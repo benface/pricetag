@@ -324,9 +324,16 @@ const keyOf = (address: string, { from, to }: WalletRange) => `${address.toLower
  * `maxWallets`: how many reads to keep, the oldest going first. A server that many people share wants more than one Mac does.
  * `priceSamples`: also read prices between a wallet's transactions, for an app's chart, which costs a query for each wallet.
  */
+/** How far a wallet's first read has got. `costs` means its facts are in and they're being worked into an answer. */
+export type ReadProgress = { stage: "waiting" | "transfers" | "prices" | "checking" | "costs"; transfers: number | null }
+
+const countTransfers = (rows: readonly LegRow[]) => rows.filter((row) => row.kind !== "gas" && row.kind !== "l1_fee").length
+
 export function createWallets(source: Source, currentHead: () => Promise<Head>, readL1Fees: ReadL1Fees, logger: Logger = console, { maxWallets = MAX_WALLETS, priceSamples = false }: { maxWallets?: number | undefined; priceSamples?: boolean | undefined } = {}) {
   const wallets = new Map<string, Cached>()
   const inflight = new Map<string, Promise<Cached>>()
+  /** First reads in progress, for showing how far along they are. Later reads are quick, and have numbers to show meanwhile. */
+  const firstReads = new Map<string, ReadProgress>()
   const reorgs: Reorg[] = []
   /** How many reorgs have been told about. Prices are read outside a wallet's own read too, and one that crossed a reorg isn't kept. */
   let rewinds = 0
@@ -644,6 +651,11 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     !hasMarketReadsLeft(address, wallet, chain.blockNum)
 
   async function refresh(address: string, key: string, range: WalletRange): Promise<Cached> {
+    const isFirst = !wallets.has(key)
+    const reached = (stage: ReadProgress["stage"], transfers: number | null = null) => {
+      if (isFirst) firstReads.set(key, { stage, transfers })
+    }
+    reached("transfers")
     const chain = await currentHead()
     const head = headAsOf(chain, range.to)
     const cached = wallets.get(key)
@@ -677,6 +689,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
         replacedFrom = readFrom
         const window = await source.readWindow(address, readFrom, coveredTo)
         rows = [...rows.filter((r) => r.block_num < readFrom), ...window.rows]
+        reached("prices", countTransfers(rows))
         for (const block of known.keys()) if (block >= readFrom) known.delete(block)
         for (const block of knownSamples.keys()) if (block >= readFrom) knownSamples.delete(block)
         for (const block of ethBalances.keys()) if (block >= readFrom) ethBalances.delete(block)
@@ -729,6 +742,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const unreadEth = unwrapBalanceBlocks(rows).filter((block) => !ethBalances.has(block)).slice(0, MAX_ETH_BALANCES_PER_READ)
     await readEthBalances(address, unreadEth, ethBalances)
 
+    reached("checking", countTransfers(rows))
     const opening = mergeOpening(cached?.opening ?? null, openingRead)
     const openingReadAt = { ...cached?.openingReadAt }
     for (const asset of Object.keys(openingRead?.amounts ?? {})) openingReadAt[asset] = chain.blockNum
@@ -836,10 +850,20 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       const key = keyOf(account, range)
       let pending = inflight.get(key)
       if (!pending) {
-        pending = refresh(account, key, range).finally(() => inflight.delete(key))
+        pending = refresh(account, key, range).finally(() => {
+          inflight.delete(key)
+          firstReads.delete(key)
+        })
         inflight.set(key, pending)
       }
       return currentOf(account, await pending).response
+    },
+
+    /** How far this wallet's first read has got. A wallet that's been read has only its costs left, however long ago that was. */
+    progress(address: string): ReadProgress {
+      const key = keyOf(address.toLowerCase(), {})
+      const read = wallets.get(key)
+      return firstReads.get(key) ?? (read ? { stage: "costs", transfers: countTransfers(read.rows) } : { stage: "waiting", transfers: null })
     },
 
     /**

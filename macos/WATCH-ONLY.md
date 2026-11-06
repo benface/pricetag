@@ -14,7 +14,7 @@ Patina shows what a Base wallet is worth, what you paid for what's in it, and ho
 
 ## The invite
 
-Patina reads prices and history from its server, which only answers people it invited. The first time you open it, it asks for the invite you were sent. Paste it and press Continue. It's saved on this Mac, for that server alone. Please don't share it: it's yours, and it can be taken back. To change it later, go to Settings > General.
+Patina reads prices and history from its server, which only answers people it invited. The first time you open it, its welcome screen asks for the invite you were sent. Paste it and press Continue. It's saved on this Mac, for that server alone. Please don't share it: it's yours, and it can be taken back. To change it later, go to Settings > General. To see the welcome again, choose it from the Help menu.
 
 ## What it can't do yet
 

@@ -140,7 +140,7 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
     assert.equal(status, 1)
     assert.deepEqual(ran, [])
     assert.match(output, /so nothing was built/)
-    assert.equal(check().ran.length, 5)
+    assert.equal(check().ran.length, 6)
   })
 
   test("the same code runs nothing the second time, and says so", () => {

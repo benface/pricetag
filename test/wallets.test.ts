@@ -668,6 +668,58 @@ describe("reconciling", () => {
   })
 })
 
+describe("how far a first read has got", () => {
+  it("goes through each stage, counting transfers but not gas", async () => {
+    const seen: unknown[] = []
+    const { source } = fake(new Map([[950, [row(950), { ...row(950), kind: "gas" }]]]), () => reference(1000))
+    let wallets: ReturnType<typeof createWallets>
+    const readWindow = source.readWindow.bind(source)
+    const readReferences = source.readReferences.bind(source)
+    const readBalances = source.readBalances.bind(source)
+    const withWatch: Source = {
+      ...source,
+      readWindow: async (...args) => {
+        seen.push(wallets.progress(ME))
+        return readWindow(...args)
+      },
+      readReferences: async (blocks) => {
+        if (blocks.length > 0) seen.push(wallets.progress(ME))
+        return readReferences(blocks)
+      },
+      marketReady: async () => {
+        seen.push(wallets.progress(ME))
+        return false
+      },
+      readMarketTrades: async () => [],
+      readBalances,
+    }
+    wallets = createWallets(withWatch, headAt(1000), noFees)
+    assert.deepEqual(wallets.progress(ME), { stage: "waiting", transfers: null })
+    await wallets.get(ME)
+    assert.deepEqual(seen[0], { stage: "transfers", transfers: null })
+    assert.deepEqual(seen[1], { stage: "prices", transfers: 1 })
+    assert.deepEqual(seen.at(-1), { stage: "checking", transfers: 1 })
+    assert.deepEqual(wallets.progress(ME), { stage: "costs", transfers: 1 })
+  })
+
+  it("says nothing new about a wallet that's already been read", async () => {
+    let head = 1000
+    const seen: unknown[] = []
+    const { source } = fake(new Map([[950, [row(950)]], [1001, [row(1001)]]]), () => reference(1000))
+    let wallets: ReturnType<typeof createWallets>
+    const readWindow = source.readWindow.bind(source)
+    wallets = createWallets({ ...source, readWindow: async (...args) => {
+      seen.push(wallets.progress(ME))
+      return readWindow(...args)
+    } }, async () => headAt(head)(), noFees)
+    await wallets.get(ME)
+    seen.length = 0
+    head = 1001
+    await wallets.get(ME)
+    assert.deepEqual(seen, [{ stage: "costs", transfers: 1 }])
+  })
+})
+
 describe("working out a wallet's response", () => {
   it("does it once until there's a new block", async () => {
     let head = 1000

@@ -22,6 +22,7 @@ import { warnOfNewAggregators, warnOfNewRateAggregators } from "./feeds.ts"
 import { createManifestReader, createProofs, feedBehind, isSeed, proofOf, verificationOf, type BlockRead, type CheckedUpdate, type PriceBehind, type Proofs } from "./proof.ts"
 import { rawSource, resolvingSource, settledL1Fees, sharedReads, type SharedReads } from "./source.ts"
 import { createApprovals, demoApprovals, type Approvals } from "./approvals.ts"
+import { createContractCheck } from "./contract.ts"
 import { TAX_COUNTRIES, isTaxCountryCode, parseTaxYear, taxReportOf, type TaxScope } from "../src/core/tax.ts"
 
 type Env = Record<string, string | undefined>
@@ -284,6 +285,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     if (subscribers.size > 0) void followLoop()
   }
 
+  const isContract = createContractCheck(env.BASE_RPC_URL || DEFAULT_RPC_URL)
   const readL1Fees = settledL1Fees(createL1FeeReader(env.BASE_RPC_URL || DEFAULT_RPC_URL, fetch, undefined, console, Number(env.BASE_RPC_RATE_LIMIT) || undefined), () => head?.blockNum ?? null)
   const wallets = source ? createWallets(source, walletHead, readL1Fees, console, { maxWallets, priceSamples: true }) : null
   // Each rule keeps its own, so a rule nobody's looking at costs nothing, and what no rule changes is only read once. The first rule is the same as having none.
@@ -785,6 +787,15 @@ export function createApi(env: Env, created: Created | null = createSource(env),
         return true
       }
       await answerRate(currency, res)
+      return true
+    }
+
+    const progressMatch = /^\/api\/wallet\/([^/]+)\/progress$/.exec(path)
+    if (progressMatch) {
+      const address = (progressMatch[1] as string).toLowerCase()
+      if (address === "demo" || address === DEMO_ADDRESS || demoWallet(address)) sendJson(res, 200, { stage: "costs", transfers: null, isContract: false })
+      else if (!isAddress(address)) sendJson(res, 400, { error: "That isn't a Base address." })
+      else sendJson(res, 200, { ...(wallets?.progress(address) ?? { stage: "waiting", transfers: null }), isContract: await isContract(address) })
       return true
     }
 

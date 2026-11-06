@@ -23,20 +23,25 @@ struct InvitePrompt: View {
     @State private var invite = ""
     @Environment(\.dismiss) private var dismiss
 
+    static var explanation: String {
+        "\(AppName.current) reads prices and history from its server, which only answers people it invited. Paste the invite you were sent."
+    }
+    static let refused = "The server didn't accept that invite. Check that you copied all of it, or ask for a new one."
+
     private var wasRefused: Bool { isRefused ?? (store.needsInvite && store.invite != nil) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Enter Your Invite")
                 .font(.headline)
-            Text("\(AppName.current) reads prices and history from its server, which only answers people it invited. Paste the invite you were sent.")
+            Text(Self.explanation)
                 .secondaryText()
                 .fixedSize(horizontal: false, vertical: true)
             SecureField("Invite", text: $invite)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit(save)
             if wasRefused {
-                WarningText("The server didn't accept that invite. Check that you copied all of it, or ask for a new one.")
+                WarningText(Self.refused)
                     .font(.callout)
             }
             HStack {

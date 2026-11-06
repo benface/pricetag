@@ -29,6 +29,8 @@ public protocol PortfolioSource: Sendable {
     func importCoinbase(csv: String) async throws -> ExchangeImport
     /// Empty when the server has only one, so there's nothing to choose.
     func rules() async throws -> [PricingRule]
+    /// How far a wallet's first read has got. Nil when this source can't tell, like a server from before it could.
+    func readProgress(address: String) async throws -> FirstReadProgress?
     func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> RuleComparison
     func taxReport(_ request: TaxReportRequest) async throws -> TaxReport
     func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof
@@ -56,6 +58,7 @@ extension PortfolioSource {
     public func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification { throw FetchError.unreachable }
     public func approvals(address: String) async throws -> WalletApprovals { throw FetchError.unreachable }
     public func rules() async throws -> [PricingRule] { [] }
+    public func readProgress(address: String) async throws -> FirstReadProgress? { nil }
     public func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> RuleComparison { throw FetchError.rejected("There's only one pricing rule here.") }
     public func onrampCheckout(address: String, asset: String, cryptoAmount: String, fiat: Money?) async throws -> OnrampCheckout { throw FetchError.unreachable }
     public func currentRate(currency: CurrencyCode) async throws -> String? { throw FetchError.unreachable }
@@ -159,6 +162,10 @@ public struct PricetagClient: PortfolioSource {
     public func rules() async throws -> [PricingRule] {
         let body: RulesBody = try await get("/api/rules", query: [], timeout: .seconds(15))
         return body.rules
+    }
+
+    public func readProgress(address: String) async throws -> FirstReadProgress? {
+        try await get("/api/wallet/\(address)/progress", query: [], timeout: .seconds(8))
     }
 
     public func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> RuleComparison {

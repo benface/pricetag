@@ -73,6 +73,8 @@ final class Navigation {
     /// A wallet's name while it's being typed. Closing the list keeps it, whichever way the list closes, and only Esc cancels.
     let pendingWalletName = PendingWalletName()
     @ObservationIgnored var onSwitcherClosed: (() -> Void)?
+    /// Welcome was chosen in the Help menu, with a wallet already showing.
+    var isShowingWelcomeAgain = false
     /// The extension's Top Up button was pressed. Spending Money's page takes it from here.
     var wantsTopUp = false
     /// The menu bar's Send button was pressed. Spending Money's page takes it from here.

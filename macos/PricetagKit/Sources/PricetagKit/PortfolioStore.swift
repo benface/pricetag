@@ -77,6 +77,11 @@ public struct ExplanationRequest: Hashable, Sendable {
     public let book: Book
 }
 
+/// Whether anything answers at the server's address, whichever wallet is showing, and even with none.
+public enum ServerCheck: Equatable, Sendable {
+    case checking, answers, unreachable
+}
+
 @MainActor
 @Observable
 public final class PortfolioStore {
@@ -127,6 +132,8 @@ public final class PortfolioStore {
     public private(set) var invite: String?
     /// The server at `serverURL` answered that it needs an invite, and hasn't taken one since.
     public private(set) var needsInvite = false
+    /// What the last question to the server found, for when there's no wallet being read to say so.
+    public private(set) var serverCheck = ServerCheck.checking
     /// What the user has said about where things came from. It stays on this device.
     private var answers: Book
     /// What each answer replaced, newest last, so Undo is always there. Accounts aren't in here, so it can't bring back one that's gone.
@@ -665,14 +672,20 @@ public final class PortfolioStore {
     /// Asks the server what rules it has. A rule it doesn't have would fail every read, so that choice goes.
     public func refreshRules() async {
         let asked = serverURL
+        let askedInvite = invite
+        // An answer to an invite that's since been replaced says nothing about the new one.
+        let isCurrent = { [self] in asked == serverURL && askedInvite == invite }
         let next: [PricingRule]
         do {
             next = try await source.rules()
         } catch {
-            if asked == serverURL, case .needsInvite = error as? FetchError { needsInvite = true }
+            guard isCurrent() else { return }
+            serverCheck = error as? FetchError == .unreachable || error as? FetchError == .timedOut ? .unreachable : .answers
+            if case .needsInvite = error as? FetchError { needsInvite = true }
             return
         }
-        guard asked == serverURL else { return }
+        guard isCurrent() else { return }
+        serverCheck = .answers
         needsInvite = false
         rules = next
         if let chosen = selectedRule, !next.contains(where: { $0.id == chosen }) {
@@ -688,12 +701,19 @@ public final class PortfolioStore {
         return try await source.comparison(address: address, method: method, currency: currency, linked: linked(for: address), book: bookToSend(book, for: address))
     }
 
+    /// Asks again, saying so until there's an answer.
+    public func checkServer() {
+        serverCheck = .checking
+        Task { await refreshRules() }
+    }
+
     public func setServerURL(_ url: URL) {
         guard url != serverURL else { return }
         serverURL = url
         defaults.set(url.absoluteString, forKey: Keys.server)
         invite = Self.invites(in: defaults)[Self.origin(of: url)]
         needsInvite = false
+        serverCheck = .checking
         source = makeSource(url)
         rules = []
         // Another server's numbers can be different facts, so these aren't kept even for a moment. What's known is this server's own.
@@ -710,6 +730,7 @@ public final class PortfolioStore {
         guard next != invite else { return }
         invite = next
         needsInvite = false
+        serverCheck = .checking
         var invites = Self.invites(in: defaults)
         invites[Self.origin(of: serverURL)] = next
         defaults.set(invites, forKey: Keys.invites)
@@ -990,6 +1011,11 @@ public final class PortfolioStore {
         case .rejected(let message), .needsInvite(let message): .rejected(message)
         case .unreachable, .timedOut, nil: .serverUnreachable
         }
+    }
+
+    /// Whether this Mac has used the app before, from anything it would have saved by now.
+    public nonisolated static func hasBeenUsed(defaults: UserDefaults = .standard) -> Bool {
+        [Keys.wallet, Keys.method, Keys.currency, Keys.menuBar, Keys.server, Keys.invites, Keys.book, Keys.answerDetails, Keys.rule, Keys.savedWallets, Keys.walletOrder, Keys.hiddenWallets, Keys.holdingsSort].contains { defaults.object(forKey: $0) != nil }
     }
 
     private enum Keys {
