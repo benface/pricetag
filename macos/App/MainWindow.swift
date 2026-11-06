@@ -871,8 +871,9 @@ private struct HoldingsTable: View {
         Wording.answerQuestions(max(1, portfolio.questions.count { $0.arrivals.contains { $0.asset == asset } }))
     }
 
+    /// Only a listed one. The selection outlives a search that hides its row, and what isn't showing can't be copied.
     private func position(_ asset: String) -> Position? {
-        portfolio.listedPositions.first { $0.asset == asset }
+        positions.first { $0.asset == asset }
     }
 
     private var dash: some View {
