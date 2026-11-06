@@ -205,7 +205,7 @@ public final class ResolveModel {
         } catch FetchError.rejected(let message) {
             failure = message
         } catch {
-            failure = "Couldn't read that file. Is the price service running?"
+            failure = "Couldn't read that file. The price service may not be answering."
         }
         return nil
     }

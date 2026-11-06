@@ -290,6 +290,20 @@
     {
       "kind": "noSource",
       "said": "No data source is set up, so only the demo wallet is available.",
+      "message": "The price service has no data source, so only the demo wallet works. Your money isn't affected. Whoever runs it needs to set one up.",
+      "detail": "The price service said: No data source is set up, so only the demo wallet is available."
+    },
+    {
+      "kind": "refused",
+      "said": "That isn't a Base address.",
+      "message": "The price service turned this request down. Your money isn't affected. Try again. If it keeps happening, let whoever runs the price service know.",
+      "detail": "The price service said: That isn't a Base address."
+    }
+  ],
+  "problemsOnThisMachine": [
+    {
+      "kind": "noSource",
+      "said": "No data source is set up, so only the demo wallet is available.",
       "message": "The price service has no data source, so only the demo wallet works. Your money isn't affected. Set one up, then restart the price service.",
       "detail": "The price service said: No data source is set up, so only the demo wallet is available. Its data source goes in .env.local."
     },

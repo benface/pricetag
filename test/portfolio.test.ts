@@ -838,6 +838,7 @@ describe("wording", () => {
     },
     finishNotes: FINISH_METERS.map((meter) => ({ ...meter, text: wording.finishNote(meter) })),
     problems: READ_FAILURES.map((failure) => ({ ...failure, ...wording.feedProblem(failure, "https://prices.example.com") })),
+    problemsOnThisMachine: READ_FAILURES.filter((failure) => failure.kind === "noSource" || failure.kind === "refused").map((failure) => ({ ...failure, ...wording.feedProblem(failure, "http://127.0.0.1:8787") })),
     unseenEth: UNSEEN_ETH_CASES.map((unseen) => ({ unseen, text: wording.unseenEthCause(unseen) })),
     manifestHash: wording.shortManifestHash("bea12f7575e74575f2f0318213d61d421706eea0314e5d7116edebd4e77818a1"),
   }
@@ -859,6 +860,17 @@ describe("wording", () => {
     assert.ok(wording.feedProblem(READ_FAILURES[1]!, "https://prices.example.com", stale).message.includes(`right now. ${stale} ${wording.MONEY_UNAFFECTED}`))
     assert.equal(wording.feedProblem({ kind: "unreachable" }, "https://prices.example.com").detail, "Nothing answered at https://prices.example.com.")
     assert.equal(wording.feedProblem({ kind: "unavailable", said: "Couldn't read this wallet's data." }, "x").detail, "The price service said: Couldn't read this wallet's data.")
+  })
+
+  it("only asks someone to restart a server on their own machine", () => {
+    for (const failure of READ_FAILURES) {
+      const hosted = wording.feedProblem(failure, "https://prices.example.com")
+      assert.doesNotMatch(`${hosted.message} ${hosted.detail}`, /restart|\.env\.local/i)
+    }
+    for (const server of ["http://127.0.0.1:8787", "http://localhost:5173", "http://[::1]:8787"]) {
+      assert.match(wording.feedProblem({ kind: "refused", said: "Nope." }, server).message, /restart the price service/)
+      assert.match(wording.feedProblem({ kind: "noSource", said: "None." }, server).detail ?? "", /\.env\.local/)
+    }
   })
 
   it("lets a panel say what a refusal said, since that's about the question it asked", () => {
