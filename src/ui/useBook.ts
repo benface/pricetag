@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { CurrencyCode } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../core/api.ts"
 import { applyAnswer, changeStoredBook, isBookKey, linkDeviceAccounts, readStoredBook, recordPurchase, same, storedBook, undoAnswer, type Book, type Purchase } from "../core/book.ts"
@@ -6,7 +6,8 @@ import { readKey, readsMatching } from "../core/resolve.ts"
 import { browserShelf } from "../core/shelf.ts"
 import { walletUrl } from "./useWallet.ts"
 
-type Step = { before: Book; after: Book }
+/** `number` says where it goes, for an undo that couldn't be saved and has to go back. */
+type Step = { number: number; before: Book; after: Book }
 
 /** Shared with `usePurchases`. */
 export const shelf = browserShelf()
@@ -14,7 +15,16 @@ export const shelf = browserShelf()
 /** The user's answers, kept in this browser and nowhere else. Undo goes back one of this tab's answers at a time, and leaves what other tabs have said. */
 export function useBook() {
   const [book, setBook] = useState(() => storedBook(localStorage))
-  const [history, setHistory] = useState<Step[]>([])
+  // Not state, because a save can fail between renders, and an undo right then has to see the step that put back.
+  const history = useRef<Step[]>([])
+  const [canUndo, setCanUndo] = useState(false)
+  const [notSaved, setNotSaved] = useState(false)
+  const steps = useRef(0)
+
+  const setHistory = useCallback((next: Step[]) => {
+    history.current = next
+    setCanUndo(next.length > 0)
+  }, [])
 
   const show = useCallback((latest: Book) => setBook((shown) => (same(shown, latest) ? shown : latest)), [])
 
@@ -32,6 +42,19 @@ export function useBook() {
     [show],
   )
 
+  // Something the user just did, so they're told if it didn't stick.
+  const act = useCallback(
+    (update: (latest: Book) => Book, undone?: () => void) => {
+      setNotSaved(false)
+      save(update).catch((error) => {
+        console.error(error)
+        setNotSaved(true)
+        undone?.()
+      })
+    },
+    [save],
+  )
+
   useEffect(() => {
     const read = () => void readStoredBook(shelf).then(show, console.error)
     const onStorage = (event: StorageEvent) => {
@@ -44,30 +67,35 @@ export function useBook() {
 
   const change = useCallback(
     (next: Book) => {
-      setHistory((h) => [...h, { before: book, after: next }])
-      save((latest) => applyAnswer(latest, book, next)).catch(console.error)
+      const step = { number: ++steps.current, before: book, after: next }
+      setHistory([...history.current, step])
+      act(
+        (latest) => applyAnswer(latest, book, next),
+        () => setHistory(history.current.filter((other) => other !== step)),
+      )
     },
-    [book, save],
+    [book, act, setHistory],
   )
   const undo = useCallback(() => {
-    const step = history.at(-1)
+    const step = history.current.at(-1)
     if (!step) return
-    setHistory(history.slice(0, -1))
-    save((latest) => undoAnswer(latest, step.before, step.after)).catch(console.error)
-  }, [history, save])
+    setHistory(history.current.slice(0, -1))
+    act(
+      (latest) => undoAnswer(latest, step.before, step.after),
+      () => setHistory([...history.current, step].sort((a, b) => a.number - b.number)),
+    )
+  }, [act, setHistory])
 
   // Not an answer, so undo doesn't take it back, whichever answers came before it.
   const linkAccounts = useCallback(
-    (addresses: readonly string[]) => {
-      save((latest) => linkDeviceAccounts(latest, addresses)).catch(console.error)
-    },
-    [save],
+    (addresses: readonly string[]) => act((latest) => linkDeviceAccounts(latest, addresses)),
+    [act],
   )
 
   // What an order says, and not an answer either. Whoever calls this hears if it wasn't saved, so the order can be read again.
   const addPurchase = useCallback((purchase: Purchase) => save((latest) => recordPurchase(latest, purchase)), [save])
 
-  return { book, change, undo, canUndo: history.length > 0, linkAccounts, addPurchase }
+  return { book, change, undo, canUndo, notSaved, linkAccounts, addPurchase }
 }
 
 /**

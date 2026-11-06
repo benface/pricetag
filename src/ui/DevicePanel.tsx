@@ -6,6 +6,7 @@ import { readColdRequest, transferRequest, type ColdAccount, type ColdRequest, t
 import { accountsToLink, isFresh, readCheckedAccounts, rememberCheckedAccount, selectedAccount, type AccountActivity, type CheckedAccount, type SeenAccount } from "../core/device-accounts.ts"
 import { addToMacLink, usdMicrosOf, type DeviceLink } from "../core/device-link.ts"
 import { amountForUsd, checkSend, parseAmount, readActivity, readEthPriceMicros, type SendCheck } from "../core/device-read.ts"
+import { NOT_SAVED } from "../core/wording.ts"
 import { CHECK_ADDRESS_WARNING, KEYSTONE_CONNECT, KEYSTONE_LOOK, LEDGER_HANDED_OFF, LEDGER_HAND_OFF, LEDGER_NEEDS_CHROMIUM, LEDGER_READY, LEDGER_VERIFY, LOOK_HANDED_OFF, NEVER_ASKED, PROMPTS, PUBLISH_DETAIL, PUBLISH_DEVICE_NOTE, PUBLISH_WARNING, WRONG_PUBLISHER, groupAddress } from "../core/device-wording.ts"
 import type { BrowserWallet } from "./devices/browser.ts"
 import { realConnectors, type Connectors } from "./devices/connectors.ts"
@@ -40,6 +41,8 @@ type Props = {
   currency?: CurrencyCode
   /** Accounts from a device are the user's, with no question. */
   onLink: (addresses: readonly string[]) => void
+  /** The last link couldn't be saved. */
+  notSaved?: boolean
   /** Opens a wallet in the main view. */
   onView: (address: string) => void
   onClose: () => void
@@ -49,7 +52,7 @@ type Props = {
 }
 
 /** The one place the web app reaches a hardware wallet. Keys stay on the device: this only ever sees addresses and signatures. */
-export function DevicePanel({ link, book, currency = "USD", onLink, onView, onClose, connectors = realConnectors, start }: Props) {
+export function DevicePanel({ link, book, currency = "USD", onLink, notSaved = false, onView, onClose, connectors = realConnectors, start }: Props) {
   const dialog = useRef<HTMLDialogElement>(null)
   const closeButton = useRef<HTMLButtonElement>(null)
   const [step, setStep] = useState<Step>(start?.step ?? (link?.kind === "add-savings" && link.device === "ledger" && connectors.canUseUsb() ? "ledger" : "route"))
@@ -407,6 +410,7 @@ export function DevicePanel({ link, book, currency = "USD", onLink, onView, onCl
         {busy && !prompt && !exchange && step === "route" ? <p className="notice">Connecting…</p> : null}
         {busy && !prompt && !exchange && step === "ledger" ? <p className="notice">Choose your Ledger in your browser's list.</p> : null}
         {problem ? <p className="notice warn">⚠ {problem}</p> : null}
+        {notSaved ? <p className="notice warn" role="alert">⚠ {NOT_SAVED}</p> : null}
         {problem && step === "check" ? (
           <button type="button" onClick={checkOnDevice}>
             Try again

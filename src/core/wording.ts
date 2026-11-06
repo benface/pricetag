@@ -11,6 +11,8 @@ export const METHOD_HELP = "Average spreads what you paid across all you hold. O
 
 export const AVERAGE_PRICE_PAID = "Average price paid"
 export const NETWORK_FEES = "Network fees"
+/** An answer, an undo or a device's accounts that didn't reach what's stored, so they're back as they were. */
+export const NOT_SAVED = "This browser couldn't save that, so it's back as it was. Try again."
 export const BALANCE_CHECK = "Balance check"
 export const CHECK_LABELS = { reconciled: "Matches", incomplete: "Doesn't match", unchecked: "Not checked" }
 export const STARTING_BALANCE = "Starting balance"

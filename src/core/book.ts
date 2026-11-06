@@ -61,8 +61,8 @@ export type Book = {
   withdrawals: ExchangeWithdrawal[]
   /** The wallets a client already knows are the user's, like the Mac app's hot and cold ones. Nobody answered for these. */
   linked?: string[]
-  /** Accounts a hardware device proved are the user's. They're in `senders` too, and this is what says no answer put them there, so undoing one can't take them out. */
-  deviceAccounts?: string[]
+  /** How many times a hardware device has proved each account is the user's. They're in `senders` too, and this is what says a device spoke after an answer, so undoing that answer can't take them out. */
+  deviceLinks?: Record<string, number>
   purchases?: Purchase[]
 }
 
@@ -95,8 +95,12 @@ export function answerSender(book: Book, focus: string | null, sender: string, a
 /** Accounts from one hardware device are all the user's, and the device already proved it, so nobody's asked. This overrides any earlier answer about them. */
 export function linkDeviceAccounts(book: Book, addresses: readonly string[]): Book {
   const senders: Book["senders"] = { ...book.senders }
-  for (const address of addresses) senders[normalizeAddress(address)] = { kind: "mine" }
-  return { ...book, senders, deviceAccounts: [...new Set([...(book.deviceAccounts ?? []), ...addresses.map(normalizeAddress)])] }
+  const deviceLinks = { ...book.deviceLinks }
+  for (const address of new Set(addresses.map(normalizeAddress))) {
+    senders[address] = { kind: "mine" }
+    deviceLinks[address] = (deviceLinks[address] ?? 0) + 1
+  }
+  return { ...book, senders, deviceLinks }
 }
 
 /** A purchase in the book. An order's read again as more is known, like its block, so this takes over from what it said before. If nothing's new, it's the same book. */
@@ -137,10 +141,10 @@ export const applyAnswer = (latest: Book, before: Book, after: Book): Book => ({
 
 /**
  * Takes back only what an answer changed. Anything said about the same thing since, here or in another tab, is newer, so it
- * stays, and so does an account a device has linked since, which no answer can take back.
+ * stays, and so does an account a device has linked since, even one it had linked before, which no answer can take back.
  */
 export function undoAnswer(latest: Book, before: Book, after: Book): Book {
-  const linkedSince = new Set((latest.deviceAccounts ?? []).filter((address) => !after.deviceAccounts?.includes(address)))
+  const linkedSince = new Set(Object.entries(latest.deviceLinks ?? {}).flatMap(([address, links]) => (links > (after.deviceLinks?.[address] ?? 0) ? [address] : [])))
   const open = (senders: Book["senders"]) => Object.fromEntries(Object.entries(senders).filter(([address]) => !linkedSince.has(address)))
   return { ...latest, senders: moveEntries(latest.senders, open(after.senders), open(before.senders), true), costs: moveEntries(latest.costs, after.costs, before.costs, true), withdrawals: moveRows(latest.withdrawals, after.withdrawals, before.withdrawals) }
 }
@@ -280,9 +284,14 @@ export function parseBook(value: unknown): Book | null {
     if (!purchase) return null
     parsed.purchases = [...(parsed.purchases ?? []), purchase]
   }
-  if (book.deviceAccounts !== undefined) {
-    if (!Array.isArray(book.deviceAccounts) || !book.deviceAccounts.every((address) => typeof address === "string" && isAddress(address))) return null
-    parsed.deviceAccounts = book.deviceAccounts.map((address: string) => normalizeAddress(address))
+  if (book.deviceLinks !== undefined) {
+    const deviceLinks = plainRecord(book.deviceLinks)
+    if (!deviceLinks) return null
+    parsed.deviceLinks = {}
+    for (const [address, links] of Object.entries(deviceLinks)) {
+      if (!isAddress(address) || !Number.isSafeInteger(links) || (links as number) < 1) return null
+      parsed.deviceLinks[normalizeAddress(address)] = links as number
+    }
   }
   return parsed
 }

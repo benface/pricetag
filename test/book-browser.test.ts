@@ -111,6 +111,20 @@ describe("the book in two browser tabs", { skip: existsSync(CHROME) ? false : "C
 
   const bookIn = (session: string) => evaluate(session, "window.hook.book")
 
+  /** The next save of the book in this tab fails, as it would with a full disk or a closing database. */
+  const failNextSave = (session: string) =>
+    evaluate(session, `(() => {
+      const put = IDBObjectStore.prototype.put
+      IDBObjectStore.prototype.put = function (value, key) {
+        const request = put.call(this, value, key)
+        if (key === "patina.book") {
+          IDBObjectStore.prototype.put = put
+          this.transaction.abort()
+        }
+        return request
+      }
+    })()`)
+
   before(async () => {
     scratch = await mkdtemp(join(tmpdir(), "book-browser-"))
     server = await createServer({
@@ -232,6 +246,125 @@ describe("the book in two browser tabs", { skip: existsSync(CHROME) ? false : "C
       await reload(tab)
       assert.deepEqual((await bookIn(tab)).senders[OTHER], { kind: "mine" })
     }
+  })
+
+  it("keeps an account a device linked again after an answer, and can still take back an answer given after that", async () => {
+    const [a, b] = (await tabs(2)) as [string, string]
+    const heard = (session: string, kind: string) => until(() => evaluate(session, `hook.book.senders[${JSON.stringify(OTHER)}]?.kind === ${JSON.stringify(kind)}`), `the tab to hear ${kind}`)
+    await evaluate(a, `link([${JSON.stringify(OTHER)}])`)
+    await heard(b, "mine")
+    await evaluate(b, `answer(${JSON.stringify(OTHER)}, "someone-else")`)
+    await heard(a, "someone-else")
+    await evaluate(a, `answer(${JSON.stringify(OTHER)}, "mine")`)
+    await heard(b, "mine")
+    await evaluate(b, `link([${JSON.stringify(OTHER)}])`)
+    await until(() => evaluate(a, `hook.book.deviceLinks?.[${JSON.stringify(OTHER)}] === 2`), "the tab to hear of the link")
+    await evaluate(a, "undo()")
+    await delay(100)
+    await reload(b)
+    assert.equal((await bookIn(b)).senders[OTHER]?.kind, "mine")
+
+    await evaluate(b, `answer(${JSON.stringify(OTHER)}, "someone-else")`)
+    await heard(b, "someone-else")
+    await evaluate(b, "undo()")
+    await delay(100)
+    await reload(b)
+    assert.equal((await bookIn(b)).senders[OTHER]?.kind, "mine")
+  })
+
+  it("keeps an undo that couldn't be saved, says so, and it works once saving does", async () => {
+    const [a] = (await tabs(1)) as [string]
+    await evaluate(a, `answer(${JSON.stringify(OTHER)}, "mine")`)
+    await evaluate(a, `answer(${JSON.stringify(ME)}, "someone-else")`)
+    await until(() => evaluate(a, `JSON.parse(localStorage.getItem("patina.book") ?? "{}").senders?.[${JSON.stringify(ME)}]`), "the answers to be saved")
+    await failNextSave(a)
+    await evaluate(a, "undo()")
+    await until(() => evaluate(a, "hook.notSaved"), "the failure to show")
+    assert.equal(await evaluate(a, "hook.canUndo"), true)
+    assert.equal((await bookIn(a)).senders[ME]?.kind, "someone-else", "the answer's back")
+
+    await evaluate(a, "undo()")
+    await until(() => evaluate(a, `hook.book.senders[${JSON.stringify(ME)}] === undefined`), "the undo to work")
+    await evaluate(a, "undo()")
+    await until(() => evaluate(a, "!hook.canUndo"), "the history to run out")
+    assert.equal(await evaluate(a, "hook.notSaved"), false, "and the warning's gone")
+    await delay(100)
+    await reload(a)
+    assert.deepEqual((await bookIn(a)).senders, {})
+  })
+
+  it("puts undos that couldn't be saved back in their order", async () => {
+    const [a] = (await tabs(1)) as [string]
+    await evaluate(a, `answer(${JSON.stringify(OTHER)}, "mine")`)
+    await evaluate(a, `answer(${JSON.stringify(ME)}, "mine")`)
+    await until(() => evaluate(a, `JSON.parse(localStorage.getItem("patina.book") ?? "{}").senders?.[${JSON.stringify(ME)}]`), "the answers to be saved")
+    await evaluate(a, `window.put = IDBObjectStore.prototype.put; IDBObjectStore.prototype.put = function () { this.transaction.abort() }`)
+    await evaluate(a, "undo()")
+    await evaluate(a, "undo()")
+    await until(() => evaluate(a, "hook.canUndo && hook.notSaved"), "both to come back")
+    await delay(100)
+    await evaluate(a, "IDBObjectStore.prototype.put = window.put")
+    await evaluate(a, "undo()")
+    await until(() => evaluate(a, `hook.book.senders[${JSON.stringify(ME)}] === undefined`), "the latest answer to be taken back first")
+    assert.deepEqual((await bookIn(a)).senders[OTHER], { kind: "mine" })
+  })
+
+  it("sees a step put back between renders", async () => {
+    const [a] = (await tabs(1)) as [string]
+    await evaluate(a, `answer(${JSON.stringify(OTHER)}, "mine")`)
+    await evaluate(a, `answer(${JSON.stringify(ME)}, "mine")`)
+    await until(() => evaluate(a, `JSON.parse(localStorage.getItem("patina.book") ?? "{}").senders?.[${JSON.stringify(ME)}]`), "the answers to be saved")
+    await failNextSave(a)
+    // The failure's handlers run with this waiting, and this undo runs with the render they asked for not done yet.
+    await evaluate(a, `new Promise((resolve) => {
+      const abort = IDBTransaction.prototype.abort
+      IDBTransaction.prototype.abort = function () {
+        IDBTransaction.prototype.abort = abort
+        this.addEventListener("abort", () => queueMicrotask(() => queueMicrotask(() => queueMicrotask(() => { window.hook.undo(); resolve(true) }))))
+        abort.call(this)
+      }
+      window.undo()
+    })`)
+    await until(() => evaluate(a, `hook.book.senders[${JSON.stringify(ME)}] === undefined`), "the latest answer to be taken back")
+    assert.equal(await evaluate(a, "hook.canUndo"), true, "the first answer can still be taken back")
+    assert.deepEqual((await bookIn(a)).senders[OTHER], { kind: "mine" })
+  })
+
+  it("forgets an answer or a link that couldn't be saved, and says so", async () => {
+    const [a] = (await tabs(1)) as [string]
+    await failNextSave(a)
+    await evaluate(a, `answer(${JSON.stringify(OTHER)}, "mine")`)
+    await until(() => evaluate(a, "hook.notSaved"), "the failure to show")
+    assert.equal(await evaluate(a, "hook.canUndo"), false)
+    assert.equal((await bookIn(a)).senders[OTHER], undefined)
+
+    await failNextSave(a)
+    await evaluate(a, `link([${JSON.stringify(OTHER)}])`)
+    await delay(100)
+    assert.equal(await evaluate(a, "hook.notSaved"), true)
+    assert.equal((await bookIn(a)).senders[OTHER], undefined)
+
+    await evaluate(a, `answer(${JSON.stringify(ME)}, "mine")`)
+    await until(() => evaluate(a, "hook.canUndo"), "the next answer to count")
+    assert.equal(await evaluate(a, "hook.notSaved"), false)
+    await delay(100)
+    await reload(a)
+    assert.deepEqual((await bookIn(a)).senders, { [ME]: { kind: "mine" } })
+  })
+
+  it("keeps an order it couldn't record, and records it once saving works", async () => {
+    const [a] = (await tabs(1)) as [string]
+    await evaluate(a, `localStorage.setItem("patina.purchases", ${JSON.stringify(JSON.stringify([tracked("failure", null)]))})`)
+    await reload(a)
+    await failNextSave(a)
+    orders.set("failure", delivered("failure"))
+    await evaluate(a, `document.dispatchEvent(new Event("visibilitychange"))`)
+    await until(() => evaluate(a, "tracker.problem"), "the failure to show")
+    assert.equal(await evaluate(a, "tracker.purchases[0].order"), null)
+    await evaluate(a, `document.dispatchEvent(new Event("visibilitychange"))`)
+    await until(() => evaluate(a, `hook.book.purchases?.some(({ order }) => order === "failure") && tracker.purchases[0].order?.status === "succeeded"`), "the order to be recorded")
+    await reload(a)
+    assert.ok((await bookIn(a)).purchases.some(({ order }: { order: string }) => order === "failure"))
   })
 
   it("takes over what was saved before, records an older order from it, and trusts what's stored over its copy", async () => {

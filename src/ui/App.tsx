@@ -37,6 +37,7 @@ import {
   holdCaveatSentence,
   holdDifferenceSentence,
   linkedFailedSentence,
+  NOT_SAVED,
   networkFeeUnknownSentence,
   withheldSentence,
   staleSentence,
@@ -269,7 +270,7 @@ export function App() {
   const [taxYear, setTaxYear] = useState<TaxYear>("latest")
   const [chosenCurrency, setChosenCurrency] = useState<CurrencyCode>(readCurrency)
   const { rules, chosen: chosenRule, choose: chooseRule } = useRules()
-  const { book, change, undo, canUndo, linkAccounts, addPurchase } = useBook()
+  const { book, change, undo, canUndo, notSaved, linkAccounts, addPurchase } = useBook()
   const { purchases, problem: purchasesProblem, begin: beginPurchase, dismiss: dismissPurchase } = usePurchases(addPurchase)
   const [buying, setBuying] = useState(false)
   const paidIn = currenciesIn(book).filter((code) => code !== "USD").join(",")
@@ -411,6 +412,7 @@ export function App() {
         {wallet ? <LiveBadge wallet={wallet} stale={error !== null} /> : null}
       </header>
       {inputError ? <p className="notice warn">⚠ {inputError}</p> : null}
+      {notSaved ? <p className="notice warn" role="alert">⚠ {NOT_SAVED}</p> : null}
       {rules.length > 1 ? <RulesPanel rules={rules} chosen={chosenRule} choose={chooseRule} current={wallet?.rule ?? null} address={address} method={method} currency={currency} book={book} /> : null}
 
       <PurchaseList purchases={purchases} problem={purchasesProblem} matches={fold?.purchases ?? []} currency={chosenCurrency} showing={wallet?.address ?? null} onView={go} onDismiss={dismissPurchase} />
@@ -530,7 +532,7 @@ export function App() {
       ) : null}
 
       {explanation && wallet ? <ExplainPanel explanation={explanation} address={wallet.address} rule={wallet.rule ?? null} onClose={close} /> : null}
-      {resolving && wallet ? <ResolvePanel wallet={wallet} others={others} failed={failed} onRetry={retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} onPublish={(link) => setDevice({ link })} onCurrentSender={setCardSender} onClose={closeResolve} /> : null}
+      {resolving && wallet ? <ResolvePanel wallet={wallet} others={others} failed={failed} onRetry={retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} notSaved={notSaved} onPublish={(link) => setDevice({ link })} onCurrentSender={setCardSender} onClose={closeResolve} /> : null}
       {buying ? (
         <Suspense fallback={null}>
           <BuyPanel
@@ -551,6 +553,7 @@ export function App() {
             book={book}
             currency={chosenCurrency}
             onLink={linkAccounts}
+            notSaved={notSaved}
             onView={(next) => {
               setDevice(null)
               go(next)

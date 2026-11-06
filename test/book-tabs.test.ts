@@ -162,6 +162,30 @@ describe("a book shared between tabs", () => {
       assert.deepEqual(storedBook(storage).senders[OTHER], { kind: "mine" })
     })
 
+    it("doesn't take back an account a device linked again after the answer, in any order of tabs", async () => {
+      const storage = shelf()
+      const [a, b] = [tab(storage), tab(storage)]
+      await a.link([OTHER])
+      await a.change((shown) => answerSender(shown, null, OTHER, { kind: "someone-else" }))
+      await a.change(mine)
+      b.hear()
+      await b.link([OTHER])
+      await a.undo()
+      assert.deepEqual(tab(storage).book.senders[OTHER], { kind: "mine" })
+      await a.undo()
+      assert.deepEqual(tab(storage).book.senders[OTHER], { kind: "mine" })
+    })
+
+    it("still takes back an answer given after a device linked it again", async () => {
+      const storage = shelf()
+      const a = tab(storage)
+      await a.link([OTHER])
+      await a.link([OTHER])
+      await a.change((shown) => answerSender(shown, null, OTHER, { kind: "someone-else" }))
+      await a.undo()
+      assert.deepEqual(storedBook(storage).senders[OTHER], { kind: "mine" })
+    })
+
     it("still takes back an answer about an account that was already linked", async () => {
       const storage = shelf()
       const a = tab(storage)
@@ -197,9 +221,11 @@ describe("a book shared between tabs", () => {
   })
 
   it("keeps which accounts a device linked, and turns away a book that says something else", () => {
-    assert.deepEqual(parseBook({ deviceAccounts: [OTHER.toUpperCase().replace("0X", "0x")] })?.deviceAccounts, [OTHER])
-    assert.equal(parseBook({ deviceAccounts: ["nope"] }), null)
-    assert.equal(parseBook({ deviceAccounts: OTHER }), null)
-    assert.equal(parseBook({})?.deviceAccounts, undefined)
+    assert.deepEqual(parseBook({ deviceLinks: { [OTHER.toUpperCase().replace("0X", "0x")]: 2 } })?.deviceLinks, { [OTHER]: 2 })
+    assert.equal(parseBook({ deviceLinks: { nope: 1 } }), null)
+    assert.equal(parseBook({ deviceLinks: { [OTHER]: 0 } }), null)
+    assert.equal(parseBook({ deviceLinks: { [OTHER]: "1" } }), null)
+    assert.equal(parseBook({ deviceLinks: [OTHER] }), null)
+    assert.equal(parseBook({})?.deviceLinks, undefined)
   })
 })
