@@ -1,7 +1,7 @@
 // What the server sends its clients. The browser runs the fold itself, because cost is personal.
 // Clients that can't run it, like the Mac app, read the portfolio it computes instead.
 
-import { hasStarted, msBetweenBlocks, type CurrencyCode, type Head, type LatestPrice, type Method, type Mode, type PnlPoint, type PnlStatus, type PositionValues, type PricedLeg, type Reconciliation, type Totals, type UnlistedToken, type WalletData } from "@pricetag/sdk/core"
+import { hasStarted, msBetweenBlocks, type CurrencyCode, type Head, type LatestPrice, type Method, type Mode, type PnlPoint, type PnlStatus, type PositionValues, type PricedLeg, type Reconciliation, type Totals, type OtherToken, type UnlistedToken, type WalletData } from "@pricetag/sdk/core"
 import type { Estimates, HoldComparison } from "@pricetag/sdk/core"
 import type { TransactionFacts } from "./activity.ts"
 import type { Meter, Question } from "./resolve.ts"
@@ -88,6 +88,9 @@ export type PortfolioResponse = {
   /** Every transaction that took something from this wallet or that it paid gas for. A hot wallet compares these with what it signed. */
   outgoingTxs: string[]
   unlisted: UnlistedToken[]
+  /** Tokens off the allowlist this wallet holds. They have no price, and they're in no total. See `OtherToken`. */
+  otherTokens: OtherToken[]
+  otherTokensLeftOut: number
   l1FeeUnknownTxs: string[]
   openingUnread: string[]
   /** Assets with no position because nothing could be read about them, which isn't the same as holding none. */

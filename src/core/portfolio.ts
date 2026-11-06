@@ -73,6 +73,8 @@ export function responseOf(wallet: WalletResponse, method: Method, others: reado
     gasUnknownTxs: wallet.gasUnknownTxs,
     outgoingTxs: outgoingTxsOf(wallet),
     unlisted: wallet.unlisted,
+    otherTokens: wallet.otherTokens,
+    otherTokensLeftOut: wallet.otherTokensLeftOut,
     l1FeeUnknownTxs: wallet.l1FeeUnknownTxs,
     openingUnread: wallet.openingUnread,
     unreadAssets: unread,

@@ -222,6 +222,8 @@ button { font: inherit; cursor: pointer; color: inherit; }
 .field textarea { font-family: ui-monospace, Menlo, monospace; resize: vertical; }
 .tax-counts { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 0; }
 .tax-counts dd { margin: 0; font-size: 17px; font-weight: 600; }
+.other-tokens-spam { margin-top: 12px; }
+.other-tokens-spam summary { cursor: pointer; font-weight: 600; }
 .tax-year { margin: 4px 0 0; font-size: 13px; }
 .tax-unknown { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .warn-text { color: var(--warn-ink); }

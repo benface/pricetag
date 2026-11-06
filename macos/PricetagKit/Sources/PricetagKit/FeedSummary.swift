@@ -45,6 +45,10 @@ public struct FeedSummary: Equatable, Sendable {
                 (text, isWarning) = ("\(prefix)No activity", false)
                 return
             }
+            if portfolio.holdsOnlyOtherTokens {
+                (text, isWarning) = ("\(prefix)\(Wording.nothingPriced)", false)
+                return
+            }
             switch shows {
             case .icon:
                 (text, isWarning) = (portfolio.mode == .demo ? "Demo" : "", false)
