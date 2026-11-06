@@ -61,6 +61,19 @@ public struct ResolveFlow: View {
                     Text(sentence).font(.callout).secondaryText()
                 }
             }
+            if let refusal = model.importRefusal {
+                WarningText(refusal).font(.callout).fixedSize(horizontal: false, vertical: true)
+            }
+            if let startsAt = model.pendingImport?.startsAt {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(Wording.importQuestion).font(.callout.weight(.semibold))
+                    Text(Wording.importWhy(startsAt: startsAt)).font(.callout).secondaryText().fixedSize(horizontal: false, vertical: true)
+                    HStack {
+                        Button("Yes, Use It") { model.keepImport() }
+                        Button("No, Don't Use It") { model.declineImport() }
+                    }
+                }
+            }
             footer
         }
         // One question to the next, and the last to the finish, fade rather than swap.

@@ -303,6 +303,18 @@ export function importedSentence(found: number, skipped: number): string {
   return skipped === 0 ? `Found ${withdrawals(found)}.` : `Found ${withdrawals(found)}. ${skipped} more had no usable cost.`
 }
 
+export const IMPORT_QUESTION = "Does this file have your whole Coinbase history?"
+export const IMPORT_NOT_WHOLE = "Nothing changed. These costs need your whole history, so download it from Coinbase going back to the start, and import that."
+export const IMPORT_STARTS_LATE = "This file starts after a withdrawal you've already imported, so part of your history is missing. Nothing changed. Download your whole history from Coinbase, and import that."
+
+const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+/** Takes the date as the file has it, in UTC, so the Mac and the web say the same day. */
+export function importWhySentence(startsAt: string): string {
+  const [year, month, day] = startsAt.slice(0, 10).split("-").map(Number) as [number, number, number]
+  return `It starts on ${SHORT_MONTHS[month - 1]} ${day}, ${year}. What you bought before then changes what these cost, so if anything's missing, they'd be wrong.`
+}
+
 export function linkedFailedSentence(count: number): string {
   return count === 1 ? "Couldn't read your other wallet, so what came from it may show an unknown cost." : `Couldn't read ${count} of your other wallets, so what came from them may show an unknown cost.`
 }

@@ -5,9 +5,9 @@ import { combinedPortfolioOf, previewCombined, type Unread } from "../core/combi
 import { answerSender, enterExchangeCosts, walletsBehind, type Book, type BookChange, type Money, type SenderAnswer } from "../core/book.ts"
 import { readCheckedAccounts } from "../core/device-accounts.ts"
 import { noteLinkFor, type DeviceLink } from "../core/device-link.ts"
-import { mergeWithdrawals, parseCoinbaseCsv, type ExchangeImport } from "../core/exchange-import.ts"
+import { importStart, keepingImport, parseCoinbaseCsv, startsAfterImported, type ExchangeImport } from "../core/exchange-import.ts"
 import { answersOffered, foldBook, isBalanced, microsOf, previewBook, type Question } from "../core/resolve.ts"
-import { ALL_ANSWERED, ANSWER_QUESTIONS, COST_QUESTION, COST_WHY, EXCHANGE_COST_WHY, NOT_SAVED, NOTHING_LEFT, SENDER_QUESTION, SENDER_WHY, finishNote, importedSentence, linkedFailedSentence } from "../core/wording.ts"
+import { ALL_ANSWERED, ANSWER_QUESTIONS, COST_QUESTION, COST_WHY, EXCHANGE_COST_WHY, NOT_SAVED, NOTHING_LEFT, SENDER_QUESTION, SENDER_WHY, finishNote, IMPORT_NOT_WHOLE, IMPORT_QUESTION, IMPORT_STARTS_LATE, importedSentence, importWhySentence, linkedFailedSentence } from "../core/wording.ts"
 import { linkByProof, type Ethereum } from "./link-proof.ts"
 
 type Ownership = "mine" | "my-exchange" | "someone-else"
@@ -47,7 +47,8 @@ type Props = {
   book: Book
   /** Which holding Resolve was clicked on, so its questions come first. */
   firstAsset: string | null
-  onChange: (change: BookChange) => void
+  /** `onSaved` hears what the change was made to, since that can be more than what's on screen. */
+  onChange: (change: BookChange, onSaved?: (before: Book) => void) => void
   onUndo: () => void
   canUndo: boolean
   /** The last answer or undo couldn't be saved. */
@@ -68,8 +69,16 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
   const [message, setMessage] = useState<string | null>(null)
   // Apart from the message, which goes with its card, because an import can answer the card it was made from.
   const [lastImport, setLastImport] = useState<ExchangeImport | null>(null)
+  const [pendingImport, setPendingImport] = useState<ExchangeImport | null>(null)
+  const [importRefusal, setImportRefusal] = useState<string | null>(null)
+  const importAsk = useRef<HTMLDivElement>(null)
   const [drag, setDrag] = useState<{ x: number; y: number } | null>(null)
   const start = useRef<{ x: number; y: number } | null>(null)
+
+  // It's below the card, which can put it out of sight in a short window, and then picking a file looks like it did nothing.
+  useEffect(() => {
+    if (pendingImport || importRefusal) importAsk.current?.scrollIntoView({ block: "nearest" })
+  }, [pendingImport, importRefusal])
 
   useLayoutEffect(() => {
     const element = dialog.current
@@ -134,6 +143,7 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
   }
   const undo = () => {
     setLastImport(null)
+    setImportRefusal(null)
     onUndo()
   }
   const skip = () => {
@@ -181,11 +191,29 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
   const importFile = async (file: File | undefined) => {
     if (!file) return
     const imported = parseCoinbaseCsv(await file.text())
-    setLastImport(imported)
+    setPendingImport(null)
+    setImportRefusal(null)
+    setLastImport(null)
     if (!imported) return setMessage("That doesn't look like a Coinbase transaction history.")
     setMessage(null)
-    onChange((latest) => ({ ...latest, withdrawals: mergeWithdrawals(latest.withdrawals, imported.withdrawals) }))
-    setAsking(false)
+    if (imported.withdrawals.length === 0) return setLastImport(imported)
+    if (startsAfterImported(book.withdrawals, imported)) return setImportRefusal(IMPORT_STARTS_LATE)
+    setPendingImport(imported)
+  }
+  const keepImport = (imported: ExchangeImport) => {
+    setPendingImport(null)
+    onChange(
+      (latest) => keepingImport(latest, imported),
+      (before) => {
+        if (startsAfterImported(before.withdrawals, imported)) return setImportRefusal(IMPORT_STARTS_LATE)
+        setLastImport(imported)
+        setAsking(false)
+      },
+    )
+  }
+  const declineImport = () => {
+    setPendingImport(null)
+    setImportRefusal(IMPORT_NOT_WHOLE)
   }
 
   const onPointerUp = (e: ReactPointerEvent) => {
@@ -267,7 +295,7 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
                   <>
                     <label className="file-button">
                       Import Coinbase history
-                      <input type="file" accept=".csv,text/csv" hidden onChange={(e) => void importFile(e.target.files?.[0])} />
+                      <input type="file" accept=".csv,text/csv" hidden onChange={(e) => { void importFile(e.target.files?.[0]); e.target.value = "" }} />
                     </label>
                     <button type="button" title="An estimate, and it's always shown as one" onClick={() => choose("someone-else")}>
                       Use the price when it arrived
@@ -326,6 +354,23 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
           {importedSentence(lastImport.withdrawals.length, lastImport.skipped)}
         </p>
       ) : null}
+
+      <div ref={importAsk}>
+        {importRefusal ? <p className="small warn-text" role="status">{importRefusal}</p> : null}
+        {pendingImport ? (
+          <div role="group" aria-label="Importing a file">
+            <p className="small"><strong>{IMPORT_QUESTION}</strong> {importWhySentence(importStart(pendingImport) as string)}</p>
+            <div className="cost-actions">
+              <button type="button" onClick={() => keepImport(pendingImport)}>
+                Yes, use it
+              </button>
+              <button type="button" onClick={declineImport}>
+                No, don't use it
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
 
       <LinkByProof current={wallet.address} book={book} onChange={onChange} />
 
