@@ -103,7 +103,7 @@ export function foldWallet(wallet: WalletData, method: Method, view: WalletView 
 }
 
 /** What a wallet's numbers leave out, in words. Empty when nothing is. */
-export function describeMissing({ totals, gasUnknownTxs, l1FeeUnknownTxs }: { totals: Totals; gasUnknownTxs: readonly string[]; l1FeeUnknownTxs: readonly string[] }): string[] {
+export function describeMissing({ totals, gasUnknownTxs, l1FeeUnknownTxs, missingRateTxs = [] }: { totals: Totals; gasUnknownTxs: readonly string[]; l1FeeUnknownTxs: readonly string[]; missingRateTxs?: readonly string[] }): string[] {
   const reasons = new Map<string, string[]>()
   for (const { asset, reason } of totals.excluded) reasons.set(asset, [...(reasons.get(asset) ?? []), reason])
   return [
@@ -111,5 +111,6 @@ export function describeMissing({ totals, gasUnknownTxs, l1FeeUnknownTxs }: { to
     ...(totals.unpricedGas ? ["gas with no price"] : []),
     ...(gasUnknownTxs.length > 0 ? [`gas that couldn't be worked out, in ${gasUnknownTxs.length} tx, so ETH is overstated`] : []),
     ...(l1FeeUnknownTxs.length > 0 ? [`the L1 fees of ${l1FeeUnknownTxs.length} tx, so ETH can't be checked`] : []),
+    ...(missingRateTxs.length > 0 ? [`the exchange rate of ${missingRateTxs.length} tx, so what they moved has no amount in this currency`] : []),
   ]
 }
