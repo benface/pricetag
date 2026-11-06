@@ -261,6 +261,11 @@ public final class ResolveModel {
     public func keepImport() {
         guard let imported = pendingImport else { return }
         pendingImport = nil
+        // What proves the file partial can have been saved while it waited for an answer.
+        guard !store.book.importStartsLate(imported) else {
+            importRefusal = Wording.importStartsLate
+            return
+        }
         store.keepImport(imported)
         lastImport = imported
         advance()

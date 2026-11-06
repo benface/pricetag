@@ -392,6 +392,23 @@ actor BookSource: PortfolioSource {
         #expect(store.book.withdrawals == [good])
     }
 
+    @Test func aWithdrawalSavedWhileAFileWaitsGetsItRefused() async throws {
+        let (store, source, _) = try makeStore()
+        await _ = store.poll()
+        let model = ResolveModel(store: store)
+        let imported = ExchangeImport(withdrawals: [withdrawal("2026-02-01T00:00:00.000Z", cost: "6")], skipped: 0, firstSeen: ["ETH": "2026-01-01T00:00:00.000Z"])
+        await source.answerImports(imported)
+        await _ = model.importCoinbase(csv: "anything")
+        #expect(model.pendingImport != nil)
+        let saved = Book(withdrawals: [withdrawal("2025-06-01T00:00:00.000Z"), withdrawal("2026-02-01T00:00:00.000Z", cost: "4.5")])
+        store.setBook(saved)
+        model.keepImport()
+        #expect(store.book.withdrawals == saved.withdrawals)
+        #expect(model.pendingImport == nil)
+        #expect(model.importRefusal == Wording.importStartsLate)
+        #expect(model.lastImport == nil)
+    }
+
     @Test func importingTheSameFileAgainIsStillAsked() {
         let found = withdrawal("2025-06-01T00:00:00.000Z")
         let imported = ExchangeImport(withdrawals: [found], skipped: 0, firstSeen: [found.asset: "2025-01-01T00:00:00.000Z"])

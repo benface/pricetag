@@ -3,7 +3,7 @@
 // was bought before it changes every cost in it, so only the person who downloaded it can vouch for that.
 
 import { ASSETS, decimalsOf, isAddress, normalizeAddress, type CurrencyCode } from "@pricetag/sdk/core"
-import type { ExchangeWithdrawal } from "./book.ts"
+import type { Book, ExchangeWithdrawal } from "./book.ts"
 
 export type ExchangeImport = {
   withdrawals: ExchangeWithdrawal[]
@@ -150,6 +150,12 @@ export function mergeWithdrawals(earlier: readonly ExchangeWithdrawal[], found: 
   const again = new Set(found.map(withdrawalKey))
   return [...earlier.filter((withdrawal) => !again.has(withdrawalKey(withdrawal))), ...found]
 }
+
+/**
+ * What the book becomes once someone vouches for a file. It's checked against the book as it is now, since what proves the file
+ * partial can have been saved while it waited for an answer, and then the book stays as it is.
+ */
+export const keepingImport = (latest: Book, imported: ExchangeImport): Book => (startsAfterImported(latest.withdrawals, imported) ? latest : { ...latest, withdrawals: mergeWithdrawals(latest.withdrawals, imported.withdrawals) })
 
 const MATCH_BEFORE_MS = 5 * 60_000
 const MATCH_AFTER_MS = 60 * 60_000

@@ -7,7 +7,7 @@ import { createWallets, type Source } from "@pricetag/sdk/internal"
 import { ASSETS, CURRENCIES, ETH_ADDRESS, USDC_ADDRESS, buildPricedLegs, openingLegs, shortHash, type LegRow, type Method, type Reference, encodeNote, parseNote } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../src/core/api.ts"
 import { answerSender, applyChange, costKey, emptyBook, enterExchangeCosts, linkDeviceAccounts, linkMessage, linkedWallets, parseBook, proofOwner, undoAnswer, type Book, type BookChange, type Money, type Receipt, type SenderAnswer } from "../src/core/book.ts"
-import { importStart, matchWithdrawals, mergeWithdrawals, parseCoinbaseCsv, startsAfterImported } from "../src/core/exchange-import.ts"
+import { importStart, keepingImport, matchWithdrawals, mergeWithdrawals, parseCoinbaseCsv, startsAfterImported } from "../src/core/exchange-import.ts"
 import { exportCsv } from "../src/core/export.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_SAVINGS_WALLET, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import { linkByProof } from "../src/ui/link-proof.ts"
@@ -1397,6 +1397,16 @@ Timestamp,Transaction Type,Asset,Quantity Transacted,Spot Price Currency,Spot Pr
     it("isn't partial for being imported again, or for going further back", () => {
       assert.equal(startsAfterImported(whole.withdrawals, whole), false)
       assert.equal(startsAfterImported(part.withdrawals, whole), false)
+    })
+
+    it("leaves the book alone when what proves the file partial was saved while it waited", () => {
+      const saved = { ...emptyBook(), withdrawals: whole.withdrawals }
+      assert.equal(keepingImport(saved, part), saved)
+    })
+
+    it("adds what it found when nothing proves the file partial", () => {
+      assert.deepEqual(keepingImport(emptyBook(), part).withdrawals, part.withdrawals)
+      assert.deepEqual(keepingImport({ ...emptyBook(), withdrawals: part.withdrawals }, whole).withdrawals, whole.withdrawals)
     })
 
     it("only looks at the assets the file has withdrawals of", () => {

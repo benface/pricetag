@@ -5,7 +5,7 @@ import { combinedPortfolioOf, previewCombined, type Unread } from "../core/combi
 import { answerSender, enterExchangeCosts, walletsBehind, type Book, type BookChange, type Money, type SenderAnswer } from "../core/book.ts"
 import { readCheckedAccounts } from "../core/device-accounts.ts"
 import { noteLinkFor, type DeviceLink } from "../core/device-link.ts"
-import { importStart, mergeWithdrawals, parseCoinbaseCsv, startsAfterImported, type ExchangeImport } from "../core/exchange-import.ts"
+import { importStart, keepingImport, parseCoinbaseCsv, startsAfterImported, type ExchangeImport } from "../core/exchange-import.ts"
 import { foldBook, isBalanced, microsOf, previewBook, type Question } from "../core/resolve.ts"
 import { ALL_ANSWERED, ANSWER_QUESTIONS, COST_QUESTION, COST_WHY, EXCHANGE_COST_WHY, NOT_SAVED, NOTHING_LEFT, SENDER_QUESTION, SENDER_WHY, finishNote, IMPORT_NOT_WHOLE, IMPORT_QUESTION, IMPORT_STARTS_LATE, importedSentence, importWhySentence, linkedFailedSentence } from "../core/wording.ts"
 import { linkByProof, type Ethereum } from "./link-proof.ts"
@@ -47,7 +47,8 @@ type Props = {
   book: Book
   /** Which holding Resolve was clicked on, so its questions come first. */
   firstAsset: string | null
-  onChange: (change: BookChange) => void
+  /** `onSaved` hears what the change was made to, since that can be more than what's on screen. */
+  onChange: (change: BookChange, onSaved?: (before: Book) => void) => void
   onUndo: () => void
   canUndo: boolean
   /** The last answer or undo couldn't be saved. */
@@ -76,7 +77,7 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
 
   // It's below the card, which can put it out of sight in a short window, and then picking a file looks like it did nothing.
   useEffect(() => {
-    importAsk.current?.scrollIntoView({ block: "nearest" })
+    if (pendingImport || importRefusal) importAsk.current?.scrollIntoView({ block: "nearest" })
   }, [pendingImport, importRefusal])
 
   useLayoutEffect(() => {
@@ -198,9 +199,14 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
   }
   const keepImport = (imported: ExchangeImport) => {
     setPendingImport(null)
-    setLastImport(imported)
-    onChange((latest) => ({ ...latest, withdrawals: mergeWithdrawals(latest.withdrawals, imported.withdrawals) }))
-    setAsking(false)
+    onChange(
+      (latest) => keepingImport(latest, imported),
+      (before) => {
+        if (startsAfterImported(before.withdrawals, imported)) return setImportRefusal(IMPORT_STARTS_LATE)
+        setLastImport(imported)
+        setAsking(false)
+      },
+    )
   }
   const declineImport = () => {
     setPendingImport(null)
