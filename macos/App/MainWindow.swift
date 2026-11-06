@@ -33,6 +33,8 @@ struct MainWindow: View {
     @State private var exporting = false
     @State private var exportDocument: CSVDocument?
     @State private var exportError: String?
+    /// Asked for from the details sheet, which closes first.
+    @State private var resolvingAfterDetails: String?
 
     /// How small the window can get, with the sidebar closed. It closes by itself below `sidebarWidth`.
     static let minimumSize = CGSize(width: 480, height: 400)
@@ -59,6 +61,8 @@ struct MainWindow: View {
                 .inspector(isPresented: inspectorBinding) { inspector }
         }
         .frame(minWidth: Self.minimumSize.width, minHeight: Self.minimumSize.height)
+        // What each wallet is called, wherever All Yours says which wallet something is in.
+        .environment(\.walletNames, store.walletList(hotWallet: hotWallet).names)
         // Only for the details opening and closing. It doesn't reach anything else that changes at another moment.
         .motion(Motion.panel, value: navigation.target == nil)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { newWidth in
@@ -67,7 +71,12 @@ struct MainWindow: View {
             width = newWidth
             if wasWide != isWide { columns = isWide ? .all : .detailOnly }
         }
-        .sheet(isPresented: detailsSheetBinding) { detailsSheet }
+        .sheet(isPresented: detailsSheetBinding, onDismiss: {
+            if let asset = resolvingAfterDetails {
+                resolvingAfterDetails = nil
+                navigation.resolve(asset)
+            }
+        }) { detailsSheet }
         // Coming back from the provider's page is when there's news, whichever section this is on.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await purchases.check() }
@@ -178,7 +187,8 @@ struct MainWindow: View {
                 Button("Buy", systemImage: "plus") { navigation.isBuying = true }
                     // A plus on its own could mean adding anything.
                     .labelStyle(.titleAndIcon)
-                    .help("Buy crypto")
+                    // With every wallet showing, it says which one it's for.
+                    .help(WalletAddress.isAllYours(store.address) ? "Buy crypto for \(HotWalletWording.title)" : "Buy crypto")
             }
         }
     }
@@ -186,7 +196,7 @@ struct MainWindow: View {
     @ViewBuilder
     private var inspector: some View {
         if let target = navigation.target {
-            ExplanationPane(target: target, store: store)
+            ExplanationPane(target: target, store: store) { navigation.resolve($0) }
                 .safeAreaBar(edge: .top) { metricPicker(target) }
                 .inspectorColumnWidth(min: 300, ideal: 330, max: 520)
                 .toolbar {
@@ -211,7 +221,11 @@ struct MainWindow: View {
                 }
                 .padding(12)
                 Divider()
-                ExplanationPane(target: target, store: store)
+                // Questions open in a sheet of their own, so they wait for this one to close.
+                ExplanationPane(target: target, store: store) { asset in
+                    resolvingAfterDetails = asset
+                    navigation.target = nil
+                }
             }
             .frame(minWidth: 320, idealWidth: 420, minHeight: 320, idealHeight: 520)
         }
@@ -221,12 +235,16 @@ struct MainWindow: View {
     @ViewBuilder
     private func metricPicker(_ target: ExplainTarget) -> some View {
         if case .asset(let asset, let metric) = target, let position = portfolio?.positions.first(where: { $0.asset == asset }) {
-            Picker("Show", selection: Binding(get: { metric }, set: { navigation.target = .asset(asset, $0) })) {
-                ForEach(position.explainableMetrics, id: \.self) { Text($0.title).tag($0) }
+            // The pane has no title of its own for these, so this names both the asset and the number.
+            HStack(spacing: 8) {
+                Text(asset).font(.headline)
+                Picker("Show", selection: Binding(get: { metric }, set: { navigation.target = .asset(asset, $0) })) {
+                    ForEach(position.explainableMetrics, id: \.self) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .fixedSize()
             }
-            .pickerStyle(.menu)
-            .labelsHidden()
-            .fixedSize()
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16)
             .padding(.vertical, 6)
@@ -347,8 +365,8 @@ struct MainWindow: View {
                 .fixedSize(horizontal: false, vertical: true)
             PortfolioAttention(portfolio: portfolio, onOpen: { navigation.target = $0 }, onResolve: { navigation.resolve() })
                 .arrives()
-            PnlHistorySection(portfolio: portfolio, isLive: isLive, range: $navigation.chartRange) { navigation.target = .transaction($0) }
-                .frame(height: portfolio.hasChartableData && !portfolio.isTooNewToChart ? chartHeight(pageHeight, rows: portfolio.listedPositions.count) : nil)
+            PnlHistorySection(portfolio: portfolio, isLive: isLive, range: $navigation.chartRange, metric: $navigation.chartMetric) { navigation.target = .transaction($0) }
+                .frame(height: portfolio.canChart(navigation.chartMetric) ? chartHeight(pageHeight, rows: portfolio.listedPositions.count) : nil)
             HoldingsSection(portfolio: portfolio, store: store, isLive: isLive, target: $navigation.target) { navigation.resolve($0) }
             HoldComparisonCard(comparison: portfolio.holdComparison, currency: portfolio.currency, isLive: isLive) { navigation.target = .holdComparison }
         }
@@ -358,7 +376,7 @@ struct MainWindow: View {
 
     /// What can add or remove a whole block of the page.
     private func pageShape(_ portfolio: Portfolio) -> [Bool] {
-        [portfolio.attention == nil, portfolio.hasChartableData && !portfolio.isTooNewToChart, store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) == nil, portfolio.linkedFailed.isEmpty, portfolio.linkedReading.isEmpty]
+        [portfolio.attention == nil, portfolio.canChart(navigation.chartMetric), store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) == nil, portfolio.linkedFailed.isEmpty, portfolio.linkedReading.isEmpty]
     }
 
     private func chartHeight(_ pageHeight: CGFloat, rows: Int) -> CGFloat {
@@ -367,15 +385,7 @@ struct MainWindow: View {
     }
 
     private func transactions(_ portfolio: Portfolio) -> some View {
-        VStack(spacing: 0) {
-            let notices = notices(portfolio)
-            notices.padding(12)
-            if portfolio.transactions.isEmpty {
-                ContentUnavailableView("No Transactions Yet", systemImage: "list.bullet", description: Text("They'll show up here as they happen."))
-            } else {
-                TransactionsTable(transactions: portfolio.transactions, currency: portfolio.currency, isLive: isLive, target: $navigation.target)
-            }
-        }
+        TransactionsPage(portfolio: portfolio, store: store, hotWallet: hotWallet, isLive: isLive, navigation: navigation, notices: notices(portfolio))
     }
 
     @ViewBuilder
@@ -398,6 +408,32 @@ struct MainWindow: View {
         if portfolio.mode == .demo {
             Notice(.info, Wording.demo)
         }
+        if portfolio.isAllYours {
+            allYoursNotices(portfolio)
+        } else {
+            linkedNotices(portfolio)
+        }
+    }
+
+    /// Wallets that aren't in All Yours' numbers yet, by name, since the numbers are only theirs once they are.
+    @ViewBuilder
+    private func allYoursNotices(_ portfolio: Portfolio) -> some View {
+        let names = store.walletList(hotWallet: hotWallet).names
+        if !portfolio.linkedFailed.isEmpty {
+            HStack(spacing: 8) {
+                Notice(.warning, Wording.allYoursFailed(portfolio.linkedFailed.map(names.walletName)))
+                Button("Try Again") { store.refresh() }
+            }
+            .arrives()
+        }
+        if !portfolio.linkedReading.isEmpty {
+            Notice(.info, Wording.allYoursReading(portfolio.linkedReading.map(names.walletName)))
+                .arrives()
+        }
+    }
+
+    @ViewBuilder
+    private func linkedNotices(_ portfolio: Portfolio) -> some View {
         if !portfolio.linkedFailed.isEmpty {
             HStack(spacing: 8) {
                 Notice(.warning, Wording.linkedFailed(portfolio.linkedFailed.count))
@@ -568,9 +604,17 @@ private struct CompactHolding: View {
         }
         .lineLimit(1)
         .padding(.vertical, 7)
-        .opacity(isLive ? (position.isHeld ? 1 : 0.6) : 0.55)
+        .stale(!isLive || !position.isHeld)
         .contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(HoldingRow.spokenLabel(
+            position,
+            currency,
+            isLive: isLive,
+            amount: Format.amount(position.values.qty, decimals: position.decimals),
+            price: position.price.map { Format.estimate(Format.price($0.micros, currency), position.estimates.value) },
+            returnText: position.isHeld ? position.returnBps.map { Format.estimate(Format.percent(bps: $0), position.estimates.unrealized) } : nil
+        ))
     }
 
     private var amountAtPrice: String {
@@ -601,6 +645,7 @@ private struct HoldingsTable: View {
     let onResolve: (String) -> Void
     @State private var selection: Position.ID?
     @State private var columns = TableColumnCustomization<Position>()
+    @Environment(\.walletNames) private var walletNames
 
     private var rows: [Position] { portfolio.listedPositions.sorted(using: sort) }
 
@@ -665,12 +710,13 @@ private struct HoldingsTable: View {
                 HStack(spacing: 5) {
                     Text(position.asset).fontWeight(.medium)
                     if let note = position.note {
-                        Text(note).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Text(note).font(.caption).secondaryText().lineLimit(1)
                     }
                     // Once per row, however many of its numbers it affects. A balance that matches says nothing.
                     balanceCheck(position)
                 }
-                .opacity(position.isHeld ? 1 : 0.6)
+                .stale(!position.isHeld)
+                .help(breakdown(position) ?? "")
                 .tableCell()
             }
             .width(min: Column.asset, ideal: Column.assetRoom, max: limit(Column.assetRoom))
@@ -800,7 +846,7 @@ private struct HoldingsTable: View {
     }
 
     private var dash: some View {
-        Text("—").foregroundStyle(.tertiary).tableCell()
+        Text("—").foregroundStyle(.tertiary).accessibilityLabel("None").tableCell()
     }
 
     /// Unknown whenever its cost is, and never 0%. With a known cost of nothing, there's no share of it to show.
@@ -819,6 +865,22 @@ private struct HoldingsTable: View {
         .buttonStyle(NumberButtonStyle())
     }
 
+    /// Where each wallet's share is, for All Yours, so nothing that's unknown hides inside a total.
+    private func breakdown(_ position: Position) -> String? {
+        guard let parts = position.wallets, !parts.isEmpty else { return nil }
+        return parts.map { part in
+            let unknown = part.hasUnknownCost ? ", \(Format.amount(part.unknownCostQty, decimals: position.decimals)) at an unknown cost" : ""
+            return "\(walletNames.walletName(part.wallet)): \(Format.amount(part.qty, decimals: position.decimals)) \(position.asset)\(unknown)"
+        }.joined(separator: "\n")
+    }
+
+    /// Which wallets an unknown cost is in, for All Yours.
+    private func unknownIn(_ position: Position) -> String? {
+        let parts = (position.wallets ?? []).filter(\.hasUnknownCost)
+        guard !parts.isEmpty else { return nil }
+        return "Unknown cost in \(parts.map { walletNames.walletName($0.wallet) }.formatted(.list(type: .and)))"
+    }
+
     private func number(_ position: Position, _ metric: AssetMetric, _ text: String, tone: Tone) -> some View {
         Button {
             target = .asset(position.asset, metric)
@@ -827,99 +889,20 @@ private struct HoldingsTable: View {
                 .lineLimit(1)
                 // A long amount gets smaller rather than losing digits.
                 .minimumScaleFactor(0.7)
-                .opacity(isLive ? (position.isHeld ? 1 : 0.6) : 0.55)
+                .stale(!isLive || !position.isHeld)
                 .justKnown(justKnown.contains(position.asset) && (metric == .average || metric == .unrealized || metric == .return))
         }
         .buttonStyle(NumberButtonStyle())
-        .help(metric.help ?? "")
-        .accessibilityLabel("\(position.asset) \(metric.label), \(text)")
+        .help((text == Wording.unknown ? unknownIn(position) : nil) ?? metric.help ?? "")
+        .accessibilityLabel(Spoken.number("\(position.asset) \(metric.label)", text, isLive: isLive))
         .tableCell()
     }
 }
 
 extension View {
     /// Lines a cell up with its column's title, which the header draws a couple of points in from each side.
-    fileprivate func tableCell() -> some View {
+    func tableCell() -> some View {
         padding(.horizontal, 2)
-    }
-}
-
-/// Each transaction the chart plots. Up and down move through them and show each one's legs.
-private struct TransactionsTable: View {
-    let transactions: [PnlPoint]
-    let currency: CurrencyCode
-    let isLive: Bool
-    @Binding var target: ExplainTarget?
-    @State private var selection: PnlPoint.ID?
-    @FocusState private var isFocused: Bool
-
-    private var targetHash: String? {
-        if case .transaction(let hash) = target { hash } else { nil }
-    }
-
-    private func hash(_ id: PnlPoint.ID) -> String? {
-        transactions.first { $0.id == id }?.txHash
-    }
-
-    var body: some View {
-        Table(transactions, selection: $selection) {
-            TableColumn("Time") { point in
-                Text(point.date.map(Format.time) ?? point.timestamp)
-                    .tableCell()
-            }
-            // Only what they need, so the words get the rest, and a small window still has room for the last column.
-            .width(min: 120, ideal: 120, max: 130)
-            TableColumn("What happened") { point in
-                if let summary = point.summary {
-                    Text(summary)
-                        .lineLimit(1)
-                        .help(summary)
-                        .tableCell()
-                } else {
-                    Text("—").foregroundStyle(.tertiary).tableCell()
-                }
-            }
-            .width(min: 100)
-            TableColumn("Total PnL") { point in
-                LiveNumber(point.pnlMicros.map { Format.signedMoney($0, currency) } ?? "Unavailable", tone: point.pnlMicros == nil ? .secondary : isLive ? Tone(signed: point.pnlMicros) : .neutral)
-                    .opacity(isLive ? 1 : 0.55)
-                    .help(Wording.pnlHelp)
-                    .updatingMark()
-                    .tableCell()
-            }
-            .width(min: 90, ideal: 90, max: 110)
-            .alignment(.numeric)
-            TableColumn("Left out") { point in
-                if point.excludedCount > 0 {
-                    LiveNumber("\(point.excludedCount) unknown", tone: .secondary).tableCell()
-                } else {
-                    Text("—").foregroundStyle(.tertiary).tableCell()
-                }
-            }
-            .width(min: 70, ideal: 70, max: 90)
-            .alignment(.numeric)
-        }
-        .tableStyle(.inset)
-        .alternatingRowBackgrounds(.disabled)
-        .contextMenu(forSelectionType: PnlPoint.ID.self) { ids in
-            if let hash = ids.first.flatMap(hash) {
-                TransactionActions(hash: hash) { target = .transaction(hash) }
-            }
-        }
-        .onCopyCommand {
-            guard let hash = selection.flatMap(hash) else { return [] }
-            return [NSItemProvider(object: hash as NSString)]
-        }
-        .focused($isFocused)
-        .onAppear { isFocused = true }
-        .onChange(of: selection) { _, id in
-            guard let hash = transactions.first(where: { $0.id == id })?.txHash, hash != targetHash else { return }
-            target = .transaction(hash)
-        }
-        .onChange(of: target, initial: true) {
-            selection = transactions.first { $0.txHash == targetHash }?.id
-        }
-        .accessibilityLabel("Transactions")
     }
 }
 
@@ -991,7 +974,7 @@ private struct NoActivity<Notices: View>: View {
             // Never shown here: what holds the key is the only place to trust it, since a tampered page could show another.
             Text("To receive here, copy the address from the device or app that holds its key, and check it there.")
         } else {
-            Text("Nothing has moved for this wallet in \(Format.duration(ms: BlockTime.msBetween(portfolio.coverage.fromBlock, portfolio.coverage.toBlock))).")
+            Text("Nothing has moved \(portfolio.isAllYours ? "in any of your wallets" : "for this wallet") in \(Format.duration(ms: BlockTime.msBetween(portfolio.coverage.fromBlock, portfolio.coverage.toBlock))).")
                 .help(Wording.coverage(portfolio))
         }
     }

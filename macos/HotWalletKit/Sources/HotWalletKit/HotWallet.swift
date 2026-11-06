@@ -1094,7 +1094,12 @@ public final class HotWallet {
     }
 
     private func signAndSend(to: EthereumAddress, value: UInt128, data: [UInt8], from address: EthereumAddress, snapshot: ChainSnapshot, record: (String, UInt64) -> SignedRecord) async throws {
-        let estimate = try await chain.estimateGas(from: address, to: to, value: value, data: data)
+        let estimate: UInt64
+        do {
+            estimate = try await chain.estimateGas(from: address, to: to, value: value, data: data)
+        } catch ChainError.rejected(let message) {
+            throw ChainError.rejected(HotWalletWording.notSent(message))
+        }
         // A plain send to a plain address uses exactly what it's quoted.
         let gasLimit = data.isEmpty && estimate == 21000 ? estimate : estimate + estimate / 4
         guard snapshot.balances[Base.eth] ?? 0 >= value + snapshot.fees.costWei(gas: UInt128(gasLimit)) else { throw ChainError.rejected(HotWalletWording.noGasToSend) }
@@ -1117,6 +1122,8 @@ public final class HotWallet {
             try await recordAndSend(signed, from: address, record: record(signed.hash, nonce))
         } catch ChainError.unreachable {
             // It may have got through, so it counts as on its way, and the receipt check settles it.
+        } catch ChainError.rejected(let message) {
+            throw ChainError.rejected(HotWalletWording.notSent(message))
         }
     }
 
@@ -1155,7 +1162,7 @@ public final class HotWallet {
                 nonce += 1
                 sweepProblem = nil
             } catch let ChainError.rejected(message) {
-                sweptOnItsOwnFailed("A sweep of \(transfer.token.symbol) didn't go out: \(message)", reason: reason)
+                sweptOnItsOwnFailed("A sweep of \(transfer.token.symbol) didn't go out. \(HotWalletWording.refusal(message))", reason: reason)
                 pausedUntil = now().addingTimeInterval(Self.pauseAfterFailure)
                 return
             }

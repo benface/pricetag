@@ -3,6 +3,7 @@
 
 import { hasStarted, msBetweenBlocks, type CurrencyCode, type Head, type LatestPrice, type Method, type Mode, type PnlPoint, type PnlStatus, type PositionValues, type PricedLeg, type Reconciliation, type Totals, type UnlistedToken, type WalletData } from "@pricetag/sdk/core"
 import type { Estimates, HoldComparison } from "@pricetag/sdk/core"
+import type { TransactionFacts } from "./activity.ts"
 import type { Meter, Question } from "./resolve.ts"
 import type { TaxCountryCode, TaxPreviewRow, TaxScope } from "./tax.ts"
 
@@ -64,8 +65,8 @@ export type PortfolioExchange = {
   missingRateTxs: string[]
 }
 
-/** A point on the PnL chart, and what its transaction did. The last point has no transaction, so no summary. */
-export type BookPoint = PnlPoint & { summary: string | null }
+/** A point on the PnL chart, and what its transaction did. The last point has no transaction, so no summary and no facts. */
+export type BookPoint = PnlPoint & { summary: string | null } & TransactionFacts
 
 /** A wallet's holdings, cost and PnL, already folded by one method, in one currency. */
 export type PortfolioResponse = {
@@ -158,6 +159,12 @@ export type ExplanationLeg = {
   txHash: string
   /** What the wallet already held before the first block read. It isn't a transaction, so `txHash` is empty. */
   opening: boolean
+  /** What this leg did, in one plain sentence led by its amount in money. */
+  summary: string
+  /** What about it isn't known, in words, or null when nothing is. */
+  unknown: string | null
+  /** Answering a question about this asset could fix what isn't known. */
+  answerable: boolean
   /** What this leg did to its position, in words. */
   effect: string
   /** The rows this leg nets together, in words, or null when it's just one. */
