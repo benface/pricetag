@@ -4,7 +4,7 @@ import { createServer, request, type Server } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { after, before, describe, it } from "node:test"
-import { createApi } from "../server/app.ts"
+import { createApi, createSource } from "../server/app.ts"
 import { createHandler } from "../server/http.ts"
 import { createWallets, datasetSource, describeError, isNotStarted, settledThrough, type Query, type ReadL1Fees, type Source, type StreamRange, type StreamRanges } from "@pricetag/sdk/internal"
 import { resolvingSource, settledL1Fees, sharedReads } from "../server/source.ts"
@@ -68,6 +68,21 @@ describe("the server", () => {
 
   it("has nothing to compare with only one rule", async () => {
     assert.equal((await get(server, "/api/portfolio/demo/compare")).status, 404)
+  })
+
+  it("bounds the first head lookup by the dataset's start block", async () => {
+    const asked: string[] = []
+    const query = Object.assign(async <T>(sql: string) => (asked.push(sql), [] as T[]), { aliased: () => query })
+    const hash = { PRICETAG_DATASET_HASH: "a".repeat(64), PRICETAG_FORK_DATASET: "a/c@0.0.1", PRICETAG_FORK_HASH: "b".repeat(64) }
+    const dataset = { AMP_QUERY_URL: "http://127.0.0.1:1", BASE_RPC_URL: "http://127.0.0.1:1", PRICETAG_DATASET: "a/b@0.0.1", PRICETAG_START_BLOCK: "5" }
+    for (const env of [dataset, { ...dataset, ...hash }]) {
+      const created = createSource(env, query)!
+      asked.length = 0
+      await created.source.head(null)
+      await created.follow.readMark(null)
+      assert.equal(asked.length, 2)
+      for (const sql of asked) assert.match(sql, /\.blocks WHERE block_num >= 5 ORDER BY/)
+    }
   })
 
   it("won't start with a fork it can't pin", () => {
@@ -643,7 +658,7 @@ describe("reading a wallet by two pricing rules", () => {
       assert.equal(reads, 2)
     })
 
-    it("reaches them all from the server, so a wallet read after it has the new chain", async () => {
+    it("reaches them all from the server, so a wallet read after it has the new chain", { timeout: 30_000 }, async (t) => {
       const GAS = { block_num: 100, timestamp: 1_800_000_000_000, tx_hash: "ab", tx_index: 1, log_index: 0, token: ETH_ADDRESS.slice(2), account: ME, side: "debit", amount: "1000", kind: "gas" }
       let state = { amount: "1000", fee: 24 }
       const rpc = createServer((req, res) => {
@@ -689,17 +704,15 @@ describe("reading a wallet by two pricing rules", () => {
       await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
       const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
       const paid = async () => ((await (await fetch(`${base}/api/wallet/0x${ME}`)).json()) as WalletResponse).legs.find((leg) => leg.kind === "gas")?.delta
-      const stop = new AbortController()
       try {
         assert.equal(await paid(), "-1024")
-        const events = (await fetch(`${base}/api/events`, { signal: stop.signal })).body!.getReader()
+        const events = (await fetch(`${base}/api/events`, { signal: t.signal })).body!.getReader()
         await new Promise((resolve) => setTimeout(resolve, 20))
         state = { amount: "2000", fee: 34 }
         hand.send({ start: 100, end: 200, hash: "0xnew", complete: true })
         for (let seen = ""; !seen.includes("event: head"); ) seen += new TextDecoder().decode((await events.read()).value)
         assert.equal(await paid(), "-2034")
       } finally {
-        stop.abort()
         server.closeAllConnections()
         server.close()
         rpc.close()

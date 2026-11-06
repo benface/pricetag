@@ -63,7 +63,7 @@ An honest account of building Pricetag on Amp, November 4 to 5, 2026. Private to
 | Dataset's three wallet queries, 33,272 blocks, quiet wallet with 4 `legs` rows | 8.3 s then 6.2 s for `legs` ([WORK-448]) |
 | Same, busy wallet with 75,735 `legs` rows | 8.7 s then 4.8 s ([WORK-448]) |
 | `legs` for the quiet wallet today, 43,000 blocks, 10 rows, after the switch | 7.7 s and 10.8 s |
-| The app's full read, including balances and fees | Quiet: 19–22 s cold, 3–4 s warm. Busy: 142 s cold, 6 s per update (DEMO.md, [WORK-410]) |
+| The app's full read, including balances and fees | Quiet: 13–17 s cold with a bounded head lookup ([WORK-552]), 19–22 s before, 3–4 s warm. Busy: 142 s cold, 6 s per update (DEMO.md, [WORK-410]) |
 | `eth_call` through Amp | About 30 ms per call on staging. It kept up with 2 s blocks, 1,030 of 1,030 in a row ([WORK-320], [321][WORK-321]) |
 
 **Freshness** (measured, on staging):
@@ -87,6 +87,7 @@ Some costs do grow. `carried` writes about 10 times the rows, an estimated 3.6M 
 ### Reliability on staging
 
 - **Jobs were solid.** No failure events across 33-minute, 16-minute and overnight runs, and one `ERROR` on the fork seconds after it deployed, with nothing since (measured, [WORK-321], [448][WORK-448]). We can't see worker logs, so retries inside a worker wouldn't show.
+- **Except for one panic, which stopping another job can cause.** On Nov 6 at 02:33 UTC, `pricetag@0.2.0` died with `FATAL` 4 s after we stopped two other jobs on its worker, and stayed down for 13 minutes until a `POST` restarted it, with no history lost (measured, [WORK-575]). All of a worker's jobs share one JS pool (code). A stopped job hands its JS isolate back while a call is still running on it, so the next call can panic, and panics aren't retried (code). Cancelling calls this way panicked uncancelled ones in 10 of 10 local runs on the pool at staging's commit, and never without cancelling (measured). It was 1 in 14 stops on that worker since Nov 3, and all 14 deploys in that time were fine, so it's rare, but it can take down someone else's job. It's already filed as [#3187], from the same worker in September, and still open.
 - **The gateway wasn't.** Reads failed with `upstream connect error` or `Connection refused` in short bursts: three between 20:58 and 21:10 UTC on Nov 4 ([WORK-365]), and repeatedly during [WORK-364], which is why Verify's reads retry up to 4 times. Today, right after the switch, 7 of 104 of our head reads failed, in two bursts at about 18:07 and 18:09 UTC, each cleared within a minute (measured). We don't know the cause, and it's the biggest risk to the demo.
 
 ## 3. Where it shines
@@ -392,6 +393,9 @@ No new issues were filed in the `amp` project: everything that meets its bar alr
 [WORK-519]: https://multica.ai/benface-work/issues/01a1ad4a-d011-7430-8447-bb5443d76b0c
 [WORK-520]: https://multica.ai/benface-work/issues/01a1ad4a-d2ec-7501-9a5b-1095fea392d3
 [WORK-521]: https://multica.ai/benface-work/issues/01a1ad4a-d5ac-7704-9537-87f64c961ae0
+[WORK-552]: https://multica.ai/benface-work/issues/01a1ae83-a37f-79a2-b5bb-257ab02a975c
+[WORK-575]: https://multica.ai/benface-work/issues/01a1aece-4d0e-7e87-b10c-736721709d0b
 [#479]: https://github.com/edgeandnode/amp/issues/479
 [#1819]: https://github.com/edgeandnode/amp/issues/1819
+[#3187]: https://github.com/edgeandnode/amp/issues/3187
 [#3377]: https://github.com/edgeandnode/amp/issues/3377

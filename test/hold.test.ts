@@ -10,7 +10,7 @@ import { explainTarget } from "../src/core/explain.ts"
 import { DEMO_SAVINGS_ADDRESS, DEMO_SAVINGS_WALLET, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import { foldBook } from "../src/core/resolve.ts"
 import { holdCaveatSentence, holdDifferenceSentence } from "../src/core/wording.ts"
-import { explainPortfolio, parseExplainTarget, portfolioOf } from "../server/portfolio.ts"
+import { explainPortfolio, parseExplainTarget, portfolioOf } from "../src/core/portfolio.ts"
 
 const E18 = 10n ** 18n
 const E6 = 10n ** 6n

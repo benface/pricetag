@@ -364,6 +364,8 @@ public struct MessageReview: Equatable, Sendable {
     let signable: SignableMessage
     /// What a permit allows, when it's one this app can read. Then `body` is only there for anyone who wants to check it.
     public var permit: PermitSummary?
+    /// It lets someone act for this wallet later, whether or not this app can read how.
+    var isPermitLike = false
 }
 
 extension MessageReview {
@@ -395,7 +397,7 @@ extension MessageReview {
         let permit = chain == Base.chainID ? PermitSummary(data, formatDate: formatDate) : nil
         if let permit, permit.isZero, permit.kind != .permit2Transfer { warnings.append(SiteWarning(SiteWording.removalIsOnlyARequest(spender: SiteWording.who(permit.spender)))) }
         let headline = permit?.headline ?? "Sign \(data.domain["name"]?.string.map { "this for \($0)" } ?? "this message")"
-        self.init(headline: headline, body: Self.pretty(data.message, indent: 0), contract: contract, warnings: warnings, signable: try data.signable(), permit: permit)
+        self.init(headline: headline, body: Self.pretty(data.message, indent: 0), contract: contract, warnings: warnings, signable: try data.signable(), permit: permit, isPermitLike: Self.looksLikeAPermit(data))
     }
 
     /// Line breaks are fine. Direction overrides, zero-width characters and the like can make a message read as something it isn't.
