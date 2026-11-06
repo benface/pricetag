@@ -726,7 +726,7 @@ struct TopUpSheet: View {
                     .secondaryText()
                     .fixedSize(horizontal: false, vertical: true)
                 if let deviceLink {
-                    DeviceBrowserNote(choice: found, outcome: "your hardware wallet signs the transfer.") { open(deviceLink, in: nil) }
+                    DeviceBrowserNote(choice: found, outcome: "your hardware wallet signs the transfer.", canUseDefault: hasRead) { open(deviceLink, in: nil) }
                 }
                 DisclosureGroup("Or do it by hand on the device") {
                     VStack(alignment: .leading, spacing: 8) {
@@ -774,6 +774,8 @@ struct TopUpSheet: View {
     }
 
     private func open(_ link: URL, in browser: InstalledBrowser?) {
+        // The amount in the link is only worth sending once the room's known.
+        guard hasRead else { return }
         browsers.open(link, browser)
         dismiss()
     }
