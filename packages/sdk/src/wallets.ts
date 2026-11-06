@@ -44,7 +44,11 @@ export type Source = {
   marketReady?(): Promise<boolean>
   /** An asset's latest trades in a block range, newest first. Only a dataset's `priced_legs` has them. */
   readMarketTrades?(asset: string, from: number, to: number): Promise<MarketTrade[]>
-  /** Trades of these tokens off the allowlist in a block range, oldest first. Only a dataset with `token_trades` has them. Leaving this or `tokenActivityThrough` out changes nothing about any wallet. */
+  /**
+   * Trades of these tokens off the allowlist in a block range, with `from` and `to` on the edges of a pricing bucket. Rows have to be grouped
+   * by those buckets, or by something inside them, so a wider read gives the same rows for what it shares. Only a dataset with `token_trades`
+   * has them. Leaving this or `tokenActivityThrough` out changes nothing about any wallet.
+   */
   readTokenActivity?(tokens: readonly string[], from: number, to: number): Promise<TokenActivity[]>
   /** The newest block, in `after`..`head`, that `token_trades` has processed, or null if it hasn't reached `after`. A read past this looks like no trading, not a dataset that's behind. */
   tokenActivityThrough?(after: number, head: number): Promise<number | null>
@@ -195,7 +199,7 @@ export function marketNeeds(rows: readonly LegRow[], priced: readonly PricedRow[
 }
 
 /** A price for each block in a bucket, so a thousand transfers don't make a thousand queries. Always at or before the block. In 2 s blocks. */
-const MARKET_BUCKET_BLOCKS = 150
+export const MARKET_BUCKET_BLOCKS = 150
 /** A current price moves on faster. */
 const MARKET_HEAD_BUCKET_BLOCKS = 30
 /**
@@ -359,9 +363,8 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
   /** Each token's trades, and the blocks they're known to be complete for. */
   const tokenReads = new Map<string, { from: number; through: number; activity: TokenActivity[] }>()
   const tokenPrices = new Map<string, number | null>()
-  /** How far `token_trades` had got when last asked, and the chain's head then, so one that's behind costs one question per block. */
+  /** How far `token_trades` had got when last asked. */
   let tokensReached = -1
-  let tokensAskedAt = -1
 
   /** The answers at `block`'s bucket, reading what's missing. A failure leaves those assets out, and it mustn't take the wallet down with it. */
   async function loadFeedRounds(assets: readonly string[], block: number): Promise<Record<string, FeedRound>> {
@@ -485,10 +488,13 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     return usable && startedAt === rewinds && wanted.every((w) => market.has(marketKey(w)))
   }
 
-  /** The blocks a token's price at `block` rests on: its bucket's whole lookback, up to the bucket's start, where it's worked out. */
+  /**
+   * The blocks a token's price at `block` rests on: its bucket's whole lookback, up to the bucket's start, where it's worked out. A read's
+   * rows are grouped by these buckets, so starting at one's first block means it's never part of a group, whichever read it's in.
+   */
   function tokenPriceBlocks(block: number): { from: number; to: number } {
     const to = bucketOf(block)
-    return { from: blockBefore(to, TOKEN_MARKET_RULES.windowMs), to }
+    return { from: bucketOf(blockBefore(to, TOKEN_MARKET_RULES.windowMs) - 1) + 1, to }
   }
 
   const hasTokenPriceBlocks = (token: string, { from, to }: { from: number; to: number }) => {
@@ -531,7 +537,6 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const unread = unreadTokenPrices(address, rows)
     if (!readTokenActivity || !tokenActivityThrough || unread.length === 0) return
     const startedAt = rewinds
-    tokensAskedAt = head
     try {
       const reached = await tokenActivityThrough(unread.reduce((first, { to }) => Math.min(first, to), Number.POSITIVE_INFINITY), head)
       if (reached === null || startedAt !== rewinds) return
@@ -546,7 +551,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
         wanted.add(need.token)
         // What's been read goes with it: a token's rows get replaced whole, so an earlier block keeps its price.
         from = Math.min(from, need.from, known?.from ?? need.from)
-        to = Math.max(to, need.to, Math.min(known?.through ?? need.to, believed))
+        to = Math.max(to, need.to, Math.min(known?.through ?? need.to, bucketOf(believed)))
       }
       if (wanted.size === 0) return
       const activity = await readTokenActivity([...wanted], from, to)
@@ -567,8 +572,8 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const key = `${token}:${blocks.to}`
     const known = tokenPrices.get(key)
     if (known !== undefined) return known
-    // At the bucket's start, so no block in it is priced by what came after it.
-    const { usdPerRaw } = tokenMarketPrice(tokenReads.get(token)?.activity ?? [], Date.parse(timestamp) - msBetweenBlocks(blocks.to, block))
+    // At the bucket's start, so no block in it is priced by what came after it, and in whole seconds like the trades, so it's the same whichever block asks first.
+    const { usdPerRaw } = tokenMarketPrice(tokenReads.get(token)?.activity ?? [], Date.parse(timestampOfBlock(blocks.to, { blockNum: block, timestamp })))
     const price = usdPerRaw ?? null
     tokenPrices.set(key, price)
     return price
@@ -748,7 +753,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     unreadUnseenBlocks(address, wallet).length === 0 &&
     unreadPayerBlocks(address, wallet).length === 0 &&
     !hasMarketReadsLeft(address, wallet, chain.blockNum) &&
-    !(chain.blockNum > tokensAskedAt && unreadTokenPrices(address, wallet.rows).length > 0)
+    !(chain.blockNum > wallet.readAtHead && unreadTokenPrices(address, wallet.rows).length > 0)
 
   async function refresh(address: string, key: string, range: WalletRange): Promise<Cached> {
     const chain = await currentHead()

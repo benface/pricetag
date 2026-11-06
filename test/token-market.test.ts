@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { ASSETS, ETH_ADDRESS, TOKEN_MARKET_RULES, USDC_ADDRESS, buildPricedLegs, derivePricedRows, foldPositions, msBetweenBlocks, tokenMarketPrice, type LegRow, type Reference, type TokenActivity, type TokenPriceLookup } from "@pricetag/sdk/core"
+import { ASSETS, ETH_ADDRESS, LAST_2S_BLOCK, TOKEN_MARKET_RULES, USDC_ADDRESS, buildPricedLegs, derivePricedRows, foldPositions, msBetweenBlocks, tokenMarketPrice, type LegRow, type Reference, type TokenActivity, type TokenPriceLookup } from "@pricetag/sdk/core"
 import { createWallets, sharedMarket, type Query, type Source } from "@pricetag/sdk/internal"
 import { ptNativeSource, ptTradeSource, tokensTablesSql } from "../dataset/build.ts"
 import { resolvingSource } from "../server/source.ts"
@@ -138,15 +138,16 @@ describe("a wallet reading a token's market", () => {
   const SALE = 50_000_100
   const LATER = SALE + 1000
   const ANCHOR = { blockNum: SALE + 100_000, ms: NOW }
-  const timeOf = (block: number) => ANCHOR.ms - msBetweenBlocks(block, ANCHOR.blockNum)
+  /** In whole seconds, like a block's timestamp. */
+  const timeOf = (block: number) => Math.floor((block > ANCHOR.blockNum ? ANCHOR.ms + msBetweenBlocks(ANCHOR.blockNum, block) : ANCHOR.ms - msBetweenBlocks(block, ANCHOR.blockNum)) / 1000) * 1000
   const quiet = { warn() {}, error() {}, log() {}, info() {}, debug() {} } as unknown as Console
 
   type Trade = { block: number; activity: TokenActivity }
   /** 12 senders on each side, every hour for 12 hours, up to `block`. */
-  const healthyTo = (block: number): Trade[] =>
+  const healthyTo = (block: number, hourBlocks = HOUR_BLOCKS): Trade[] =>
     Array.from({ length: 12 }, (_, hour) => Array.from({ length: 12 }, (_, sender) =>
       (["buy", "sell"] as const).map((side) => {
-        const at = block - hour * HOUR_BLOCKS - sender
+        const at = block - hour * hourBlocks - sender
         return { block: at, activity: { token: TOKEN, timeMs: timeOf(at), sender: `${side}${sender}`, side, usd: 100, raw: 100 / 2e-18, trades: 1 } }
       }),
     )).flat(2)
@@ -287,8 +288,128 @@ describe("a wallet reading a token's market", () => {
     })
   })
 
+  describe("when a read's rows are grouped, as the source does", () => {
+    const BUCKET = SALE - (SALE % 150)
+    const NEXT = BUCKET + 150
+    /** The source's SQL: a sender's side over a bucket's blocks, dated by its last trade. */
+    const groupedSetup = (rows: LegRow[], trades: Trade[], start?: Parameters<typeof setup>[2]) => {
+      const set = setup(rows, trades, start)
+      const blockOf = new Map(trades.map((t) => [t.activity, t.block]))
+      const read = set.source.readTokenActivity!
+      set.source.readTokenActivity = async (tokens, from, to) => {
+        const groups = new Map<string, TokenActivity>()
+        for (const row of await read(tokens, from, to)) {
+          const block = blockOf.get(row)!
+          const size = block > LAST_2S_BLOCK ? 1500 : 150
+          const key = `${row.token}:${row.sender}:${row.side}:${Math.floor((block + size - 1) / size) * size}`
+          const old = groups.get(key)
+          groups.set(key, old ? { ...row, timeMs: Math.max(old.timeMs, row.timeMs), raw: old.raw + row.raw, usd: old.usd + row.usd, trades: old.trades + row.trades } : row)
+        }
+        return [...groups.values()]
+      }
+      return set
+    }
+    /** The same senders again just after `block`, which is what a group that straddled it would've been dated by. */
+    const justAfter = (trades: Trade[], block: number) => trades.filter((t) => t.block > block - 20).map((t) => ({ block: t.block + 20, activity: { ...t.activity, timeMs: timeOf(t.block + 20) } }))
+
+    it("keeps a swap's price when another wallet's read goes further", async () => {
+      const history = healthyTo(BUCKET)
+      const { state, wallets } = groupedSetup([...sale(ME, SALE), ...sale(OTHER, NEXT)], [...history, ...justAfter(history, BUCKET)])
+      const before = await usdcOf(wallets, ME)
+      assertPriced(before)
+      assertPriced(await usdcOf(wallets, OTHER))
+      assert.ok(state.reads.at(-1)![1] > BUCKET, "the second read went further")
+      assert.deepEqual(await usdcOf(wallets, ME), before)
+    })
+
+    it("gives each wallet what a fresh read would, whichever is read first", async () => {
+      const history = healthyTo(BUCKET)
+      const trades = [...history, ...justAfter(history, BUCKET)]
+      const rows = [...sale(ME, SALE), ...sale(OTHER, NEXT)]
+      const meFirst = groupedSetup(rows, trades)
+      const otherFirst = groupedSetup(rows, trades)
+      for (const [wallets, order] of [[meFirst.wallets, [ME, OTHER]], [otherFirst.wallets, [OTHER, ME]]] as const) for (const address of order) await usdcOf(wallets, address)
+      for (const address of [ME, OTHER]) {
+        const fresh = await usdcOf(groupedSetup(rows.filter((r) => r.account === address), trades).wallets, address)
+        assert.deepEqual(await usdcOf(meFirst.wallets, address), fresh)
+        assert.deepEqual(await usdcOf(otherFirst.wallets, address), fresh)
+      }
+    })
+
+    it("only ever reads whole buckets, even with a dataset that's fallen behind or a reorg's blocks held back", async () => {
+      const older = SALE - 23 * HOUR_BLOCKS
+      const third = "0x00000000000000000000000000000000000000dd"
+      const { state, wallets } = groupedSetup([...sale(ME, SALE), ...sale(OTHER, NEXT), ...sale(third, older)], healthyTo(BUCKET))
+      await usdcOf(wallets, ME)
+      await usdcOf(wallets, OTHER)
+      state.reached = NEXT - 40
+      await usdcOf(wallets, third)
+      state.reached = LATER
+      await wallets.rewind(NEXT - 40, LATER)
+      state.head = LATER + 10
+      state.reached = state.head
+      await usdcOf(wallets, OTHER)
+      state.head = LATER + 100
+      state.reached = state.head
+      await usdcOf(wallets, OTHER)
+      assert.ok(state.reads.length >= 4)
+      for (const [from, to] of state.reads) {
+        assert.equal(to % 150, 0)
+        assert.equal((from - 1) % 150, 0)
+      }
+    })
+
+    it("works a bucket out the same whichever of its blocks asks first, where blocks are faster than a timestamp", async () => {
+      const bucket = LAST_2S_BLOCK - (LAST_2S_BLOCK % 1500) + 240_000
+      const recent = (block: number, sender: string, side: "buy" | "sell") => ({ block, activity: { token: TOKEN, timeMs: timeOf(block), sender, side, usd: 100, raw: 100 / 2e-18, trades: 1 } })
+      // An hour is 18,000 of these blocks. The third of the last hour's senders only just makes it, dated at the bucket's very start.
+      const trades = [...healthyTo(bucket - 18_100, 18_000), recent(bucket - 30, "a", "buy"), recent(bucket - 31, "b", "sell"), recent(bucket, "c", "sell")]
+      const costs = await Promise.all([1, 2, 3, 4, 5].map(async (offset) => {
+        const { wallets } = groupedSetup(sale(ME, bucket + offset), trades, { head: bucket + 1000, reached: bucket + 1000 })
+        return (await usdcOf(wallets)).costMicros
+      }))
+      assert.deepEqual(costs, Array(5).fill(COST))
+    })
+
+    it("asks for its buckets in the query, not the clock's", async () => {
+      const sql: string[] = []
+      const query = Object.assign(async (statement: string) => {
+        sql.push(statement)
+        return []
+      }) as unknown as Query
+      await resolvingSource(query, { baseDataset: "base", dataset: "pricetag", tokensDataset: "benface/pricetag_tokens@0.1.1", startBlock: 0, network: "base" }).readTokenActivity!([TOKEN], 1, 150)
+      assert.match(sql[0]!, /\(block_num \+ 149\) - \(block_num \+ 149\) % 150/)
+      assert.match(sql[0]!, /\(block_num \+ 1499\) - \(block_num \+ 1499\) % 1500/)
+      assert.doesNotMatch(sql[0]!, /date_bin/)
+    })
+  })
+
   describe("when the token dataset is behind", () => {
     const BUCKET = SALE - (SALE % 150)
+
+    it("lets one wallet catch up while another fixed read is still waiting for further blocks", async () => {
+      const NEWER = SALE + 2 * HOUR_BLOCKS
+      const range = { to: NEWER + 10 }
+      const { state, wallets } = setup([...sale(ME, NEWER), ...sale(OTHER, SALE)], healthyTo(BUCKET), { head: NEWER + 1000, reached: BUCKET - 10 })
+      assertUnknown(await usdcOf(wallets, ME, range))
+      assertUnknown(await usdcOf(wallets, OTHER, range))
+
+      state.reached = BUCKET + 10
+      state.head += 1
+      assertUnknown(await usdcOf(wallets, ME, range))
+      assertPriced(await usdcOf(wallets, OTHER, range))
+      assert.equal(state.reads.length, 1, "the row read came from the wallet that can use it")
+    })
+
+    it("still asks once per block for each wallet, whichever order they're read in", async () => {
+      const range = { to: SALE + 10 }
+      const { state, wallets } = setup([...sale(ME, SALE), ...sale(OTHER, SALE + 1)], healthyTo(BUCKET), { head: LATER + 200, reached: BUCKET - 10 })
+      for (let i = 0; i < 3; i++) for (const address of [ME, OTHER]) await wallets.get(address, range)
+      assert.equal(state.asked, 2)
+      state.head += 1
+      for (let i = 0; i < 3; i++) for (const address of [OTHER, ME]) await wallets.get(address, range)
+      assert.equal(state.asked, 4)
+    })
 
     it("catches up with no new transaction, in a live read", async () => {
       const { state, wallets } = setup(sale(ME, SALE), healthyTo(BUCKET), { head: LATER, reached: BUCKET - 10 })
