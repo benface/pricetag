@@ -254,6 +254,12 @@ button { font: inherit; cursor: pointer; color: inherit; }
 .code-light { padding: 12px; border-radius: 10px; background: #fff; align-self: center; }
 .code-progress { width: 100%; }
 .exchange { display: flex; flex-direction: column; gap: 10px; }
+.purchases { display: flex; flex-direction: column; gap: 8px; }
+.purchases h2 { margin: 0; }
+.purchases ul { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.purchase { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; }
+.purchase p { margin: 0; }
+.purchase-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .sort-button { all: unset; cursor: pointer; white-space: nowrap; }
 .sort-button:hover { color: var(--text-primary); }
 .sort-button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; border-radius: 3px; }

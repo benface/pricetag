@@ -53,7 +53,7 @@ function sourceAt(ethAnswer: bigint, through = HEAD, reads: string[] = []): Sour
   }
 }
 
-const NO_PROOFS: Proofs = { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null }
+const NO_PROOFS: Proofs = { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null }
 
 const rule = (id: string): PricingRule => ({ id, ...RULE_TEXT[id]!, dataset: `a/${id}@0.0.1`, hash: "a".repeat(64) })
 
@@ -81,7 +81,7 @@ describe("comparing a token priced by its feed", () => {
       readBalances: async (_, block) => ({ blockNum: block, amounts: Object.fromEntries(ASSETS.map((asset) => [asset, asset === "DAI" && block >= 5 ? ONE : "0"])) }),
       marketReady: async () => true,
       readMarketTrades: async () => [],
-      readFeedRounds: async (assets, block) => Object.fromEntries(assets.map((asset) => [asset, { answer: "100000000", updatedAt: Date.parse(NOW) / 1000 - 60, blockNum: block, timestamp: NOW }])),
+      readFeedRounds: async (assets, blocks) => new Map(blocks.map((block) => [block, Object.fromEntries(assets.map((asset) => [asset, { answer: "100000000", updatedAt: Date.parse(NOW) / 1000 - 60, blockNum: block, timestamp: NOW }]))])),
       ...changes,
     }
   }
@@ -115,9 +115,9 @@ describe("comparing a token priced by its feed", () => {
   it("says the value leaves it out, rather than $0, when the feed read fails during the comparison", async () => {
     let reads = 0
     const failsAfterTheRefresh: Partial<Source> = {
-      readFeedRounds: async (assets, block) => {
+      readFeedRounds: async (assets, blocks) => {
         if (++reads > 1) throw new Error("boom")
-        return Object.fromEntries(assets.map((asset) => [asset, { answer: "100000000", updatedAt: Date.parse(NOW) / 1000 - 60, blockNum: block, timestamp: NOW }]))
+        return new Map(blocks.map((block) => [block, Object.fromEntries(assets.map((asset) => [asset, { answer: "100000000", updatedAt: Date.parse(NOW) / 1000 - 60, blockNum: block, timestamp: NOW }]))]))
       },
     }
     const { status, normal, comparison } = await valueRow(daiSource(31, failsAfterTheRefresh), daiSource(29))
@@ -239,7 +239,7 @@ describe("the update behind a price, by a pricing rule", () => {
   const tx = data.txs.find((candidate) => candidate.tx_index === log.tx_index)!
   const feed: PriceFeed = { ...PRICE_FEEDS[0], aggregators: [`0x${log.address}`] }
   const update = { block_num: Number(data.block.block_num), tx_hash: `0x${tx.tx_hash}`, log_index: 2, answer: BigInt(`0x${log.topics[1]}`).toString() }
-  const proofs: Proofs = { datasets: async () => [], priceBehind: async () => ({ feed, update }), readBlock: async () => ({ data, deposits: new Map(Object.entries(deposits)), nodeHash: data.block.hash }) }
+  const proofs: Proofs = { datasets: async () => [], priceBehind: async () => ({ feed, update }), currentPriceBehind: async () => null, readBlock: async () => ({ data, deposits: new Map(Object.entries(deposits)), nodeHash: data.block.hash }) }
   const cautious = `&rule=${CAUTIOUS_RULE_ID}`
   let server: Server
   let base: string
@@ -485,6 +485,17 @@ describe("comparing only ever shows the rule", () => {
     assert.equal(body.rows.find((r) => r.label === "ETH price")?.format, "usdPrice")
     const row = valueRow(body)
     assert.equal(((BigInt(row.a!) * 99n) / 100n - BigInt(row.b!)) ** 2n <= 1n, true, "the only difference is the 1%")
+  })
+
+  it("tells the rates the chain's head when it compares at an earlier block", async () => {
+    const seen: [number, number | undefined][] = []
+    const readRates = async (_currency: unknown, wallet: { latest: { blockNum: number } }, options?: { chainHead?: number }) => {
+      seen.push([wallet.latest.blockNum, options?.chainHead])
+      return { byBlock: {}, latest: null }
+    }
+    const { status } = await compareWith({}, {}, { through: [HEAD - 1, HEAD], query: "?currency=CAD", readRates: readRates as never })
+    assert.equal(status, 200)
+    assert.deepEqual(seen, [[HEAD - 1, HEAD]])
   })
 
   it("a balance read that fails for one rule's own reads changes nothing", async () => {

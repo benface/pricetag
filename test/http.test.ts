@@ -2,14 +2,17 @@ import assert from "node:assert/strict"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { createServer, request, type Server } from "node:http"
 import { tmpdir } from "node:os"
+import type { AddressInfo } from "node:net"
 import { join } from "node:path"
 import { after, before, describe, it } from "node:test"
 import { createApi, createSource } from "../server/app.ts"
 import { createHandler } from "../server/http.ts"
 import { createWallets, datasetSource, describeError, isNotStarted, settledThrough, type Query, type ReadL1Fees, type Source, type StreamRange, type StreamRanges } from "@pricetag/sdk/internal"
-import { resolvingSource, settledL1Fees, sharedReads } from "../server/source.ts"
+import type { Approvals } from "../server/approvals.ts"
+import { resolvingSource, settledL1Fees, sharedReads, type SharedReads } from "../server/source.ts"
 import { ETH_ADDRESS, encodeNote, marketPrice } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../src/core/api.ts"
+import { eachPart } from "./support/fake-amp.ts"
 
 /** Sends the path exactly as written, which fetch wouldn't. */
 function get(server: Server, path: string): Promise<{ status: number; body: string }> {
@@ -192,20 +195,17 @@ describe("what a dataset adds to a wallet's rows", () => {
   const SENDER = "00000000000000000000000000000000000000dd"
   const leg = { block_num: 5, timestamp: 1, tx_hash: "aa", tx_index: 1, log_index: 3, token: "833589fcd6edb6e08f4c7c32d4f71b54bda02913", account: ME, side: "credit", amount: "7", kind: "erc20" }
 
-  it("says who sent each row, reading only the blocks that have one", async () => {
+  it("says who sent each row from the dataset, without reading the raw tables", async () => {
     const queries: string[] = []
     const query = async <T>(sql: string) => {
       queries.push(sql)
-      if (sql.includes(".legs")) return [leg, { ...leg, log_index: 0, token: "0000000000000000000000000000000000000000", kind: "eth", tx_hash: "bb" }] as T[]
-      if (sql.includes("base\".logs")) return [{ tx_hash: "aa", log_index: 3, topic1: SENDER.padStart(64, "0"), topic2: ME.padStart(64, "0") }] as T[]
-      if (sql.includes("base\".transactions")) return [{ tx_hash: "bb", from: SENDER, to: ME }] as T[]
+      if (sql.includes(".legs")) return [{ ...leg, counterparty: SENDER }, { ...leg, log_index: 0, token: "0000000000000000000000000000000000000000", kind: "eth", tx_hash: "bb", counterparty: SENDER }] as T[]
       return [] as T[]
     }
     const { rows } = await resolvingSource(query, config).readWindow(`0x${ME}`, 1, 10)
     assert.deepEqual(rows.map((r) => r.counterparty), [`0x${SENDER}`, `0x${SENDER}`])
-    const raw = queries.filter((q) => q.includes('"base"'))
-    assert.equal(raw.length, 2)
-    assert.ok(raw.every((q) => q.includes("block_num BETWEEN 5 AND 5")), "only that block")
+    assert.ok(queries.some((q) => /counterparty FROM "ds"\.legs/.test(q)))
+    assert.ok(!queries.some((q) => q.includes('"base".logs') || q.includes('"base".transactions')), "no raw lookups")
   })
 
   it("doesn't touch the raw tables for a wallet with nothing to look up", async () => {
@@ -297,9 +297,8 @@ describe("reading a wallet by two pricing rules", () => {
     const queries: string[] = []
     const query = async <T>(sql: string) => {
       queries.push(sql)
-      const leg = (block: number) => ({ block_num: block, timestamp: 1, tx_hash: `aa${block}`, tx_index: 1, log_index: 3, token: USDC, account: ME, side: "credit", amount: amountAt(block), kind: "erc20" })
+      const leg = (block: number) => ({ block_num: block, timestamp: 1, tx_hash: `aa${block}`, tx_index: 1, log_index: 3, token: USDC, account: ME, side: "credit", amount: amountAt(block), kind: "erc20", counterparty: SENDER })
       if (sql.includes(".legs")) return blocks.filter((block) => inRange(sql, block)).map(leg) as T[]
-      if (sql.includes('"base".logs')) return blocks.filter((block) => inRange(sql, block)).map((block) => ({ tx_hash: `aa${block}`, log_index: 3, topic1: SENDER.padStart(64, "0"), topic2: ME.padStart(64, "0") })) as T[]
       return [] as T[]
     }
     const reads = (table: string) => queries.filter((sql) => sql.includes(table))
@@ -318,8 +317,6 @@ describe("reading a wallet by two pricing rules", () => {
     assert.equal(reads('"market".priced_legs').length, 1)
     assert.equal(reads('"cautious".priced_legs').length, 1)
     assert.equal(reads('"ds".legs').filter((sql) => sql.includes("BETWEEN 1 AND 200")).length, 1, "the whole range once")
-    assert.equal(reads('"base".logs').filter((sql) => inRange(sql, 5)).length, 1, "a block no reorg can reach has one lookup")
-    assert.equal(reads('"base".logs').filter((sql) => inRange(sql, 150)).length, 1)
   })
 
   it("re-reads only what a reorg could reach, up to the blocks that are new", async () => {
@@ -331,7 +328,6 @@ describe("reading a wallet by two pricing rules", () => {
     assert.deepEqual(rows.map((r) => r.block_num).sort((a, b) => a - b), [5, 190, 205])
     assert.equal(reads('"ds".legs').length, 1)
     assert.ok(reads('"ds".legs')[0]!.includes(`BETWEEN ${settledThrough(200) + 1} AND 210`))
-    assert.ok(!reads('"base".logs').some((sql) => inRange(sql, 5)), "an old block's lookup isn't repeated")
   })
 
   it("a reorg in the blocks it re-reads replaces what's held, and older blocks stay", async () => {
@@ -671,11 +667,11 @@ describe("reading a wallet by two pricing rules", () => {
         })
       })
       await new Promise<void>((resolve) => rpc.listen(0, "127.0.0.1", resolve))
-      const query = async <T>(sql: string) => {
+      const query = eachPart(async <T>(sql: string) => {
         if (/ORDER BY block_num DESC LIMIT 1/.test(sql)) return [{ block_num: 200, timestamp: 1_800_000_000_000, hash: "00" }] as T[]
         if (sql.includes(".legs")) return (inRange(sql, 100) ? [{ ...GAS, amount: state.amount }] : []) as T[]
         return [] as T[]
-      }
+      })
       const cfg = { baseDataset: "base", dataset: "ds", startBlock: 50, network: "base_mainnet" }
       const shared = sharedReads(query, cfg)
       const hand = { send: (_: StreamRange) => {} }
@@ -696,7 +692,7 @@ describe("reading a wallet by two pricing rules", () => {
       const api = createApi({ BASE_RPC_URL: `http://127.0.0.1:${(rpc.address() as { port: number }).port}` }, {
         source: resolvingSource(query, cfg, shared),
         readRates: async () => ({ byBlock: {}, latest: null }),
-        proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null },
+        proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null },
         follow: { stream, sql: "SELECT 1", readMark: async () => ({ blockNum: 200, hash: "0x200" }), logger: { warn() {} }, pollMs: 1, tickMs: 0 },
         shared,
       })
@@ -723,7 +719,7 @@ describe("reading a wallet by two pricing rules", () => {
   it("both rules' wallets end up with the same rows, from one read of the history", async () => {
     const { query, reads } = chain([5, 150])
     const head = { blockNum: 200, timestamp: "2026-11-04T00:00:00.000Z" }
-    const withHead = async <T>(sql: string) => (sql.includes("eth_call") || /ORDER BY block_num DESC LIMIT 1/.test(sql) ? ([{ block_num: 200 }] as T[]) : query<T>(sql))
+    const withHead = eachPart(async <T>(sql: string) => (sql.includes("eth_call") || /ORDER BY block_num DESC LIMIT 1/.test(sql) ? ([{ block_num: 200 }] as T[]) : query<T>(sql)))
     const shared = sharedReads(withHead, config)
     const quiet = { log() {}, warn() {}, error() {} }
     const [a, b] = ["market", "cautious"].map((priceDataset) => createWallets(resolvingSource(withHead, { ...config, priceDataset }, shared), async () => head, async () => new Map(), quiet))
@@ -731,7 +727,6 @@ describe("reading a wallet by two pricing rules", () => {
     assert.deepEqual(wb.legs.map((leg) => [leg.txHash, leg.blockNum]), wa.legs.map((leg) => [leg.txHash, leg.blockNum]))
     assert.ok(wa.legs.length >= 2)
     assert.equal(reads('"ds".legs').filter((sql) => sql.includes("BETWEEN 1 AND 200")).length, 1)
-    assert.equal(reads('"base".logs').filter((sql) => inRange(sql, 5)).length, 1)
   })
 })
 
@@ -755,13 +750,56 @@ describe("a dataset whose tables haven't started", () => {
 
   it("the slowest table sets how far a read can go", async () => {
     const tops: Record<string, number> = { legs: 90, unlisted_legs: 95, priced_legs: 70, reference_prices: 80 }
-    const query = async <T>(sql: string) => {
+    const sqls: string[] = []
+    const parts = eachPart(async <T>(sql: string) => {
       const table = /\.(\w+) WHERE/.exec(sql)![1]!
       return [{ block_num: String(tops[table]) }] as T[]
+    })
+    const query = <T>(sql: string) => {
+      sqls.push(sql)
+      return parts<T>(sql)
     }
     assert.equal(await datasetSource(query, config).processedThrough(1, 100), 70)
     tops.unlisted_legs = 60
     assert.equal(await datasetSource(query, config).processedThrough(1, 100), 60)
+    assert.equal(sqls.length, 2, "one query each time, however many tables")
+  })
+
+  it("isn't past a table with nothing in the range", async () => {
+    const query = eachPart(async <T>(sql: string) => (sql.includes(".priced_legs") ? [] : [{ block_num: "90" }]) as T[])
+    assert.equal(await datasetSource(query, config).processedThrough(1, 100), null)
+  })
+
+  it("asks each table when they can't all be asked together, so one that's only out of step with the rest doesn't read as not started", async () => {
+    const tops: Record<string, number | null> = { legs: 90, unlisted_legs: 95, priced_legs: 70, reference_prices: 80 }
+    const query = async <T>(sql: string) => {
+      if (sql.includes("UNION ALL")) throw notStarted
+      const top = tops[/\.(\w+) WHERE/.exec(sql)![1]!]
+      if (top === null) throw notStarted
+      return [{ block_num: String(top) }] as T[]
+    }
+    assert.equal(await datasetSource(query, config).processedThrough(1, 100), 70)
+    tops.priced_legs = null
+    assert.equal(await datasetSource(query, config).processedThrough(1, 100), null)
+  })
+
+  it("only asks for priced rows when the range has legs, whichever source reads it", async () => {
+    const leg = { block_num: "5", timestamp: 0, tx_hash: "aa", tx_index: 1, log_index: 0, token: "bb", account: "cc", side: "credit", amount: "1", kind: "erc20" }
+    const address = "0x00000000000000000000000000000000000000cc"
+    for (const sourceOf of [(query: Query) => datasetSource(query, config), (query: Query) => resolvingSource(query, config)]) {
+      let legs: unknown[] = []
+      const sqls: string[] = []
+      const parts = eachPart(async <T>(sql: string) => (sql.includes(".legs") ? legs : []) as T[])
+      const source = sourceOf(<T>(sql: string) => {
+        sqls.push(sql)
+        return parts<T>(sql)
+      })
+      assert.deepEqual((await source.readWindow(address, 1, 10)).priced, [])
+      assert.equal(sqls.filter((sql) => sql.includes(".priced_legs")).length, 0)
+      legs = [leg]
+      await source.readWindow(address, 1, 10)
+      assert.equal(sqls.filter((sql) => sql.includes(".priced_legs")).length, 1)
+    }
   })
 
   describe("when Amp says how far its tables have got", () => {
@@ -792,23 +830,209 @@ describe("a dataset whose tables haven't started", () => {
     it("falls back on each table's newest row when Amp doesn't say", async () => {
       const { source, rows } = answering(async () => null)
       assert.equal(await source.processedThrough(1, 100), null)
-      assert.equal(rows.length, 4)
+      assert.equal(rows.length, 1)
+      for (const table of ["legs", "unlisted_legs", "priced_legs", "reference_prices"]) assert.ok(rows[0]!.includes(`.${table} WHERE`), table)
     })
   })
 
   it("keeps an NFT row's kind and ID, including ID 0, so both data paths net it the same way", async () => {
     const leg = { block_num: "5", timestamp: 0, tx_hash: "aa", tx_index: 1, log_index: 0, token: "bb", account: "cc", side: "credit" }
-    const query = async <T>(sql: string) => (sql.includes(".unlisted_legs") ? [{ ...leg, amount: "0", kind: "unlisted_nft" }, { ...leg, amount: "0", kind: "unlisted" }] : []) as T[]
+    const query = eachPart(async <T>(sql: string) => (sql.includes(".unlisted_legs") ? [{ ...leg, amount: "0", kind: "unlisted_nft" }, { ...leg, amount: "0", kind: "unlisted" }] : []) as T[])
     const window = await datasetSource(query, config).readWindow("0x00000000000000000000000000000000000000cc", 1, 10)
     assert.deepEqual(window.rows.map((r) => [r.kind, r.amount]), [["unlisted_nft", "0"], ["unlisted", "0"]])
   })
 
   it("reads unlisted rows as evidence, even with a null amount, and still drops empty gas", async () => {
     const leg = { block_num: "5", timestamp: 0, tx_hash: "aa", tx_index: 1, log_index: 0, token: "bb", account: "cc", side: "credit" }
-    const query = async <T>(sql: string) =>
-      (sql.includes(".unlisted_legs") ? [{ ...leg, amount: null, kind: "unlisted" }] : sql.includes(".legs") ? [{ ...leg, amount: "", kind: "gas" }] : []) as T[]
+    const query = eachPart(async <T>(sql: string) => (sql.includes(".unlisted_legs") ? [{ ...leg, amount: null, kind: "unlisted" }] : sql.includes(".legs") ? [{ ...leg, amount: "", kind: "gas" }] : []) as T[])
     const window = await datasetSource(query, config).readWindow("0x00000000000000000000000000000000000000cc", 1, 10)
     assert.deepEqual(window.rows.map((r) => [r.kind, r.amount]), [["unlisted", ""]])
     assert.deepEqual(window.gasUnknown, [{ tx_hash: "0xaa", block_num: 5 }])
+  })
+})
+
+describe("head reads that overlap", () => {
+  it("keeps the newer head when an older read finishes last", async () => {
+    const at = (blockNum: number) => ({ blockNum, timestamp: "2026-11-04T00:00:00.000Z" })
+    let finishOlder = () => {}
+    const older = new Promise<void>((resolve) => (finishOlder = resolve))
+    const heads = [() => older.then(() => at(1000)), async () => at(1010), async () => null]
+    const source: Source = {
+      mode: "raw",
+      startBlock: null,
+      historyFrom: (head) => head - 100,
+      head: () => (heads.shift() as () => Promise<ReturnType<typeof at> | null>)(),
+      processedThrough: async (_, head) => head,
+      readWindow: async () => ({ rows: [], priced: null, gasUnknown: [] }),
+      readReferences: async () => [],
+      readLatestReference: async () => null,
+      readBalances: async () => null,
+      readEthBalances: async () => new Map(),
+    }
+    const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } }, null)
+    const server = createServer((req, res) => void api(req, res))
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const read = async (wallet: string) => (await (await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/api/portfolio/0x${wallet.repeat(40)}`)).json()) as { latest: { blockNum: number } }
+    const first = read("a")
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.equal((await read("b")).latest.blockNum, 1010)
+    finishOlder()
+    await first
+    assert.equal((await read("c")).latest.blockNum, 1010)
+    server.close()
+  })
+
+  /** An API following a chain the test controls, with one head read it can hold, and every head a request went on to use. */
+  async function reorging(shared?: SharedReads) {
+    const at = (blockNum: number) => ({ blockNum, timestamp: "2026-11-04T00:00:00.000Z" })
+    let tip = 110
+    let held: { answer: number; gate: Promise<void> } | null = null
+    const asked: (number | null)[] = []
+    const used: number[] = []
+    const source: Source = {
+      mode: "raw",
+      startBlock: null,
+      historyFrom: (head) => head - 100,
+      head: async (after) => {
+        asked.push(after)
+        const read = held
+        held = null
+        if (read) await read.gate
+        const answer = read?.answer ?? tip
+        return answer >= (after ?? 0) ? at(answer) : null
+      },
+      processedThrough: async (_, head) => head,
+      readWindow: async () => ({ rows: [], priced: null, gasUnknown: [] }),
+      readReferences: async () => [],
+      readLatestReference: async () => null,
+      readBalances: async () => null,
+      readEthBalances: async () => new Map(),
+    }
+    const hand = { send: (_: StreamRange) => {} }
+    const queued: StreamRange[] = []
+    const stream: StreamRanges = async function* (_sql, _resume, signal) {
+      while (!signal.aborted) {
+        const next = queued.shift()
+        if (next) yield next
+        else await new Promise<void>((resolve) => {
+          hand.send = (range) => {
+            queued.push(range)
+            resolve()
+          }
+          signal.addEventListener("abort", () => resolve())
+        })
+      }
+    }
+    const api = createApi({}, {
+      source,
+      readRates: async (_, { latest }) => {
+        used.push((latest as { blockNum: number }).blockNum)
+        return { byBlock: {}, latest: null }
+      },
+      proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null },
+      follow: { stream, sql: "SELECT 1", readMark: async () => ({ blockNum: tip, hash: `0x${tip}` }), logger: { warn() {} }, pollMs: 1, tickMs: 0 },
+      approvals: {
+        read: async (_, head) => {
+          used.push(head.blockNum)
+          return { spenders: [] } as unknown as Awaited<ReturnType<Approvals["read"]>>
+        },
+      },
+      ...(shared ? { shared } : {}),
+    }, null)
+    const server = createServer((req, res) => void api(req, res))
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    const stop = new AbortController()
+    const events = (await fetch(`${base}/api/events`, { signal: stop.signal })).body!.getReader()
+    return {
+      asked,
+      used,
+      base,
+      /** Replaces the chain from block 100 on with a shorter one that ends at 105. */
+      reorg() {
+        tip = 105
+        hand.send({ start: 100, end: 105, hash: "0xnew", complete: true })
+      },
+      /** The next head read answers `answer`, from the old chain, once `gate` lets it. */
+      hold(answer: number, gate: Promise<void>) {
+        held = { answer, gate }
+      },
+      async headEvent(): Promise<number> {
+        for (let seen = ""; ; ) {
+          seen += new TextDecoder().decode((await events.read()).value)
+          const head = /event: head\ndata: (\{.*\})\n\n/.exec(seen)
+          if (head) return (JSON.parse(head[1]!) as { blockNum: number }).blockNum
+        }
+      },
+      close() {
+        stop.abort()
+        server.closeAllConnections()
+        server.close()
+      },
+    }
+  }
+
+  for (const [name, path] of [
+    ["an approvals read", `/api/approvals/0x${"a".repeat(40)}`],
+    ["an exchange rate read", "/api/rate?currency=EUR"],
+  ] as const) {
+    it(`throws away the old chain's head when ${name} spans a reorg`, async () => {
+      const chain = await reorging()
+      try {
+        assert.equal((await fetch(chain.base + path)).status, 200)
+        assert.equal(chain.used.at(-1), 110)
+
+        let release = () => {}
+        chain.hold(120, new Promise<void>((resolve) => (release = resolve)))
+        const spanning = fetch(chain.base + path)
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        chain.reorg()
+        assert.equal(await chain.headEvent(), 105)
+
+        release()
+        assert.equal((await spanning).status, 200)
+        assert.equal(chain.used.at(-1), 105, "the request reads the head again")
+        assert.equal((await fetch(chain.base + path)).status, 200)
+        assert.equal(chain.used.at(-1), 105, "and so does the next")
+        assert.equal(chain.asked.at(-1), 105, "the next head read starts from the replacement chain")
+      } finally {
+        chain.close()
+      }
+    })
+  }
+
+  it("throws away the old chain's head when it lands while a reorg is still being applied", async () => {
+    let applied = () => {}
+    const applying = new Promise<void>((resolve) => (applied = resolve))
+    let rewinding = () => {}
+    const started = new Promise<void>((resolve) => (rewinding = resolve))
+    const chain = await reorging({
+      rewind: () => {
+        rewinding()
+        return applying
+      },
+    } as unknown as SharedReads)
+    const path = `/api/approvals/0x${"a".repeat(40)}`
+    try {
+      assert.equal((await fetch(chain.base + path)).status, 200)
+
+      let release = () => {}
+      chain.hold(120, new Promise<void>((resolve) => (release = resolve)))
+      const spanning = fetch(chain.base + path)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      chain.reorg()
+      await started
+
+      release()
+      assert.equal((await spanning).status, 200)
+      assert.equal(chain.used.at(-1), 110, "the old chain's newer head isn't taken up, though the reorg hasn't lowered the last one yet")
+
+      applied()
+      assert.equal(await chain.headEvent(), 105)
+      assert.equal((await fetch(chain.base + path)).status, 200)
+      assert.equal(chain.used.at(-1), 105)
+    } finally {
+      chain.close()
+    }
   })
 })

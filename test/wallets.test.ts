@@ -683,6 +683,20 @@ describe("working out a wallet's response", () => {
   })
 })
 
+/** A source whose feeds answer a block at a time, and which says how they were grouped into queries. */
+type FeedsAtBlock = (assets: readonly string[], block: number) => Promise<Record<string, FeedRound>>
+type WithFeeds = Omit<Partial<Source>, "readFeedRounds"> & { readFeedRounds?: FeedsAtBlock }
+const feedQueries = (answer: FeedsAtBlock) => {
+  const queries: [readonly string[], readonly number[]][] = []
+  const readFeedRounds: NonNullable<Source["readFeedRounds"]> = async (assets, blocks) => {
+    queries.push([assets, blocks])
+    const rounds = new Map<number, Record<string, FeedRound>>()
+    for (const block of blocks) rounds.set(block, await answer(assets, block))
+    return rounds
+  }
+  return { queries, readFeedRounds }
+}
+
 describe("current prices from the token feeds", () => {
   const AERO = "0x940181a94a35a4569e4529a3cdfb74e38fd98631"
   const DAI = "0x50c5725949a6f0c72e6c4a641f24049a917db0cb"
@@ -691,7 +705,7 @@ describe("current prices from the token feeds", () => {
   const held = (block: number, token: string): LegRow => ({ ...row(block), token, kind: "erc20", amount: (10n ** 18n).toString() })
   const round = (answer: string, block = 990, updatedAt = NOW - 60): FeedRound => ({ answer, updatedAt, blockNum: block, timestamp: "2026-11-04T00:00:00.000Z" })
 
-  function feedFake(rows: LegRow[], answers: Record<string, FeedRound | undefined>, changes: Partial<Source> = {}) {
+  function feedFake(rows: LegRow[], answers: Record<string, FeedRound | undefined>, { readFeedRounds, ...changes }: WithFeeds = {}) {
     const reads: [readonly string[], number][] = []
     const marketReads: string[] = []
     const { source } = fake(new Map(rows.map((r) => [r.block_num, [r]])), () => reference(1000))
@@ -702,10 +716,10 @@ describe("current prices from the token feeds", () => {
         marketReads.push(asset)
         return [1, 2, 3].map((n) => ({ blockNum: to - n, txHash: `0x${n}`, asset, usdMicros: "1300000", notionalUsdMicros: "500000000" }))
       },
-      async readFeedRounds(assets, block) {
+      ...feedQueries(readFeedRounds ?? (async (assets, block) => {
         reads.push([assets, block])
         return Object.fromEntries(assets.flatMap((asset) => (answers[asset] ? [[asset, answers[asset]]] : [])))
-      },
+      })),
       ...changes,
     }
     return { source: withFeeds, reads, marketReads }
@@ -916,9 +930,13 @@ describe("marking the chart from the token feeds", () => {
   }
 
   /** Too little trading to pass the market's guards, unless a test says otherwise. Each feed answers 0.60 plus a cent per 100 blocks of its bucket. */
-  function thin(rows: LegRow[], changes: Partial<Source> = {}, latest: () => Reference | null = () => reference(1000)) {
+  function thin(rows: LegRow[], { readFeedRounds, ...changes }: WithFeeds = {}, latest: () => Reference | null = () => reference(1000)) {
     const feedReads: [readonly string[], number][] = []
     const marketReads: [string, number][] = []
+    const feeds = feedQueries(readFeedRounds ?? (async (assets, block) => {
+      feedReads.push([assets, block])
+      return Object.fromEntries(assets.map((asset) => [asset, round(String(60_000_000 + block * 10_000), block)]))
+    }))
     const { source } = fake(chainOf(rows), latest)
     const withFeeds: Source = {
       ...source,
@@ -928,13 +946,10 @@ describe("marking the chart from the token feeds", () => {
         marketReads.push([asset, to])
         return []
       },
-      async readFeedRounds(assets, block) {
-        feedReads.push([assets, block])
-        return Object.fromEntries(assets.map((asset) => [asset, round(String(60_000_000 + block * 10_000), block)]))
-      },
+      readFeedRounds: feeds.readFeedRounds,
       ...changes,
     }
-    return { source: withFeeds, feedReads, marketReads }
+    return { source: withFeeds, feedReads, marketReads, queries: feeds.queries }
   }
 
   it("marks a token too thin for the market at each point, so the line doesn't wait for the last one", async () => {
@@ -983,7 +998,7 @@ describe("marking the chart from the token feeds", () => {
 
   it("prices an answer in ETH with ETH at that point, and needs it", async () => {
     const eth = (block: number) => (block === 750 ? "200000000000" : "240000000000")
-    const answers: Partial<Source> = {
+    const answers: WithFeeds = {
       readFeedRounds: async (assets, block) => Object.fromEntries(assets.map((asset) => [asset, round("1250000000000000000", block)])),
       readReferences: async (blocks) => blocks.flatMap((block) => (block === 850 ? [] : [{ ...reference(block), ethUsd: eth(block) }])),
     }
@@ -1103,7 +1118,7 @@ describe("marking the chart from the token feeds", () => {
   it("tries a failed read again, without calling what prices the wallet unchecked", async () => {
     let fail = true
     let head = 1000
-    const answer: Source["readFeedRounds"] = async (assets, block) => {
+    const answer: FeedsAtBlock = async (assets, block) => {
       if (fail && block === 900) throw new Error("boom")
       return Object.fromEntries(assets.map((asset) => [asset, round("63000000", block)]))
     }
@@ -1167,7 +1182,7 @@ describe("marking the chart from the token feeds", () => {
   })
 
   it("marks both rules from the same answers in a comparison, each with its own ETH", async () => {
-    const ethAt = (usd: string): Partial<Source> => ({ readReferences: async (blocks) => blocks.map((block) => ({ ...reference(block), ethUsd: usd })) })
+    const ethAt = (usd: string): WithFeeds => ({ readReferences: async (blocks) => blocks.map((block) => ({ ...reference(block), ethUsd: usd })) })
     const answer = { readFeedRounds: async (assets: readonly string[], block: number) => Object.fromEntries(assets.map((asset) => [asset, round("1250000000000000000", block)])) }
     const a = createWallets(thin([holding(950, WSTETH)], { ...answer, ...ethAt("240000000000") }).source, headAt(1000), noFees)
     const b = createWallets(thin([holding(950, WSTETH)], { ...ethAt("200000000000"), readFeedRounds: async () => { throw new Error("boom") } }).source, headAt(1000), noFees, { ...console, warn: () => {} })
@@ -1203,6 +1218,79 @@ describe("marking the chart from the token feeds", () => {
       assert.equal(chartFeedReads(feedReads).length, 41, "only what's left")
       assert.ok(Object.keys(second.marketMarks).length > Object.keys(first.marketMarks).length)
       assert.equal(third.marketMarks[300]?.AERO, "630000")
+    })
+
+    describe("sharing queries", () => {
+      const chartQueries = (queries: [readonly string[], readonly number[]][]) => queries.filter(([, blocks]) => blocks.every((block) => block < NEXT_HEAD))
+
+      it("reads buckets that want the same feeds in one query, still as many as the limit, newest first", async () => {
+        const { source, queries } = thin(rows, { historyFrom: () => 0 })
+        let head = NEXT_HEAD
+        const wallets = createWallets(source, async () => headAt(head)(), noFees)
+        await wallets.get(ME)
+        assert.deepEqual(chartQueries(queries).map(([, blocks]) => blocks.length), [19], "the market read that prices the leg took the other one")
+        const [[, blocks] = [[], []]] = chartQueries(queries)
+        assert.deepEqual(blocks, [...blocks].sort((a, b) => b - a))
+        assert.equal(blocks[0], HEAD - (HEAD % 150))
+        head += 1
+        await wallets.get(ME)
+        head += 1
+        await wallets.get(ME)
+        assert.deepEqual(chartQueries(queries).map(([, blocks]) => blocks.length), [19, 20, 2])
+        assert.equal(new Set(chartQueries(queries).flatMap(([, blocks]) => blocks)).size, 41, "nothing asked twice")
+      })
+
+      it("doesn't ask a bucket about a feed it doesn't want, so the RPC makes no more calls", async () => {
+        const { source, queries } = thin([holding(300), holding(450), holding(600), holding(750, DAI), holding(900, DAI)], { historyFrom: () => 0 })
+        await createWallets(source, headAt(NEXT_HEAD), noFees).get(ME)
+        assert.deepEqual(chartQueries(queries).map(([assets, blocks]) => [[...assets], [...blocks].sort()]), [[["AERO", "DAI"], [750, 900]], [["AERO"], [300, 450, 600]]])
+      })
+
+      it("keeps a bucket's answers apart from the others'", async () => {
+        const { source } = thin([holding(300), holding(450)], { historyFrom: () => 0 })
+        const { marketMarks } = await createWallets(source, headAt(NEXT_HEAD), noFees).get(ME)
+        assert.deepEqual([marketMarks[300]?.AERO, marketMarks[450]?.AERO], ["630000", "645000"])
+      })
+
+      it("tries a whole failed query again, without counting it as no answer", async () => {
+        let failing = true
+        let head = NEXT_HEAD
+        const logged: string[] = []
+        const { queries, readFeedRounds } = feedQueries(async (assets, block) => {
+          if (failing && block < NEXT_HEAD) throw new Error("boom")
+          return Object.fromEntries(assets.map((asset) => [asset, round("63000000", block)]))
+        })
+        const { source } = thin([holding(300), holding(450)], { historyFrom: () => 0 })
+        const wallets = createWallets({ ...source, readFeedRounds }, async () => headAt(head)(), noFees, { ...console, warn: (message: string) => logged.push(message) })
+        assert.deepEqual((await wallets.get(ME)).marketMarks, {})
+        assert.match(logged[0] ?? "", /Feed read failed/)
+        failing = false
+        head += 1
+        const { marketMarks } = await wallets.get(ME)
+        assert.deepEqual([marketMarks[300]?.AERO, marketMarks[450]?.AERO], ["630000", "630000"])
+        assert.deepEqual(chartQueries(queries).map(([, blocks]) => blocks.length), [2, 2], "asked straight away, with no wait for a feed that gave no answer")
+      })
+
+      it("still gets to the market for a point whose feed gave no answer, once the feeds have had their turn", async () => {
+        const { source, marketReads } = thin(rows, {
+          historyFrom: () => 0,
+          readFeedRounds: async (_, block): Promise<Record<string, FeedRound>> => (block < NEXT_HEAD ? {} : { AERO: round("63000000", block) }),
+          async readMarketTrades(asset, _, to) {
+            marketReads.push([asset, to])
+            return [1, 2, 3].map((n) => ({ blockNum: to - n, txHash: `0x${n}`, asset, usdMicros: "1300000", notionalUsdMicros: "500000000" }))
+          },
+        })
+        let head = NEXT_HEAD
+        const wallets = createWallets(source, async () => headAt(head)(), noFees)
+        let wallet = await wallets.get(ME)
+        for (let tries = 0; !wallet.marketMarks[300]; tries++) {
+          assert.ok(tries < 10, "the oldest never got a price")
+          head += 1
+          wallet = await wallets.get(ME)
+        }
+        assert.equal(wallet.marketMarks[300]?.AERO, "1300000")
+        assert.equal(wallet.marketMarks[HEAD]?.AERO, "1300000")
+      })
     })
 
     it("leaves a chart's feeds waiting while what prices the wallet takes the limit", async () => {
@@ -1910,6 +1998,62 @@ describe("settling unwrap credits", () => {
     const read = async (blocks: readonly number[]) => new Map(blocks.map((b) => [b, b === BLOCK ? "5870" : "5000"]))
     const { source } = fake(new Map([[BLOCK, [gas(), claim()]]]), () => reference(1000), undefined, undefined, read)
     assert.deepEqual(ethDeltas((await createWallets(source, headAt(1000), fee).get(ME)).legs), ["1000"])
+  })
+})
+
+describe("a wallet read with nothing new", () => {
+  const every = (amount: string) => Object.fromEntries(ASSETS.map((asset) => [asset, amount]))
+  const counted = () => {
+    let head = 1000
+    const reads: string[] = []
+    const { source } = fake(new Map([[950, [row(950)]]]), () => reference(head), (at) => at, async () => every("0"))
+    const logged = <A extends unknown[], R>(name: string, read: (...args: A) => Promise<R>) => (...args: A) => (reads.push(name), read(...args))
+    const wallets = createWallets(
+      { ...source, processedThrough: logged("processed", source.processedThrough), readWindow: logged("window", source.readWindow), readBalances: logged("balances", source.readBalances), readLatestReference: logged("latest", source.readLatestReference), readReferences: (blocks) => (blocks.length > 0 ? logged("references", source.readReferences)(blocks) : source.readReferences(blocks)) },
+      async () => headAt(head)(),
+      noFees,
+    )
+    return { reads, wallets, moveTo: (block: number) => void (head = block) }
+  }
+
+  it("only asks how far the tables got, the rows, the closing balance and the latest price", async () => {
+    const { reads, wallets, moveTo } = counted()
+    await wallets.get(ME)
+    reads.length = 0
+    moveTo(1100)
+    await wallets.get(ME)
+    assert.deepEqual([...reads].sort(), ["balances", "latest", "processed", "window"])
+  })
+
+  it("reads the rows, the balances and the latest price side by side", async () => {
+    const started = new Set<string>()
+    let startAll = () => {}
+    const allStarted = new Promise<void>((resolve) => (startAll = resolve))
+    const together = async <T,>(name: string, value: T) => {
+      started.add(name)
+      if (started.size === 3) startAll()
+      await allStarted
+      return value
+    }
+    const { source } = fake(new Map(), () => null, (at) => at)
+    const wallet = await createWallets(
+      { ...source, readWindow: () => together("rows", { rows: [row(950)], priced: null, gasUnknown: [] }), readBalances: (_, block) => together("balances", { blockNum: block, amounts: every("7") }), readLatestReference: () => together("latest", reference(1000)) },
+      headAt(1000),
+      noFees,
+    ).get(ME)
+    assert.equal(wallet.balances?.amounts.ETH, "7")
+    assert.equal(wallet.prices.ETH?.blockNum, 1000)
+  })
+
+  it("keeps nothing from a read whose latest price failed, and the next one starts over", async () => {
+    const { source, windows } = fake(new Map([[950, [row(950)]]]), () => reference(1000), (at) => at, async () => every("0"))
+    let failing = true
+    const wallets = createWallets({ ...source, readLatestReference: async () => (failing ? Promise.reject(new Error("boom")) : reference(1000)) }, headAt(1000), noFees)
+    await assert.rejects(wallets.get(ME), /boom/)
+    assert.equal(wallets.peek(ME), null)
+    failing = false
+    assert.equal((await wallets.get(ME)).legs.length, 1)
+    assert.deepEqual(windows, [[900, 1000], [900, 1000]])
   })
 })
 

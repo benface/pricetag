@@ -3,9 +3,9 @@ import { describe, it } from "node:test"
 import { createTurns } from "@pricetag/sdk/internal"
 
 /** Reads that stay open until a test finishes them, in a lane it picks, and what order they started in. */
-function reading(lanesAtOnce?: number) {
+function reading(lanesAtOnce?: number, noLaneAtOnce?: number) {
   let lane: string | undefined
-  const inTurn = createTurns(lanesAtOnce, () => lane)
+  const inTurn = createTurns(lanesAtOnce, () => lane, noLaneAtOnce)
   const started: string[] = []
   const finishers = new Map<string, () => void>()
   const read = (name: string, inLane?: string) => {
@@ -74,6 +74,31 @@ describe("taking turns", () => {
     await finish("head 1")
     assert.deepEqual(started, ["a", "head 1", "head 2"])
     assert.ok(!started.includes("b"))
+  })
+
+  it("runs a few at once with no lanes when it's told to, and the rest in order", async () => {
+    const { read, finish, started } = reading(1, 2)
+    void read("a")
+    void read("b")
+    void read("c")
+    void read("d")
+    assert.deepEqual(started, ["a", "b"])
+    await finish("b")
+    assert.deepEqual(started, ["a", "b", "c"])
+    await finish("a")
+    assert.deepEqual(started, ["a", "b", "c", "d"])
+  })
+
+  it("keeps each lane to one at a time, however many having no lane can run", async () => {
+    const { read, finish, started } = reading(1, 2)
+    void read("mine 1", "me")
+    void read("mine 2", "me")
+    void read("theirs", "them")
+    void read("head 1")
+    void read("head 2")
+    assert.deepEqual(started, ["mine 1", "head 1", "head 2"])
+    await finish("mine 1")
+    assert.deepEqual(started, ["mine 1", "head 1", "head 2", "theirs"])
   })
 
   it("keeps going after a read fails, and passes on the failure", async () => {

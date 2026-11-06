@@ -71,7 +71,7 @@ const source: Source = {
 const names = ["busy", ...Array.from({ length: people }, (_, i) => `person${i}`)]
 const inviteOf = (name: string) => `an-invite-for-this-load-test-${name}`
 const hosting = hostingOf({ PRICETAG_INVITES: names.map((name) => `${name}:${hashOf(inviteOf(name))}`).join(","), HOST: "127.0.0.1" })
-const created = { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } }
+const created = { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } }
 const server = createServer(createHandler(gate(createApi({}, created, null, { maxWallets: 200 }), hosting, () => ({ amp: true, buying: false })), null))
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()))
 const { port } = server.address() as AddressInfo

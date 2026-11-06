@@ -116,6 +116,11 @@ public final class AddSavingsModel {
 
     public var canAdd: Bool { parsed != nil && problem == nil && matches }
 
+    /// Touch ID is asking.
+    public private(set) var isAdding = false
+    /// Why the last try stopped, when it wasn't the user changing their mind.
+    public private(set) var addProblem: String?
+
     /// The first savings wallet becomes where sweeps go, and they run by themselves. This wallet already has something it wants to sweep,
     /// or hasn't read its balance yet, so it can't say that it doesn't. Adding doesn't wait for that read, and a sweep can follow right after it.
     public var wouldStartSweeps: Bool {
@@ -220,10 +225,17 @@ public final class AddSavingsModel {
         step = .check
     }
 
-    public func add() throws(HotWallet.ColdWalletProblem) {
-        guard canAdd, let parsed else { return }
+    public func add() async throws(HotWallet.ColdWalletProblem) {
+        guard canAdd, !isAdding, let parsed else { return }
         let startsSweeps = wouldStartSweeps
-        try wallet.addColdWallet(address: parsed.checksummed, name: name)
+        isAdding = true
+        defer { isAdding = false }
+        addProblem = nil
+        // A link can arrive while Touch ID's asking, and that takes the answer back.
+        guard try await wallet.addColdWallet(address: parsed.checksummed, name: name, isWanted: { canAdd && self.parsed == parsed }) else {
+            addProblem = wallet.sweepProblem
+            return
+        }
         wallet.linkDeviceAccounts(link?.accountsToLink(accepted: acceptedAccounts, adding: address) ?? [])
         added = parsed
         startedSweeps = startsSweeps
@@ -231,8 +243,8 @@ public final class AddSavingsModel {
         step = .finished
     }
 
-    public func sweepHere() {
-        if let added { wallet.setSweepDestination(added) }
+    public func sweepHere() async {
+        if let added { await wallet.setSweepDestination(added) }
     }
 
     private func sequence(_ device: Device) -> [Step] {

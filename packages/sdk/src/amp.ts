@@ -2,11 +2,13 @@
 
 import { create, toBinary } from "@bufbuild/protobuf"
 import { AnySchema, anyPack } from "@bufbuild/protobuf/wkt"
-import { ArrowFlight, createAuthInterceptor, createClient } from "@edgeandnode/amp"
+import { Arrow, ArrowFlight, createAuthInterceptor, createClient } from "@edgeandnode/amp"
 import * as Flight from "@edgeandnode/amp/proto/Flight_pb"
 import * as FlightSql from "@edgeandnode/amp/proto/FlightSql_pb"
 import type { Interceptor } from "@connectrpc/connect"
 import { createGrpcTransport } from "@connectrpc/connect-node"
+import { Table, tableFromIPC } from "apache-arrow"
+import * as Schema from "effect/Schema"
 
 export type Query = (<T>(sql: string, timeoutMs?: number) => Promise<T[]>) & {
   /**
@@ -26,8 +28,10 @@ export type QueryOptions = {
   logger?: Logger | undefined
   /** How many lanes run a query at once, not counting having no lane. It defaults to 1. See `createTurns`. */
   lanesAtOnce?: number | undefined
-  /** Whose query this is, for a server that shares Amp between people. It defaults to no lane, which is one query at a time. */
+  /** Whose query this is, for a server that shares Amp between people. It defaults to no lane. */
   laneOf?: (() => string | undefined) | undefined
+  /** How many queries with no lane can run at once. It defaults to 1, because a hosted Amp is shared. */
+  maxConcurrent?: number | undefined
 }
 
 /** A query that can also read through dataset aliases. */
@@ -64,16 +68,18 @@ export const isNotStarted = (error: unknown) => describeError(error).includes("n
 /**
  * Runs reads in turns, so a slow one only holds up whoever's it is. Each lane runs one at a time, up to `lanesAtOnce` of them,
  * and a lane that's just had a turn goes behind the others waiting. Having no lane is a lane of its own that never waits for
- * those, for what a server reads for everyone, like the head.
+ * those, for what a server reads for everyone, like the head. It runs `noLaneAtOnce` at a time.
  */
-export function createTurns(lanesAtOnce = 1, laneOf: () => string | undefined = () => undefined) {
+export function createTurns(lanesAtOnce = 1, laneOf: () => string | undefined = () => undefined, noLaneAtOnce = 1) {
   const waiting = new Map<string | undefined, (() => void)[]>()
-  const running = new Set<string | undefined>()
+  const running = new Set<string>()
+  let runningNoLane = 0
+  const canStart = (lane: string | undefined) => (lane === undefined ? runningNoLane < noLaneAtOnce : !running.has(lane) && running.size < lanesAtOnce)
   const startWhatCan = () => {
     for (const [lane, jobs] of waiting) {
-      if (running.has(lane)) continue
-      if (lane !== undefined && running.size - (running.has(undefined) ? 1 : 0) >= lanesAtOnce) continue
-      running.add(lane)
+      if (!canStart(lane)) continue
+      if (lane === undefined) runningNoLane += 1
+      else running.add(lane)
       waiting.delete(lane)
       const job = jobs.shift() as () => void
       if (jobs.length > 0) waiting.set(lane, jobs)
@@ -88,7 +94,8 @@ export function createTurns(lanesAtOnce = 1, laneOf: () => string | undefined = 
         void read()
           .then(resolve, reject)
           .finally(() => {
-            running.delete(lane)
+            if (lane === undefined) runningNoLane -= 1
+            else running.delete(lane)
             // Behind whoever's been waiting, even if this lane's next read arrived first.
             const rest = waiting.get(lane)
             if (rest && waiting.delete(lane)) waiting.set(lane, rest)
@@ -100,7 +107,7 @@ export function createTurns(lanesAtOnce = 1, laneOf: () => string | undefined = 
     })
 }
 
-export function createQuery(url: string, token: string | undefined, { timeoutMs: maxTimeoutMs = DEFAULT_TIMEOUT_MS, logger = console, lanesAtOnce, laneOf }: QueryOptions = {}): AmpQuery {
+export function createQuery(url: string, token: string | undefined, { timeoutMs: maxTimeoutMs = DEFAULT_TIMEOUT_MS, logger = console, lanesAtOnce, laneOf, maxConcurrent }: QueryOptions = {}): AmpQuery {
   const transportWith = (aliases?: Record<string, string>) => {
     const auth: Interceptor[] = token ? [createAuthInterceptor(token)] : []
     const alias: Interceptor[] = aliases
@@ -114,7 +121,7 @@ export function createQuery(url: string, token: string | undefined, { timeoutMs:
     return createGrpcTransport({ baseUrl: url, interceptors: [...auth, ...alias] })
   }
   // Staging is shared, so queries take turns, whatever they read through.
-  const inTurn = createTurns(lanesAtOnce, laneOf)
+  const inTurn = createTurns(lanesAtOnce, laneOf, maxConcurrent)
 
   const run = async <T>(client: ReturnType<typeof createClient>, sql: string, timeoutMs: number): Promise<T[]> => {
     const iterator = client.query(sql)[Symbol.asyncIterator]()
@@ -208,23 +215,77 @@ const statement = (sql: string) => {
   return create(Flight.FlightDescriptorSchema, { type: Flight.FlightDescriptor_DescriptorType.CMD, cmd: toBinary(AnySchema, command) })
 }
 
-/**
- * Amp's own `client.stream` can't be used here, for two reasons found by running it. It drops each batch's block ranges, and
- * they're the only way to see a reorg. And it fails on the empty keepalive Amp sends every 30 s, because it reads that
- * as Arrow data. So this reads Flight directly, and only the metadata: rows always come from a bounded query.
- *
- * `network` is the name Amp's block ranges use, like `base-mainnet`.
- */
-export function createRangeStream(url: string, token: string | undefined, network: string): StreamRanges {
+/** Asks Amp to follow a query from just after `resume`, and gives what comes back with the schema Amp said it has. */
+function createFollow(url: string, token: string | undefined, network: string) {
   const { client } = ArrowFlight.make(createGrpcTransport({ baseUrl: url, interceptors: token ? [createAuthInterceptor(token)] : [] }))
-  return async function* (sql, resume, signal) {
+  return async (sql: string, resume: BlockMark, signal: AbortSignal) => {
     const headers = { "amp-stream": "true", "amp-resume": JSON.stringify({ [network]: { number: resume.blockNum, hash: resume.hash } }) }
     const info = await client.getFlightInfo(statement(sql), { signal, headers })
     const ticket = info.endpoint[0]?.ticket
     if (!ticket) throw new Error("Amp didn't answer the stream with a ticket")
-    for await (const message of client.doGet(ticket, { signal })) {
+    return { schema: info.schema, messages: client.doGet(ticket, { signal }) }
+  }
+}
+
+/**
+ * Amp's own `client.stream` can't be used here, for two reasons found by running it. It drops each batch's block ranges, and
+ * they're the only way to see a reorg. And it fails on the empty keepalive Amp sends every 30 s, because it reads that
+ * as Arrow data. So this reads Flight directly, and only the metadata: rows come from a bounded query, or `createRowStream`.
+ *
+ * `network` is the name Amp's block ranges use, like `base-mainnet`.
+ */
+export function createRangeStream(url: string, token: string | undefined, network: string): StreamRanges {
+  const follow = createFollow(url, token, network)
+  return async function* (sql, resume, signal) {
+    for await (const message of (await follow(sql, resume, signal)).messages) {
       const range = parseStreamRange(message.appMetadata, network)
       if (range) yield range
     }
   }
+}
+
+/** A stream message: the blocks it covers, and the rows it brought, in the shape a bounded query gives them. */
+export type StreamBatch = StreamRange & { rows: Record<string, unknown>[] }
+
+/** A query followed as new blocks arrive, rows included, from just after `resume`. */
+export type StreamRows = (sql: string, resume: BlockMark, signal: AbortSignal) => AsyncIterable<StreamBatch>
+
+/** One Flight message as Arrow's IPC format. The body has to start on a multiple of 8 bytes. */
+function ipcOf(header: Uint8Array, body: Uint8Array): Uint8Array {
+  const padding = (8 - ((8 + header.length) % 8)) % 8
+  const bytes = new Uint8Array(8 + header.length + padding + body.length)
+  const view = new DataView(bytes.buffer)
+  view.setUint32(0, 0xffffffff, true)
+  view.setUint32(4, header.length, true)
+  bytes.set(header, 8)
+  bytes.set(body, 8 + header.length + padding)
+  return bytes
+}
+
+/** `createRangeStream` with the rows. Each message is decoded alone, so a keepalive has nothing to trip over. */
+export function createRowStream(url: string, token: string | undefined, network: string): StreamRows {
+  const follow = createFollow(url, token, network)
+  return async function* (sql, resume, signal) {
+    const { schema: schemaIpc, messages } = await follow(sql, resume, signal)
+    const { schema } = tableFromIPC(schemaIpc)
+    // What `client.query` does with a batch, so a row is the same either way.
+    const encode = Schema.encodeSync(Schema.Array(Arrow.generateSchema(schema)))
+    for await (const message of messages) {
+      const range = parseStreamRange(message.appMetadata, network)
+      if (!range) continue
+      if (message.dataBody.length === 0) {
+        yield { ...range, rows: [] }
+        continue
+      }
+      const table = new Table(tableFromIPC(concat(schemaIpc, ipcOf(message.dataHeader, message.dataBody))).batches)
+      yield { ...range, rows: [...encode([...table] as never)] as Record<string, unknown>[] }
+    }
+  }
+}
+
+function concat(first: Uint8Array, second: Uint8Array): Uint8Array {
+  const bytes = new Uint8Array(first.length + second.length)
+  bytes.set(first)
+  bytes.set(second, first.length)
+  return bytes
 }

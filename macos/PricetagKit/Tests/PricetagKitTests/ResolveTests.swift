@@ -125,7 +125,7 @@ actor BookSource: PortfolioSource {
         let model = ResolveModel(store: store)
         let answer = BookPreview(pnlMicros: "12400000", pnlStatus: .complete, estimatedMicros: "0", unresolvedMicros: "0", open: 0, pending: false, failed: false)
         await source.answerPreviews([answer, answer])
-        await source.refusePreviews(retryAfter: 1)
+        await source.refusePreviews(retryAfter: 5)
         let load = Task { await model.loadPreviews() }
         try await waitUntil { model.previewsAreHeldBack }
         #expect(model.previews.isEmpty)
@@ -163,7 +163,7 @@ actor BookSource: PortfolioSource {
         // What's on screen is about the amount before this one.
         await model.previewCost(typed("1"))
         #expect(model.costPreview == answer)
-        await source.refusePreviews(retryAfter: 1)
+        await source.refusePreviews(retryAfter: 5)
         let first = Task { await model.previewCost(typed("2")) }
         try await waitUntil { model.costPreviewIsHeldBack }
         #expect(model.costPreview == nil, "that was for a different amount")

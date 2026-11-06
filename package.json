@@ -19,6 +19,7 @@
     "mac:shot": "macos/shot.sh",
     "check:mac": "macos/check-mac.sh",
     "check:mac:quick": "macos/check-mac.sh --quick",
+    "check:swift-queue": "node macos/swift-queue.test.ts",
     "check:anvil": "macos/anvil-test.sh",
     "check:keychain": "macos/keychain-test.sh",
     "check:extension": "macos/extension-test.sh",
@@ -51,6 +52,7 @@
     "@types/node": "26.6.6",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
+    "apache-arrow": "21.2.0",
     "typescript": "7.0.2",
     "vite": "8.3.5"
   }

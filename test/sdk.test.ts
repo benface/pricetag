@@ -1,11 +1,12 @@
 import assert from "node:assert/strict"
 import { readdirSync, readFileSync } from "node:fs"
-import { createServer } from "node:http2"
+import { createServer, type Http2ServerResponse } from "node:http2"
 import { createServer as createNetServer, type AddressInfo, type Socket } from "node:net"
 import { describe, it } from "node:test"
 import { createPricetag } from "@pricetag/sdk"
-import { USDC_ADDRESS, buildPortfolio, buildPricedLegs, foldPositions, formatPrice, formatSignedMoney, formatMoney, pnlStatus, sumTotals } from "@pricetag/sdk/core"
-import { createQuery, createWallets, datasetReader, datasetSource, pricetagClient, type Query, type ReadL1Fees } from "@pricetag/sdk/internal"
+import { TOKEN_FEEDS, USDC_ADDRESS, buildPortfolio, buildPricedLegs, foldPositions, formatPrice, formatSignedMoney, formatMoney, pnlStatus, sumTotals } from "@pricetag/sdk/core"
+import { createQuery, createRates, createWallets, datasetReader, datasetSource, feedRounds, pricetagClient, type Query, type ReadL1Fees } from "@pricetag/sdk/internal"
+import { resolvingSource } from "../server/source.ts"
 import { portfolioOf } from "../src/core/portfolio.ts"
 import { DEMO_REFERENCES, DEMO_ROWS, DEMO_WALLET } from "../src/core/fixtures.ts"
 import { fakeAmp, type Tables } from "./support/fake-amp.ts"
@@ -347,6 +348,77 @@ describe("getLatestPrices", () => {
   it("has nothing without a recent read", async () => {
     assert.deepEqual(await fakeAmp({ reference_prices: [] }).client.getLatestPrices(), {})
   })
+
+  const NOW = 1_800_000_000
+  const eth = { block_num: "199", eth_usd: ETH_ANSWER, usdc_usd: USDC_ANSWER }
+
+  it("values every other token at its feed, in one query", async () => {
+    const { client, queries } = fakeAmp({ reference_prices: [eth], feeds: { AERO: { answer: 63_000_000n, updatedAt: NOW - 60 }, wstETH: { answer: 1_250_000_000_000_000_000n, updatedAt: NOW - 60 } } })
+    assert.deepEqual(await client.getLatestPrices(), {
+      ETH: { micros: "2400000000", source: "oracle", blockNum: 199 },
+      USDC: { micros: "1000000", source: "oracle", blockNum: 199 },
+      AERO: { micros: "630000", source: "oracle", blockNum: 200 },
+      wstETH: { micros: "3000000000", source: "oracle", blockNum: 200 },
+    })
+    const feedReads = queries.filter((sql) => sql.includes("latestRoundData()"))
+    assert.equal(feedReads.length, 1)
+    for (const feed of Object.values(TOKEN_FEEDS)) assert.ok(feedReads[0]!.includes(feed!.address))
+    assert.ok(feedReads[0]!.includes("block_num BETWEEN 200 AND 200"), "bounded to the head")
+  })
+
+  it("has no price from an answer that's too old or implausible", async () => {
+    const { client } = fakeAmp({ reference_prices: [eth], feeds: { AERO: { answer: 63_000_000n, updatedAt: NOW - 30 * 3600 }, DAI: { answer: 1n, updatedAt: NOW - 60 } } })
+    assert.deepEqual(Object.keys(await client.getLatestPrices()), ["ETH", "USDC"])
+  })
+
+  it("has no price for a token its feed answers in ETH without ETH's", async () => {
+    const { client } = fakeAmp({ reference_prices: [], feeds: { AERO: { answer: 63_000_000n, updatedAt: NOW - 60 }, wstETH: { answer: 1_250_000_000_000_000_000n, updatedAt: NOW - 60 } } })
+    assert.deepEqual(Object.keys(await client.getLatestPrices()), ["AERO"])
+  })
+
+  it("keeps the oracle's prices when the feeds can't be read, and says so", async () => {
+    const { query } = fakeAmp({ reference_prices: [eth] })
+    const warnings: string[] = []
+    const failing: Query = (sql, timeoutMs) => (sql.includes("latestRoundData()") ? Promise.reject(new Error("boom")) : query(sql, timeoutMs))
+    const client = pricetagClient(failing, { dataset: "benface/pricetag@0.0.1", logger: { warn: (message) => warnings.push(message) } })
+    assert.deepEqual(Object.keys(await client.getLatestPrices()), ["ETH", "USDC"])
+    assert.deepEqual(warnings, ["Feed read failed: boom"])
+  })
+})
+
+describe("getPortfolio's current prices", () => {
+  const NOW = 1_800_000_000
+  const HELD = String(500n * E18)
+  const tables = (feeds: Tables["feeds"]): Tables => ({
+    reference_prices: [{ block_num: "199", eth_usd: ETH_ANSWER, usdc_usd: USDC_ANSWER }],
+    balances: { 49: { AERO: HELD }, 200: { AERO: HELD } },
+    feeds,
+  })
+
+  it("values a token at its feed", async () => {
+    const { client } = fakeAmp(tables({ AERO: { answer: 63_000_000n, updatedAt: NOW - 60 } }))
+    const { positions, totals } = await client.getPortfolio(`0x${ME}`, { from: 50 })
+    const aero = positions.find((p) => p.asset === "AERO")!
+    assert.deepEqual([aero.price?.micros, aero.price?.source, aero.values.valueMicros], ["630000", "oracle", "315000000"])
+    assert.equal(totals.valueMicros, "315000000")
+  })
+
+  it("leaves its value unknown without an answer, never $0", async () => {
+    const { client } = fakeAmp(tables({}))
+    const { positions } = await client.getPortfolio(`0x${ME}`, { from: 50 })
+    const aero = positions.find((p) => p.asset === "AERO")!
+    assert.deepEqual([aero.price, aero.values.valueMicros], [null, null])
+  })
+
+  it("reads the same prices the app's server does", async () => {
+    const answers = tables({ AERO: { answer: 63_000_000n, updatedAt: NOW - 60 } })
+    const { query, client } = fakeAmp(answers)
+    const source = resolvingSource(query, { dataset: "benface/pricetag@0.0.1", baseDataset: "edgeandnode/base_mainnet@0.0.2", startBlock: 50, network: "base_mainnet" })
+    const app = await createWallets(source, async () => ({ blockNum: 200, timestamp: new Date(NOW * 1000).toISOString() }), async () => new Map()).get(`0x${ME}`)
+    const sdk = await client.getPortfolio(`0x${ME}`, { from: 50 })
+    assert.equal(sdk.positions.find((p) => p.asset === "AERO")!.price?.micros, app.prices.AERO?.micros)
+    assert.equal(app.prices.AERO?.micros, "630000")
+  })
 })
 
 describe("buildPortfolio", () => {
@@ -486,6 +558,99 @@ describe("getPortfolio", () => {
     assert.ok(!queries.some((q) => q.includes("eth_call")))
   })
 
+  describe("in another currency", () => {
+    // 0.75 USD for one CAD at the swap, and 0.80 now.
+    const RATES = { 100: 75_000_000n, 200: 80_000_000n }
+    const options = { startBlock: 50, readL1Fees: readFees }
+    const rateReads = (queries: readonly string[]) => queries.filter((sql) => sql.includes("AS round"))
+
+    it("gives the same answer as the app, and keeps each leg's USD", async () => {
+      const { query, client, queries } = fakeAmp({ ...TABLES, rates: RATES }, 200, options)
+      const source = datasetSource(query, { dataset: "benface/pricetag@0.0.1", baseDataset: "edgeandnode/base_mainnet@0.0.2", startBlock: 50, network: "base_mainnet" })
+      const read = await createWallets(source, async () => HEAD, readFees).get(`0x${ME}`)
+      const app = portfolioOf({ ...read, currency: "CAD", rates: await createRates(feedRounds(query, { baseDataset: "edgeandnode/base_mainnet@0.0.2", network: "base_mainnet" }))("CAD", read) }, "fifo")
+      const sdk = await client.getPortfolio(`0x${ME}`, { method: "fifo", currency: "CAD", from: 50 })
+
+      assert.deepEqual(sdk.totals, app.totals)
+      assert.equal(sdk.pnlStatus, app.pnlStatus)
+      assert.deepEqual(sdk.positions.map((p) => [p.asset, p.values, p.reconciliation, p.price]), app.positions.map((p) => [p.asset, p.values, p.reconciliation, p.price]))
+      assert.ok(rateReads(queries).every((sql) => sql.includes("0xA840145F87572E82519d578b1F36340368a25D5d")))
+
+      assert.equal(sdk.currency, "CAD")
+      assert.deepEqual(sdk.latestRate, { rateMicros: "1250000", blockNum: 200 })
+      assert.deepEqual(sdk.missingRateTxs, [])
+      const eth = sdk.positions.find((p) => p.asset === "ETH")!
+      assert.equal(eth.price?.usdMicros, "2400000000")
+      assert.equal(eth.price?.micros, "3000000000", "2,400 USD at the current rate, not the swap's")
+      const aero = sdk.legs.find((l) => l.asset === "AERO")!
+      assert.equal(aero.priceMicros, String((2_000_000n * 100n) / 75n), "2 USD at the swap's rate, not the current one")
+      assert.equal(aero.conversion?.priceUsdMicros, "2000000")
+    })
+
+    it("is unknown with no rate at a transaction's block, and says so", async () => {
+      const { client } = fakeAmp({ ...TABLES, rates: { 200: RATES[200] } }, 200, options)
+      const { missingRateTxs, missing, legs, latestRate, positions } = await client.getPortfolio(`0x${ME}`, { currency: "CAD" })
+      assert.deepEqual(missingRateTxs, ["0xaa"])
+      assert.match(missing.join(), /exchange rate of 1 tx/)
+      assert.equal(legs.find((l) => l.asset === "AERO")?.priceMicros, null)
+      assert.equal(legs.find((l) => l.asset === "AERO")?.conversion?.priceUsdMicros, "2000000")
+      assert.ok(latestRate)
+      assert.equal(positions.find((p) => p.asset === "AERO")?.values.costMicros, null)
+    })
+
+    it("has no current value with no current rate, rather than one in USD", async () => {
+      const { client } = fakeAmp({ ...TABLES, rates: { 100: RATES[100] } }, 200, options)
+      const { latestRate, missing, positions, totals } = await client.getPortfolio(`0x${ME}`, { currency: "CAD" })
+      assert.equal(latestRate, null)
+      assert.match(missing.join(), /current exchange rate/)
+      assert.equal(positions.find((p) => p.asset === "ETH")?.values.valueMicros, null)
+      assert.equal(totals.valueMicros, null)
+    })
+
+    it("throws when rates can't be read, rather than answering in USD", async () => {
+      const { query } = fakeAmp(TABLES, 200, options)
+      const client = pricetagClient(async (sql, timeout) => {
+        if (sql.includes("AS round")) throw new Error("no rates")
+        return query(sql, timeout)
+      }, { dataset: "benface/pricetag@0.0.1", ...options })
+      await assert.rejects(client.getPortfolio(`0x${ME}`, { currency: "CAD" }), /no rates/)
+    })
+
+    it("reads no rate in USD, or before the dataset has started", async () => {
+      const usd = fakeAmp({ ...TABLES, rates: RATES }, 200, options)
+      const { currency, latestRate } = await usd.client.getPortfolio(`0x${ME}`)
+      assert.equal(currency, "USD")
+      assert.equal(latestRate, null)
+      assert.deepEqual(rateReads(usd.queries), [])
+
+      const early = fakeAmp({ ...TABLES, rates: RATES }, null, options)
+      const portfolio = await early.client.getPortfolio(`0x${ME}`, { currency: "CAD" })
+      assert.equal(portfolio.started, false)
+      assert.equal(portfolio.currency, "CAD")
+      assert.ok(portfolio.positions.every((p) => p.values.valueMicros === null), "no amount in USD labeled CAD")
+      assert.deepEqual(rateReads(early.queries), [])
+    })
+
+    it("reads the rates dataset when there is one", async () => {
+      const seen: string[] = []
+      const { query } = fakeAmp({ ...TABLES, rates: RATES }, 200, options)
+      const client = pricetagClient(async (sql, timeout) => {
+        seen.push(sql)
+        return sql.includes("rate_updates") ? ([{ block_num: "150", currency: "CAD", answer: "75000000", updated_at: 1_800_000_000 }] as never[]) : query(sql, timeout)
+      }, { dataset: "benface/pricetag@0.0.1", ratesDataset: "benface/rates@0.0.1", ...options })
+      const { legs, latestRate } = await client.getPortfolio(`0x${ME}`, { currency: "CAD" })
+      assert.ok(seen.some((sql) => sql.includes('"benface/rates@0.0.1".rate_updates')))
+      assert.equal(legs.find((l) => l.asset === "AERO")?.conversion?.rateMicros, null, "no update before block 100 in this table")
+      assert.deepEqual(latestRate, { rateMicros: "1250000", blockNum: 200 })
+    })
+
+    it("turns down a currency it can't show", async () => {
+      const { client } = fakeAmp(TABLES, 200, options)
+      await assert.rejects(client.getPortfolio(`0x${ME}`, { currency: "JPY" as never }), /JPY isn't a currency/)
+      await assert.rejects(client.watchWallet(`0x${ME}`, { currency: "JPY" as never }).next(), /JPY isn't a currency/)
+    })
+  })
+
   it("gives no totals when the chain has no blocks yet", async () => {
     const queries: string[] = []
     const client = pricetagClient(async (sql) => (queries.push(sql), []), { dataset: "benface/pricetag@0.0.1", startBlock: 50 })
@@ -532,7 +697,7 @@ describe("getPortfolio", () => {
       const chain = { block, tables, queries: [] as string[] }
       const query: Query = async <T,>(sql: string) => {
         chain.queries.push(sql)
-        if (sql.includes(".blocks")) return [{ block_num: String(chain.block), timestamp: 1_800_000_000_000 }] as T[]
+        if (sql.includes(".blocks") && !sql.includes("AS round")) return [{ block_num: String(chain.block), timestamp: 1_800_000_000_000 }] as T[]
         return fakeAmp(chain.tables, chain.block).query<T>(sql)
       }
       const client = () => pricetagClient(query, { dataset: "benface/pricetag@0.0.1", startBlock: 50, readL1Fees })
@@ -570,6 +735,65 @@ describe("getPortfolio", () => {
       chain.queries.length = 0
       assert.equal((await summary(kept)).positions[0]![1], String(2n * E18))
       assert.ok(!chain.queries.some((q) => q.includes("eth_call") || q.includes(".legs")), chain.queries.join("; "))
+    })
+
+    describe("in another currency, with no transaction at that block", () => {
+      const tables = (rates: Record<string, bigint>) => ({ legs: [creditAt(100, E18)], reference_prices: [...refsThrough(100), ...refsThrough(190)], balances: { 49: {}, 190: { ETH: String(E18) } }, rates })
+      const rateReads = (queries: readonly string[]) => queries.filter((sql) => sql.includes("AS round"))
+      const read = (client: ReturnType<typeof pricetagClient>) => client.getPortfolio(ADDRESS, { currency: "CAD", to: 190 })
+
+      it("reads a rate a reorg changed, and matches a fresh client", async () => {
+        const { chain, client } = chainAt(200, tables({ 100: 80_000_000n, 190: 80_000_000n }))
+        const kept = client()
+        assert.equal((await read(kept)).latestRate?.rateMicros, "1250000")
+        chain.tables = tables({ 100: 80_000_000n, 190: 50_000_000n })
+        chain.block = 201
+        const after = await read(kept)
+        assert.deepEqual(after.latestRate, { rateMicros: "2000000", blockNum: 190 })
+        const fresh = await read(client())
+        assert.deepEqual(after.latestRate, fresh.latestRate)
+        assert.deepEqual(after.totals, fresh.totals)
+      })
+
+      it("has no current value when what replaced it has no usable rate, rather than the old rate", async () => {
+        const { chain, client } = chainAt(200, tables({ 100: 80_000_000n, 190: 80_000_000n }))
+        const kept = client()
+        assert.ok((await read(kept)).latestRate)
+        chain.tables = tables({ 100: 80_000_000n })
+        chain.block = 201
+        const after = await read(kept)
+        assert.equal(after.latestRate, null)
+        assert.equal(after.totals.valueMicros, null)
+        assert.match(after.missing.join(), /current exchange rate/)
+        assert.deepEqual(after.totals, (await read(client())).totals)
+
+        // It isn't stuck there. Under the same head it's asked again, as any block with no answer is.
+        chain.tables = tables({ 100: 80_000_000n, 190: 50_000_000n })
+        assert.equal((await read(kept)).latestRate?.rateMicros, "2000000")
+      })
+
+      it("doesn't read it again without a new block", async () => {
+        const { chain, client } = chainAt(200, tables({ 100: 80_000_000n, 190: 80_000_000n }))
+        const kept = client()
+        await read(kept)
+        chain.queries.length = 0
+        assert.equal((await read(kept)).latestRate?.rateMicros, "1250000")
+        assert.deepEqual(rateReads(chain.queries), [])
+      })
+
+      it("still catches a change on the read past the window, and then stops reading", async () => {
+        const { chain, client } = chainAt(200, tables({ 100: 80_000_000n, 190: 80_000_000n }))
+        const kept = client()
+        await read(kept)
+        chain.tables = tables({ 100: 80_000_000n, 190: 50_000_000n })
+        chain.block = 220
+        assert.equal((await read(kept)).latestRate?.rateMicros, "2000000")
+        chain.tables = tables({ 100: 80_000_000n, 190: 80_000_000n })
+        chain.block = 221
+        chain.queries.length = 0
+        assert.equal((await read(kept)).latestRate?.rateMicros, "2000000")
+        assert.deepEqual(rateReads(chain.queries), [])
+      })
     })
 
     it("doesn't read it again without a new block", async () => {
@@ -810,7 +1034,7 @@ describe("the formatters", () => {
 describe("the package boundary", () => {
   it("keeps the public API small", async () => {
     const sdk = await import("@pricetag/sdk")
-    assert.deepEqual(Object.keys(sdk).sort(), ["ASSETS", "TOKENS", "buildPortfolio", "createPricetag", "describeError", "formatAmount", "formatMoney", "formatPrice", "formatSignedAmount", "formatSignedMoney", "isAddress", "pnlOverTime", "pnlStatus", "referenceMarks", "shortHash"])
+    assert.deepEqual(Object.keys(sdk).sort(), ["ASSETS", "MAIN_CURRENCY_CODES", "TOKENS", "buildPortfolio", "createPricetag", "describeError", "formatAmount", "formatMoney", "formatPrice", "formatSignedAmount", "formatSignedMoney", "isAddress", "pnlOverTime", "pnlStatus", "referenceMarks", "shortHash"])
   })
 
   const sdkFile = (name: string) => readFileSync(new URL(`../packages/sdk/src/${name}`, import.meta.url), "utf8")
@@ -863,12 +1087,12 @@ describe("reading through aliases", () => {
   })
 
   it("reads prices from the price dataset, and what happened on the chain from the other", async () => {
-    const { query, queries } = fakeAmp({ legs: [], unlisted_legs: [], priced_legs: [], reference_prices: [] })
+    const { query, queries } = fakeAmp({ legs: [leg("aa", USDC, ME, "credit", "7", "erc20")], unlisted_legs: [], priced_legs: [], reference_prices: [] })
     const reader = datasetReader(query, { baseDataset: "base", dataset: "pricetag", priceDataset: "pricing" })
-    await reader.readWindow("0x" + ME, 1, 2)
+    await reader.readWindow("0x" + ME, 1, 200)
     await reader.readReferences([1])
     await reader.processedThrough(1, 200)
-    const from = (table: string) => [...new Set(queries.filter((sql) => sql.includes(`.${table} `)).map((sql) => /FROM "(\w+)"/.exec(sql)![1]))]
+    const from = (table: string) => [...new Set(queries.flatMap((sql) => [...sql.matchAll(/FROM "(\w+)"\.(\w+)/g)]).filter((match) => match[2] === table).map((match) => match[1]))]
     assert.deepEqual(from("legs"), ["pricetag"])
     assert.deepEqual(from("unlisted_legs"), ["pricetag"])
     assert.deepEqual(from("priced_legs"), ["pricing"])
@@ -888,4 +1112,46 @@ describe("reading through aliases", () => {
     await datasetReader(query, { baseDataset: "base", dataset: "pricetag" }).readWindow("0x" + ME, 1, 2)
     for (const sql of queries) assert.match(sql, /FROM "pricetag"\./)
   })
+})
+
+describe("how many queries run at once", () => {
+  /** A server that holds each query until it's let go, and says how many it's holding. */
+  async function holdingServer() {
+    const held: Http2ServerResponse[] = []
+    const server = createServer((req, res) => {
+      req.resume()
+      held.push(res)
+    })
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const release = () => {
+      for (const res of held.splice(0)) {
+        res.writeHead(200, { "content-type": "application/grpc", "grpc-status": "14", "grpc-message": "not a real Amp" })
+        res.end()
+      }
+    }
+    return { held, release, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, close: () => server.close() }
+  }
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+  async function untilHolding(held: readonly unknown[], count: number) {
+    for (let i = 0; i < 200 && held.length < count; i++) await wait(10)
+  }
+
+  for (const [options, atOnce] of [[{}, 1], [{ maxConcurrent: 3 }, 3]] as const) {
+    it(`runs ${atOnce} with ${JSON.stringify(options)}, and the rest once those are done`, async () => {
+      const { held, release, url, close } = await holdingServer()
+      const query = createQuery(url, undefined, options)
+      const all = Promise.allSettled([1, 2, 3, 4, 5].map((n) => query(`SELECT ${n}`)))
+      await untilHolding(held, atOnce)
+      await wait(50)
+      assert.equal(held.length, atOnce, "no more than that")
+      release()
+      await untilHolding(held, 1)
+      assert.ok(held.length > 0, "the next ones started")
+      const letGo = setInterval(release, 10)
+      const results = await all
+      clearInterval(letGo)
+      close()
+      assert.ok(results.every(({ status }) => status === "rejected"), "a failed query still ends its turn")
+    })
+  }
 })

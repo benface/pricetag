@@ -541,6 +541,7 @@ enum TestScene: String, CaseIterable {
     case hotWalletTopUp = "hot-wallet-top-up"
     case hotWalletTopUpFirstRead = "hot-wallet-top-up-first-read"
     case hotWalletTopUpReading = "hot-wallet-top-up-reading"
+    case hotWalletTopUpReadingSafari = "hot-wallet-top-up-reading-safari"
     case hotWalletTopUpNoGas = "hot-wallet-top-up-no-gas"
     case hotWalletTopUpOneDollar = "hot-wallet-top-up-one-dollar"
     case hotWalletTopUpAtCap = "hot-wallet-top-up-at-cap"
@@ -742,7 +743,7 @@ enum TestScene: String, CaseIterable {
         case .hotWalletNoSavings, .hotWalletNoSavingsCAD, .popoverHotWalletNoSavings, .hotWalletTopUpNoSavings, .addSavingsFinished, .addSavingsCheckBalanceUnread, .addSavingsCheckFirstWallet: .noSavings
         case .hotWalletNoPrice: .noPrice
         case .hotWalletTwoSavings: .twoSavings
-        case .hotWalletTopUpReading: .funded
+        case .hotWalletTopUpReading, .hotWalletTopUpReadingSafari: .funded
         case .hotWalletTopUpNoGas: .noGas
         case .hotWalletNothingToSweep: .nothingToSweep
         case .hotWalletOverCap, .hotWalletOverCapCAD, .popoverHotWalletOverCap, .hotWalletTopUpAtCap, .buyAtCap: .overCap
@@ -770,7 +771,7 @@ enum TestScene: String, CaseIterable {
     /// For scenes that only differ in the browsers on this Mac.
     private var deviceBrowsers: DeviceBrowsers {
         switch self {
-        case .hotWalletTopUpSafari, .publishFromDeviceSafari: browsers(defaultBrowser: Self.safari, installed: [Self.safari, Self.chrome])
+        case .hotWalletTopUpSafari, .hotWalletTopUpReadingSafari, .publishFromDeviceSafari: browsers(defaultBrowser: Self.safari, installed: [Self.safari, Self.chrome])
         case .hotWalletTopUpNoChromium, .publishFromDeviceNoChromium: browsers(defaultBrowser: Self.safari, installed: [Self.safari])
         default: browsers(defaultBrowser: Self.chrome, installed: [Self.chrome])
         }
@@ -844,8 +845,12 @@ enum TestScene: String, CaseIterable {
         case .addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere:
             model = AddSavingsModel(wallet: wallet, device: .ledger, step: .check, address: other)
             model.matches = true
-            do { try model.add() } catch { TestMode.fail("This scene's wallet couldn't be added.") }
-            if model.step != .finished { TestMode.fail("This scene's wallet wasn't added.") }
+            Task { try? await model.add() }
+            let deadline = Date.now.addingTimeInterval(TestMode.readyTimeout)
+            while model.step != .finished {
+                guard Date.now < deadline else { TestMode.fail("This scene's wallet wasn't added.") }
+                RunLoop.main.run(until: .now.addingTimeInterval(0.01))
+            }
         default: model = AddSavingsModel(wallet: wallet)
         }
         let mac = AddSavingsMac(
@@ -891,7 +896,7 @@ enum TestScene: String, CaseIterable {
         let readStarted: TimeInterval = TestMode.live == nil && [.neverAnswers, .updating, .retrying, .retryingWithNumbers].contains(feed) && self != .mainReadingStart ? 72 : 0
         let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, now: { Date().addingTimeInterval(-readStarted) }, reachableDelay: TestMode.live == nil ? .milliseconds(50) : .seconds(30), unreachableDelay: .seconds(30))
         store.start()
-        let hotWallet = hotWalletFixture.make(source: source, costMethod: { store.method }, moneyDisplay: { store.moneyDisplay })
+        let hotWallet = hotWalletFixture.make(source: source, costMethod: { store.method }, moneyDisplay: { store.moneyDisplay }, confirmsAddingSavings: [.addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere].contains(self))
         if !hasWallet, TestMode.live == nil, store.address != nil { TestMode.fail("This scene should start with no wallet, but it's showing \(store.address ?? "").") }
         // Never started, so it reads nothing, and only what these scenes registered is there.
         let purchases = PurchaseTracker(store: store, defaults: defaults, matchOf: { TestScene.purchaseMatches[$0] })
@@ -904,7 +909,7 @@ enum TestScene: String, CaseIterable {
             hotWalletHasRead.isDone = true
         }
         // Adding a wallet doesn't wait for this read, and neither does that scene.
-        if ![.hotWalletTopUpFirstRead, .hotWalletTopUpReading, .addSavingsCheckBalanceUnread, .buyFirstRead, .buyReading, .buyNoSavingsFirstRead, .buyNoSavingsAtCapFirstRead].contains(self) {
+        if ![.hotWalletTopUpFirstRead, .hotWalletTopUpReading, .hotWalletTopUpReadingSafari, .addSavingsCheckBalanceUnread, .buyFirstRead, .buyReading, .buyNoSavingsFirstRead, .buyNoSavingsAtCapFirstRead].contains(self) {
             Task { await readHotWallet() }
             let deadline = Date.now.addingTimeInterval(TestMode.readyTimeout)
             while !hotWalletHasRead.isDone {
@@ -1214,7 +1219,7 @@ enum TestScene: String, CaseIterable {
         case .hotWalletTopUpFirstRead:
             // The sheet opens first here, so the read has to change what it worked out.
             return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet, server: URL(string: "http://127.0.0.1:8787")!, browsers: deviceBrowsers).task { await readHotWallet() }), isReady: { hotWalletHasRead.isDone })
-        case .hotWalletTopUpReading:
+        case .hotWalletTopUpReading, .hotWalletTopUpReadingSafari:
             // Never read, to show what it says while it waits.
             return TestScreen(view: AnyView(TopUpSheet(wallet: hotWallet, server: URL(string: "http://127.0.0.1:8787")!, browsers: deviceBrowsers)), isReady: { true })
         case .send, .sendCAD, .sendKnown, .sendPicking, .sendSearching, .sendPicked, .sendTypo, .sendShortened, .sendTyping, .sendWaiting, .sendReviewing, .sendGoing, .sendSent, .sendStopped, .sendMoney, .sendMoneyCAD, .sendLookalike, .sendLookalikeChecked, .sendRefused:
@@ -1572,6 +1577,7 @@ final class FixtureSource: PortfolioSource {
                 object["withheld"] = [["wallet": "0x00000000000000000000000000000000000de301", "asset": "USDC"]]
                 let asked: [String: Any] = ["id": "cost:0xdemo:0xwithheld:USDC", "kind": "cost", "wallet": object["address"] ?? "", "receipts": [["wallet": object["address"] ?? "", "legId": "0xwithheld:USDC", "asset": "USDC", "units": "500000000"]], "costKey": "0xdemo:0xwithheld:USDC", "sender": feed == .costOnSavings ? "0x00000000000000000000000000000000000de301" : NSNull(), "noteAbout": feed == .costOnSavings ? "0x" + String(repeating: "ab", count: 32) : NSNull(), "needsCost": false, "arrivals": [["asset": "USDC", "decimals": 6, "units": "500000000"]], "transfers": 1, "firstAt": "2026-11-04T12:00:00.000Z", "lastAt": "2026-11-04T12:00:00.000Z", "evidence": ["0x0000…e301, your wallet, sent this, and its USDC history can't be confirmed"], "valueMicros": "500000000"]
                 object["questions"] = [asked] + (object["questions"] as? [[String: Any]] ?? [])
+                object["meter"] = ["open": (object["questions"] as? [[String: Any]])?.count ?? 0, "answered": 0, "waiting": 0]
             }
         case .smallAmounts:
             // A wallet's first minute: fractions of a cent in PnL, and the longest amounts a warning can sit beside.

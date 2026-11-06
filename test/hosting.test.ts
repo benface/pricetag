@@ -69,8 +69,24 @@ describe("hosting settings", () => {
   it("read the client's address from the host's header only when told to", () => {
     const req = (headers: Record<string, string>, remoteAddress: string) => ({ headers, socket: { remoteAddress } }) as unknown as IncomingMessage
     assert.equal(clientIpOf(req({ "fly-client-ip": "203.0.113.9" }, "10.0.0.1"), "fly-client-ip"), "203.0.113.9")
-    assert.equal(clientIpOf(req({ "fly-client-ip": "203.0.113.9" }, "10.0.0.1"), null), "10.0.0.1")
-    assert.equal(clientIpOf(req({}, "127.0.0.1"), null), null)
+    assert.equal(clientIpOf(req({ "fly-client-ip": "203.0.113.9" }, "198.51.100.7"), null), "198.51.100.7")
+    assert.equal(clientIpOf(req({}, "::ffff:198.51.100.7"), null), "198.51.100.7")
+    assert.equal(clientIpOf(req({}, "2001:db8::7"), null), "2001:db8::7")
+  })
+
+  it("say nothing rather than a wrong address", () => {
+    const req = (headers: Record<string, string>, remoteAddress: string) => ({ headers, socket: { remoteAddress } }) as unknown as IncomingMessage
+    for (const local of ["127.0.0.1", "::1", "::ffff:127.0.0.1", "10.0.0.1", "192.168.1.5", "172.16.0.9", "fdaa::3", "fe80::1"]) assert.equal(clientIpOf(req({}, local), null), null, local)
+    // Behind a proxy with no header set, the socket is the proxy, and a client's own `x-forwarded-for` doesn't change that.
+    assert.equal(clientIpOf(req({ "x-forwarded-for": "203.0.113.9" }, "10.0.0.1"), null), null)
+    assert.equal(clientIpOf(req({}, "10.0.0.1"), "fly-client-ip"), null, "the header's missing")
+    assert.equal(clientIpOf(req({ "fly-client-ip": "203.0.113.9, 198.51.100.7" }, "198.51.100.1"), "fly-client-ip"), null, "a client's entry could be first in a list")
+    assert.equal(clientIpOf(req({ "fly-client-ip": "not an address" }, "198.51.100.1"), "fly-client-ip"), null)
+  })
+
+  it("refuse to start on a header a client can write", () => {
+    for (const header of ["x-forwarded-for", "X-Forwarded-For", "forwarded", "x-real-ip"]) assert.throws(() => hostingOf({ PRICETAG_CLIENT_IP_HEADER: header }), /a client can write its own/)
+    assert.equal(hostingOf({ PRICETAG_CLIENT_IP_HEADER: "Fly-Client-IP" }).clientIpHeader, "fly-client-ip")
   })
 })
 
@@ -211,7 +227,7 @@ describe("whose queries they are", () => {
       readEthBalances: async () => new Map(),
       readBalances: async (_, block) => ({ blockNum: block, amounts: {} }),
     }
-    const created = { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } }
+    const created = { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } }
     const hosting = hostingOf({ PRICETAG_INVITES: `ben:${hashOf(INVITE)}` })
     const server = createServer(createHandler(gate(createApi({}, created, null), hosting, () => ({ amp: true, buying: false })), null))
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
@@ -302,7 +318,7 @@ describe("one request's reads", () => {
   const post = (path: string, body: unknown) => call(server, path, { method: "POST", body: JSON.stringify(body) })
 
   before(async () => {
-    server = createServer(createHandler(createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } }), null))
+    server = createServer(createHandler(createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } }), null))
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
   })
   after(() => server.close())

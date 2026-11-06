@@ -3,6 +3,7 @@
 
 import { createHash } from "node:crypto"
 import type { IncomingMessage, ServerResponse } from "node:http"
+import { BlockList, isIP } from "node:net"
 import { format } from "node:util"
 import { pathOf } from "./app.ts"
 import { inLane } from "./lanes.ts"
@@ -67,6 +68,9 @@ function positive(env: Env, name: string, fallback: number): number {
 /** Whether only this machine can reach an address. */
 const staysOnThisMachine = (host: string) => host === "localhost" || host === "::1" || /^127\.\d+\.\d+\.\d+$/.test(host)
 
+/** A client can send these itself, and a proxy adds to them instead of replacing them, so they say nothing about who's asking. */
+const FORWARDED_HEADERS = new Set(["x-forwarded-for", "forwarded", "x-real-ip", "x-client-ip", "true-client-ip"])
+
 export function hostingOf(env: Env): Hosting {
   const hosted = env.PRICETAG_HOSTED === "1"
   const invites = parseInvites(env.PRICETAG_INVITES)
@@ -76,6 +80,7 @@ export function hostingOf(env: Env): Hosting {
   if (invites.size === 0 && !staysOnThisMachine(host)) throw new Error(`HOST=${host} needs PRICETAG_INVITES, or anyone who can reach it could use its Amp token and Coinbase key.`)
   const header = env.PRICETAG_CLIENT_IP_HEADER?.trim().toLowerCase() || null
   if (hosted && !header) throw new Error("A hosted server needs PRICETAG_CLIENT_IP_HEADER, like fly-client-ip, or Coinbase would be told the host's proxy's address instead of the buyer's.")
+  if (header && FORWARDED_HEADERS.has(header)) throw new Error(`PRICETAG_CLIENT_IP_HEADER can't be ${header}, because a client can write its own. Use the one the host overwrites, like fly-client-ip.`)
   return {
     hosted,
     host,
@@ -102,14 +107,21 @@ export function inviteOf(req: IncomingMessage, invites: ReadonlyMap<string, stri
   return match ? (invites.get(hashOf(match[1] as string)) ?? null) : null
 }
 
-/** What a client on this machine's address is, which says nothing a provider could use. */
-const isLocal = (ip: string) => ip === "::1" || ip === "::ffff:127.0.0.1" || ip.startsWith("127.")
+/** This machine, a local network, or a host's own proxy, none of which say anything a provider could use. */
+const NOT_PUBLIC = new BlockList()
+for (const [network, prefix] of [["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8], ["169.254.0.0", 16], ["172.16.0.0", 12], ["192.168.0.0", 16]] as const) NOT_PUBLIC.addSubnet(network, prefix, "ipv4")
+for (const [network, prefix] of [["::", 128], ["::1", 128], ["fc00::", 7], ["fe80::", 10]] as const) NOT_PUBLIC.addSubnet(network, prefix, "ipv6")
 
-/** The client's address, for Coinbase to check where a purchase is made from. Null when it's this machine or isn't known. */
+/**
+ * The client's address, for Coinbase to check where a purchase is made from: the socket's, or the header the host overwrites.
+ * Null when it's not a public address or isn't one at all. A list is too: it means something else added to the header, and its
+ * first entry is whatever the client wrote.
+ */
 export function clientIpOf(req: IncomingMessage, header: string | null): string | null {
   const value = header ? req.headers[header] : req.socket.remoteAddress
-  const ip = (Array.isArray(value) ? value[0] : value)?.split(",")[0]?.trim()
-  return ip && !isLocal(ip) ? ip : null
+  const ip = typeof value === "string" ? value.trim().replace(/^::ffff:(?=\d+\.)/i, "") : ""
+  const family = isIP(ip)
+  return family !== 0 && !NOT_PUBLIC.check(ip, family === 4 ? "ipv4" : "ipv6") ? ip : null
 }
 
 /** Counts in fixed windows. Keys are invite names, and the total, so there are only ever a few of them. */

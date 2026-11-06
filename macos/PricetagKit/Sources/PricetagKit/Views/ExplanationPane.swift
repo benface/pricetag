@@ -78,6 +78,9 @@ public struct ExplanationPane: View {
                     if store.feed.isStale {
                         WarningText("Not updating").font(.callout)
                     }
+                    if let priceProof = explanation.priceProof {
+                        PriceProofRow(proof: priceProof, store: store)
+                    }
                 }
                 .padding(.vertical, 4)
             }
@@ -93,6 +96,30 @@ public struct ExplanationPane: View {
                 ForEach(explanation.legs, id: \.rowID) { leg in
                     LegRow(leg: leg, currency: explanation.currency, store: store, questions: questionCount(for: leg.asset), showsProof: opensFirstProof && leg.rowID == first, onResolve: onResolve)
                 }
+            }
+        }
+    }
+}
+
+/// The way into what's behind a current price, like a row's Proof.
+private struct PriceProofRow: View {
+    let proof: ExplanationPriceProof
+    let store: PortfolioStore
+    @State private var isShowing = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                isShowing.toggle()
+            } label: {
+                Label("Proof of this price", systemImage: isShowing ? "chevron.down" : "chevron.right")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.tint)
+            .font(.caption)
+            .accessibilityValue(isShowing ? "Showing" : "Hidden")
+            if isShowing {
+                ProofPanel(asset: proof.asset, price: proof.price, address: proof.wallet, store: store).id(proof.panelID(currency: store.currency, rule: store.selectedRule))
             }
         }
     }
