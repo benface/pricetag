@@ -280,7 +280,7 @@ public struct LegRow: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(.tint)
                 if let address = leg.wallet ?? store.address {
-                    ProofPanel(leg: leg.id, address: address, store: store, costNote: leg.costSource.map { Wording.costProof(source: $0, label: leg.costLabel) }).id("\(address):\(leg.id):\(currency.rawValue):\(store.selectedRule ?? "")")
+                    ProofPanel(leg: leg.id, address: address, store: store, costNote: leg.costSource.map { Wording.costProof(source: $0, label: leg.costLabel) }).id("\(address):\(leg.id):\(currency.rawValue):\(store.selectedRule ?? "")").id("\(store.currency.rawValue):\(store.selectedRule ?? "")")
                 }
             }
         }
