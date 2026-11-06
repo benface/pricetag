@@ -88,9 +88,9 @@ extension WalletList {
     /// build, and scenes show what one looks like.
     static var offersDemo: Bool {
         #if DEBUG
-        Build.isWatchOnly || !TestMode.isRunning
+        Build.isForOtherPeople || !TestMode.isRunning
         #else
-        Build.isWatchOnly
+        Build.isForOtherPeople
         #endif
     }
 }

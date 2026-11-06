@@ -175,6 +175,14 @@ The invites live in `~/.config/pricetag/invites.txt`, mode 600, outside any repo
 
 That restarts the machine, so wallet reads start over, the limits reset and the apps reconnect. Nothing else is lost, because it keeps nothing else. The dataset settings are secrets too, so when `.env.local` moves to a new version, set the same ones with `fly secrets import`, and only after that version reaches head. Code changes reach it with `fly deploy --ha=false`.
 
+### The hosted build
+
+`pnpm mac:hosted` builds the whole app for colleagues to install: Spending Money, Send, Buy, sites and hardware wallets, reading `PATINA_HOSTED_SERVER_HOST`. It's the normal app with `macos/Config/Hosted.xcconfig`, under its own bundle ID, sandbox and Keychain group, so it can't see the wallet of a normal build on the same Mac. It needs this Mac signed in to Xcode with an admin of team `R7TNNTC382`, and nothing else: Xcode makes the App ID and a Developer ID profile, which isn't tied to registered Macs, and notarizes through the same account, with no `notarytool` credential. `macos/build/Patina-<version>-hosted.dmg` holds the app, the browser extension to load unpacked, and `macos/INSTALLING.md` as its Read Me First.
+
+An installed copy tells each Chromium browser where the extension's host is when it opens (`BrowserHosts`). Its sandbox allows that one file and nothing else in a browser's folders, and it never replaces a manifest it didn't write, so on a Mac with `pnpm mac`, the extension stays with that build.
+
+`pnpm check:hosted [--no-launch] [dmg]` tests a built one with no real funds, and `macos/TESTING.md` says how to run it without interrupting anyone.
+
 ### The watch-only build
 
 `pnpm mac:watch-only` builds the copy colleagues can install: a Developer ID `.dmg` with no key code in it and its own bundle ID, which reads `PATINA_HOSTED_SERVER_HOST` in `macos/Config/App.xcconfig`, notarized and stapled. It tells you what to do if this Mac has no notarytool profile yet. `pnpm check:watch-only` checks a built one, and `macos/WATCH-ONLY.md` is what to send people. `pnpm mac` never uses any of this.

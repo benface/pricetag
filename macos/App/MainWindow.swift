@@ -142,7 +142,7 @@ struct MainWindow: View {
             }
         }
         // On the way to a first wallet, the welcome asks for it itself.
-        .sheet(isPresented: Binding(get: { Build.isWatchOnly && store.asksForInvite && !isOnWayToWallet }, set: { if !$0 { store.declineInvite() } })) {
+        .sheet(isPresented: Binding(get: { Build.isForOtherPeople && store.asksForInvite && !isOnWayToWallet }, set: { if !$0 { store.declineInvite() } })) {
             // The store closes this when an invite's given, and opens it again if the server refuses that one.
             InvitePrompt(store: store, decline: store.declineInvite)
         }
@@ -1144,8 +1144,8 @@ private struct Unavailable: View {
     let store: PortfolioStore
     let firstRun: FirstRun
 
-    /// A server that wants an invite isn't something to try again or restart: only a watch-only build's invite answers it.
-    private var wantsInvite: Bool { Build.isWatchOnly && store.needsInvite }
+    /// A server that wants an invite isn't something to try again or restart: only a build with its own server's invite answers it.
+    private var wantsInvite: Bool { Build.isForOtherPeople && store.needsInvite }
 
     var body: some View {
         let problem = store.feed.problem(serverURL: store.serverURL, portfolio: nil)

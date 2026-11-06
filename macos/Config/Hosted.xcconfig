@@ -1,0 +1,12 @@
+// What makes a build the whole app for other people: the normal app, reading the hosted server, with its own settings, records, sandbox and
+// Keychain group, so it can never see the normal build's wallet. Only macos/hosted.sh uses this, with xcodebuild's -xcconfig, so every target
+// and package sees it and `pnpm mac` never does. What it signs with is in Hosted.entitlements.
+
+SWIFT_ACTIVE_COMPILATION_CONDITIONS = $(inherited) PATINA_HOSTED
+
+// The last word of each names its socket, so neither can be the normal build's `wallet` or `debug`.
+APP_BUNDLE_ID = com.benface.pricetag.macos.hosted
+APP_DEBUG_BUNDLE_ID = com.benface.pricetag.macos.hosteddebug
+
+// The hosted server, from App.xcconfig. macos/hosted.sh sets this over it for --local, which reads this Mac's server and is never notarized.
+PATINA_SERVER_HOST = $(PATINA_HOSTED_SERVER_HOST)
