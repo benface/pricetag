@@ -1,0 +1,288 @@
+{
+  "address": "all",
+  "mode": "demo",
+  "method": "average",
+  "rule": null,
+  "currency": "USD",
+  "exchange": null,
+  "coverage": {
+    "fromBlock": 53500000,
+    "toBlock": 53505400
+  },
+  "trackedTokens": 10,
+  "latest": {
+    "blockNum": 53505400,
+    "timestamp": "2026-11-04T11:00:00.000Z"
+  },
+  "progress": {
+    "started": true,
+    "behindBlocks": 0
+  },
+  "gasUnknownTxs": [],
+  "outgoingTxs": [
+    "0x1",
+    "0x2",
+    "0x3"
+  ],
+  "unlisted": [
+    {
+      "token": "0x00000000000000000000000000000000000000f1",
+      "transfers": 3
+    }
+  ],
+  "l1FeeUnknownTxs": [],
+  "openingUnread": [],
+  "unreadAssets": [],
+  "positions": [
+    {
+      "asset": "ETH",
+      "decimals": 18,
+      "note": "incl. wrapped ETH",
+      "price": {
+        "micros": "2640000000",
+        "source": "oracle",
+        "blockNum": 53505400
+      },
+      "values": {
+        "qty": "2497000000000000000",
+        "unknownCostQty": "1000000000000000000",
+        "costMicros": null,
+        "averageCostMicros": null,
+        "valueMicros": "6592080000",
+        "realizedMicros": "0",
+        "unrealizedMicros": null,
+        "estimatedCostMicros": "0",
+        "estimatedRealizedMicros": "0"
+      },
+      "pnlMicros": null,
+      "returnBps": null,
+      "shortfallQty": "0",
+      "legCount": 8,
+      "reconciliation": {
+        "status": "reconciled",
+        "blockNum": 53505400,
+        "computedQty": "2497000000000000000",
+        "actualQty": "2497000000000000000",
+        "differenceQty": "0"
+      },
+      "noMarket": false,
+      "estimates": {
+        "cost": false,
+        "value": false,
+        "realized": false,
+        "unrealized": false
+      },
+      "resolvable": true,
+      "wallets": [
+        {
+          "wallet": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "qty": "998000000000000000",
+          "unknownCostQty": "0",
+          "costMicros": "2994000000",
+          "valueMicros": "2634720000",
+          "pnlMicros": "-359280000",
+          "resolvable": false,
+          "reconciliation": "reconciled"
+        },
+        {
+          "wallet": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "qty": "499000000000000000",
+          "unknownCostQty": "0",
+          "costMicros": "1497000000",
+          "valueMicros": "1317360000",
+          "pnlMicros": "-179640000",
+          "resolvable": false,
+          "reconciliation": "reconciled"
+        },
+        {
+          "wallet": "0xcccccccccccccccccccccccccccccccccccccccc",
+          "qty": "1000000000000000000",
+          "unknownCostQty": "1000000000000000000",
+          "costMicros": null,
+          "valueMicros": "2640000000",
+          "pnlMicros": null,
+          "resolvable": true,
+          "reconciliation": "reconciled"
+        }
+      ]
+    }
+  ],
+  "totals": {
+    "valueMicros": "6592080000",
+    "realizedMicros": "0",
+    "unrealizedMicros": "-538920000",
+    "gasMicros": "9000000",
+    "pnlMicros": "-547920000",
+    "excluded": [
+      {
+        "asset": "ETH",
+        "reason": "unknown cost",
+        "wallet": "0xcccccccccccccccccccccccccccccccccccccccc"
+      }
+    ],
+    "unpricedGas": false,
+    "coverage": {
+      "value": {
+        "known": 3,
+        "missing": 0
+      },
+      "realized": {
+        "known": 2,
+        "missing": 0
+      },
+      "unrealized": {
+        "known": 2,
+        "missing": 1
+      },
+      "pnl": {
+        "known": 6,
+        "missing": 1
+      }
+    },
+    "unresolvedMicros": "2640000000",
+    "estimatedMicros": "0",
+    "estimated": {
+      "value": false,
+      "realized": false,
+      "unrealized": false
+    },
+    "noMarket": []
+  },
+  "pnlStatus": "partial",
+  "points": [
+    {
+      "blockNum": 101,
+      "timestamp": "2026-11-04T00:00:00.000Z",
+      "txHash": "0x1",
+      "pnlMicros": "-3000000",
+      "excludedCount": 0,
+      "summary": "Received 2 ETH",
+      "wallets": [
+        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ]
+    },
+    {
+      "blockNum": 102,
+      "timestamp": "2026-11-04T00:00:00.000Z",
+      "txHash": "0x2",
+      "pnlMicros": "-6000000",
+      "excludedCount": 0,
+      "summary": "Moved 1 ETH between your wallets",
+      "wallets": [
+        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ]
+    },
+    {
+      "blockNum": 104,
+      "timestamp": "2026-11-04T00:00:00.000Z",
+      "txHash": "0x3",
+      "pnlMicros": "-9000000",
+      "excludedCount": 0,
+      "summary": "Sent 0.5 ETH",
+      "wallets": [
+        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ]
+    },
+    {
+      "blockNum": 108,
+      "timestamp": "2026-11-04T00:00:00.000Z",
+      "txHash": "0x4",
+      "pnlMicros": "-9000000",
+      "excludedCount": 1,
+      "summary": "Received 1 ETH",
+      "wallets": [
+        "0xcccccccccccccccccccccccccccccccccccccccc"
+      ]
+    },
+    {
+      "blockNum": 53505400,
+      "timestamp": "2026-11-04T11:00:00.000Z",
+      "txHash": null,
+      "pnlMicros": "-547920000",
+      "excludedCount": 1,
+      "summary": null,
+      "wallets": []
+    }
+  ],
+  "holdComparison": {
+    "walletMicros": "-547920000",
+    "gainThatLeftMicros": "0",
+    "walletLeavesOut": true,
+    "walletEstimated": false,
+    "putInMicros": "6000000000",
+    "takenOutMicros": "1500000000",
+    "ethPriceMicros": "2640000000",
+    "unknownAmounts": 1,
+    "ranOut": false,
+    "status": "partial",
+    "unavailable": null,
+    "holdMicros": "-540000000",
+    "differenceMicros": null,
+    "ethQty": "1500000000000000000",
+    "ethValueMicros": "3960000000",
+    "estimated": false
+  },
+  "questions": [
+    {
+      "id": "sender:0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "kind": "sender",
+      "wallet": "0xcccccccccccccccccccccccccccccccccccccccc",
+      "sender": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "known": null,
+      "costKey": null,
+      "needsCost": false,
+      "arrivals": [
+        {
+          "asset": "ETH",
+          "decimals": 18,
+          "units": "1000000000000000000"
+        }
+      ],
+      "receipts": [
+        {
+          "wallet": "0xcccccccccccccccccccccccccccccccccccccccc",
+          "legId": "0x4:ETH",
+          "asset": "ETH",
+          "units": "1000000000000000000"
+        }
+      ],
+      "transfers": 1,
+      "firstAt": "2026-11-04T00:00:00.000Z",
+      "lastAt": "2026-11-04T00:00:00.000Z",
+      "evidence": [],
+      "valueMicros": "3000000000",
+      "noteAbout": "0x4"
+    }
+  ],
+  "meter": {
+    "open": 1,
+    "answered": 0,
+    "waiting": 1
+  },
+  "linkedReading": [
+    "0xdddddddddddddddddddddddddddddddddddddddd"
+  ],
+  "linkedFailed": [],
+  "withheld": [],
+  "purchases": [],
+  "marketChecked": true,
+  "wallets": [
+    {
+      "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "state": "read"
+    },
+    {
+      "address": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "state": "read"
+    },
+    {
+      "address": "0xcccccccccccccccccccccccccccccccccccccccc",
+      "state": "read"
+    },
+    {
+      "address": "0xdddddddddddddddddddddddddddddddddddddddd",
+      "state": "reading"
+    }
+  ]
+}

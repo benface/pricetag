@@ -3,7 +3,7 @@ import PricetagKit
 import SwiftUI
 
 struct SettingsView: View {
-    enum Pane: Hashable { case general, spendingMoney, server }
+    enum Pane: Hashable { case general, answers, spendingMoney, server }
 
     let store: PortfolioStore
     let hotWallet: HotWallet
@@ -38,6 +38,7 @@ struct SettingsView: View {
     var body: some View {
         TabView(selection: $tab) {
             Tab("General", systemImage: "gearshape", value: Pane.general) { general }
+            Tab("Answers", systemImage: "checklist", value: Pane.answers) { pane(.answers) { AnswersList(store: store) } }
             Tab(HotWalletWording.title, systemImage: "banknote", value: Pane.spendingMoney) { spendingMoney }
             Tab("Price Service", systemImage: "server.rack", value: Pane.server) { connection }
         }
@@ -59,7 +60,7 @@ struct SettingsView: View {
             if shownHeight == nil || reduceMotion {
                 shownHeight = height
             } else {
-                withAnimation(.easeInOut(duration: 0.25)) { shownHeight = height }
+                withAnimation(Motion.panel) { shownHeight = height }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didChangeScreenNotification)) { _ in room = Self.roomOnDisplay }
@@ -101,7 +102,7 @@ struct SettingsView: View {
                     RulePicker(store: store)
                         .help(Wording.rulesHelp)
                     Button("Compare Side by Side…") { isComparing = true }
-                        .disabled(store.address == nil || store.address == WalletAddress.demo)
+                        .disabled(store.address == nil || store.address == WalletAddress.demo || WalletAddress.isAllYours(store.address))
                 }
             }
             Section {
@@ -120,16 +121,6 @@ struct SettingsView: View {
                 Text("Sweeps, purchases, and sends that didn't go through. Never prices.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            }
-            Section {
-                LabeledContent("Who sent what") {
-                    Button("Forget All My Answers", role: .destructive) { store.setBook(Book(), action: "Forget All Answers") }
-                        .controlSize(.small)
-                        .disabled(!store.hasAnswers)
-                }
-                .help("They stay on this Mac. They're only sent to your price service to work out your numbers, and it doesn't keep them.")
-            } header: {
-                Text("Your Answers")
             }
         }
     }

@@ -101,7 +101,7 @@ private final class Heard {
         let heard = Heard(rig.wallet)
         await rig.chain.setSendFailure(.rejected("insufficient funds"))
         await rig.wallet.tick()
-        #expect(heard.news == [.sweepDidntGoOut("A sweep of USDC didn't go out: insufficient funds")])
+        #expect(heard.news == [.sweepDidntGoOut("A sweep of USDC didn't go out. There isn't enough ETH for this and its network fee. Add some ETH, then try again.")])
         clock.advance(HotWallet.pauseAfterFailure + 1)
         await rig.wallet.tick()
         #expect(await rig.signer.signed.count == 2, "it tried again")
@@ -192,6 +192,21 @@ private final class Heard {
 
     @Test func aSweepThatDidntLandGoesAgainWithoutANotification() {
         #expect(notices([.unconfirmed(record("USDC", amount: "5000000", decimals: 6, usd: "5000000", reason: .aboveCap, status: .dropped))]).isEmpty)
+    }
+
+    /// Its row leaving the page says a revoke landed, so only what's still in doubt or failed is news.
+    @Test func aRevokeIsNewsWhenItDidntGoAsExpected() {
+        let revoke = record("USDC", amount: "0", decimals: 0, usd: nil, reason: .revoke, status: .confirmed)
+        #expect(notices([.settled(revoke)]).isEmpty)
+        #expect(notices([.landedLate(revoke)]).map(\.body) == ["The approval for USDC was revoked after all."])
+        var dropped = revoke
+        dropped.status = .dropped
+        #expect(notices([.unconfirmed(dropped)]).map(\.body) == ["Revoking an approval for USDC hasn't landed after 3 minutes. It may still go through, so check before revoking it again."])
+        var failed = revoke
+        failed.status = .failed
+        let failure = notices([.settled(failed)])
+        #expect(failure.map(\.title) == ["Revoke Failed"])
+        #expect(failure.map(\.body) == ["Revoking an approval for USDC failed onchain. It may still be there, and its gas was spent."])
     }
 
     /// The old key's records go with it, so the notification opens what the money's on now.

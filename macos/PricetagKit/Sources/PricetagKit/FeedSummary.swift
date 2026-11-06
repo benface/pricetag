@@ -53,13 +53,14 @@ public struct FeedSummary: Equatable, Sendable {
                     (text, isWarning) = (prefix + Wording.valueUnavailable, true)
                     return
                 }
-                (text, isWarning) = (prefix + value, portfolio.isValuePartial)
+                // With no line beside it to say what's estimated, a number here keeps its own mark.
+                (text, isWarning) = (prefix + Format.estimate(value, portfolio.totals.estimated.value), portfolio.isValuePartial)
             case .pnl:
                 guard let pnl = portfolio.totalPnlText else {
                     (text, isWarning) = (prefix + Wording.pnlUnavailable, true)
                     return
                 }
-                (text, isWarning) = (prefix + pnl, portfolio.pnlStatus == .partial)
+                (text, isWarning) = (prefix + Format.estimate(pnl, isPositive(portfolio.totals.estimatedMicros)), portfolio.pnlStatus == .partial)
             }
         }
     }

@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
-import { ASSETS, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, applyLeg, blockBefore, buildPricedLegs, chartMoneyTicks, derivePricedRows, emptyPosition, formatChartSpan, msBetweenBlocks, encodeNote, foldPositions, formatAmount, formatDuration, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, labelUsd, plainAmount, sumTotals, type LegRow, type Method, type PricedLeg } from "@pricetag/sdk/core"
+import { ASSETS, CURRENCIES, CURRENCY_CODES, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, applyLeg, blockBefore, buildPricedLegs, chartMoneyTicks, derivePricedRows, emptyPosition, formatChartSpan, msBetweenBlocks, encodeNote, foldPositions, formatAmount, formatDuration, formatMoney, formatPaid, formatPrice, formatReturn, formatSignedAmount, formatSignedMoney, labelUsd, plainAmount, sumTotals, type LegRow, type Method, type PricedLeg } from "@pricetag/sdk/core"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { TICK_GAP, chartLeftMargin, placeChartTimes } from "../src/core/chart-times.ts"
 import { describeEffect, describeNetting, summarizeEffect } from "../src/core/explain.ts"
@@ -12,7 +12,8 @@ import * as wording from "../src/core/wording.ts"
 import { createApi } from "../server/app.ts"
 import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "../server/portfolio.ts"
 import { emptyBook, linkMessage } from "../src/core/book.ts"
-import { foldBook } from "../src/core/resolve.ts"
+import { foldBook, microsOf } from "../src/core/resolve.ts"
+import { PRESET_FIAT } from "../server/coinbase.ts"
 import { RULE_TEXT, differenceOf, ruleNote, showRuleDifference, showRuleValue, whySentence, type RuleComparison } from "../src/core/rules.ts"
 import { proofOf, verificationOf } from "../server/proof.ts"
 
@@ -92,6 +93,23 @@ describe("portfolioOf", () => {
     assert.equal(dai.title, "DAI: Average price paid")
     assert.equal(dai.value, null)
     assert.match(dai.lines.join(" "), /unknown cost, so there's no average/)
+  })
+
+  it("explains a price and a return, and a return with an unknown cost is unknown, not 0%", () => {
+    const aero = portfolioOf(DEMO_WALLET, "average").positions.find((p) => p.asset === "AERO")!
+    assert.equal(aero.returnBps, "1202")
+    const aeroReturn = explainPortfolio(DEMO_WALLET, "average", { kind: "asset", asset: "AERO", metric: "return" })!
+    assert.equal(aeroReturn.title, "AERO: Return")
+    assert.equal(aeroReturn.value, "+12.0%")
+    assert.match(aeroReturn.lines.join(" "), /\+\$75\.13 unrealized ÷ \$624\.88 cost/)
+    const daiReturn = explainPortfolio(DEMO_WALLET, "average", { kind: "asset", asset: "DAI", metric: "return" })!
+    assert.equal(daiReturn.value, null)
+    assert.match(daiReturn.lines.join(" "), /unknown cost, so there's no return/)
+    const price = explainPortfolio(DEMO_WALLET, "average", { kind: "asset", asset: "AERO", metric: "price" })!
+    assert.equal(price.title, "AERO: Price")
+    assert.equal(price.value, "$1.40")
+    assert.match(price.lines[0] as string, /^Current price: \$1\.40/)
+    for (const metric of ["price", "return"]) assert.deepEqual(parseExplainTarget(new URLSearchParams({ asset: "AERO", metric })), { kind: "asset", asset: "AERO", metric })
   })
 
   it("says the total is partial when it leaves something out", () => {
@@ -434,8 +452,10 @@ describe("the formatters the Swift package repeats", () => {
       usd: usd.map((micros) => ({ micros, usd: formatMoney(micros, "USD"), signed: formatSignedMoney(micros, "USD") })),
       cad: usd.map((micros) => ({ micros, usd: formatMoney(micros, "CAD"), signed: formatSignedMoney(micros, "CAD") })),
       price: usd.filter((micros) => !micros.startsWith("-") && micros !== "0").map((micros) => ({ micros, price: formatPrice(micros, "USD"), cad: formatPrice(micros, "CAD") })),
-      others: (["EUR", "GBP", "CHF"] as const).map((currency) => ({
+      others: CURRENCY_CODES.filter((currency) => currency !== "USD" && currency !== "CAD").map((currency) => ({
         currency,
+        label: CURRENCIES[currency].label,
+        paid: formatPaid("25810000", currency),
         money: usd.map((micros) => ({ micros, usd: formatMoney(micros, currency), signed: formatSignedMoney(micros, currency) })),
         price: usd.filter((micros) => !micros.startsWith("-") && micros !== "0").map((micros) => ({ micros, price: formatPrice(micros, currency) })),
         chartTicks: [[0], [-0.0023], [0.75], [120], [-250000, 1250000]].map((values) => ({ values, ticks: chartMoneyTicks(values, currency) })),
@@ -446,7 +466,10 @@ describe("the formatters the Swift package repeats", () => {
       duration: [0, 60_000, 3_600_000, 7_198_000, 7_200_000, 10_800_000, 200_000_000].map((ms) => ({ ms, duration: formatDuration(ms) })),
       blockSpans: [[100, 130], [LAST_2S_BLOCK - 5, LAST_2S_BLOCK], [LAST_2S_BLOCK - 5, LAST_2S_BLOCK + 10], [LAST_2S_BLOCK, LAST_2S_BLOCK + 300], [LAST_2S_BLOCK + 5, LAST_2S_BLOCK + 305], [130, 100]].map(([from, to]) => ({ from, to, ms: msBetweenBlocks(from as number, to as number) })),
       blocksBefore: [[130, 60_000], [LAST_2S_BLOCK, 60_000], [LAST_2S_BLOCK + 10, 60_000], [LAST_2S_BLOCK + 300, 60_000], [LAST_2S_BLOCK + 301, 60_000], [LAST_2S_BLOCK + 300, 60_100], [10, 60_000]].map(([block, ms]) => ({ block, ms, before: blockBefore(block as number, ms as number) })),
+      returns: ["0", "4", "5", "-4", "-5", "1", "-1", "1234", "-1234", "-10000", "99949", "99950", "-99950", "100000", "123456", "-123456", "10000000"].map((bps) => ({ bps, text: formatReturn(bps) })),
       plainAmount: ["46,20", "46,2", "0,5", "1 234,50", "1\u00a0234,50", "1\u202f234,50", "1,234", "1,234,567.50", "1,000.", "12.50", "46", ".5", "", "abc", "1.234,50", "12,3456", "1,23,456", "1,234,50", "1234,567", "0,125", "012,345", ",5", "5,", "1,,5", "46,20.5", "abc,5", "٤٦,٢٠"].map((text) => ({ text, plain: plainAmount(text) })),
+      typed: CURRENCY_CODES.flatMap((currency) => [...new Set(CURRENCY_CODES.flatMap((other) => [CURRENCIES[other].code, CURRENCIES[other].symbol.trim(), CURRENCIES[other].label.trim()]))].flatMap((mark) => [`${mark}46`, `46 ${mark}`]).concat(["46,20", "$46", "46 $", "€46", "46,20 €", "£46", "US$46", "CA$46", "A$46", "MX$46", "R$46", "R46", "₺46", "CHF 46", "46 EUR", "46 SEK"]).map((text) => ({ currency, text, micros: microsOf(text, currency) }))),
+      presetFiat: [...PRESET_FIAT],
       linkMessage: { owner: DEMO_WALLET.address, address: "0x00000000000000000000000000000000000DE301", message: linkMessage(DEMO_WALLET.address, "0x00000000000000000000000000000000000DE301") },
       note: { txHash: `0x${"ab".repeat(32)}`, asset: "USDC", usdMicros: "250000000", calldata: encodeNote(`0x${"ab".repeat(32)}`, "USDC", "250000000") },
     })
@@ -606,6 +629,7 @@ describe("wording", () => {
     pnlHelp: ["Total PnL", "AERO: Realized PnL", "Transaction 0x1234…abcd"].map((text) => ({ text, help: wording.pnlHelp(text) ?? null })),
     linkedFailed: [1, 2].map((count) => ({ count, text: wording.linkedFailedSentence(count) })),
     withheld: wording.withheldSentence("0x1234567890abcdef1234567890abcdef12345678", "ETH"),
+    answerQuestions: [1, 5, 1203].map((count) => ({ count, text: wording.answerQuestionsLabel(count) })),
     sentences: {
       methodName: wording.METHOD_NAME,
       methodHelp: wording.METHOD_HELP,
@@ -616,6 +640,7 @@ describe("wording", () => {
       pnlHelp: wording.PNL_HELP,
       realizedHelp: wording.REALIZED_HELP,
       unrealizedHelp: wording.UNREALIZED_HELP,
+      returnHelp: wording.RETURN_HELP,
       notStarted: wording.NOT_STARTED,
       unpricedFees: wording.UNPRICED_FEES,
       demo: wording.DEMO_NOTICE,
@@ -629,6 +654,15 @@ describe("wording", () => {
       holdWallet: wording.HOLD_WALLET,
       holdEth: wording.HOLD_ETH,
       holdPast: wording.HOLD_PAST,
+      answerQuestions: wording.ANSWER_QUESTIONS,
+      showMissing: wording.SHOW_MISSING,
+      senderQuestion: wording.SENDER_QUESTION,
+      senderWhy: wording.SENDER_WHY,
+      costQuestion: wording.COST_QUESTION,
+      costWhy: wording.COST_WHY,
+      exchangeCostWhy: wording.EXCHANGE_COST_WHY,
+      allAnswered: wording.ALL_ANSWERED,
+      nothingLeft: wording.NOTHING_LEFT,
     },
     unseenEth: UNSEEN_ETH_CASES.map((unseen) => ({ unseen, text: wording.unseenEthCause(unseen) })),
     manifestHash: wording.shortManifestHash("bea12f7575e74575f2f0318213d61d421706eea0314e5d7116edebd4e77818a1"),

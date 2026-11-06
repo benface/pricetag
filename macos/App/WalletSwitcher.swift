@@ -160,6 +160,7 @@ struct WalletSwitcher: View {
     @State private var pointerAtLastKey: CGPoint?
     @FocusState private var focus: Field?
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private enum Field: Hashable {
         case add, rename
@@ -205,6 +206,7 @@ struct WalletSwitcher: View {
                 // A list, so dragging a row is what it is everywhere else on a Mac. Sections keep their own order, because moving to another section
                 // changes what a wallet is, and that isn't something to do by a slip of the mouse.
                 List {
+                    section(nil, list.allYours.map { [$0] } ?? [])
                     section("Yours", list.yours, canReorder: true)
                     section("Watching", list.watching, canReorder: true)
                     section("Recent", list.recent)
@@ -221,7 +223,7 @@ struct WalletSwitcher: View {
             VStack(alignment: .leading, spacing: 0) {
                 if offersSpendingMoney || cantOpenSpendingMoney { createSpendingMoney }
                 addRow
-                if let note { noteRow(note) }
+                if let note { noteRow(note).arrives() }
             }
             .padding(6)
         }
@@ -307,7 +309,7 @@ struct WalletSwitcher: View {
             .accessibilityLabel([entry.title, entry.detail].joined(separator: ", "))
             .accessibilityAddTraits(entry.address == store.address ? [.isButton, .isSelected] : .isButton)
             .accessibilityAction { choose(entry.address) }
-            if isHighlighted, entry.kind != .demo {
+            if isHighlighted, entry.kind != .demo, entry.kind != .allYours {
                 Menu {
                     actions(entry)
                 } label: {
@@ -338,7 +340,7 @@ struct WalletSwitcher: View {
             if hovering { highlighted = entry.address } else if highlighted == entry.address { highlighted = nil }
         }
         .contextMenu {
-            if entry.kind != .demo { actions(entry) }
+            if entry.kind != .demo, entry.kind != .allYours { actions(entry) }
         }
     }
 
@@ -378,9 +380,9 @@ struct WalletSwitcher: View {
         }
         if let arranged = [list.yours, list.watching].first(where: { $0.contains(entry) && $0.count > 1 }), let index = arranged.firstIndex(of: entry) {
             // For the keyboard and VoiceOver, which can't drag.
-            Button("Move Up") { store.moveWallets(in: arranged.map(\.address), from: [index], to: index - 1) }
+            Button("Move Up") { withAnimation(reduceMotion ? nil : Motion.state) { store.moveWallets(in: arranged.map(\.address), from: [index], to: index - 1) } }
                 .disabled(index == 0)
-            Button("Move Down") { store.moveWallets(in: arranged.map(\.address), from: [index], to: index + 2) }
+            Button("Move Down") { withAnimation(reduceMotion ? nil : Motion.state) { store.moveWallets(in: arranged.map(\.address), from: [index], to: index + 2) } }
                 .disabled(index == arranged.count - 1)
         }
         if entry.canKeep {
@@ -424,14 +426,19 @@ struct WalletSwitcher: View {
     }
 
     /// Does it, and says what changed right away, because the numbers change with it. An account from a device comes back with Undo too,
-    /// here and in the Edit menu.
+    /// here and in the Edit menu. The rows slide to where they now are, and so does Undo.
     private func change(_ entry: WalletEntry, to text: String, named name: String, _ action: @escaping () -> Void) {
         let account = hotWallet?.settings.deviceAccounts.first { $0.lowercased == entry.address }
         let relink = { [hotWallet] in if let account { hotWallet?.linkDeviceAccounts([account.lowercased]) } }
-        let before = store.changeWallet(entry.address, name: name, alsoUndo: relink, action)
-        note = WalletListNote(text: text) { [store] in
-            relink()
-            store.restore(before)
+        let animation = reduceMotion ? nil : Motion.state
+        withAnimation(animation) {
+            let before = store.changeWallet(entry.address, name: name, alsoUndo: relink, action)
+            note = WalletListNote(text: text) { [store] in
+                withAnimation(animation) {
+                    relink()
+                    store.restore(before)
+                }
+            }
         }
     }
 

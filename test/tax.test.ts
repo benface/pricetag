@@ -9,7 +9,7 @@ import type { PortfolioResponse, TaxReportResponse, WalletResponse } from "../sr
 import { costKey, emptyBook, type Book } from "../src/core/book.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import { foldBook } from "../src/core/resolve.ts"
-import { TAX_COUNTRIES, readOtherWallets, taxReportOf, taxRows } from "../src/core/tax.ts"
+import { TAX_COUNTRIES, parseTaxYear, readOtherWallets, taxReportOf, taxRows, type TaxYear } from "../src/core/tax.ts"
 import { createApi } from "../server/app.ts"
 
 const E18 = 10n ** 18n
@@ -379,6 +379,15 @@ describe("taxReportOf", () => {
     assert.ok(report.warnings.some((warning) => /Canada reports in CAD/.test(warning)))
   })
 
+  it("says first that its rules may not apply in a currency neither country reports in, and doesn't suggest switching to one", () => {
+    for (const country of ["CA", "US"] as const) {
+      const report = taxReportOf([{ ...wallet, currency: "EUR", rates: demoRates("EUR") }], { country, method: TAX_COUNTRIES[country].method, scope: TAX_COUNTRIES[country].scope })
+      assert.equal(report.currency, "EUR")
+      assert.match(report.warnings[0] ?? "", /only knows Canada and the US, and neither reports in EUR\. If you report in EUR, these rules and this layout may not apply/)
+      assert.ok(!report.warnings.some((warning) => /Change your main currency/.test(warning)))
+    }
+  })
+
   it("converts at each transaction's rate, and a missing rate is unknown rather than guessed", () => {
     // USD for one CAD, with 8 decimals: 0.50 at the buy and 0.25 at the sale.
     const round = (answer: string, block: number) => ({ answer, updatedAt: Date.parse(leg(block, 0n).timestamp) / 1000 })
@@ -402,6 +411,94 @@ describe("taxReportOf", () => {
     assert.equal(report.gainMicros, null)
   })
 
+  describe("a year", () => {
+    // History from August 2025: a buy in December 2025 and a sale in March 2026.
+    const head = 20_000_000
+    const spanning = walletOf(A, [buy(10, 1n, 1000), sell(30, 1n, 2000)].map((l, i) => ({ ...l, timestamp: ["2025-12-01T00:00:00.000Z", "2026-03-01T00:00:00.000Z"][i] as string })), {
+      coverage: { fromBlock: 1, toBlock: head },
+      latest: { blockNum: head, timestamp: "2026-11-27T00:00:00.000Z" },
+    })
+    const report = (year: TaxYear) => taxReportOf([spanning], { country: "US", method: "fifo", scope: "per-wallet", year })
+
+    it("lists only that year, with costs from the years before it", () => {
+      const year = report(2026)
+      assert.deepEqual([year.year, year.years, year.rowCount, year.gainMicros, year.partialYear], [2026, [2026, 2025], 1, usd(1000), null])
+      assert.equal(eventsOf(year).length, 1)
+      assert.match(year.filename, /-2026-US-/)
+      const before = report(2025)
+      assert.deepEqual([before.rowCount, before.gainMicros, before.preview], [0, null, []])
+    })
+
+    it("says when a year's history isn't all there", () => {
+      assert.match(report(2025).partialYear ?? "", /^Records start on August \d+, 2025, so 2025 is missing everything before then\.$/)
+      assert.equal(report(2025).warnings[0], report(2025).partialYear)
+      assert.match(report(2024).partialYear ?? "", /so nothing from 2024 is here/)
+      const recent = taxReportOf([wallet], { country: "US", method: "fifo", scope: "per-wallet", year: "latest" })
+      assert.deepEqual([recent.year, recent.partialYear], [2026, "Records start on November 4, 2026, so 2026 is missing everything before then."])
+    })
+
+    it("is everything without one, as before", () => {
+      const all = report("all")
+      assert.deepEqual([all.year, all.partialYear, all.rowCount], [null, null, 1])
+      assert.equal(taxReportOf([spanning], { country: "US", method: "fifo", scope: "per-wallet" }).csv, all.csv)
+    })
+
+    it("reads what's asked for", () => {
+      assert.deepEqual([parseTaxYear(undefined), parseTaxYear("all"), parseTaxYear("latest"), parseTaxYear("2026"), parseTaxYear(2025)], ["all", "all", "latest", 2026, 2025])
+      for (const bad of ["26", "nope", 1999, 2026.5, "2026a"]) assert.equal(parseTaxYear(bad), null, String(bad))
+    })
+  })
+
+  it("counts what happened once, even when the file splits it into a known and an unknown part", () => {
+    const gas = (block: number, units: bigint) => leg(block, -units, { kind: "gas" })
+    // Oldest first: a fee from the known ETH, a sale of the known half and the unknown half, then a fee from both.
+    const half = E18 / 2n
+    const legs = [buy(10, 1n, 1000), leg(20, E18), gas(25, half), sell(30, 1n, 2000), buy(35, 1n, 2000), gas(40, E18)]
+    const report = taxReportOf([walletOf(A, legs)], { country: "US", method: "fifo", scope: "per-wallet" })
+    assert.deepEqual(eventsOf(report).map((row) => [row.Type, row.Status]), [
+      ["Network fee", "OK"],
+      ["Sold", "OK"],
+      ["Sold", "UNRESOLVED"],
+      ["Network fee", "OK"],
+      ["Network fee", "UNRESOLVED"],
+    ])
+    assert.deepEqual([report.soldCount, report.feeCount, report.sentCount, report.unknownCount], [1, 2, 0, 2])
+    assert.deepEqual([report.rowCount, report.unresolvedCount], [5, 2], "The file's own counts are still by row")
+    // $500 on the first fee, $500 on the known half of the sale, and $0 on the known half of the last fee.
+    assert.equal(report.gainMicros, usd(1000), "Known parts are in the total")
+  })
+
+  it("names the wallets with something unknown, even when only an added one has it", () => {
+    const known = walletOf(A, [buy(10, 1n, 1000), sell(20, 1n, 2000)])
+    const unknown = walletOf(B, [leg(30, E18), sell(40, 1n, 2000)])
+    const report = taxReportOf([known, unknown], { country: "US", method: "fifo", scope: "per-wallet" })
+    assert.deepEqual([report.unknownCount, report.unknownWallets], [1, [B]])
+    // Answering that wallet's question is what the button leads to, and the report picks it up.
+    const book: Book = { ...emptyBook(), costs: { [costKey(B, `${hash(30)}:ETH`)]: { micros: usd(1500), currency: "USD" } } }
+    const answered = taxReportOf([known, unknown], { country: "US", method: "fifo", scope: "per-wallet" }, { book })
+    assert.deepEqual([answered.unknownCount, answered.unknownWallets, answered.gainMicros], [0, [], usd(1500)])
+    assert.deepEqual(taxReportOf([known], { country: "US", method: "fifo", scope: "per-wallet" }).unknownWallets, [])
+  })
+
+  it("names a wallet whose unknown cost is part of another wallet's sale", () => {
+    // Pooled: B's ETH, of unknown cost, averages into what A's sale cost, and only B has a question about it.
+    const a = walletOf(A, [buy(10, 1n, 1000), sell(30, 1n, 2000)])
+    const b = walletOf(B, [leg(20, E18)])
+    const ca = { country: "CA", method: "average", scope: "pooled" } as const
+    const report = taxReportOf([a, b], ca)
+    assert.deepEqual([report.unknownCount, report.unknownWallets], [1, [A, B]])
+    const book: Book = { ...emptyBook(), costs: { [costKey(B, `${hash(20)}:ETH`)]: { micros: usd(1500), currency: "USD" } } }
+    const answered = taxReportOf([a, b], ca, { book })
+    assert.deepEqual([answered.unknownCount, answered.unknownWallets, answered.gainMicros], [0, [], usd(750)])
+  })
+
+  it("previews the file's first rows", () => {
+    const report = taxReportOf([DEMO_WALLET], { country: "US", method: "fifo", scope: "per-wallet" })
+    assert.equal(report.preview.length, Math.min(5, report.rowCount))
+    assert.deepEqual(report.preview.map((row) => row.type), eventsOf(report).slice(0, 5).map((row) => row.Type))
+    assert.deepEqual(report.unknownWallets, [DEMO_WALLET.address.toLowerCase()])
+  })
+
   it("keeps the words people read plain", () => {
     const JARGON = /\b(legs?|oracle|FIFO|traces?|rebas\w*|L1|L2|allowlist)\b/i
     for (const report of [taxReportOf([DEMO_WALLET], { country: "US", method: "average", scope: "pooled" }), taxReportOf([{ ...DEMO_WALLET, currency: "CAD", rates: demoRates("CAD") }], { country: "CA", method: "fifo", scope: "per-wallet" })]) {
@@ -412,7 +509,8 @@ describe("taxReportOf", () => {
 
   it("matches what the Swift tests read", () => {
     const url = new URL("../macos/PricetagKit/Tests/PricetagKitTests/Resources/demo-tax-report.json", import.meta.url)
-    const text = `${JSON.stringify(taxReportOf([{ ...DEMO_WALLET, currency: "CAD", rates: demoRates("CAD") }], { country: "CA", method: "average", scope: "pooled" }), null, 2)}\n`
+    // The newest year, as the app asks for it.
+    const text = `${JSON.stringify(taxReportOf([{ ...DEMO_WALLET, currency: "CAD", rates: demoRates("CAD") }], { country: "CA", method: "average", scope: "pooled", year: "latest" }), null, 2)}\n`
     if (process.env.UPDATE_FIXTURES) writeFileSync(url, text)
     assert.equal(readFileSync(url, "utf8"), text, "demo-tax-report.json is out of date. Run with UPDATE_FIXTURES=1 if the change is on purpose.")
   })
@@ -811,7 +909,7 @@ describe("POST /api/tax-report", () => {
     assert.equal((await post("demo", { country: "CA", method: "lifo" })).status, 400)
     assert.equal((await post("demo", { country: "CA", method: 1 })).status, 400)
     assert.equal((await post("demo", { country: "CA", scope: "everything" })).status, 400)
-    assert.equal((await post("demo", { country: "CA", currency: "EUR" })).status, 400)
+    assert.equal((await post("demo", { country: "CA", currency: "SEK" })).status, 400)
     assert.equal((await post("demo", { country: "CA", book: { costs: { x: "nope" } } })).status, 400)
     assert.equal((await post(A, { country: "CA", also: "nope" })).status, 400)
     assert.equal((await post(A, { country: "CA", also: [1] })).status, 400)
@@ -936,12 +1034,20 @@ describe("GET /api/tax-report", () => {
     assert.deepEqual([override.body.method, override.body.scope, override.body.defaults.method], ["average", "pooled", "fifo"])
   })
 
+  it("lists a year when asked", async () => {
+    const latest = await get("demo?country=US&year=latest")
+    assert.deepEqual([latest.status, latest.body.year], [200, 2026])
+    assert.equal((await get("demo?country=US&year=2026")).body.year, 2026)
+    assert.equal((await get("demo?country=US")).body.year, null)
+  })
+
   it("turns down what it can't do", async () => {
     assert.equal((await get("demo")).status, 400)
+    assert.equal((await get("demo?country=CA&year=last")).status, 400)
     assert.equal((await get("demo?country=FR")).status, 400)
     assert.equal((await get("demo?country=CA&method=lifo")).status, 400)
     assert.equal((await get("demo?country=CA&scope=everything")).status, 400)
-    assert.equal((await get("demo?country=CA&currency=EUR")).status, 400)
+    assert.equal((await get("demo?country=CA&currency=SEK")).status, 400)
     assert.equal((await get(`demo?country=CA&also=${A}`)).status, 400)
     assert.equal((await get(`${DEMO_ADDRESS}?country=CA&also=${A}`)).status, 400)
     assert.equal((await get(`${A}?country=CA&also=nope`)).status, 400)

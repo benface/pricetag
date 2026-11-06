@@ -21,6 +21,8 @@ public enum Base {
     public static let chainID: UInt64 = 8453
     public static let publicRPC = URL(string: "https://mainnet.base.org")!
     public static let eth = Token(contract: nil, symbol: "ETH", decimals: 18, asset: "ETH")
+    /// Uniswap's, at the same address on every chain. Revoking only ever calls its `lockdown`.
+    public static let permit2 = EthereumAddress("0x000000000022D473030F116dDEE9F6B43aC78BA3")!
 
     /// Nothing else is ever called. Unknown tokens can be malicious, and a transaction to one could do anything.
     public static let tokens: [Token] = [
@@ -72,6 +74,12 @@ public enum Money {
     }
 
     /// An amount as typed. nil when it isn't one, including when it's finer than the token can hold, because rounding someone's money isn't this app's call.
+    /// How many digits were typed after the decimal point, as `units(fromText:decimals:)` reads it.
+    public static func fractionDigits(inText text: String) -> Int {
+        guard let clean = Format.plainAmount(text), let point = clean.firstIndex(of: ".") else { return 0 }
+        return clean[clean.index(after: point)...].count
+    }
+
     public static func units(fromText text: String, decimals: Int) -> UInt128? {
         guard let clean = Format.plainAmount(text), clean.wholeMatch(of: /\d+(\.\d*)?|\.\d+/) != nil else { return nil }
         let parts = clean.split(separator: ".", omittingEmptySubsequences: false)
@@ -82,13 +90,14 @@ public enum Money {
         return UInt128(digits.isEmpty ? "0" : digits)
     }
 
-    /// The shortest text `units(fromText:decimals:)` reads back as exactly this.
-    public static func text(ofUnits units: UInt128, decimals: Int) -> String {
+    /// The shortest text `units(fromText:decimals:)` reads back as exactly this, with at least `minimumFractionDigits` after the point,
+    /// so what was typed as 12.50 stays 12.50.
+    public static func text(ofUnits units: UInt128, decimals: Int, minimumFractionDigits: Int = 0) -> String {
         let digits = String(units)
         guard decimals > 0 else { return digits }
         let padded = String(repeating: "0", count: max(0, decimals + 1 - digits.count)) + digits
         var fraction = String(padded.suffix(decimals))
-        while fraction.last == "0" { fraction.removeLast() }
+        while fraction.last == "0", fraction.count > min(minimumFractionDigits, decimals) { fraction.removeLast() }
         return String(padded.dropLast(decimals)) + (fraction.isEmpty ? "" : "." + fraction)
     }
 }

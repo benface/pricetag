@@ -4,7 +4,7 @@
 import { hasStarted, msBetweenBlocks, type CurrencyCode, type Head, type LatestPrice, type Method, type Mode, type PnlPoint, type PnlStatus, type PositionValues, type PricedLeg, type Reconciliation, type Totals, type UnlistedToken, type WalletData } from "@pricetag/sdk/core"
 import type { Estimates, HoldComparison } from "@pricetag/sdk/core"
 import type { Meter, Question } from "./resolve.ts"
-import type { TaxCountryCode, TaxScope } from "./tax.ts"
+import type { TaxCountryCode, TaxPreviewRow, TaxScope } from "./tax.ts"
 
 export { hasStarted }
 
@@ -42,6 +42,8 @@ export type PortfolioPosition = {
   values: PositionValues
   /** Realized plus unrealized. null when either is unknown on what's still held, or units left that we never saw arrive. */
   pnlMicros: string | null
+  /** Unrealized over the cost of what's held, in basis points. null when either is unknown, or it cost nothing. Never 0 for unknown. */
+  returnBps: string | null
   shortfallQty: string
   legCount: number
   reconciliation: Reconciliation | null
@@ -180,7 +182,21 @@ export type TaxReportResponse = {
   currency: CurrencyCode
   /** What this country calls for, so a client can tell an override. */
   defaults: { method: Method; scope: TaxScope }
+  /** The calendar year listed, in UTC, or null for everything. */
+  year: number | null
+  /** Every year with some history, newest first. */
+  years: number[]
+  /** When `year`'s history isn't all here, why, in a sentence. It's also the first warning. */
+  partialYear: string | null
   rowCount: number
+  /** Sales, fees and sends, each counted once, where `rowCount` counts one split into a known and an unknown part twice. */
+  soldCount: number
+  feeCount: number
+  sentCount: number
+  /** Of those, how many have an unknown gain, in whole or in part. `unresolvedCount` counts the file's rows instead. */
+  unknownCount: number
+  /** The wallets with something unknown, in the order of `wallets`, so a client can open the right one's questions. */
+  unknownWallets: string[]
   unresolvedCount: number
   estimatedCount: number
   /** Rows with a known gain that partly rests on a cost the user gave. */
@@ -192,6 +208,8 @@ export type TaxReportResponse = {
   warnings: string[]
   /** What this report never does, and what it covers. */
   notes: string[]
+  /** The first few rows, oldest first. */
+  preview: TaxPreviewRow[]
   filename: string
   csv: string
 }
@@ -231,4 +249,46 @@ export type VerificationResponse = {
   status: CheckStatus
   summary: string
   checks: ProofCheck[]
+}
+
+/** One approval a wallet gave that still lets someone spend from it. */
+export type ApprovalView = {
+  /** Its kind, token and spender, which is what makes it this approval. */
+  id: string
+  kind: "token" | "permit2" | "collection"
+  /** The token, or for a collection, its contract. */
+  token: string
+  /** Only for a tracked token. Anything else can call itself anything, so it's never named. */
+  symbol: string | null
+  decimals: number | null
+  spender: string
+  /** Whose contract it is, when it's a well-known one. That says who, not that it's safe. */
+  spenderName: string | null
+  /** In the token's smallest units. Null for a collection, which allows every NFT in it. */
+  amount: string | null
+  /** The amount in the token, when it's tracked and not unlimited. */
+  amountText: string | null
+  unlimited: boolean
+  /** When a Permit2 allowance stops working. Null when it never will, including an expiry past the year 9999. */
+  expiresAt: string | null
+  /** The newest transaction that set it, when the history has it. */
+  grantedTx: string | null
+  grantedBlock: number | null
+  grantedAt: string | null
+  /** In the wallet's history, or only found by checking well-known apps, so it may be older than the history. */
+  found: "history" | "known-spender"
+}
+
+export type ApprovalsResponse = {
+  mode: Mode
+  address: string
+  /** The block every approval here was checked at. */
+  checkedAt: Head
+  /** The blocks searched for approval events, and the dataset they came from. */
+  history: { fromBlock: number; throughBlock: number; dataset: string }
+  /** Where this list comes from, line by line, like a price's proof. */
+  source: string[]
+  approvals: ApprovalView[]
+  /** Approvals in the history whose contract didn't answer, so what they allow isn't known. */
+  unreadable: number
 }

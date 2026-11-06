@@ -123,9 +123,9 @@ struct MacApp: App {
             SidebarCommands()
             CommandGroup(after: .toolbar) {
                 Divider()
-                ForEach(Array(AppSection.allCases.enumerated()), id: \.element) { index, section in
+                ForEach(AppSection.allCases) { section in
                     OpenSectionCommand(section: section, navigation: navigation)
-                        .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+                        .keyboardShortcut(section.shortcut, modifiers: .command)
                 }
                 Divider()
                 Button(navigation.target == nil ? "Show Details" : "Hide Details") { navigation.toggleDetails() }
@@ -142,12 +142,13 @@ struct MacApp: App {
                 WalletCommands(store: store, hotWallet: hotWallet, navigation: navigation)
             }
             CommandGroup(after: .newItem) {
-                Button("Answer Questions…") { navigation.resolve() }
+                Button("\(Wording.answerQuestions)…") { navigation.resolve() }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
                     .disabled(store.portfolio?.questions.isEmpty != false)
                 Button("Export as CSV…") { navigation.isExporting = true }
                     .keyboardShortcut("e", modifiers: [.command, .shift])
                     .disabled(store.portfolio == nil)
+                YourAnswersCommand(navigation: navigation)
             }
             // Nothing to offer yet, and an item that opens nothing would be worse. The menu's search still finds any command.
             CommandGroup(replacing: .help) {}
@@ -286,6 +287,20 @@ final class TypingHistory {
 
     func undo() { manager?.undo() }
     func redo() { manager?.redo() }
+}
+
+/// Opens Settings on the list of answers.
+private struct YourAnswersCommand: View {
+    let navigation: Navigation
+    @Environment(\.openSettings) private var openSettings
+
+    var body: some View {
+        Button("Your Answers…") {
+            navigation.settingsPane = .answers
+            openSettings()
+            DockPresence.bringForward()
+        }
+    }
 }
 
 /// The window may be closed, so this opens it too.

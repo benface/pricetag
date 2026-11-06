@@ -1,10 +1,10 @@
 // What a click on a number explains: a sentence for how it's worked out, and the legs behind it.
 
-import { CURRENCIES, TOKENS, TOKEN_FEEDS, foldPositions, formatAmount, formatMoney, formatPrice, formatRate, orderMatters, formatSignedMoney, holdEffects, pnlOverTime, shortHash, sumTotals, tokenByAddress, unconfirmedAssets, unreadAssets, usdView, worth, type CostLabel, type CurrencyCode, type HoldComparison, type LegEffect, type Method, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { CURRENCIES, TOKENS, TOKEN_FEEDS, foldPositions, formatAmount, formatMoney, formatPrice, formatRate, formatReturn, returnBps, orderMatters, formatSignedMoney, holdEffects, pnlOverTime, shortHash, sumTotals, tokenByAddress, unconfirmedAssets, unreadAssets, usdView, worth, type CostLabel, type CurrencyCode, type HoldComparison, type LegEffect, type Method, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import type { WalletResponse } from "./api.ts"
 import { COST_WORDS, AVERAGE_PRICE_PAID, BALANCE_CHECK, CHECK_LABELS, HOLD_ETH, HOLD_PAST, METHOD_LABELS, NETWORK_FEES, currentPriceSource, holdCaveatSentence, holdDifferenceSentence, tokenLabel, unseenEthCause } from "./wording.ts"
 
-export type Metric = "amount" | "average" | "value" | "realized" | "unrealized" | "onchain"
+export type Metric = "amount" | "average" | "price" | "value" | "return" | "realized" | "unrealized" | "onchain"
 
 export type Explanation = {
   /** What `value` and the effects' amounts are in. */
@@ -20,7 +20,9 @@ export type Explanation = {
 const METRIC_TITLES: Record<Metric, string> = {
   amount: "Amount",
   average: AVERAGE_PRICE_PAID,
+  price: "Price",
   value: "Value",
+  return: "Return",
   realized: "Realized PnL",
   unrealized: "Unrealized PnL",
   onchain: BALANCE_CHECK,
@@ -264,7 +266,7 @@ export function explainMetric(position: Position, metric: Metric, context: Expla
 
   const incomplete = reconciliation?.status === "incomplete"
   const unconfirmed = reconciliation !== null && reconciliation.status !== "reconciled"
-  if (unconfirmed && (metric === "average" || metric === "realized" || metric === "unrealized")) {
+  if (unconfirmed && (metric === "average" || metric === "return" || metric === "realized" || metric === "unrealized")) {
     return { currency, title: `${asset}: ${METRIC_TITLES[metric]}`, value: null, sourceValue: null, lines: onchainLines(position), effects: [...effects].reverse() }
   }
 
@@ -286,6 +288,10 @@ export function explainMetric(position: Position, metric: Metric, context: Expla
       else if (values.costMicros) lines.push(`${money(values.costMicros)} of cost ÷ ${qty}, using the ${METHOD_LABELS[state.method]} method.`)
       if (costSources) lines.push(costSources)
       break
+    case "price":
+      value = price && formatPrice(price.micros, currency)
+      lines.push(priceLine)
+      break
     case "value":
       value = values.valueMicros && money(values.valueMicros)
       lines.push(priceLine)
@@ -300,6 +306,16 @@ export function explainMetric(position: Position, metric: Metric, context: Expla
         lines.push(`${unknowns.join(", and ")}, so its gain can't be known.${known}`)
       } else lines.push("What you received minus what it cost, on what was sold or spent on network fees. The fees themselves are a separate cost in the total.")
       break
+    case "return": {
+      const bps = returnBps(values)
+      value = bps && formatReturn(bps)
+      lines.push(priceLine)
+      if (unknown) lines.push(`${unknownQty} of ${qty} has an unknown cost, so there's no return. It's never counted as zero.`)
+      else if (values.costMicros && values.unrealizedMicros && bps === null) lines.push("It cost nothing, so there's no return as a share of what it cost.")
+      else if (values.costMicros && values.unrealizedMicros) lines.push(`${signed(values.unrealizedMicros)} unrealized ÷ ${money(values.costMicros)} cost.`)
+      if (costSources) lines.push(costSources)
+      break
+    }
     case "unrealized":
       value = values.unrealizedMicros && signed(values.unrealizedMicros)
       lines.push(priceLine)
@@ -308,8 +324,9 @@ export function explainMetric(position: Position, metric: Metric, context: Expla
       if (costSources) lines.push(costSources)
       break
   }
-  const isMoney = metric !== "amount" && metric !== "onchain"
-  if (isMoney) lines.push(...exchangeLines(view, metric === "value" ? "current" : metric === "unrealized" ? "both" : "past"))
+  // A return is a share, not an amount, so it has no USD to show beside it. It still depends on the rates.
+  const isMoney = metric !== "amount" && metric !== "onchain" && metric !== "return"
+  if (isMoney || metric === "return") lines.push(...exchangeLines(view, metric === "value" || metric === "price" ? "current" : metric === "unrealized" || metric === "return" ? "both" : "past"))
   const usd = source?.positions.find((p) => p.asset === asset)
   return {
     currency,
@@ -388,18 +405,20 @@ export function explainTotal(positions: readonly Position[], totals: Totals, met
   }
 }
 
-export function explainHold(positions: readonly Position[], comparison: HoldComparison, { view, source }: ExplainContext): Explanation {
+/** `combined` is for several of the user's wallets at once, where moving between them is neither putting in nor taking out. */
+export function explainHold(positions: readonly Position[], comparison: HoldComparison, { view, source }: ExplainContext, { combined = false } = {}): Explanation {
   const { currency } = view
   const money = (micros: string) => formatMoney(micros, currency)
   const signed = (micros: string | null) => (micros === null ? "unavailable" : formatSignedMoney(micros, currency))
   const { holdMicros, ethValueMicros, ethPriceMicros, ethQty, putInMicros, takenOutMicros, walletMicros, gainThatLeftMicros, differenceMicros, ranOut } = comparison
   const caveat = holdCaveatSentence(comparison, currency)
+  const [here, these] = combined ? ["your wallets", "Your wallets"] : ["this wallet", "This wallet"]
   const lines = [
-    "Takes each amount put in this wallet, turns it into ETH at that moment's price, and values that ETH at today's price.",
-    "Put in means whatever arrived from outside this wallet, at what it cost you, or at its price when it arrived if that's all that's known. Exchanges inside the wallet aren't put in.",
-    ...(BigInt(takenOutMicros) > 0n ? [`${money(takenOutMicros)} left this wallet, so it leaves the ETH too, at its price when it left.${ranOut ? " Holding ETH would have run out before all of it could leave." : ""}`] : []),
+    `Takes each amount put in ${here}, turns it into ETH at that moment's price, and values that ETH at today's price.`,
+    `Put in means whatever arrived from outside ${here}, at what it cost you, or at its price when it arrived if that's all that's known. Exchanges inside ${combined ? "them" : "the wallet"} aren't put in${combined ? ", and neither are moves between them" : ""}.`,
+    ...(BigInt(takenOutMicros) > 0n ? [`${money(takenOutMicros)} left ${here}, so it leaves the ETH too, at its price when it left.${ranOut ? " Holding ETH would have run out before all of it could leave." : ""}`] : []),
     ...(ethValueMicros !== null && ethPriceMicros !== null ? [`${money(putInMicros)} put in leaves ${formatAmount(ethQty, 18)} ETH, worth ${money(ethValueMicros)} at today's ${formatPrice(ethPriceMicros, currency)}.`] : []),
-    `This wallet: ${signed(walletMicros)}. That's its total PnL after network fees${BigInt(gainThatLeftMicros) === 0n ? "" : `, and ${signed(gainThatLeftMicros)} on what left it, which total PnL doesn't count because a transfer isn't a sale`}. Holding ETH pays no fees.`,
+    `${these}: ${signed(walletMicros)}. That's ${combined ? "their" : "its"} total PnL after network fees${BigInt(gainThatLeftMicros) === 0n ? "" : `, and ${signed(gainThatLeftMicros)} on what left ${combined ? "them" : "it"}, which total PnL doesn't count because a transfer isn't a sale`}. Holding ETH pays no fees.`,
     `${HOLD_ETH}: ${signed(holdMicros)}.`,
     ...(differenceMicros !== null ? [holdDifferenceSentence(differenceMicros, currency)] : []),
     ...(caveat ? [caveat] : []),

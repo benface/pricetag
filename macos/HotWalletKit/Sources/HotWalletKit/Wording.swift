@@ -44,6 +44,26 @@ public enum HotWalletWording {
         "Send only on Base. Anything above your \(cap) cap " + (hasDestination ? "gets swept to your savings." : "stays here until you add a savings wallet.")
     }
 
+    /// Buy's warning without savings. The provider's page can raise the amount, so it says what happens to the rest, whatever's typed.
+    public static func buyWithoutSavings(cap: String, provider: String) -> String {
+        "You don't have a savings wallet, so anything above your \(cap) cap stays here, with no backup, until you add one. \(provider)'s page can change the amount."
+    }
+
+    /// Where a purchase ends up. `fits` and `aboveCap` are already formatted, and nil when there's none.
+    public static func buyLands(fits: String?, aboveCap: String?, savings: String?) -> String {
+        guard let aboveCap else { return "It all stays in Spending Money." }
+        guard let savings else {
+            guard let fits else { return "Spending Money is already at its cap, so all of it stays here, above it." }
+            return "\(fits) fits under your cap. The other \(aboveCap) stays here too, above it."
+        }
+        guard let fits else { return "Spending Money is full, so it all goes to \(savings)." }
+        return "\(fits) stays in Spending Money, the rest goes to \(savings)."
+    }
+
+    public static func buyNoGas(_ symbol: String, savings: String?) -> String {
+        "This wallet doesn't have enough ETH to move \(symbol)\(savings.map { " to \($0)" } ?? ""), so it could get stuck here. Buy ETH this time."
+    }
+
     public static let sweepsOnlyWhileOpen = "Sweeps only run while the app is open. If it's closed, whatever arrives stays here until it opens again."
 
     /// The cap's held in USD, so its number here moves with the rate, and what it does doesn't.
@@ -151,10 +171,38 @@ public enum HotWalletWording {
     public static let unreadableAnswer = "The network sent an answer this app can't read, so nothing was signed. Try again in a moment."
     public static let changedWhileWaiting = "This wallet changed while that was waiting, so nothing was signed."
 
+    /// What a node's refusal means, and what to do about it. Nodes word these differently, so one this doesn't know keeps the node's own words.
+    public static func refusal(_ message: String) -> String {
+        let lower = message.lowercased()
+        if lower.contains("insufficient funds") { return "There isn't enough ETH for this and its network fee. Add some ETH, then try again." }
+        if lower.contains("revert") { return "The token's contract refused it. Check the amount and the address." }
+        if lower.contains("nonce") || lower.contains("already known") || lower.contains("replacement transaction") {
+            return "Another transaction from this wallet went first. Try again in a moment."
+        }
+        if lower.contains("underpriced") || lower.contains("fee cap") || lower.contains("base fee") { return "Network fees went up. Try again." }
+        return "The network refused it, saying \u{201C}\(message)\u{201D}. Try again in a moment."
+    }
+
+    /// A send or a note the node refused, before or after it was signed. Either way, nothing left this wallet.
+    public static func notSent(_ message: String) -> String {
+        "Nothing was sent. \(refusal(message))"
+    }
+
+    /// What stopped a send, said for a send. The wallet's own wording is for everything it does, like sweeping.
+    public static func sendFailure(_ problem: String) -> String {
+        switch problem {
+        case cantReachChain: "Nothing was sent, because the network can't be reached. Check your internet connection, then try again."
+        case touchIDDidNotConfirm: "Nothing was sent, because Touch ID didn't confirm it. Try again."
+        default: problem
+        }
+    }
+
     public static func failedOnchain(_ record: SignedRecord) -> String {
-        record.reason == .note
-            ? "Publishing the cost of \(record.symbol) failed onchain. Nothing was published, but its gas was spent."
-            : "Sending \(record.symbol) failed onchain. Nothing moved, but its gas was spent."
+        switch record.reason {
+        case .note: "Publishing the cost of \(record.symbol) failed onchain. Nothing was published, but its gas was spent."
+        case .revoke: "Revoking an approval for \(record.symbol) failed onchain. It may still be there, and its gas was spent."
+        default: "Sending \(record.symbol) failed onchain. Nothing moved, but its gas was spent."
+        }
     }
 
     public static func alarm(_ alarm: StolenKeyAlarm) -> String {

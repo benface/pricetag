@@ -38,25 +38,35 @@ struct BuyPlanTests {
     }
 
     @Test func whatFitsStays() {
-        #expect(plan(20).stays == 20 * Money.dollar)
-        #expect(plan(20).sweeps == 0)
+        #expect(plan(20).fits == 20 * Money.dollar)
+        #expect(plan(20).aboveCap == 0)
         #expect(plan(20).problem == nil)
-        #expect(plan(25).sweeps == 0, "Exactly to the cap sweeps nothing")
+        #expect(plan(25).aboveCap == 0, "Exactly to the cap sweeps nothing")
     }
 
     @Test func theRestGoesToSavingsWithNoMaximumOfOurs() {
         let large = plan(5000)
-        #expect(large.stays == 25 * Money.dollar)
-        #expect(large.sweeps == 4975 * Money.dollar)
+        #expect(large.fits == 25 * Money.dollar)
+        #expect(large.aboveCap == 4975 * Money.dollar)
         #expect(large.problem == nil)
-        #expect(plan(50, room: 0).stays == 0)
-        #expect(plan(50, room: 0).sweeps == 50 * Money.dollar)
+        #expect(plan(50, room: 0).fits == 0)
+        #expect(plan(50, room: 0).aboveCap == 50 * Money.dollar)
     }
 
-    @Test func withoutSavingsNothingCanBeBoughtEvenWhatFits() {
-        // The page can raise the amount, so a small preset is no limit: at $500, $475 would have nowhere to go.
-        for dollars in [3, 25, 26, 500] { #expect(plan(dollars, savings: false).problem == .needsSavings) }
-        #expect(plan(3, native: false, savings: false).problem == .needsSavings)
+    @Test func withoutSavingsWhatsAboveTheCapIsSaidAndNotStopped() {
+        // The page can raise the amount, so whatever's above the room stays here, over the cap, and the sheet says so.
+        for dollars in [3, 25, 26, 500] { #expect(plan(dollars, savings: false).problem == nil) }
+        #expect(plan(25, savings: false).aboveCap == 0)
+        #expect(plan(500, savings: false).fits == 25 * Money.dollar)
+        #expect(plan(500, savings: false).aboveCap == 475 * Money.dollar)
+        #expect(plan(2, savings: false).problem == .belowMinimum)
+        #expect(plan(3, native: false, savings: false).problem == nil)
+    }
+
+    @Test func withoutSavingsATokenWithNoGasIsStillStopped() {
+        // Nothing sweeps yet, but once there's a savings wallet, or to send it anywhere, it needs ETH beside it.
+        #expect(plan(20, native: false, eth: 0, savings: false, usdcHeld: 0).problem == .noGasToSweep)
+        #expect(plan(20, native: true, eth: 0, savings: false, usdcHeld: 0).problem == nil)
     }
 
     @Test func aTokenThatCantBeSweptForLackOfGasIsStopped() {
@@ -84,6 +94,9 @@ struct BuyPlanTests {
         #expect(unread.problem == .notReadYet)
         let noPrice = BuyPlan(usdMicros: 20 * Money.dollar, token: Base.eth, priceUsdMicros: nil, holdings: [Holding(token: Base.eth, balance: 0, priceUsdMicros: nil)], capUsdMicros: 50 * Money.dollar, roomUsdMicros: 50 * Money.dollar, fees: lowFees, destination: cold)
         #expect(noPrice.problem == .notReadYet)
+        // An empty field before the first read says it's reading, not that it's below the minimum.
+        let empty = BuyPlan(usdMicros: 0, token: Base.eth, priceUsdMicros: nil, holdings: [], capUsdMicros: 25 * Money.dollar, roomUsdMicros: 25 * Money.dollar, fees: nil, destination: nil)
+        #expect(empty.problem == .notReadYet)
     }
 
     @Test func belowTheMinimumIsSaidFirst() {
@@ -102,7 +115,7 @@ struct BuyPlanTests {
         // An empty field reads as 0.
         for typed in [-5, -1, 0, Int.min, 2] {
             #expect(plan(typed).problem == .belowMinimum)
-            #expect(plan(typed).stays == 0 || typed == 2)
+            #expect(plan(typed).fits == 0 || typed == 2)
             #expect(BuyPlan.cryptoAmount(usdMicros: UInt128(max(typed, 0)) * Money.dollar, isNative: true, ethUsdMicros: 2_640_000_000) == nil)
             #expect(BuyPlan.cryptoAmount(usdMicros: UInt128(max(typed, 0)) * Money.dollar, isNative: false, ethUsdMicros: nil) == nil)
         }

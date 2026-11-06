@@ -8,6 +8,7 @@ public struct ExplanationPane: View {
     let onResolve: ((String) -> Void)?
     @State private var model: ExplanationModel
     @Environment(\.opensFirstProof) private var opensFirstProof
+    @Environment(\.walletNames) private var walletNames
 
     public init(target: ExplainTarget, store: PortfolioStore, onResolve: ((String) -> Void)? = nil) {
         self.target = target
@@ -78,13 +79,49 @@ public struct ExplanationPane: View {
                 }
                 .padding(.vertical, 4)
             }
+            if let parts = explanation.parts, !parts.isEmpty {
+                Section("In Each Wallet") {
+                    ForEach(parts) { part in
+                        WalletPartRow(part: part, name: walletNames.walletName(part.wallet))
+                    }
+                }
+            }
             Section(Wording.activityTitle(count: explanation.legCount, shown: explanation.legs.count)) {
-                let first = explanation.legs.first(where: \.hasTransaction)?.id
-                ForEach(explanation.legs) { leg in
-                    LegRow(leg: leg, currency: explanation.currency, store: store, questions: questionCount(for: leg.asset), showsProof: opensFirstProof && leg.id == first, onResolve: onResolve)
+                let first = explanation.legs.first(where: \.hasTransaction)?.rowID
+                ForEach(explanation.legs, id: \.rowID) { leg in
+                    LegRow(leg: leg, currency: explanation.currency, store: store, questions: questionCount(for: leg.asset), showsProof: opensFirstProof && leg.rowID == first, onResolve: onResolve)
                 }
             }
         }
+    }
+}
+
+/// One wallet's side of a number shown across several: its name, its number, and how that's worked out.
+private struct WalletPartRow: View {
+    let part: ExplanationPart
+    let name: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(name).fontWeight(.medium).lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 8)
+                if let value = part.value {
+                    LiveNumber(value)
+                } else {
+                    WarningText("Unavailable")
+                }
+            }
+            ForEach(part.lines, id: \.self) { line in
+                Text(line)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(.vertical, 3)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -96,6 +133,7 @@ public struct LegRow: View {
     let questions: Int
     let onResolve: ((String) -> Void)?
     @State private var showsProof = false
+    @Environment(\.walletNames) private var walletNames
 
     public init(leg: ExplanationLeg, currency: CurrencyCode, store: PortfolioStore, questions: Int = 0, showsProof: Bool = false, onResolve: ((String) -> Void)? = nil) {
         self.leg = leg
@@ -126,6 +164,7 @@ public struct LegRow: View {
             if isFee {
                 // Two lines at most, with Proof at the end of the second.
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    if let wallet = leg.wallet { Tag(walletNames.walletName(wallet)) }
                     Tag("\(Format.signedAmount(leg.delta, decimals: leg.decimals)) \(leg.asset)")
                     if leg.priceMicros == nil {
                         Tag("No price", isWarning: true)
@@ -210,7 +249,7 @@ public struct LegRow: View {
                     .font(.caption)
                     .buttonStyle(.plain)
                     .foregroundStyle(.tint)
-                if let address = store.address {
+                if let address = leg.wallet ?? store.address {
                     ProofPanel(leg: leg.id, address: address, store: store, costNote: leg.costSource.map { Wording.costProof(source: $0, label: leg.costLabel) }).id("\(address):\(leg.id):\(currency.rawValue):\(store.selectedRule ?? "")")
                 }
             }
@@ -229,6 +268,7 @@ public struct LegRow: View {
 
     @ViewBuilder
     private var tagList: some View {
+        if let wallet = leg.wallet { Tag(walletNames.walletName(wallet)) }
         Tag("\(Format.signedAmount(leg.delta, decimals: leg.decimals)) \(leg.asset)")
         if let price = leg.priceMicros, let source = leg.priceSource {
             Tag("\(Format.price(price, currency)) · \(Wording.priceSource(source))")

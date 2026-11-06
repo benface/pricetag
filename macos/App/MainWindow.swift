@@ -61,6 +61,8 @@ struct MainWindow: View {
                 .inspector(isPresented: inspectorBinding) { inspector }
         }
         .frame(minWidth: Self.minimumSize.width, minHeight: Self.minimumSize.height)
+        // What each wallet is called, wherever All Yours says which wallet something is in.
+        .environment(\.walletNames, store.walletList(hotWallet: hotWallet).names)
         // Only for the details opening and closing. It doesn't reach anything else that changes at another moment.
         .motion(Motion.panel, value: navigation.target == nil)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { newWidth in
@@ -123,6 +125,11 @@ struct MainWindow: View {
         .onChange(of: store.address) {
             navigation.forgetDetails()
             navigation.isResolving = false
+            navigation.openPendingQuestions()
+        }
+        .onChange(of: store.portfolio?.address) { navigation.openPendingQuestions() }
+        .onChange(of: navigation.isResolving) { _, open in
+            if !open { navigation.returnFromQuestions() }
         }
         // Or it would open again by itself with the window.
         .onDisappear {
@@ -180,7 +187,8 @@ struct MainWindow: View {
                 Button("Buy", systemImage: "plus") { navigation.isBuying = true }
                     // A plus on its own could mean adding anything.
                     .labelStyle(.titleAndIcon)
-                    .help("Buy crypto")
+                    // With every wallet showing, it says which one it's for.
+                    .help(WalletAddress.isAllYours(store.address) ? "Buy crypto for \(HotWalletWording.title)" : "Buy crypto")
             }
         }
     }
@@ -261,14 +269,21 @@ struct MainWindow: View {
             if store.address == nil {
                 NoWalletYet(navigation: navigation)
             } else {
-                TaxReportView(store: store, wallets: store.walletList(hotWallet: hotWallet).pickable, readAddress: AddressText.readAnywhere)
+                TaxReportView(store: store, wallets: store.walletList(hotWallet: hotWallet).pickable, readAddress: AddressText.readAnywhere, onResolve: { navigation.resolve(in: $0) }, onOpen: { navigation.explain($0) })
             }
+        case .security:
+            SecurityPage(store: store, hotWallet: hotWallet, navigation: navigation)
         }
     }
 
-    /// A section that shows a wallet, or says why there's nothing to show.
-    @ViewBuilder
+    /// A section that shows a wallet, or says why there's nothing to show. The first numbers fade in over the spinner rather than replacing it at once.
     private func walletPage(_ content: @escaping (Portfolio) -> some View) -> some View {
+        walletPageContent(content)
+            .motion(Motion.state, value: portfolio == nil)
+    }
+
+    @ViewBuilder
+    private func walletPageContent(_ content: @escaping (Portfolio) -> some View) -> some View {
         if store.feed == .noWallet {
             if navigation.section == .overview {
                 Welcome(store: store, hotWallet: hotWallet, navigation: navigation)
@@ -290,6 +305,7 @@ struct MainWindow: View {
             }
             // Another wallet starts from the top with nothing selected, and its numbers appear rather than rolling from these.
             .id(store.address)
+            .transition(.opacity)
         } else if store.feed == .reading {
             ContentUnavailableView {
                 ProgressView().controlSize(.large)
@@ -300,6 +316,7 @@ struct MainWindow: View {
                         .contentTransition(.numericText())
                 }
             }
+            .transition(.opacity)
         } else {
             Unavailable(store: store)
         }
@@ -374,7 +391,7 @@ struct MainWindow: View {
             if portfolio.transactions.isEmpty {
                 ContentUnavailableView("No Transactions Yet", systemImage: "list.bullet", description: Text("They'll show up here as they happen."))
             } else {
-                TransactionsTable(transactions: portfolio.transactions, currency: portfolio.currency, isLive: isLive, target: $navigation.target)
+                TransactionsTable(transactions: portfolio.transactions, currency: portfolio.currency, isLive: isLive, showsWallets: portfolio.isAllYours, target: $navigation.target)
             }
         }
     }
@@ -399,6 +416,32 @@ struct MainWindow: View {
         if portfolio.mode == .demo {
             Notice(.info, Wording.demo)
         }
+        if portfolio.isAllYours {
+            allYoursNotices(portfolio)
+        } else {
+            linkedNotices(portfolio)
+        }
+    }
+
+    /// Wallets that aren't in All Yours' numbers yet, by name, since the numbers are only theirs once they are.
+    @ViewBuilder
+    private func allYoursNotices(_ portfolio: Portfolio) -> some View {
+        let names = store.walletList(hotWallet: hotWallet).names
+        if !portfolio.linkedFailed.isEmpty {
+            HStack(spacing: 8) {
+                Notice(.warning, Wording.allYoursFailed(portfolio.linkedFailed.map(names.walletName)))
+                Button("Try Again") { store.refresh() }
+            }
+            .arrives()
+        }
+        if !portfolio.linkedReading.isEmpty {
+            Notice(.info, Wording.allYoursReading(portfolio.linkedReading.map(names.walletName)))
+                .arrives()
+        }
+    }
+
+    @ViewBuilder
+    private func linkedNotices(_ portfolio: Portfolio) -> some View {
         if !portfolio.linkedFailed.isEmpty {
             HStack(spacing: 8) {
                 Notice(.warning, Wording.linkedFailed(portfolio.linkedFailed.count))
@@ -446,7 +489,12 @@ private struct HoldingsSection: View {
     /// Costs that were unknown until this last read. They're lit for a moment, and only ever after the server's said so.
     @State private var justKnown: Set<String> = []
 
-    private static let tableWidth: CGFloat = 560
+    /// The narrowest the table fits in, with only the columns that never give way.
+    private static let tableWidth: CGFloat = 640
+
+    private var sort: Binding<HoldingsSort> {
+        Binding(get: { store.holdingsSort }, set: { store.holdingsSort = $0 })
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -474,7 +522,7 @@ private struct HoldingsSection: View {
                     .popover(isPresented: $showsAbout, arrowEdge: .bottom) { about }
             }
             if width >= Self.tableWidth {
-                HoldingsTable(portfolio: portfolio, isLive: isLive, width: width, justKnown: justKnown, target: $target, onResolve: onResolve)
+                HoldingsTable(portfolio: portfolio, isLive: isLive, width: width, justKnown: justKnown, sort: sort, target: $target, onResolve: onResolve)
                     .frame(height: HoldingsTable.height(rows: portfolio.listedPositions.count))
             } else {
                 rows
@@ -506,7 +554,7 @@ private struct HoldingsSection: View {
 
     private var rows: some View {
         VStack(spacing: 0) {
-            ForEach(portfolio.listedPositions) { position in
+            ForEach(portfolio.listedPositions.sorted(using: store.holdingsSort)) { position in
                 Button { target = .asset(position.asset, .amount) } label: {
                     CompactHolding(position: position, currency: portfolio.currency, isLive: isLive)
                         .padding(.horizontal, 4)
@@ -522,7 +570,7 @@ private struct HoldingsSection: View {
     }
 }
 
-/// What a right-click on a holding offers. Each is also in the interface: the row opens its details, and Fill In is in the row.
+/// What a right-click on a holding offers. Each is also in the interface: the row opens its details, and answering is in the row.
 private struct HoldingActions: View {
     let position: Position
     let currency: CurrencyCode
@@ -532,29 +580,14 @@ private struct HoldingActions: View {
     var body: some View {
         Button("Show Details", action: onShow)
         if position.resolvable {
-            Button("Fill In Cost…", action: onResolve)
+            Button("Answer Questions…", action: onResolve)
         }
         Divider()
         Button("Copy") { Clipboard.copy(position.copyText(currency: currency)) }
     }
 }
 
-extension View {
-    /// A cost that's just become known, lit softly and fading by itself. The number's already rolled to what's real by then.
-    fileprivate func justKnown(_ isOn: Bool) -> some View {
-        background {
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(Tone.gain.style)
-                .opacity(isOn ? 0.2 : 0)
-                .padding(.horizontal, -5)
-                .padding(.vertical, -2)
-                // It comes up quickly and goes slowly.
-                .animation(isOn ? Motion.feedback : .easeOut(duration: 0.8 * Motion.slowdown), value: isOn)
-        }
-    }
-}
-
-/// A holding in a narrow window: what it is and how much, then what it's worth and how it's done. The rest is in its details.
+/// A holding in a narrow window: what it is, how much at what price, then what it's worth and how it's done. The rest is in its details.
 private struct CompactHolding: View {
     let position: Position
     let currency: CurrencyCode
@@ -567,13 +600,13 @@ private struct CompactHolding: View {
                     Text(position.asset).fontWeight(.medium)
                     OnchainCheck(position: position)
                 }
-                LiveNumber(Format.amount(position.values.qty, decimals: position.decimals), tone: .secondary).font(.caption)
+                LiveNumber(amountAtPrice, tone: .secondary).font(.caption)
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 1) {
                 LiveNumber(position.isHeld ? position.values.valueMicros.map { Format.estimate(Format.money($0, currency), position.estimates.value) } ?? "No price" : "—", tone: position.values.valueMicros == nil ? .secondary : .neutral)
                     .updatingMark()
-                LiveNumber(position.pnlMicros.map { Format.estimate(Format.signedMoney($0, currency), position.estimates.realized || position.estimates.unrealized) } ?? Wording.pnlUnavailable, tone: position.pnlMicros == nil ? .secondary : isLive ? Tone(signed: position.pnlMicros) : .neutral)
+                LiveNumber(howItsDone, tone: position.pnlMicros == nil ? .secondary : isLive ? Tone(signed: position.pnlMicros) : .neutral)
                     .font(.caption)
             }
         }
@@ -582,6 +615,20 @@ private struct CompactHolding: View {
         .opacity(isLive ? (position.isHeld ? 1 : 0.6) : 0.55)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
+    }
+
+    private var amountAtPrice: String {
+        let amount = Format.amount(position.values.qty, decimals: position.decimals)
+        guard let price = position.price else { return amount }
+        return "\(amount) · \(Format.estimate(Format.price(price.micros, currency), position.estimates.value))"
+    }
+
+    /// Its PnL, then its return when that's known. An unknown return says nothing the PnL doesn't.
+    private var howItsDone: String {
+        let pnl = position.pnlMicros.map { Format.estimate(Format.signedMoney($0, currency), position.estimates.realized || position.estimates.unrealized) } ?? Wording.pnlUnavailable
+        guard position.isHeld, let bps = position.returnBps else { return pnl }
+        // One "≈" says the line rests on an estimate.
+        return "\(pnl) · \(Format.estimate(Format.percent(bps: bps), position.estimates.unrealized && !pnl.hasPrefix("≈")))"
     }
 }
 
@@ -592,10 +639,19 @@ private struct HoldingsTable: View {
     /// As much as there is, because a hidden column doesn't give its width to the others.
     let width: CGFloat
     let justKnown: Set<String>
+    /// Headers sort. A row with no number goes last either way, and isn't treated as zero.
+    @Binding var sort: HoldingsSort
     @Binding var target: ExplainTarget?
     let onResolve: (String) -> Void
     @State private var selection: Position.ID?
     @State private var columns = TableColumnCustomization<Position>()
+    @Environment(\.walletNames) private var walletNames
+
+    private var rows: [Position] { portfolio.listedPositions.sorted(using: sort) }
+
+    private var sortOrder: Binding<[HoldingsSort]> {
+        Binding(get: { [sort] }, set: { if let first = $0.first { sort = first } })
+    }
 
     private var currency: CurrencyCode { portfolio.currency }
 
@@ -612,24 +668,35 @@ private struct HoldingsTable: View {
         /// With a note and a warning beside its name.
         static let assetRoom: CGFloat = 175
         static let amount: CGFloat = 100
+        static let price: CGFloat = 90
         static let averagePrice: CGFloat = 90
         static let value: CGFloat = 90
         static let realized: CGFloat = 85
         static let unrealized: CGFloat = 130
+        static let returns: CGFloat = 75
 
+        static let priceID = "price"
         static let averagePriceID = "average-price"
         static let realizedID = "realized"
 
         /// A column that was hidden comes back wider than it left, more so each time, unless something stops it.
         static let comebackRoom: CGFloat = 30
 
-        /// What the table adds around its columns.
-        static let chrome: CGFloat = 100
+        /// What the table adds between columns, and around them.
+        static let spacing: CGFloat = 18
+        static let insets: CGFloat = 24
     }
 
-    /// Below the width each needs, the average price paid gives way, then realized. Both stay in the details' menu.
-    private var showsAverage: Bool { width >= Column.assetRoom + Column.amount + Column.averagePrice + Column.value + Column.realized + Column.unrealized + Column.chrome + Column.comebackRoom }
-    private var showsRealized: Bool { width >= Column.assetRoom + Column.amount + Column.value + Column.realized + Column.unrealized + Column.chrome + Column.comebackRoom }
+    /// The room these columns need, with what's always there: what it is, how much, what it's worth and how it's done.
+    private static func needs(_ more: CGFloat...) -> CGFloat {
+        let columns = [Column.assetRoom, Column.amount, Column.value, Column.unrealized, Column.returns] + more
+        return columns.reduce(0, +) + CGFloat(columns.count) * Column.spacing + Column.insets + Column.comebackRoom
+    }
+
+    /// Below the width each needs, the average price paid gives way, then realized, then the price. All stay in the details' menu.
+    private var showsAverage: Bool { width >= Self.needs(Column.price, Column.realized, Column.averagePrice) }
+    private var showsRealized: Bool { width >= Self.needs(Column.price, Column.realized) }
+    private var showsPrice: Bool { width >= Self.needs(Column.price) }
 
     /// Hiding a column doesn't give its width to the others, so while any is hidden, each stops at what it needs, and what's left always fits.
     /// Only a change of limits reaches the rows: setting a column's width outright moves its header and leaves its cells behind.
@@ -638,8 +705,8 @@ private struct HoldingsTable: View {
     }
 
     var body: some View {
-        Table(portfolio.listedPositions, selection: $selection, columnCustomization: $columns) {
-            TableColumn("Asset") { position in
+        Table(rows, selection: $selection, sortOrder: sortOrder, columnCustomization: $columns) {
+            TableColumn("Asset", sortUsing: HoldingsSort(.asset)) { position in
                 HStack(spacing: 5) {
                     Text(position.asset).fontWeight(.medium)
                     if let note = position.note {
@@ -649,16 +716,26 @@ private struct HoldingsTable: View {
                     balanceCheck(position)
                 }
                 .opacity(position.isHeld ? 1 : 0.6)
+                .help(breakdown(position) ?? "")
+                .tableCell()
             }
             .width(min: Column.asset, ideal: Column.assetRoom, max: limit(Column.assetRoom))
             .disabledCustomizationBehavior(.all)
-            TableColumn("Amount") { position in
+            TableColumn("Amount", sortUsing: HoldingsSort(.amount)) { position in
                 number(position, .amount, Format.amount(position.values.qty, decimals: position.decimals), tone: .neutral)
             }
             .width(min: Column.amount, ideal: Column.amount, max: limit(Column.amount))
             .disabledCustomizationBehavior(.all)
             .alignment(.numeric)
-            TableColumn("Average paid") { position in
+            TableColumn("Price", sortUsing: HoldingsSort(.price)) { position in
+                let price = position.price
+                number(position, .price, price.map { Format.estimate(Format.price($0.micros, currency), position.estimates.value) } ?? "No price", tone: price == nil ? .secondary : .neutral)
+            }
+            .width(min: Column.price, ideal: Column.price, max: Column.price + Column.comebackRoom)
+            .alignment(.numeric)
+            .customizationID(Column.priceID)
+            .disabledCustomizationBehavior(.all)
+            TableColumn("Average paid", sortUsing: HoldingsSort(.average)) { position in
                 if position.isHeld {
                     number(position, .average, position.values.averageCostMicros.map { Format.estimate(Format.price($0, currency), position.estimates.cost) } ?? Wording.unknown, tone: position.hasUnknownCost ? .secondary : .neutral)
                 } else {
@@ -669,7 +746,7 @@ private struct HoldingsTable: View {
             .alignment(.numeric)
             .customizationID(Column.averagePriceID)
             .disabledCustomizationBehavior(.all)
-            TableColumn("Value") { position in
+            TableColumn("Value", sortUsing: HoldingsSort(.value)) { position in
                 if position.isHeld {
                     let value = position.values.valueMicros
                     number(position, .value, value.map { Format.estimate(Format.money($0, currency), position.estimates.value) } ?? "No price", tone: value == nil ? .secondary : .neutral)
@@ -681,7 +758,7 @@ private struct HoldingsTable: View {
             .width(min: Column.value, ideal: Column.value, max: limit(Column.value))
             .alignment(.numeric)
             .disabledCustomizationBehavior(.all)
-            TableColumn("Realized") { position in
+            TableColumn("Realized", sortUsing: HoldingsSort(.realized)) { position in
                 let realized = position.values.realizedMicros
                 number(position, .realized, realized.map { Format.estimate(Format.signedMoney($0, currency), position.estimates.realized) } ?? Wording.unknown, tone: realized == nil ? .secondary : Tone(signed: realized))
             }
@@ -689,16 +766,18 @@ private struct HoldingsTable: View {
             .alignment(.numeric)
             .customizationID(Column.realizedID)
             .disabledCustomizationBehavior(.all)
-            TableColumn("Unrealized") { position in
+            TableColumn("Unrealized", sortUsing: HoldingsSort(.unrealized)) { position in
                 if position.isHeld {
                     let unrealized = position.values.unrealizedMicros
                     HStack(spacing: 6) {
                         if position.resolvable {
-                            Button("Fill In") { onResolve(position.asset) }
+                            // The column has room for the number beside a symbol, not a name. The name's in its tooltip and for VoiceOver.
+                            Button(questionsTitle(position.asset), systemImage: "questionmark.bubble") { onResolve(position.asset) }
+                                .labelStyle(.iconOnly)
                                 .buttonStyle(.bordered)
                                 .controlSize(.mini)
-                                .accessibilityLabel("Fill in \(position.asset)'s cost")
-                                .help("Answer what the app can't work out about \(position.asset)")
+                                .accessibilityLabel("\(questionsTitle(position.asset)) about \(position.asset)")
+                                .help("\(questionsTitle(position.asset)) about \(position.asset), so what you paid is known")
                         }
                         number(position, .unrealized, unrealized.map { Format.estimate(Format.signedMoney($0, currency), position.estimates.unrealized) } ?? Wording.unknown, tone: unrealized == nil ? .secondary : Tone(signed: unrealized))
                     }
@@ -707,6 +786,16 @@ private struct HoldingsTable: View {
                 }
             }
             .width(min: Column.unrealized, ideal: Column.unrealized, max: limit(Column.unrealized))
+            .alignment(.numeric)
+            .disabledCustomizationBehavior(.all)
+            TableColumn("Return", sortUsing: HoldingsSort(.return)) { position in
+                if position.isHeld {
+                    number(position, .return, returnText(position), tone: position.returnBps == nil ? .secondary : Tone(signed: position.returnBps))
+                } else {
+                    dash
+                }
+            }
+            .width(min: Column.returns, ideal: Column.returns, max: limit(Column.returns))
             .alignment(.numeric)
             .disabledCustomizationBehavior(.all)
         }
@@ -729,6 +818,9 @@ private struct HoldingsTable: View {
         .onChange(of: showsRealized, initial: true) {
             columns[visibility: Column.realizedID] = showsRealized ? .visible : .hidden
         }
+        .onChange(of: showsPrice, initial: true) {
+            columns[visibility: Column.priceID] = showsPrice ? .visible : .hidden
+        }
         .onChange(of: selection) { _, asset in
             // Moving to a row shows its legs. A number clicked in that row has already said what to show.
             guard let asset, targetAsset != asset else { return }
@@ -744,12 +836,24 @@ private struct HoldingsTable: View {
         if case .asset(let asset, _) = target { asset } else { nil }
     }
 
+    /// Counts this holding's own questions, which are the ones that come first.
+    private func questionsTitle(_ asset: String) -> String {
+        Wording.answerQuestions(max(1, portfolio.questions.count { $0.arrivals.contains { $0.asset == asset } }))
+    }
+
     private func position(_ asset: String) -> Position? {
         portfolio.listedPositions.first { $0.asset == asset }
     }
 
     private var dash: some View {
-        Text("—").foregroundStyle(.tertiary)
+        Text("—").foregroundStyle(.tertiary).tableCell()
+    }
+
+    /// Unknown whenever its cost is, and never 0%. With a known cost of nothing, there's no share of it to show.
+    private func returnText(_ position: Position) -> String {
+        if let bps = position.returnBps { return Format.estimate(Format.percent(bps: bps), position.estimates.unrealized) }
+        if position.values.costMicros == nil { return Wording.unknown }
+        return position.values.valueMicros == nil ? "No price" : "—"
     }
 
     private func balanceCheck(_ position: Position) -> some View {
@@ -761,6 +865,22 @@ private struct HoldingsTable: View {
         .buttonStyle(NumberButtonStyle())
     }
 
+    /// Where each wallet's share is, for All Yours, so nothing that's unknown hides inside a total.
+    private func breakdown(_ position: Position) -> String? {
+        guard let parts = position.wallets, !parts.isEmpty else { return nil }
+        return parts.map { part in
+            let unknown = part.hasUnknownCost ? ", \(Format.amount(part.unknownCostQty, decimals: position.decimals)) at an unknown cost" : ""
+            return "\(walletNames.walletName(part.wallet)): \(Format.amount(part.qty, decimals: position.decimals)) \(position.asset)\(unknown)"
+        }.joined(separator: "\n")
+    }
+
+    /// Which wallets an unknown cost is in, for All Yours.
+    private func unknownIn(_ position: Position) -> String? {
+        let parts = (position.wallets ?? []).filter(\.hasUnknownCost)
+        guard !parts.isEmpty else { return nil }
+        return "Unknown cost in \(parts.map { walletNames.walletName($0.wallet) }.formatted(.list(type: .and)))"
+    }
+
     private func number(_ position: Position, _ metric: AssetMetric, _ text: String, tone: Tone) -> some View {
         Button {
             target = .asset(position.asset, metric)
@@ -770,11 +890,19 @@ private struct HoldingsTable: View {
                 // A long amount gets smaller rather than losing digits.
                 .minimumScaleFactor(0.7)
                 .opacity(isLive ? (position.isHeld ? 1 : 0.6) : 0.55)
-                .justKnown(justKnown.contains(position.asset) && (metric == .average || metric == .unrealized))
+                .justKnown(justKnown.contains(position.asset) && (metric == .average || metric == .unrealized || metric == .return))
         }
         .buttonStyle(NumberButtonStyle())
-        .help(metric.help ?? "")
+        .help((text == Wording.unknown ? unknownIn(position) : nil) ?? metric.help ?? "")
         .accessibilityLabel("\(position.asset) \(metric.label), \(text)")
+        .tableCell()
+    }
+}
+
+extension View {
+    /// Lines a cell up with its column's title, which the header draws a couple of points in from each side.
+    fileprivate func tableCell() -> some View {
+        padding(.horizontal, 2)
     }
 }
 
@@ -783,7 +911,11 @@ private struct TransactionsTable: View {
     let transactions: [PnlPoint]
     let currency: CurrencyCode
     let isLive: Bool
+    /// Which wallet each one is in, for All Yours.
+    let showsWallets: Bool
     @Binding var target: ExplainTarget?
+    @Environment(\.walletNames) private var walletNames
+    @State private var columns = TableColumnCustomization<PnlPoint>()
     @State private var selection: PnlPoint.ID?
     @FocusState private var isFocused: Bool
 
@@ -791,14 +923,17 @@ private struct TransactionsTable: View {
         if case .transaction(let hash) = target { hash } else { nil }
     }
 
+    private static let walletColumnID = "wallet"
+
     private func hash(_ id: PnlPoint.ID) -> String? {
         transactions.first { $0.id == id }?.txHash
     }
 
     var body: some View {
-        Table(transactions, selection: $selection) {
+        Table(transactions, selection: $selection, columnCustomization: $columns) {
             TableColumn("Time") { point in
                 Text(point.date.map(Format.time) ?? point.timestamp)
+                    .tableCell()
             }
             // Only what they need, so the words get the rest, and a small window still has room for the last column.
             .width(min: 120, ideal: 120, max: 130)
@@ -807,24 +942,38 @@ private struct TransactionsTable: View {
                     Text(summary)
                         .lineLimit(1)
                         .help(summary)
+                        .tableCell()
                 } else {
-                    Text("—").foregroundStyle(.tertiary)
+                    Text("—").foregroundStyle(.tertiary).tableCell()
                 }
             }
             .width(min: 100)
+            TableColumn("Wallet") { point in
+                let names = (point.wallets ?? []).map(walletNames.walletName)
+                Text(names.formatted(.list(type: .and)))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(names.formatted(.list(type: .and)))
+                    .tableCell()
+            }
+            .width(min: 90, ideal: 140, max: 220)
+            .customizationID(Self.walletColumnID)
+            .disabledCustomizationBehavior(.all)
             TableColumn("Total PnL") { point in
                 LiveNumber(point.pnlMicros.map { Format.signedMoney($0, currency) } ?? "Unavailable", tone: point.pnlMicros == nil ? .secondary : isLive ? Tone(signed: point.pnlMicros) : .neutral)
                     .opacity(isLive ? 1 : 0.55)
                     .help(Wording.pnlHelp)
                     .updatingMark()
+                    .tableCell()
             }
             .width(min: 90, ideal: 90, max: 110)
             .alignment(.numeric)
             TableColumn("Left out") { point in
                 if point.excludedCount > 0 {
-                    LiveNumber("\(point.excludedCount) unknown", tone: .secondary)
+                    LiveNumber("\(point.excludedCount) unknown", tone: .secondary).tableCell()
                 } else {
-                    Text("—").foregroundStyle(.tertiary)
+                    Text("—").foregroundStyle(.tertiary).tableCell()
                 }
             }
             .width(min: 70, ideal: 70, max: 90)
@@ -849,6 +998,10 @@ private struct TransactionsTable: View {
         }
         .onChange(of: target, initial: true) {
             selection = transactions.first { $0.txHash == targetHash }?.id
+        }
+        // Not `if` around the column, for the same reason as the holdings' columns.
+        .onChange(of: showsWallets, initial: true) {
+            columns[visibility: Self.walletColumnID] = showsWallets ? .visible : .hidden
         }
         .accessibilityLabel("Transactions")
     }
@@ -922,7 +1075,7 @@ private struct NoActivity<Notices: View>: View {
             // Never shown here: what holds the key is the only place to trust it, since a tampered page could show another.
             Text("To receive here, copy the address from the device or app that holds its key, and check it there.")
         } else {
-            Text("Nothing has moved for this wallet in \(Format.duration(ms: BlockTime.msBetween(portfolio.coverage.fromBlock, portfolio.coverage.toBlock))).")
+            Text("Nothing has moved \(portfolio.isAllYours ? "in any of your wallets" : "for this wallet") in \(Format.duration(ms: BlockTime.msBetween(portfolio.coverage.fromBlock, portfolio.coverage.toBlock))).")
                 .help(Wording.coverage(portfolio))
         }
     }

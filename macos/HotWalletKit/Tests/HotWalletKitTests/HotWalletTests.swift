@@ -109,7 +109,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         let rig = await Rig(over, now: { clock.now })
         await rig.chain.setSendFailure(.rejected("insufficient funds"))
         await rig.wallet.tick()
-        #expect(rig.wallet.sweepProblem?.contains("insufficient funds") == true)
+        #expect(rig.wallet.sweepProblem == "A sweep of USDC didn't go out. \(HotWalletWording.refusal("insufficient funds"))")
         #expect(rig.wallet.records.first?.status == .dropped)
 
         await rig.chain.setSendFailure(nil)
@@ -135,7 +135,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         await rig.chain.setEstimateFailure(.rejected("execution reverted"))
         await rig.wallet.tick()
         #expect(await rig.signer.signed.isEmpty)
-        #expect(rig.wallet.sweepProblem?.contains("execution reverted") == true)
+        #expect(rig.wallet.sweepProblem?.hasSuffix(HotWalletWording.refusal("execution reverted")) == true)
     }
 
     @Test func aBroadcastThatMightHaveWorkedStaysPending() async throws {
@@ -1322,7 +1322,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
     }
 
     @Test func topUpNeverPromisesASweepWithNoSavings() {
-        for sentence in [HotWalletWording.topUpTitle(hasDestination: false), HotWalletWording.topUpRoom("$5.00", hasDestination: false), HotWalletWording.topUpAtCap("$25.00", hasDestination: false), HotWalletWording.topUpNeedsGas(hasDestination: false), HotWalletWording.receiveNote(cap: "$25.00", hasDestination: false)] {
+        for sentence in [HotWalletWording.topUpTitle(hasDestination: false), HotWalletWording.topUpRoom("$5.00", hasDestination: false), HotWalletWording.topUpAtCap("$25.00", hasDestination: false), HotWalletWording.topUpNeedsGas(hasDestination: false), HotWalletWording.receiveNote(cap: "$25.00", hasDestination: false), HotWalletWording.buyWithoutSavings(cap: "$25.00", provider: "Coinbase"), HotWalletWording.buyLands(fits: "$5.00", aboveCap: "$20.00", savings: nil), HotWalletWording.buyLands(fits: nil, aboveCap: "$20.00", savings: nil), HotWalletWording.buyNoGas("USDC", savings: nil)] {
             #expect(!sentence.contains("swept"))
             #expect(!sentence.contains("sweeps"))
             #expect(!sentence.contains("from Savings"))
@@ -1330,6 +1330,8 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(HotWalletWording.topUpRoom("$5.00", hasDestination: true).contains("swept back to your savings"))
         #expect(HotWalletWording.topUpAtCap("$25.00", hasDestination: true).contains("swept straight back"))
         #expect(HotWalletWording.receiveNote(cap: "$25.00", hasDestination: true).contains("swept to your savings"))
+        #expect(!HotWalletWording.buyLands(fits: "$5.00", aboveCap: "$20.00", savings: nil).contains("goes to"))
+        #expect(HotWalletWording.buyLands(fits: "$5.00", aboveCap: "$20.00", savings: "Ledger").contains("goes to Ledger"))
     }
 
     @Test func overTheCapWithNoColdWalletSaysSoOnce() async throws {

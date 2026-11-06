@@ -6,21 +6,37 @@ public struct TaxReportView: View {
     let store: PortfolioStore
     let wallets: [WalletEntry]
     let readAddress: (String) -> String?
+    /// Opens a wallet's questions about what's unknown. It can be one added here rather than the one showing.
+    let onResolve: ((String) -> Void)?
+    /// Opens the details of a number, for what's unknown that no question covers.
+    let onOpen: ((ExplainTarget) -> Void)?
     @State private var model: TaxReportModel
     @State private var addingWallet: String
     @State private var document: TaxReportDocument?
     @State private var saveError: String?
 
-    public init(store: PortfolioStore, wallets: [WalletEntry] = [], readAddress: @escaping (String) -> String? = WalletAddress.pasted(in:), addingWallet: String = "", model: TaxReportModel? = nil) {
+    public init(store: PortfolioStore, wallets: [WalletEntry] = [], readAddress: @escaping (String) -> String? = WalletAddress.pasted(in:), addingWallet: String = "", model: TaxReportModel? = nil, onResolve: ((String) -> Void)? = nil, onOpen: ((ExplainTarget) -> Void)? = nil) {
         self.store = store
+        self.onResolve = onResolve
+        self.onOpen = onOpen
         _addingWallet = State(initialValue: addingWallet)
         self.wallets = wallets
         self.readAddress = readAddress
         _model = State(initialValue: model ?? TaxReportModel(currency: store.currency, fetch: { try await store.taxReport($0) }))
     }
 
+    /// What the report is on. All Yours has no address of its own, so it's on the first of them, with the rest alongside.
+    private var reportAddress: String? {
+        WalletAddress.isAllYours(store.address) ? store.allYoursWallets.first : store.address
+    }
+
+    private var reportLinked: [String] {
+        guard let address = store.address else { return [] }
+        return store.linked(for: address).filter { $0 != reportAddress }
+    }
+
     private var request: TaxReportRequest? {
-        model.request(address: store.address, currency: store.currency, serverURL: store.serverURL, book: store.book, linked: store.address.map(store.linked(for:)) ?? [])
+        model.request(address: reportAddress, currency: store.currency, serverURL: store.serverURL, book: store.book, linked: reportLinked)
     }
 
     private var badWallet: String? {
@@ -72,6 +88,12 @@ public struct TaxReportView: View {
     @ViewBuilder
     private var choices: some View {
         Section {
+            Picker("Year", selection: Binding(get: { model.shownYear }, set: { model.setYear($0) })) {
+                // Until the first report says which years there are.
+                if model.years.isEmpty { Text("Newest").tag(TaxYear.latest) }
+                ForEach(model.years, id: \.self) { Text(verbatim: String($0)).tag(TaxYear.year($0)) }
+                Text("All years").tag(TaxYear.all)
+            }
             Picker("Country", selection: Binding(get: { model.country }, set: { model.setCountry($0) })) {
                 ForEach(TaxCountry.allCases) { Text($0.name).tag($0) }
             }
@@ -81,6 +103,13 @@ public struct TaxReportView: View {
             Picker("Wallets", selection: Binding(get: { model.scope }, set: { model.setScope($0) })) {
                 ForEach(TaxScope.allCases) { Text($0.label + defaultTag($0 == model.country.defaultScope)).tag($0) }
             }
+        } footer: {
+            if let methodNote {
+                Text(methodNote)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         if store.address != WalletAddress.demo {
             Section {
@@ -89,7 +118,7 @@ public struct TaxReportView: View {
                     "Add a wallet",
                     prompt: wallets.isEmpty ? "Paste an address" : "Paste an address, or find a wallet",
                     text: $addingWallet,
-                    wallets: wallets.filter { model.offers($0, showing: store.address, linked: store.address.map(store.linked(for:)) ?? []) },
+                    wallets: wallets.filter { model.offers($0, showing: reportAddress, linked: reportLinked) },
                     read: readAddress,
                     takesSeveral: true,
                     onAddress: model.addOtherWallet
@@ -127,6 +156,16 @@ public struct TaxReportView: View {
         }
     }
 
+    /// Overview's numbers and this report's can differ only through this, so it says so and why.
+    private var methodNote: String? {
+        guard model.method != store.method else { return nil }
+        let overview = "Overview uses \(store.method.label)"
+        if model.method == model.country.defaultMethod {
+            return "\(overview), but \(model.country.rules) call for \(model.method.label), so this report uses that. Its gains can differ from Overview's."
+        }
+        return "\(overview), and you chose \(model.method.label) here, so its gains can differ from Overview's."
+    }
+
     private func defaultTag(_ isDefault: Bool) -> String {
         isDefault ? " (default)" : ""
     }
@@ -151,22 +190,28 @@ public struct TaxReportView: View {
     @ViewBuilder
     private func content(_ report: TaxReport) -> some View {
         Section {
-            LabeledContent("Rows") { Text(Format.block(report.rowCount)).monospacedDigit() }
-            LabeledContent("Unknown gain") {
-                if report.unresolvedCount > 0 {
-                    WarningText(Format.block(report.unresolvedCount)).monospacedDigit()
-                } else {
-                    Text("0").monospacedDigit()
-                }
+            if let partialYear = report.partialYear {
+                WarningText(partialYear)
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            LabeledContent("Gain on known rows") {
+            LabeledContent("Sales") { Text(Format.block(report.soldCount)).monospacedDigit() }
+            LabeledContent(Wording.networkFees) { Text(Format.block(report.feeCount)).monospacedDigit() }
+            if report.sentCount > 0 {
+                LabeledContent("Sent to other addresses") { Text(Format.block(report.sentCount)).monospacedDigit() }
+            }
+            LabeledContent("Total gain") {
                 if let gain = report.gainMicros {
                     LiveNumber(Format.signedMoney(gain, report.currency), tone: Tone(signed: gain))
                 } else {
                     WarningText("Unknown")
                 }
             }
+            if report.unresolvedCount > 0 { unknownRow(report) }
+        } header: {
+            Text(report.year.map { "In \(String($0))" } ?? "In all years")
         }
+        previewSection(report)
         Section {
             DisclosureGroup("What this leaves out") {
                 ForEach(report.warnings + report.notes, id: \.self) { line in
@@ -175,6 +220,95 @@ public struct TaxReportView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+            }
+        }
+    }
+
+    /// What's unknown is never in the total, so this says how much is left out, and where to fix it.
+    private func unknownRow(_ report: TaxReport) -> some View {
+        let count = report.unknownCount
+        let text = count == report.eventCount
+            ? (count == 1 ? "Its gain is unknown, in whole or in part." : "All \(Format.block(count)) have an unknown gain, in whole or in part.")
+            : "\(Format.block(count)) of these \(Format.block(report.eventCount)) \(count == 1 ? "has" : "have") an unknown gain, in whole or in part. What's unknown is left out of the total."
+        return VStack(alignment: .leading, spacing: 8) {
+            WarningText(text)
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+            fixButtons(report)
+        }
+    }
+
+    /// One for each wallet with something unknown, since its questions are about that wallet. The one showing works like
+    /// Overview's: answer what the app can't work out, or see why when there's nothing to answer.
+    @ViewBuilder
+    private func fixButtons(_ report: TaxReport) -> some View {
+        let buttons = report.unknownWallets.compactMap(fixButton)
+        if !buttons.isEmpty {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { ForEach(buttons.indices, id: \.self) { buttons[$0] } }
+                VStack(alignment: .leading, spacing: 8) { ForEach(buttons.indices, id: \.self) { buttons[$0] } }
+            }
+        }
+    }
+
+    private func fixButton(_ wallet: String) -> AnyView? {
+        guard wallet == store.address else {
+            guard let onResolve else { return nil }
+            let name = wallets.first { $0.address == wallet }?.title ?? Format.shortHash(wallet)
+            return AnyView(
+                Button("Answer for \(name)") { onResolve(wallet) }
+                    .fixedSize()
+                    .help("Shows this wallet's questions, then comes back here")
+            )
+        }
+        guard let portfolio = store.portfolio else { return nil }
+        if !portfolio.questions.isEmpty, let onResolve {
+            return AnyView(
+                Button(Wording.answerQuestions(portfolio.questions.count)) { onResolve(wallet) }
+                    .fixedSize()
+                    .help("Answer what the app can't work out by itself (⇧⌘R)")
+            )
+        }
+        if portfolio.attention != nil, let onOpen {
+            return AnyView(Button("See Why") { onOpen(portfolio.attentionTarget) }.fixedSize())
+        }
+        return nil
+    }
+
+    private func previewSection(_ report: TaxReport) -> some View {
+        Section {
+            if report.preview.isEmpty {
+                Text(report.year.map { "Nothing to report in \(String($0))." } ?? "Nothing to report.")
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(Array(report.preview.enumerated()), id: \.offset) { _, row in
+                previewRow(row, currency: report.currency)
+            }
+        } header: {
+            Text("First rows of the file")
+        } footer: {
+            if report.rowCount > report.preview.count {
+                Text("And \(Format.block(report.rowCount - report.preview.count)) more in the file.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func previewRow(_ row: TaxPreviewRow, currency: CurrencyCode) -> some View {
+        let amount = "\(Format.amount(row.amount, decimals: row.decimals)) \(row.asset)"
+        return LabeledContent {
+            if let gain = row.gainMicros {
+                Text(Format.signedMoney(gain, currency))
+                    .monospacedDigit()
+                    .foregroundStyle(Tone(signed: gain).style)
+            } else {
+                WarningText("Unknown gain")
+            }
+        } label: {
+            Text(row.type == "Network fee" ? "Network fee, \(amount)" : "\(row.type) \(amount)")
+            if let date = parseTimestamp(row.timestamp) {
+                Text(Format.utcDateTime(date))
             }
         }
     }
