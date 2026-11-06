@@ -985,6 +985,17 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
             ("https://A.Evil.COM:8443", "evil.com"),
             ("https://shop.example.co.uk", "example.co.uk"),
             ("https://example.co.uk", "example.co.uk"),
+            ("https://shop.example.com.au", "example.com.au"),
+            ("https://shop.example.ne.jp", "example.ne.jp"),
+            // These only look like a country's second level. Each is someone's domain, who could otherwise have a family per subdomain.
+            ("https://a.net.de", "net.de"),
+            ("https://b.net.de", "net.de"),
+            ("https://a.co.de", "co.de"),
+            ("https://a.com.fr", "com.fr"),
+            ("https://a.org.ch", "org.ch"),
+            ("https://a.ne.uk", "ne.uk"),
+            ("https://a.or.uk", "or.uk"),
+            ("https://a.b.com.xx", "com.xx"),
             ("https://a.example.io", "example.io"),
             ("https://one.vercel.app", "vercel.app"),
             ("http://localhost:3000", "localhost"),
@@ -993,6 +1004,91 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
             ("https://[::1]", "[::1]"),
         ]
         for (origin, family) in cases { #expect(SiteBridge.family(of: origin) == family, "\(origin)") }
+    }
+
+    @Test func aSecondLevelDomainThatLooksLikeASuffixIsStillOneSite() async {
+        let rig = SiteRig()
+        var tasks: [Task<RPCAnswer, Never>] = []
+        for index in 0..<SiteBridge.maxPendingPerOrigin {
+            let (task, _) = await rig.start("eth_requestAccounts", origin: "https://a\(index).net.de", id: "\(index)")
+            tasks.append(task)
+        }
+        #expect(code(await rig.ask("eth_requestAccounts", origin: "https://more.net.de")) == -32002)
+        #expect(rig.bridge.pending.count == SiteBridge.maxPendingPerOrigin)
+        rig.bridge.cancelAll(connection: rig.connection)
+        for task in tasks { _ = await task.value }
+    }
+
+    @Test func aSiteInACooldownCantReachTheNodeBySending() async {
+        final class Clock: @unchecked Sendable { var now = Date() }
+        let clock = Clock()
+        let rig = SiteRig(now: { clock.now })
+        await rig.connect()
+        for _ in 0..<SiteBridge.rejectionsBeforeCooldown {
+            let (task, approval) = await rig.start("personal_sign", .array([.string("hello"), .string(hot)]))
+            rig.bridge.reject(approval.id)
+            _ = await task.value
+        }
+        let snapshots = await rig.chain.snapshotReads
+        let fees = await rig.chain.l1FeePayloads.count
+        for _ in 0..<20 {
+            #expect(code(await rig.ask("eth_sendTransaction", rig.sendParameters())) == 4001)
+        }
+        #expect(await rig.chain.snapshotReads == snapshots)
+        #expect(await rig.chain.l1FeePayloads.count == fees)
+        #expect(rig.bridge.pending.isEmpty)
+    }
+
+    @Test func transactionsBeingPricedCountAsWaiting() async {
+        let rig = SiteRig()
+        await rig.connect()
+        await rig.chain.hold(snapshots: true)
+        var tasks: [Task<RPCAnswer, Never>] = []
+        for index in 0..<SiteBridge.maxPendingPerOrigin {
+            let bridge = rig.bridge
+            let request = rig.request("eth_sendTransaction", rig.sendParameters(), id: "\(index)")
+            tasks.append(Task { await bridge.handle(request) })
+            while await rig.chain.heldCalls <= index { await Task.yield() }
+        }
+
+        // Nothing has reached the window yet, and there's still no room for more at the node, or for a message that needs none.
+        let snapshots = await rig.chain.snapshotReads
+        #expect(code(await rig.ask("eth_sendTransaction", rig.sendParameters())) == -32002)
+        #expect(code(await rig.ask("personal_sign", .array([.string("hello"), .string(hot)]))) == -32002)
+        #expect(await rig.chain.snapshotReads == snapshots)
+        #expect(rig.bridge.pending.isEmpty)
+
+        // They all still get their turn.
+        await rig.chain.release()
+        for _ in 0..<10_000 where rig.bridge.pending.count < SiteBridge.maxPendingPerOrigin {
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        #expect(rig.bridge.pending.count == SiteBridge.maxPendingPerOrigin)
+        rig.bridge.cancelAll(connection: rig.connection)
+        for task in tasks { #expect(code(await task.value) == 4001) }
+    }
+
+    @Test func transactionsThatCantBePricedCantUseUpTheNode() async {
+        final class Clock: @unchecked Sendable { var now = Date() }
+        let clock = Clock()
+        let rig = SiteRig(now: { clock.now })
+        await rig.connect()
+        await rig.connect(origin: "https://other.example.org")
+        await rig.chain.setEstimateFailure(.rejected("execution reverted"))
+        let snapshots = await rig.chain.snapshotReads
+        for _ in 0..<SiteBridge.quotesPerWindow {
+            #expect(code(await rig.ask("eth_sendTransaction", rig.sendParameters())) == -32000)
+        }
+        #expect(await rig.chain.snapshotReads == snapshots + SiteBridge.quotesPerWindow)
+        for _ in 0..<20 {
+            #expect(code(await rig.ask("eth_sendTransaction", rig.sendParameters())) == -32005)
+        }
+        #expect(await rig.chain.snapshotReads == snapshots + SiteBridge.quotesPerWindow)
+
+        // Another site isn't affected, and neither is this one after a while.
+        #expect(code(await rig.ask("eth_sendTransaction", rig.sendParameters(), origin: "https://other.example.org")) == -32000)
+        clock.now = clock.now.addingTimeInterval(SiteBridge.quoteWindow + 1)
+        #expect(code(await rig.ask("eth_sendTransaction", rig.sendParameters())) == -32000)
     }
 
     @Test func aValueThatFillsAUInt128JustWarns() async {

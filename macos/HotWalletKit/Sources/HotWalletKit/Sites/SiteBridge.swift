@@ -66,6 +66,8 @@ private final class LiveRequest {
     let requester: Requester
     var task: Task<RPCAnswer, Never>?
     var approvalID: UUID?
+    /// Still at the node, on its way to the window, so it counts as waiting.
+    var isBeingQuoted = false
     private(set) var isCancelled = false
 
     var origin: String { request.origin }
@@ -158,6 +160,7 @@ public final class SiteBridge {
     @ObservationIgnored private var live: [LiveRequest] = []
     @ObservationIgnored private var refusals: [String: Refusals] = [:]
     @ObservationIgnored private var readsThisSecond: (second: Int, count: Int, byFamily: [String: Int]) = (0, 0, [:])
+    @ObservationIgnored private var quotes: [String: [Date]] = [:]
     @ObservationIgnored private var lastKnownAddress: EthereumAddress?
     @ObservationIgnored private var lastKnownSites: [String] = []
 
@@ -176,6 +179,10 @@ public final class SiteBridge {
     /// together, and one site's limit is less, so a single tab can't use up what the others get.
     nonisolated static let readsPerSecond = 12
     nonisolated static let readsPerSecondPerFamily = 8
+    /// Pricing a transaction takes a whole wallet read and more, so this is what keeps a connected site that sends one after another that
+    /// can't be priced, which never reach the window, from taking the wallet's share of the node. Only connected sites get this far.
+    static let quotesPerWindow = 10
+    static let quoteWindow: TimeInterval = 60
 
     /// What a site can read from the node. Anything else that isn't handled here is refused, not passed along.
     static let reads: Set<String> = [
@@ -399,8 +406,13 @@ public final class SiteBridge {
         } catch {
             return .failure(error)
         }
+        // Before any of it goes to the node, so being turned away costs nothing.
+        if let refusal = whyNotAdmitted(request) { return .failure(refusal) }
+        guard noteQuote(by: request.origin) else { return .failure(.readLimit) }
+        request.isBeingQuoted = true
         do {
             quote = try await wallet.quoteForSite(transaction)
+            request.isBeingQuoted = false
         } catch {
             return .failure(Self.siteError(error))
         }
@@ -528,11 +540,8 @@ public final class SiteBridge {
     private func ask(_ request: LiveRequest, _ action: SiteApproval.Action) async -> RPCAnswer {
         // Working out what to show takes a while, and the site may be gone by now.
         guard !request.isCancelled else { return .failure(.rejected) }
-        let family = Self.family(of: request.origin)
-        if let until = refusals[family]?.cooldownUntil, until > now() { return .failure(.rejected) }
-        let fromThisFamily = pending.filter { Self.family(of: $0.origin) == family }
-        guard pending.count < Self.maxPending, fromThisFamily.count < Self.maxPendingPerOrigin else { return .failure(.tooManyRequests) }
-        if action == .connect, fromThisFamily.contains(where: { $0.origin == request.origin && $0.action == .connect }) { return .failure(.tooManyRequests) }
+        if let refusal = whyNotAdmitted(request) { return .failure(refusal) }
+        if action == .connect, pending.contains(where: { $0.origin == request.origin && $0.action == .connect }) { return .failure(.tooManyRequests) }
 
         let approval = SiteApproval(id: UUID(), origin: request.origin, action: action, requester: request.requester)
         request.approvalID = approval.id
@@ -540,6 +549,29 @@ public final class SiteBridge {
         pending.append(approval)
         let approved = await withCheckedContinuation { waiting[approval.id] = $0 }
         return approved && !request.isCancelled ? .success(.null) : .failure(.rejected)
+    }
+
+    /// Why a site can't ask for anything just now, if it can't. Transactions still being priced hold their place, or a site could have any
+    /// number of them at the node.
+    private func whyNotAdmitted(_ request: LiveRequest) -> SiteError? {
+        let family = Self.family(of: request.origin)
+        if let until = refusals[family]?.cooldownUntil, until > now() { return .rejected }
+        let waiting = pending.map(\.origin) + live.filter(\.isBeingQuoted).map(\.origin)
+        guard waiting.count < Self.maxPending, waiting.filter({ Self.family(of: $0) == family }).count < Self.maxPendingPerOrigin else { return .tooManyRequests }
+        return nil
+    }
+
+    /// False if this site has had all the transactions priced it can for now.
+    private func noteQuote(by origin: String) -> Bool {
+        let time = now()
+        let family = Self.family(of: origin)
+        let recent = quotes[family, default: []].filter { $0 > time.addingTimeInterval(-Self.quoteWindow) }
+        guard recent.count < Self.quotesPerWindow else {
+            quotes[family] = recent
+            return false
+        }
+        quotes[family] = recent + [time]
+        return true
     }
 
     private func noteRefusal(by origin: String) {
@@ -558,17 +590,39 @@ public final class SiteBridge {
     }
 
     /// What a site's limits count against: its domain, since subdomains cost nothing to make and would each get their own. Without the
-    /// public suffix list this only knows the usual shape of a country's second level, like `example.co.uk`. So sites on one shared host,
-    /// like `vercel.app`, count as one, which is the safe way to be wrong.
+    /// whole public suffix list this only knows the usual suffixes below, so anything else counts as one domain. That means `a.net.de` and
+    /// `b.net.de`, and sites on one shared host like `vercel.app`, count as one, which is the safe way to be wrong.
     static func family(of origin: String) -> String {
         guard let host = URLComponents(string: origin)?.host?.lowercased() else { return origin }
         let labels = host.split(separator: ".")
         guard labels.count > 2, let last = labels.last, last.contains(where: \.isLetter) else { return host }
-        let isCountrySecondLevel = last.count == 2 && secondLevels.contains(String(labels[labels.count - 2]))
-        return labels.suffix(isCountrySecondLevel ? 3 : 2).joined(separator: ".")
+        let isPublicSuffix = publicSecondLevels[String(last)]?.contains(String(labels[labels.count - 2])) == true
+        return labels.suffix(isPublicSuffix ? 3 : 2).joined(separator: ".")
     }
 
-    private static let secondLevels: Set<String> = ["ac", "co", "com", "edu", "gov", "ne", "net", "or", "org"]
+    /// Each one is in the ICANN part of the public suffix list, as of version 2026-11-04. A name that isn't can be one person's domain,
+    /// who then gets a family per subdomain, so only add what's there.
+    private static let publicSecondLevels: [String: Set<String>] = [
+        "ar": ["com", "edu", "gob", "gov", "int", "mil", "net", "org"],
+        "au": ["asn", "com", "edu", "gov", "id", "net", "org"],
+        "br": ["com", "edu", "gov", "mil", "net", "org"],
+        "cn": ["ac", "com", "edu", "gov", "mil", "net", "org"],
+        "hk": ["com", "edu", "gov", "idv", "net", "org"],
+        "id": ["ac", "biz", "co", "go", "mil", "my", "net", "or", "sch", "web"],
+        "il": ["ac", "co", "gov", "k12", "muni", "net", "org"],
+        "in": ["ac", "co", "com", "edu", "gov", "me", "mil", "net", "org", "res"],
+        "jp": ["ac", "ad", "co", "ed", "go", "gr", "lg", "ne", "or"],
+        "kr": ["ac", "co", "go", "me", "mil", "ne", "or"],
+        "mx": ["com", "edu", "gob", "net", "org"],
+        "my": ["biz", "com", "edu", "gov", "mil", "name", "net", "org"],
+        "nz": ["ac", "co", "geek", "gen", "govt", "iwi", "kiwi", "maori", "mil", "net", "org", "school"],
+        "sg": ["com", "edu", "gov", "net", "org"],
+        "th": ["ac", "co", "go", "in", "mi", "net", "or"],
+        "tr": ["biz", "com", "edu", "gen", "gov", "info", "k12", "mil", "name", "net", "org", "tv", "web"],
+        "tw": ["club", "com", "ebiz", "edu", "game", "gov", "idv", "mil", "net", "org"],
+        "uk": ["ac", "co", "gov", "ltd", "me", "net", "nhs", "org", "plc", "police"],
+        "za": ["ac", "co", "edu", "gov", "law", "mil", "net", "ngo", "nom", "org", "school", "web"],
+    ]
 
     private func finish(_ id: UUID, approved: Bool) {
         pending.removeAll { $0.id == id }
