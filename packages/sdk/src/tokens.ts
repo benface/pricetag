@@ -97,7 +97,8 @@ export const TOKENS: readonly Token[] = [
 const BY_ADDRESS = new Map(TOKENS.map((t) => [t.address, t]))
 
 export function tokenByAddress(address: string): Token | undefined {
-  return BY_ADDRESS.get(normalizeAddress(address))
+  // Nearly always already normalized, and this runs for every row a busy wallet has, several times a read.
+  return BY_ADDRESS.get(address) ?? BY_ADDRESS.get(normalizeAddress(address))
 }
 
 export function normalizeAddress(address: string): string {

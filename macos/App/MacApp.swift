@@ -132,9 +132,6 @@ struct MacApp: App {
                     .keyboardShortcut("i", modifiers: [.command, .control])
                     .disabled(!navigation.canShowDetails || store.portfolio == nil)
                 Divider()
-                Picker("Cost", selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
-                    ForEach(CostMethod.allCases) { Text($0.label).tag($0) }
-                }
                 Button("Refresh") { store.refresh() }
                     .keyboardShortcut("r", modifiers: .command)
             }
@@ -173,7 +170,7 @@ struct MacApp: App {
         .restorationBehavior(.disabled)
 
         Settings {
-            SettingsView(store: store, hotWallet: hotWallet, notifications: notifications, tab: Bindable(navigation).settingsPane)
+            SettingsView(store: store, notifications: notifications, tab: Bindable(navigation).settingsPane)
                 .holdsDockPresence()
         }
     }

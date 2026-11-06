@@ -63,7 +63,7 @@ An honest account of building Pricetag on Amp, November 4 to 5, 2026. Private to
 | Dataset's three wallet queries, 33,272 blocks, quiet wallet with 4 `legs` rows | 8.3 s then 6.2 s for `legs` ([WORK-448]) |
 | Same, busy wallet with 75,735 `legs` rows | 8.7 s then 4.8 s ([WORK-448]) |
 | `legs` for the quiet wallet today, 43,000 blocks, 10 rows, after the switch | 7.7 s and 10.8 s |
-| The app's full read, including balances and fees | Quiet: 19–22 s cold, 3–4 s warm. Busy: 142 s cold, 6 s per update (DEMO.md, [WORK-410]) |
+| The app's full read, including balances and fees | Quiet: 13–17 s cold with a bounded head lookup ([WORK-552]), 19–22 s before, 3–4 s warm. Busy: 142 s cold, 6 s per update (DEMO.md, [WORK-410]) |
 | `eth_call` through Amp | About 30 ms per call on staging. It kept up with 2 s blocks, 1,030 of 1,030 in a row ([WORK-320], [321][WORK-321]) |
 
 **Freshness** (measured, on staging):
@@ -101,6 +101,7 @@ These held up, and each would have been hard or slow without Amp.
 | **A pricing rule is a dataset version** | A fork materializes 2 tables and reads the rest from its parent, so it can only differ by the rule. The server switches with one header, and a wrong hash fails instead of showing other numbers | About 55 MB a day against about 3.2 GB, and no app code for the rule (measured, [WORK-365]) |
 | **The data can be audited** | The rows carry almost everything needed to recompute a block's hash and roots, so a client can catch a wrong answer | 45 of 45 sampled blocks passed all three checks, and changed, missing or reordered rows fail (measured, [WORK-364]). This is our code, and deposit fields come from an RPC, see [section 4](#4-where-it-falls-short) |
 | **A price traced to a log** | Each price is a specific Chainlink log in a block the same check covers | 5,073 of 5,395 blocks identical to `eth_call`, and the other 322 are the expected ETH lead (measured, [WORK-381]) |
+| **Progress without rows** | Any one-shot query's metadata says how far Amp had got in the tables it reads, even with nothing to return. So one empty query says how far a read can go, on a quiet chain too | 150 to 270 ms, down from 1.5 to 2.5 s for one newest-row query per table, on staging ([WORK-521]) |
 | **A last-known value without state** | A bounded range join plus an aggregate stands in for an as-of join | Replay gave 0 differences over 926 blocks (measured, [WORK-330]) |
 | **Historical state through SQL** | `rpc.base_mainnet.eth_call` reads any block, so we need no archive node of our own | Reads worked at blocks 22,000,000 and 37,700,000 ([WORK-320]). Balance reads for 200 blocks took under 700 ms ([WORK-348]). Both measured |
 | **Asking the whole chain a question** | Questions that would each need a script against an RPC took one query. Which contracts emit `AnswerUpdated`? (201 in a day.) Who calls Coinbase's payout contract? (One sender, 1,437 ETH payouts in a day.) Do two versions agree? (`EXCEPT ALL`, inside Amp.) | Measured ([WORK-330], [424][WORK-424], [376][WORK-376]) |
@@ -391,6 +392,8 @@ No new issues were filed in the `amp` project: everything that meets its bar alr
 [WORK-497]: https://multica.ai/benface-work/issues/01a1acfb-4a15-7718-b36d-9c5c03aae7c1
 [WORK-519]: https://multica.ai/benface-work/issues/01a1ad4a-d011-7430-8447-bb5443d76b0c
 [WORK-520]: https://multica.ai/benface-work/issues/01a1ad4a-d2ec-7501-9a5b-1095fea392d3
+[WORK-521]: https://multica.ai/benface-work/issues/01a1ad4a-d5ac-7704-9537-87f64c961ae0
+[WORK-552]: https://multica.ai/benface-work/issues/01a1ae83-a37f-79a2-b5bb-257ab02a975c
 [WORK-575]: https://multica.ai/benface-work/issues/01a1aece-4d0e-7e87-b10c-736721709d0b
 [#479]: https://github.com/edgeandnode/amp/issues/479
 [#1819]: https://github.com/edgeandnode/amp/issues/1819

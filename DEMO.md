@@ -29,6 +29,7 @@ All times are Montréal. Numbers marked *measured* come from the real server aga
 
 About 5 minutes. **Before you start:**
 - The server has been running for at least 5 minutes, with the wallet already read once under each rule, so nothing's a cold read.
+- [The job watch](#the-job-watch) is running, and its log shows no `ALERT` you haven't dealt with.
 - USD, Average cost, and the Market price rule. The menu bar shows Value, the default: right-click it to check.
 - The Coinbase question is **unanswered**, and what you paid is on a sticky note.
 - The main window and Settings are arranged side by side.
@@ -38,7 +39,7 @@ About 5 minutes. **Before you start:**
 | 1 | Click the menu bar item | "This is my real wallet, with real money. A small amount, on purpose." | Value, PnL and holdings, with a line under them saying what PnL leaves out |
 | 2 | Open the main window | "It only has what I've done since Wednesday at 14:24, when the dataset starts. Every position is checked against the chain to the smallest unit." | Holdings, largest first, with price, return and check marks, and a warning that ETH's cost is unknown |
 | 3 | Click cbBTC's number in the holdings | "Any number opens what's behind it: what moved, at what price, and where that price came from." | Details on the right. Each row starts with a plain sentence, like "Sold $1.00 of ETH.", then its price source and cost |
-| 4 | On a "Sold" or "Bought" row, click **Proof** under it, then **Verify block …** | "This recomputes the block's hashes from what Amp returned. It doesn't prove my SQL or Chainlink's number, and it says so." | About 11 s (*measured* on the $1 swap), then "The data Amp stored for this block matches its header, and so does Chainlink's update behind this price" and 5 passed checks |
+| 4 | On a "Sold" or "Bought" row, click **Proof** under it, then **Verify block …** | "This recomputes the block's hashes from what Amp returned. It doesn't prove my SQL or Chainlink's number, and it says so." | About 11 s (*measured* on the $1 swap), then "The data Amp stored for this block matches its header, and so does Chainlink's update behind this price. Base's node agrees on both." and 7 passed checks |
 | 5 | On Overview, click **Answer 1 Question** beside the warning (the count is whatever's open), or press ⇧⌘R | "My ETH came from Coinbase inside a batched payout. No transaction points at my wallet, and this data has no traces. We found it from the balance. So it asks, instead of guessing." | "Who sent you this?", a line saying why it asks, and "From a Coinbase address" |
 | 6 | **My exchange account**, type what you paid, **Save**, **Done** | "That stays on this Mac. Now everything adds up." | The line saying what PnL leaves out is gone, and ETH has PnL and a return. "Compared with holding ETH" and a full chart appear |
 | 7 | In Settings, pick **Cautious ETH** | "Same transactions, different recipe. It counts ETH 1% lower. That's a second dataset version, two tables, with no app code for it. Here's its fingerprint." | The numbers change on their own |
@@ -69,7 +70,7 @@ WORK-452 rewrites the steps for whatever has merged by Thursday at 13:45.
 | **Before funding** | Add your savings wallet if you can, then check the cap | Cap is $50 by default with savings, and at most $25 without. Without savings, cut every amount below to about half |
 | **Thu by 9:30** | Withdraw **$40 of ETH from Coinbase** on Base. Write down the total you paid for both withdrawals, this one and Wednesday's | This is what makes WORK-424 visible, see below. Earlier is better: the chart's one-day change needs a known point from before the range starts, so this has to be at least 24 h before the demo |
 | **Once it shows in the app** | With the extension on `app.uniswap.org`, swap **$12 of ETH to cbBTC**, then **$12 of ETH to AERO**. Don't answer the Coinbase question | Costs that are really paid, and prices that move. Waiting avoids landing in the payout's block, which would leave costs unknown. Each row should show a dollar cost. If one says unknown, see below |
-| **Thu after 14:00** | In Settings, turn off **Sweep realized gains to savings**. Then swap **half the AERO to USDC** | Gives Realized a number, adds a transaction after the block switch, and won't sweep on stage. Sell into USDC rather than ETH, because ETH paid out through a contract is the hardest case |
+| **Thu after 14:00** | At the bottom of Spending Money's page, turn off **Sweep realized gains to savings**. Then swap **half the AERO to USDC** | Gives Realized a number, adds a transaction after the block switch, and won't sweep on stage. Sell into USDC rather than ETH, because ETH paid out through a contract is the hardest case |
 | **Fri morning** | In Settings > **Answers** (or File > **Your Answers…**), remove the Coinbase answer with the ⊖ beside it. Every other answer stays | Puts steps 5 and 6 back on stage |
 
 **If a swap's cost says unknown, don't buy again.** A later purchase doesn't repair the earlier one, and answering Coinbase doesn't either. Click the row and read its reason, then:
@@ -106,12 +107,13 @@ A real card purchase on stage can fail, and a real delivery can take minutes, so
 
 | Problem | How you'd know | Do this |
 |---|---|---|
-| **Public RPC rate limit** (WORK-336's failed swap) | A send or site approval fails, or a balance says not checked. Verify's Transactions says not checked. Shared wifi makes it worse | Set `BASE_RPC_URL=https://base-rpc.publicnode.com` in `.env.local`, restart the server, and paste the URL into the **Network** field in Settings. WORK-396 may change this choice Thursday at 13:30 |
+| **Public RPC rate limit** (WORK-336's failed swap) | A send or site approval fails, or a balance says not checked. Verify's Transactions and Base's node say not checked. Shared wifi makes it worse | Set `BASE_RPC_URL=https://base-rpc.publicnode.com` in `.env.local`, restart the server, and paste the URL into **Base network address**, under Advanced at the bottom of Spending Money's page. WORK-396 may change this choice Thursday at 13:30 |
 | **Base's block switch**, Thu 13:00 | WORK-406 reports at 13:25 and WORK-396 at 13:30 | Rehearse only after both. If Base delays it, they say so. If `edgeandnode/base_mainnet` stalls, that isn't ours to fix: ask in `#amp-hackathon` and use the recording |
 | **Staging dataset behind** | The app says "Catching up", and the 8:00 health checks report it | A few seconds is fine: keep going, it's the honest behavior. If it's stuck, [restart its job](#if-the-dataset-is-stuck). If that doesn't clear it in a minute, use the recording. Don't run `pnpm amp:start`: it starts with empty history, so this wallet would have none |
+| **A dataset's job dies** (WORK-574) | Like being behind, but it doesn't move: reads still answer with the same newest block, so the numbers freeze and the app says "Catching up". Amp's status says `FATAL`, and bounded reads give no error. Stopping any job with JS on the same worker can cause it | The job watch restarts it within a minute, and it was back at head about 40 s after a restart (*measured*). Keep going, and check `~/Library/Logs/pricetag-job-watch.log` afterward. If the log shows no restart, `POST /controller/materialized-datasets/benface/<name>/versions/<version>` with `{}` by hand. A restart resumes the same job, so nothing's lost |
 | **Only the fork fails** | The rule switch or Compare errors | Stay on Market price and skip steps 7 and 8 |
-| **Admin token** expires Fri 12:46 | Only a write fails | Reads don't use it. The read token lasts until April 2027 (*checked*, not printed). So no `dataset/` merges after Thursday 18:00. A replacement or stopping the jobs after 12:46 needs a new token |
-| **Slow reads** | A cold read took 19–22 s, warm 3–4 s (*measured*). They may grow by Friday, and the app's query timeout is 60 s. A read past 5 s shows how long it's been going | Don't restart the server on stage, since a restart means a cold read. Read the wallet before you go on. The health checks measure this |
+| **Admin token** expires Fri 12:46 | Only a write fails | Reads don't use it. The read token lasts until April 2027 (*checked*, not printed). So no `dataset/` merges after Thursday 18:00. A replacement, stopping the jobs, or the job watch restarting one after 12:46 needs a new token. The watch keeps checking and says so. Put the new one in `staging.jwt`, and it picks it up |
+| **Slow reads** | A cold read took 13–17 s, and once 42 s, against 20–35 s before WORK-552. A warm read took 3–4 s (*measured*). They may grow by Friday, and the app's query timeout is 60 s. A read past 5 s shows how long it's been going | Don't restart the server on stage, since a restart means a cold read. Read the wallet before you go on. The health checks measure this |
 | **Wifi** | Everything real stops, with "Prices Aren't Available Right Now" (the web app still says "Couldn't read this wallet's data") | Phone hotspot, tested in rehearsal. If that fails, the demo wallet or the recording |
 | **Server on 8787 not running** | The app says "The Price Service Isn't Running" | In the repo: `pnpm start`, then wait for the first read. Keep it in its own terminal, not the one you'd close |
 | **Ledger or Keystone misbehaves** | Anything off in [the checklist](HARDWARE-WALLETS.md#checklist-for-a-real-device) | Nothing in the main flow needs one. Fallback is a browser wallet like Rabby. Ledger needs Chrome, the Ethereum app open and Ledger Wallet closed. Leave devices off stage unless they pass twice |
@@ -130,16 +132,30 @@ A real card purchase on stage can fail, and a real delivery can take minutes, so
 
 **Don't stop any staging job from Friday 8:00 until the demo's over.** Deploying is fine. Stopping a job that runs JS functions (`pricetag`, `pricetag_cautious`, `pricetag_control`, `pricetag_bloom`) can kill another such job on the same worker, including the one the app reads. That froze the app's dataset for 13 minutes on Thursday night (WORK-575). It's rare, one in 14 stops, but the job doesn't come back by itself.
 
-If the numbers stop moving, restart it. This is safe on a healthy job, which it leaves alone. A restart keeps the history and caught up 13 minutes in under a minute (*measured*). `pricetag_cautious` follows by itself. It needs the admin token, so it stops working Friday at 12:46. If `PRICETAG_DATASET` has moved past `0.2.0`, change the version at the end:
+[The job watch](#the-job-watch) does this by itself within about 15 s. If the numbers stop moving anyway, restart it by hand. This is safe on a healthy job, which it leaves alone. A restart keeps the history and caught up 13 minutes in under a minute (*measured*). `pricetag_cautious` is a separate job, so if the fork is stuck too, run this again with its name. It needs the admin token, so it stops working Friday at 12:46. If `PRICETAG_DATASET` has moved past `0.2.0`, change the version at the end:
 
 ```sh
 curl -sS -X POST -H @<(printf 'authorization: Bearer %s' "$(cat ~/.config/pricetag/staging.jwt)") -H 'content-type: application/json' -d '{}' https://gateway.amp.staging.edgeandnode.com/controller/materialized-datasets/benface/pricetag/versions/0.2.0
 ```
 
+### The job watch
+
+A small background service checks every dataset `.env.local` names every 15 s, including the fork. When a job is `FATAL`, it restarts it and shows a notification. It restarted real dead jobs on a local Amp about 3 s after they went `FATAL` (*measured*, WORK-577). It runs on this Mac, so it only works while the Mac is awake and online. After Friday 12:46 it can still check but can't restart, and it says so.
+
+To check it, this should print `state = running`, and the log shows each dataset's status:
+
+```sh
+launchctl print gui/$(id -u)/com.benface.pricetag-job-watch | grep -m1 'state ='
+tail ~/Library/Logs/pricetag-job-watch.log
+```
+
+If it isn't running, start it with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.benface.pricetag-job-watch.plist`. If that fails, run `node scripts/job-watch.ts` from the repo in its own terminal. Stop it after the demo with `launchctl bootout gui/$(id -u)/com.benface.pricetag-job-watch`.
+
 ## Rehearsal checklist, Thursday November 5
 
 **Morning**
 - [ ] Read the 8:00 health check on this issue.
+- [ ] [Check the job watch](#the-job-watch) is running. Do it again on Friday morning, after opening the Mac.
 - [ ] Fund and buy, as above.
 - [ ] Right after the buys, answer the Coinbase card. There should be no other question and no line saying what PnL leaves out. If it does, read what it leaves out, and see above. Then remove the Coinbase answer in Settings > **Answers**.
 - [ ] Review WORK-426, then 431 and 432. Merging 426 starts WORK-449's test on real data, so read its results if they're in by 14:00.
@@ -169,4 +185,4 @@ curl -sS -X POST -H @<(printf 'authorization: Bearer %s' "$(cat ~/.config/pricet
 
 ## After the demo
 
-Say on WORK-448 that it's over. If you agree, the run there stops the staging jobs (`benface/pricetag@0.1.0`, `benface/pricetag_cautious@0.1.0`, and any older ones still running). After Friday 12:46 that needs a new admin token. Then turn **Sweep realized gains to savings** back on, and move what you want off the hot wallet.
+Say on WORK-448 that it's over, and stop [the job watch](#the-job-watch) first, so it doesn't restart a job that stopping another one kills. If you agree, the run there stops the staging jobs (`benface/pricetag@0.1.0`, `benface/pricetag_cautious@0.1.0`, and any older ones still running). After Friday 12:46 that needs a new admin token. Then turn **Sweep realized gains to savings** back on, and move what you want off the hot wallet.

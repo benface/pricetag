@@ -5,10 +5,11 @@ import { explainPortfolio, portfolioOf } from "../src/core/portfolio.ts"
 import { createWallets, type Source } from "@pricetag/sdk/internal"
 import { ASSETS, CURRENCIES, ETH_ADDRESS, USDC_ADDRESS, buildPricedLegs, openingLegs, shortHash, type LegRow, type Method, type Reference, encodeNote, parseNote } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../src/core/api.ts"
-import { answerSender, costKey, emptyBook, enterExchangeCosts, linkMessage, linkedWallets, parseBook, proofOwner, type Book, type Money, type Receipt, type SenderAnswer } from "../src/core/book.ts"
+import { answerSender, changeBook, costKey, emptyBook, enterExchangeCosts, linkAccountsInBook, linkMessage, linkedWallets, parseBook, proofOwner, undoBook, type Book, type BookChange, type BookState, type Money, type Receipt, type SenderAnswer } from "../src/core/book.ts"
 import { matchWithdrawals, parseCoinbaseCsv } from "../src/core/exchange-import.ts"
 import { exportCsv } from "../src/core/export.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_SAVINGS_WALLET, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
+import { linkByProof } from "../src/ui/link-proof.ts"
 import { allocateTaken, foldBook, isBalanced, microsOf, missingWallets, previewBook, readKey, readsMatching } from "../src/core/resolve.ts"
 
 const addr = (n: number) => `0x${n.toString(16).padStart(40, "0")}`
@@ -1030,6 +1031,11 @@ describe("no market, in another currency", () => {
 describe("each kind of sender", () => {
   const question = (rows: LegRow[], b: Book = emptyBook()) => foldBook(wallet(A, rows), [], "average", b).questions
 
+  it("says what was last sent, and the first of what was sent in that block", () => {
+    const rows = [...send(5, "0x0", A, B, 2n * E6), ...send(7, "0x1", A, B, 3n * E6), ...send(7, "0x2", A, B, 4n * E6), ...send(6, "0x3", A, B, 5n * E6), ...send(10, "0x4", B, A, 100n * E6)]
+    assert.match(question(rows)[0]?.evidence[0] ?? "", /^You sent this address 3 USDC/)
+  })
+
   it("an own wallet gets evidence, never a preselected answer, and isn't assumed", () => {
     const rows = [...send(5, "0x0", A, B, 2n * E6), ...send(10, "0x1", B, A, 100n * E6)]
     const [q] = question(rows)
@@ -1096,6 +1102,34 @@ describe("each kind of sender", () => {
   it("the user can still recategorize a bridge's transfer", () => {
     const usdc = position(wallet(A, send(10, "0x1", ACROSS, A, 100n * E6)), [], book({ [ACROSS]: exchange("95000000", receipt(A, "0x1", 100n * E6)) }))
     assert.equal(usdc.effects[0]?.leg.costLabel, "self-reported")
+  })
+
+  for (const [name, sender] of [["NEAR Intents' treasury", "0x2cff890f0378a11913b6129b2e97417a2c302680"], ["NEAR Intents' gas refills", "0xbb2f33f73ccc2c74e3fb9bb8eb75241ac15337e0"]] as const) {
+    it(`${name} is valued when it arrived, as an estimate, with nothing to ask`, () => {
+      const rows = send(10, "0x1", sender, A, 100n * E6)
+      assert.deepEqual(question(rows), [])
+      const usdc = position(wallet(A, rows), [], emptyBook())
+      assert.equal(usdc.effects[0]?.leg.costLabel, "received at market")
+      assert.equal(usdc.estimates.cost, true)
+    })
+  }
+
+  it("Merkl is named and still asked about, because a reward and its own money coming back look the same", () => {
+    const merkl = "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae"
+    const rows = send(10, "0x1", merkl, A, 100n * E6)
+    const [q] = question(rows)
+    assert.deepEqual(q?.evidence, ["From a Merkl address"])
+    assert.equal(q?.known?.kind, "reward")
+    const usdc = position(wallet(A, rows), [], emptyBook())
+    assert.equal(usdc.effects[0]?.leg.costLabel, "unknown")
+    assert.equal(usdc.values.costMicros, null)
+    assert.equal(position(wallet(A, rows), [], book({ [merkl]: { kind: "someone-else" } })).effects[0]?.leg.costLabel, "received at market")
+  })
+
+  it("a named exchange is still asked about, because the name doesn't say whose withdrawal it was", () => {
+    const gate = "0x0d0707963952f2fba59dd06f2b425ace40b492fe"
+    assert.deepEqual(question(send(10, "0x1", gate, A, 100n * E6)).map((q) => q.evidence), [["From a Gate address"]])
+    assert.equal(position(wallet(A, send(10, "0x1", gate, A, 100n * E6)), [], emptyBook()).effects[0]?.leg.costLabel, "unknown")
   })
 
   it("a mint can't be anyone's wallet, so there's nothing to ask", () => {
@@ -1376,16 +1410,16 @@ describe("what the UI gets", () => {
     assert.equal(of("DEGEN").resolvable, false, "no market means no question")
   })
 
-  it("exports marks what's exact, estimated, unresolved and without a market", () => {
+  it("exports marks what's exact, estimated, unknown and without a market", () => {
     const { positions } = foldBook(DEMO_WALLET, [], "average", emptyBook())
     const lines = exportCsv(positions, "USD").trim().split("\n")
     assert.deepEqual(lines[0]?.split(","), ["time", "block", "transaction", "asset", "amount", "kind", "currency", "price", "price_source", "cost", "cost_source", "proceeds", "status"])
     const status = (asset: string, predicate = (_: string[]) => true) => lines.slice(1).map((l) => l.split(",")).filter((c) => c[3] === asset && predicate(c)).map((c) => c.at(-1))
-    assert.ok(status("USDC").includes("unresolved"))
+    assert.ok(status("USDC").includes("unknown"))
     assert.deepEqual(status("USDT"), ["estimated"])
     assert.ok(status("AERO").includes("exact"))
     assert.deepEqual(status("DEGEN"), ["no market"])
-    assert.ok(lines.slice(1).every((l) => /,(exact|estimated|unresolved|no market)$/.test(l)))
+    assert.ok(lines.slice(1).every((l) => /,(exact|estimated|unknown|no market)$/.test(l)))
   })
 
   it("asks about what's unresolved upstream too", () => {
@@ -1397,11 +1431,11 @@ describe("what the UI gets", () => {
   it("exports a transfer out as what it carried, not as exact", () => {
     const statuses = (rows: LegRow[], answers = emptyBook()) => exportCsv(foldBook(wallet(A, rows), [], "average", answers).positions, "USD").trim().split("\n").slice(1).map((l) => l.split(",").at(-1))
     const out = (from: string) => [...send(10, "0x1", from, A, 100n * E6), ...send(20, "0x2", A, B, 100n * E6)]
-    assert.deepEqual(statuses(out(STRANGER)), ["unresolved", "unresolved"], "unknown cost")
+    assert.deepEqual(statuses(out(STRANGER)), ["unknown", "unknown"], "unknown cost")
     assert.deepEqual(statuses(out(ACROSS)), ["estimated", "estimated"], "estimated cost")
     assert.deepEqual(statuses([...buy(5, "0x0", A, 100n), ...send(20, "0x2", A, B, 50n * E6)]).slice(-1), ["exact"], "paid")
     const partly = [...buy(5, "0x0", A, 100n), ...send(10, "0x1", STRANGER, A, 100n * E6), ...send(20, "0x2", A, B, 150n * E6)]
-    assert.deepEqual(statuses(partly).slice(-1), ["unresolved"], "partly unknown")
+    assert.deepEqual(statuses(partly).slice(-1), ["unknown"], "partly unknown")
   })
 
   it("explains where a cost came from, in plain words", () => {
@@ -1476,6 +1510,93 @@ describe("a book from a request", () => {
 
   it("drops fields it doesn't know, so nothing extra is carried along", () => {
     assert.deepEqual(parseBook({ senders: { [A]: { kind: "mine", extra: 1 } }, extra: true }), { senders: { [A]: { kind: "mine" } }, costs: {}, withdrawals: [] })
+  })
+})
+
+describe("a book that changes while a wallet signs", () => {
+  /** A browser wallet whose signature comes back when `finish` is called, with the book kept the way `useBook` keeps it. */
+  function signing(start = emptyBook()) {
+    let state: BookState = { book: start, history: [] }
+    let finish = (_: unknown) => {}
+    const signature = new Promise((resolve) => (finish = resolve))
+    const ethereum = { request: async ({ method }: { method: string }) => (method === "eth_requestAccounts" ? [B] : signature) }
+    const change = (next: BookChange) => void (state = changeBook(state, next))
+    return {
+      finish,
+      change,
+      link: () => linkByProof(ethereum, A, () => state.book, change, async () => true),
+      linkAccounts: (addresses: readonly string[]) => void (state = linkAccountsInBook(state, addresses)),
+      undo: () => void (state = undoBook(state)),
+      senders: () => state.book.senders,
+    }
+  }
+  const prompted = () => new Promise((resolve) => setImmediate(resolve))
+
+  it("keeps an answer given meanwhile, and undoes only the link", async () => {
+    const flow = signing()
+    const linking = flow.link()
+    await prompted()
+    flow.change((book) => answerSender(book, A, STRANGER, { kind: "someone-else" }))
+    flow.finish(`0x${"ab".repeat(65)}`)
+    assert.equal(await linking, `Linked ${shortHash(B)}.`)
+    assert.deepEqual(flow.senders(), { [STRANGER]: { kind: "someone-else" }, [B]: { kind: "mine" } })
+    flow.undo()
+    assert.deepEqual(flow.senders(), { [STRANGER]: { kind: "someone-else" } })
+    flow.undo()
+    assert.deepEqual(flow.senders(), {})
+  })
+
+  it("keeps accounts linked meanwhile, even after undoing the link", async () => {
+    const flow = signing()
+    const linking = flow.link()
+    await prompted()
+    flow.linkAccounts([C])
+    flow.finish(`0x${"ab".repeat(65)}`)
+    await linking
+    assert.deepEqual(flow.senders(), { [C]: { kind: "mine" }, [B]: { kind: "mine" } })
+    flow.undo()
+    assert.deepEqual(flow.senders(), { [C]: { kind: "mine" } })
+  })
+
+  it("keeps an undo done meanwhile undone", async () => {
+    const flow = signing()
+    flow.change((book) => answerSender(book, A, STRANGER, { kind: "someone-else" }))
+    const linking = flow.link()
+    await prompted()
+    flow.undo()
+    flow.finish(`0x${"ab".repeat(65)}`)
+    await linking
+    assert.deepEqual(flow.senders(), { [B]: { kind: "mine" } })
+  })
+
+  it("changes nothing when the signature's refused", async () => {
+    const flow = signing()
+    const refused = { request: async () => Promise.reject(new Error("refused")) }
+    assert.equal(await linkByProof(refused, A, () => emptyBook(), flow.change), "Didn't link it. Nothing changed.")
+    assert.deepEqual(flow.senders(), {})
+  })
+
+  it("names a wallet that's still theirs when it comes to signing", async () => {
+    const flow = signing(answerSender(emptyBook(), null, A, { kind: "mine" }))
+    let connected = (_: string[]) => {}
+    const connecting = new Promise<string[]>((resolve) => (connected = resolve))
+    const signed: string[] = []
+    const ethereum = { request: async ({ method, params }: { method: string; params?: unknown[] }) => (method === "eth_requestAccounts" ? connecting : (signed.push(params?.[0] as string), "0x")) }
+    let book = answerSender(emptyBook(), null, A, { kind: "mine" })
+    const linking = linkByProof(ethereum, A, () => book, flow.change, async () => true)
+    book = answerSender(answerSender(emptyBook(), null, A, { kind: "someone-else" }), null, C, { kind: "mine" })
+    connected([B])
+    await linking
+    assert.deepEqual(signed, [linkMessage(C, B)])
+  })
+
+  it("takes a plain book too, and undoing with nothing to go back to does nothing", () => {
+    const answered = answerSender(emptyBook(), A, STRANGER, { kind: "someone-else" })
+    const state = changeBook({ book: emptyBook(), history: [] }, answered)
+    assert.equal(state.book, answered)
+    assert.deepEqual(state.history, [emptyBook()])
+    const untouched = { book: answered, history: [] }
+    assert.equal(undoBook(untouched), untouched)
   })
 })
 

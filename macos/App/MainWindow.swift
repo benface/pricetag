@@ -448,7 +448,7 @@ struct MainWindow: View {
     }
 }
 
-/// Rarely changed, so it sits quietly by the numbers it affects. It says what's in use, because the numbers depend on it.
+/// Rarely changed, so it sits quietly by the numbers it affects. It says what's in use, because the numbers depend on it. Settings is the other place to change it.
 struct CostMethodMenu: View {
     let store: PortfolioStore
 
@@ -459,7 +459,7 @@ struct CostMethodMenu: View {
             }
             .pickerStyle(.inline)
         } label: {
-            Text("Cost: \(store.method.label)")
+            Text("\(Wording.methodName): \(store.method.label)")
         }
         .menuStyle(.borderlessButton)
         .controlSize(.small)

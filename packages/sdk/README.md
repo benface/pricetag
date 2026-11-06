@@ -83,6 +83,7 @@ There are three entry points:
 | `dataset` | The Pricetag dataset, like `benface/pricetag@0.0.1`. |
 | `startBlock` | The dataset's first block. Reads start here unless they pass a `from`. With neither, they throw. |
 | `rpcUrl` | Where `getPortfolio` and `getLegs` read L1 fees from. See below. |
+| `rpcRateLimit` | Calls a second `rpcUrl` allows, of which L1 fees use up to 40%. It defaults to 25, for the public RPC. |
 | `baseDataset` | The raw dataset the chain's head is read from. It defaults to `edgeandnode/base_mainnet@0.0.2`. |
 | `network` | Amp's name for the chain, used to read onchain balances and price feeds. It defaults to `base_mainnet`. |
 | `timeoutMs` | How long one query can take. It defaults to 60 s. |
@@ -91,6 +92,8 @@ There are three entry points:
 Queries always run one at a time, because a hosted Amp is shared.
 
 L1 fees only exist on RPC receipts. Without an `rpcUrl`, a wallet that sent anything can't have its ETH checked against the chain, so ETH is `unchecked`, `l1Fees` is `"no rpc url"`, and `missing` says so. `getLegs` can't confirm a swap paid out in unwrapped ETH either, so `l1Fees` says the same there and the swap stays unknown. The public RPC is `https://mainnet.base.org`, and it rate-limits.
+
+Fees are read at a little under 40% of `rpcRateLimit`, so about 9 a second by default, shared by all of a client's wallets. A wallet sending more than that never catches up, and its ETH stays `unchecked`. A wallet caught up needs 2 reads for each transaction, because a fee is read again once its block can't reorg, so give a dedicated RPC's real limit, at least 6 times the wallet's transactions a second, plus room to catch up. Each client keeps to its own share, so split the limit between clients that use the same RPC.
 
 ### What `getPortfolio` returns
 
@@ -145,7 +148,7 @@ Each watch holds one streaming request open, apart from the one-at-a-time querie
 
 ### Other things to check
 
-- **Lower-level `blocks`:** each call only waits for the tables it reads, so `getPrices` for ETH, WETH or USDC only needs `reference_prices`, and other tokens need `legs`, `unlisted_legs` and `priced_legs`. Check `blocks` before folding `getLegs`' legs, because a portfolio of no legs adds up to $0.
+- **Lower-level `blocks`:** a table counts as processed through any block Amp has finished in it, with or without a row there. Each call only waits for the tables it reads, so `getPrices` for ETH, WETH or USDC only needs `reference_prices`, and other tokens need `legs`, `unlisted_legs` and `priced_legs`. Check `blocks` before folding `getLegs`' legs, because a portfolio of no legs adds up to $0.
 - **Price:** a leg's `priceSource` is `oracle`, `swap` or null. When it's null, `priceNote` says why. In `getPrices`, an unknown price stays in the list with `source: "unknown"` and a `note`.
 - **Transaction:** a leg has its `txHash` and the rows it nets together in `parts`. A swap price has its `txHash` and `account`. An oracle price is read at a block, so its `txHash` is null. An opening leg isn't a transaction, so its `txHash` is empty.
 
@@ -153,7 +156,7 @@ Each watch holds one streaming request open, apart from the one-at-a-time querie
 
 ## What the tables mean
 
-The dataset reference is `benface/pricetag@0.0.1`, and it reads `edgeandnode/base_mainnet@0.0.2`.
+The dataset reference is `benface/pricetag@0.0.1` on a local Amp, which is what `pnpm amp:start` deploys and what the examples here use, and `benface/pricetag@0.1.0` on staging. Either way, it reads `edgeandnode/base_mainnet@0.0.2`.
 
 | Table | One row is | Columns worth knowing |
 | --- | --- | --- |
