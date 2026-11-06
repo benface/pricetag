@@ -692,7 +692,7 @@ describe("reading a wallet by two pricing rules", () => {
       const api = createApi({ BASE_RPC_URL: `http://127.0.0.1:${(rpc.address() as { port: number }).port}` }, {
         source: resolvingSource(query, cfg, shared),
         readRates: async () => ({ byBlock: {}, latest: null }),
-        proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null },
+        proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null },
         follow: { stream, sql: "SELECT 1", readMark: async () => ({ blockNum: 200, hash: "0x200" }), logger: { warn() {} }, pollMs: 1, tickMs: 0 },
         shared,
       })
@@ -869,7 +869,7 @@ describe("head reads that overlap", () => {
       readBalances: async () => null,
       readEthBalances: async () => new Map(),
     }
-    const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } }, null)
+    const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } }, null)
     const server = createServer((req, res) => void api(req, res))
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
     const read = async (wallet: string) => (await (await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/api/portfolio/0x${wallet.repeat(40)}`)).json()) as { latest: { blockNum: number } }
@@ -929,7 +929,7 @@ describe("head reads that overlap", () => {
         used.push((latest as { blockNum: number }).blockNum)
         return { byBlock: {}, latest: null }
       },
-      proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null },
+      proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null },
       follow: { stream, sql: "SELECT 1", readMark: async () => ({ blockNum: tip, hash: `0x${tip}` }), logger: { warn() {} }, pollMs: 1, tickMs: 0 },
       approvals: {
         read: async (_, head) => {

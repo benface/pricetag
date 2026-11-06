@@ -18,8 +18,8 @@ import { createCoinbase } from "./coinbase.ts"
 import { ONRAMP_ASSETS, OnrampError, type FiatAmount, type Onramp } from "./onramp.ts"
 import { readPaidRates } from "./rates.ts"
 import { createBlockHashReader, createDepositReader } from "./block.ts"
-import { warnOfNewAggregators, warnOfNewRateAggregators } from "./feeds.ts"
-import { createManifestReader, createProofs, feedBehind, isSeed, proofOf, verificationOf, type BlockRead, type CheckedUpdate, type PriceBehind, type Proofs } from "./proof.ts"
+import { warnOfNewAggregators, warnOfNewRateAggregators, warnOfNewTokenAggregators } from "./feeds.ts"
+import { createManifestReader, createProofs, currentProofOf, currentRevision, currentVerificationOf, feedBehind, isSeed, proofOf, verificationOf, type BlockRead, type CheckedUpdate, type PriceBehind, type Proofs } from "./proof.ts"
 import { rawSource, resolvingSource, settledL1Fees, sharedReads, type SharedReads } from "./source.ts"
 import { createApprovals, demoApprovals, type Approvals } from "./approvals.ts"
 import { TAX_COUNTRIES, isTaxCountryCode, parseTaxYear, taxReportOf, type TaxScope } from "../src/core/tax.ts"
@@ -83,6 +83,7 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
   if (!query) return null
   const baseDataset = env.PRICETAG_BASE_DATASET || "edgeandnode/base_mainnet@0.0.2"
   const network = env.PRICETAG_RPC_NETWORK || "base_mainnet"
+  const feedsDataset = env.PRICETAG_FEEDS_DATASET || undefined
   const calls = feedRounds(query, { baseDataset, network })
   const readRates = createRates(env.PRICETAG_RATES_DATASET ? updateRounds(query, env.PRICETAG_RATES_DATASET, calls) : calls)
   if (env.PRICETAG_RATES_DATASET) void warnOfNewRateAggregators(env.BASE_RPC_URL || DEFAULT_RPC_URL)
@@ -93,6 +94,7 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
   const proofs = createProofs(pin ? query.aliased({ pricetag: pin }) : query, {
     baseDataset,
     dataset: env.PRICETAG_DATASET ? { name: env.PRICETAG_DATASET, reference: pin ? "pricetag" : env.PRICETAG_DATASET, hash: pin ? env.PRICETAG_DATASET_HASH! : null } : null,
+    feedsDataset: env.PRICETAG_DATASET ? (feedsDataset ?? null) : null,
     readDeposits: createDepositReader(env.BASE_RPC_URL || DEFAULT_RPC_URL),
     readBlockHash: createBlockHashReader(env.BASE_RPC_URL || DEFAULT_RPC_URL),
     readManifestHash: createManifestReader(env.AMP_ADMIN_URL || `${env.AMP_QUERY_URL}/controller`, env.AMP_QUERY_TOKEN || undefined),
@@ -103,6 +105,7 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
       ? followedWallets({ stream: createRowStream(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined, network.replaceAll("_", "-")), sql: (address) => followedWindowSql(address, dataset, { counterparties: true }), readMark: (after) => readHeadMark(query, baseDataset, after), readHashes: (blocks) => readBlockHashes(query, baseDataset, blocks) })
       : undefined
   if (env.PRICETAG_DATASET) {
+    if (env.PRICETAG_FEEDS_DATASET) void warnOfNewTokenAggregators(env.BASE_RPC_URL || DEFAULT_RPC_URL)
     const startBlock = Number(env.PRICETAG_START_BLOCK)
     if (!Number.isSafeInteger(startBlock) || startBlock <= 0) throw new Error("PRICETAG_DATASET needs PRICETAG_START_BLOCK")
     void warnOfNewAggregators(env.BASE_RPC_URL || DEFAULT_RPC_URL)
@@ -114,7 +117,7 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
       const ruleSource = (id: string, name: string, hash: string | undefined, priceDataset: string): RuleSource => ({
         rule: { id, ...RULE_TEXT[id]!, dataset: name, hash: hash as string },
         // The stream reads the default rule's prices, so only that rule can use them.
-        source: resolvingSource(query.aliased({ pricetag: pin, pricing: priceDataset }), { baseDataset, dataset: "pricetag", priceDataset: "pricing", startBlock, network, followed: priceDataset === pin ? followed : undefined }, shared),
+        source: resolvingSource(query.aliased({ pricetag: pin, pricing: priceDataset }), { baseDataset, dataset: "pricetag", priceDataset: "pricing", feedsDataset, startBlock, network, followed: priceDataset === pin ? followed : undefined }, shared),
       })
       const rules = [
         ruleSource(MARKET_RULE_ID, env.PRICETAG_DATASET, env.PRICETAG_DATASET_HASH, pin),
@@ -126,7 +129,7 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
     const followed = followedOf(env.PRICETAG_DATASET)
     const shared = sharedReads(query, { baseDataset, dataset: env.PRICETAG_DATASET, network, followed })
     const approvals = createApprovals(query, { baseDataset, dataset: { reference: env.PRICETAG_DATASET, name: env.PRICETAG_DATASET }, network, historyFrom: () => startBlock })
-    return { source: resolvingSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock, network, followed }, shared), readRates, proofs, follow: followOf(followSql(env.PRICETAG_DATASET), startBlock), shared, approvals }
+    return { source: resolvingSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, feedsDataset, startBlock, network, followed }, shared), readRates, proofs, follow: followOf(followSql(env.PRICETAG_DATASET), startBlock), shared, approvals }
   }
   const historyBlocks = env.PRICETAG_HISTORY_BLOCKS ? Number(env.PRICETAG_HISTORY_BLOCKS) : null
   if (historyBlocks !== null && (!Number.isSafeInteger(historyBlocks) || historyBlocks <= 0)) throw new Error("PRICETAG_HISTORY_BLOCKS must be a positive number")
@@ -839,14 +842,54 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     if (proofMatch) {
       const wallet = await readWallet(proofMatch[1] as string, res, { fresh: false, rule })
       if (!wallet) return true
+      const proofs = wallet.mode === "demo" ? null : (created?.proofs ?? null)
+      const byRule = Boolean(wallet.ruleNote)
+      const asset = params.get("asset")
+      if (asset !== null) {
+        const price = wallet.prices[asset]
+        if (!price || price.source !== "oracle") {
+          sendJson(res, 404, { error: "This price doesn't come from Chainlink." })
+          return true
+        }
+        try {
+          const behind = proofs ? await proofs.currentPriceBehind(asset, price, wallet.prices.ETH, byRule) : null
+          const revision = behind && currentRevision(behind, price, wallet.prices.ETH, wallet.rule ?? null)
+          if (proofMatch[2] === "proof") {
+            // A proof of any other price would sit beside the one on screen as if it were about that.
+            if (params.get("price") !== price.micros) {
+              sendJson(res, 412, { error: "This price has just changed. Its proof will show once the new price does." })
+              return true
+            }
+            sendJson(res, 200, { ...currentProofOf(asset, price.blockNum, currency, proofs ? await proofs.datasets(rule?.note ? rule.rule : null, asset) : [], proofs ? null : DEMO_UNVERIFIABLE, behind, wallet.ruleNote ?? null), ...(revision ? { revision } : {}) })
+            return true
+          }
+          if (!proofs) {
+            sendJson(res, 400, { error: DEMO_UNVERIFIABLE })
+            return true
+          }
+          if (!behind) {
+            sendJson(res, 404, { error: "A price read from a contract has no log to check, so there's no block to verify." })
+            return true
+          }
+          // Checking the newest update instead would pass or fail something other than what the proof on screen says.
+          if (params.get("revision") !== revision) {
+            sendJson(res, 412, { error: "The update behind this price has changed, so its proof was read again. Check the new one." })
+            return true
+          }
+          const blocks = [...new Set(behind.updates.flatMap(({ update }) => (update && !isSeed(update) ? [update.block_num] : [])))]
+          const reads = new Map(await Promise.all(blocks.map(async (block) => [block, await proofs.readBlock(block)] as const)))
+          sendJson(res, 200, currentVerificationOf(behind, reads))
+        } catch (error) {
+          sendAmpError(res, error, "Couldn't read this block.")
+        }
+        return true
+      }
       const leg = wallet.legs.find(({ id }) => id === params.get("leg"))
       if (!leg || leg.opening || !leg.txHash) {
         sendJson(res, 404, { error: "There's no transaction behind that." })
         return true
       }
-      const proofs = wallet.mode === "demo" ? null : (created?.proofs ?? null)
       const feed = feedBehind(leg, wallet.legs)
-      const byRule = Boolean(wallet.ruleNote)
       if (proofMatch[2] === "proof") {
         // The rest of the proof doesn't depend on this read, so a failure just says the update couldn't be found.
         const behind: PriceBehind | null =

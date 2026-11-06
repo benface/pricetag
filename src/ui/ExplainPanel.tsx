@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react"
 import { formatPrice, formatSignedAmount, formatTime, shortHash, type CurrencyCode, type LegEffect } from "@pricetag/sdk/core"
 import type { CombinedExplanation } from "../core/combined.ts"
-import { describeConversion, describeEffect, describeNetting, type Explanation } from "../core/explain.ts"
+import { describeConversion, describeEffect, describeNetting, priceProofKey, type Explanation } from "../core/explain.ts"
 import { IN_EACH_WALLET, STARTING_BALANCE, actionLabel, activityTitle, costProof, costTag, pnlHelp, priceSourceLabel } from "../core/wording.ts"
 import { ProofPanel } from "./ProofPanel.tsx"
 
@@ -62,7 +62,7 @@ function LegRow({ effect, currency, address, wallet, rule }: { effect: LegEffect
           </button>
         </div>
       )}
-      {showsProof && !leg.opening && leg.txHash ? <ProofPanel key={`${wallet ?? address}:${currency}:${rule}`} address={wallet ?? address} legId={leg.id} currency={currency} rule={rule} costNote={leg.purchaseSource ? costProof(leg.purchaseSource, leg.costLabel) : null} /> : null}
+      {showsProof && !leg.opening && leg.txHash ? <ProofPanel key={`${wallet ?? address}:${currency}:${rule}`} address={wallet ?? address} target={{ leg: leg.id }} currency={currency} rule={rule} costNote={leg.purchaseSource ? costProof(leg.purchaseSource, leg.costLabel) : null} /> : null}
     </li>
   )
 }
@@ -71,6 +71,7 @@ export function ExplainPanel({ explanation, address, rule, onClose }: { explanat
   const across = "parts" in explanation ? explanation : null
   const dialog = useRef<HTMLDialogElement>(null)
   const close = useRef<HTMLButtonElement>(null)
+  const [showsPriceProof, setShowsPriceProof] = useState(false)
 
   // A native modal keeps focus inside and makes the page behind it inert. Closing by unmounting doesn't restore focus.
   useLayoutEffect(() => {
@@ -113,6 +114,16 @@ export function ExplainPanel({ explanation, address, rule, onClose }: { explanat
             {line}
           </p>
         ))}
+        {explanation.priceProof ? (
+          <>
+            <div className="leg-links small">
+              <button type="button" className="link small" aria-expanded={showsPriceProof} onClick={() => setShowsPriceProof((shown) => !shown)}>
+                Proof of this price {showsPriceProof ? "▾" : "▸"}
+              </button>
+            </div>
+            {showsPriceProof ? <ProofPanel key={priceProofKey(across?.priceProof?.wallet ?? address, explanation, rule)} address={across?.priceProof?.wallet ?? address} target={explanation.priceProof} currency={explanation.currency} rule={rule} /> : null}
+          </>
+        ) : null}
         {across && across.parts.length > 0 ? (
           <>
             <h3>{IN_EACH_WALLET}</h3>
