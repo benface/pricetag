@@ -5,9 +5,9 @@ import { combinedPortfolioOf, previewCombined, type Unread } from "../core/combi
 import { answerSender, enterExchangeCosts, walletsBehind, type Book, type BookChange, type Money, type SenderAnswer } from "../core/book.ts"
 import { readCheckedAccounts } from "../core/device-accounts.ts"
 import { noteLinkFor, type DeviceLink } from "../core/device-link.ts"
-import { parseCoinbaseCsv } from "../core/exchange-import.ts"
+import { mergeWithdrawals, parseCoinbaseCsv, type ExchangeImport } from "../core/exchange-import.ts"
 import { foldBook, isBalanced, microsOf, previewBook, type Question } from "../core/resolve.ts"
-import { ALL_ANSWERED, ANSWER_QUESTIONS, COST_QUESTION, COST_WHY, EXCHANGE_COST_WHY, NOT_SAVED, NOTHING_LEFT, SENDER_QUESTION, SENDER_WHY, finishNote, linkedFailedSentence } from "../core/wording.ts"
+import { ALL_ANSWERED, ANSWER_QUESTIONS, COST_QUESTION, COST_WHY, EXCHANGE_COST_WHY, NOT_SAVED, NOTHING_LEFT, SENDER_QUESTION, SENDER_WHY, finishNote, importedSentence, linkedFailedSentence } from "../core/wording.ts"
 import { linkByProof, type Ethereum } from "./link-proof.ts"
 
 type Ownership = "mine" | "my-exchange" | "someone-else"
@@ -66,6 +66,8 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
   const [asking, setAsking] = useState(false)
   const [costs, setCosts] = useState<Record<string, string>>({})
   const [message, setMessage] = useState<string | null>(null)
+  // Apart from the message, which goes with its card, because an import can answer the card it was made from.
+  const [lastImport, setLastImport] = useState<ExchangeImport | null>(null)
   const [drag, setDrag] = useState<{ x: number; y: number } | null>(null)
   const start = useRef<{ x: number; y: number } | null>(null)
 
@@ -127,6 +129,10 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
     answer(kind === "my-exchange" && earlier?.kind === "my-exchange" ? earlier : { kind })
     setAsking(kind === "my-exchange")
   }
+  const undo = () => {
+    setLastImport(null)
+    onUndo()
+  }
   const skip = () => {
     if (!current) return
     setSkipped(new Set([...skipped, current.id]))
@@ -142,7 +148,7 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "z") {
         e.preventDefault()
-        onUndo()
+        undo()
         return
       }
       if (e.target instanceof HTMLInputElement || !current) return
@@ -172,9 +178,10 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
   const importFile = async (file: File | undefined) => {
     if (!file) return
     const imported = parseCoinbaseCsv(await file.text())
+    setLastImport(imported)
     if (!imported) return setMessage("That doesn't look like a Coinbase transaction history.")
-    onChange((latest) => ({ ...latest, withdrawals: imported.withdrawals }))
-    setMessage(`Found ${imported.withdrawals.length} withdrawals.${imported.skipped > 0 ? ` ${imported.skipped} had no usable cost.` : ""}`)
+    setMessage(null)
+    onChange((latest) => ({ ...latest, withdrawals: mergeWithdrawals(latest.withdrawals, imported.withdrawals) }))
     setAsking(false)
   }
 
@@ -311,12 +318,18 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
         </div>
       )}
 
+      {lastImport ? (
+        <p className={lastImport.withdrawals.length > 0 && lastImport.skipped === 0 ? "small muted" : "small warn-text"} role="status">
+          {importedSentence(lastImport.withdrawals.length, lastImport.skipped)}
+        </p>
+      ) : null}
+
       <LinkByProof current={wallet.address} book={book} onChange={onChange} />
 
       {notSaved ? <p className="notice warn" role="alert">⚠ {NOT_SAVED}</p> : null}
 
       <footer className="resolve-foot">
-        <button type="button" disabled={!canUndo} onClick={onUndo}>
+        <button type="button" disabled={!canUndo} onClick={undo}>
           Undo
         </button>
         <span className="spacer" />

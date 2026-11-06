@@ -284,6 +284,13 @@ export function networkFeeUnknownSentence(count: number): string {
   return `Couldn't read the network fee of ${count} ${count === 1 ? "transaction" : "transactions"} yet, so fees paid are too low, and ETH's PnL is unavailable until they're read.`
 }
 
+/** What a Coinbase history had in it. Nothing changes when it had nothing usable, and that's worth saying. */
+export function importedSentence(found: number, skipped: number): string {
+  const withdrawals = (count: number) => (count === 1 ? "1 withdrawal" : `${count} withdrawals`)
+  if (found === 0) return skipped === 0 ? "That file has no withdrawals, so nothing changed." : `Found ${withdrawals(skipped)} with no usable cost, so nothing changed.`
+  return skipped === 0 ? `Found ${withdrawals(found)}.` : `Found ${withdrawals(found)}. ${skipped} more had no usable cost.`
+}
+
 export function linkedFailedSentence(count: number): string {
   return count === 1 ? "Couldn't read your other wallet, so what came from it may show an unknown cost." : `Couldn't read ${count} of your other wallets, so what came from them may show an unknown cost.`
 }
