@@ -13,6 +13,8 @@ public enum FetchError: Error, Equatable, Sendable {
     case noAmpConfigured(String)
     /// The server refused the request, or sent something this version can't read.
     case rejected(String)
+    /// The wallet has more history than the server can hold. Trying again won't change that.
+    case tooBig(String)
     /// The server only answers people it invited, and this request had no invite it takes.
     case needsInvite(String)
     /// The server is holding this client back, and says how many seconds until there's room. It clears by itself.
@@ -265,6 +267,7 @@ public struct PricetagClient: PortfolioSource {
         switch status {
         case 502: throw FetchError.ampUnavailable(message)
         case 503: throw FetchError.noAmpConfigured(message)
+        case 413: throw FetchError.tooBig(message)
         case 401: throw FetchError.needsInvite(message)
         case 429: throw FetchError.rateLimited(message, retryAfter: Self.retryAfter(response as? HTTPURLResponse))
         case 412: throw FetchError.priceChanged(message)
