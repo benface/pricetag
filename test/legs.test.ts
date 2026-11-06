@@ -20,6 +20,14 @@ function legsOf(rows: LegRow[], references: Reference[] = [REF]) {
 const marks = (references: Reference[]) => referenceMarks(references)
 
 describe("pricing a wallet's rows", () => {
+  it("prices a swap by its own priced row, in any order, whoever else's rows are there", () => {
+    const rows = [row("0x1", USDC_ADDRESS, "debit", 1000n * E6), row("0x1", AERO, "credit", 800n * E18), row("0x2", USDC_ADDRESS, "debit", 1000n * E6), row("0x2", AERO, "credit", 400n * E18)]
+    const own = derivePricedRows(rows, [REF])
+    const someoneElse = own.map((p) => ({ ...p, account: "0x00000000000000000000000000000000000000bb", priced: { ...p.priced, usd_micros: "1" } }))
+    const legs = buildPricedLegs({ account: ME, rows, references: [REF], priced: [...someoneElse, ...own.toReversed()] })
+    assert.deepEqual(legs.filter((l) => l.asset === "AERO").map((l) => l.priceMicros), ["1250000", "2500000"])
+  })
+
   it("a swap uses the oracle for ETH and USDC, and the implied price for the other token", () => {
     const legs = legsOf([row("0x1", USDC_ADDRESS, "debit", 1000n * E6), row("0x1", AERO, "credit", 800n * E18)])
     const usdc = legs.find((l) => l.asset === "USDC")!

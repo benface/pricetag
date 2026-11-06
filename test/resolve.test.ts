@@ -1030,6 +1030,11 @@ describe("no market, in another currency", () => {
 describe("each kind of sender", () => {
   const question = (rows: LegRow[], b: Book = emptyBook()) => foldBook(wallet(A, rows), [], "average", b).questions
 
+  it("says what was last sent, and the first of what was sent in that block", () => {
+    const rows = [...send(5, "0x0", A, B, 2n * E6), ...send(7, "0x1", A, B, 3n * E6), ...send(7, "0x2", A, B, 4n * E6), ...send(6, "0x3", A, B, 5n * E6), ...send(10, "0x4", B, A, 100n * E6)]
+    assert.match(question(rows)[0]?.evidence[0] ?? "", /^You sent this address 3 USDC/)
+  })
+
   it("an own wallet gets evidence, never a preselected answer, and isn't assumed", () => {
     const rows = [...send(5, "0x0", A, B, 2n * E6), ...send(10, "0x1", B, A, 100n * E6)]
     const [q] = question(rows)
