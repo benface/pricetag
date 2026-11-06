@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { portfolioOf } from "../server/portfolio.ts"
+import { portfolioOf } from "../src/core/portfolio.ts"
 import { USD_CONTEXT, explainMetric } from "../src/core/explain.ts"
 import { createWallets, sharedMarket, type ReadL1Fees, type Source, type WindowRows } from "@pricetag/sdk/internal"
 import { ASSETS, ETH_ADDRESS, LAST_2S_BLOCK, USDC_ADDRESS, foldWallet, msBetweenBlocks, pnlOverTime, priceSampleBlocks, shortHash, usdView, type FeedRound, type LegRow, type Reference } from "@pricetag/sdk/core"
@@ -668,6 +668,21 @@ describe("reconciling", () => {
   })
 })
 
+describe("working out a wallet's response", () => {
+  it("does it once until there's a new block", async () => {
+    let head = 1000
+    const { source } = fake(new Map([[950, [row(950)]], [1001, [row(1001)]]]), () => reference(1000))
+    const wallets = createWallets(source, async () => headAt(head)(), noFees)
+    const first = await wallets.get(ME)
+    assert.equal(await wallets.get(ME), first)
+    assert.equal(wallets.peek(ME), first)
+    head = 1001
+    const next = await wallets.get(ME)
+    assert.notEqual(next, first)
+    assert.deepEqual(next.legs.filter((leg) => !leg.opening).map((leg) => leg.blockNum), [950, 1001])
+  })
+})
+
 describe("current prices from the token feeds", () => {
   const AERO = "0x940181a94a35a4569e4529a3cdfb74e38fd98631"
   const DAI = "0x50c5725949a6f0c72e6c4a641f24049a917db0cb"
@@ -704,6 +719,21 @@ describe("current prices from the token feeds", () => {
     assert.equal(wallet.marketChecked, true)
     assert.ok(marketReads.every((asset) => asset === "AERO"))
     assert.equal(wallet.legs[0]?.priceSource, "market", "a past leg's price isn't what this changes")
+  })
+
+  it("shows a price read for a wallet after its response was worked out", async () => {
+    let down = true
+    const { source } = feedFake([held(950, AERO)], {}, {
+      async readMarketTrades(asset, _from, to) {
+        if (down) throw new Error("no market")
+        return [1, 2, 3].map((n) => ({ blockNum: to - n, txHash: `0x${n}`, asset, usdMicros: "1300000", notionalUsdMicros: "500000000" }))
+      },
+    })
+    const wallets = createWallets(source, headAt(1000), noFees, { warn() {} })
+    assert.equal((await wallets.get(ME)).marketMarks[950]?.AERO, undefined)
+    down = false
+    await wallets.marketOn(ME, (await wallets.factsAt(ME, 1000, { withBalances: false }))!, {})
+    assert.equal(wallets.peek(ME)?.marketMarks[950]?.AERO, "1300000")
   })
 
   it("reads nothing for what a wallet doesn't hold", async () => {

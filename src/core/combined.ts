@@ -6,16 +6,16 @@
 // once, in the wallet that paid it. Only what counts money in and out of the user's wallets, like the comparison with
 // holding ETH, has to leave moves out by name.
 
-import { CHECK_LABELS } from "../src/core/wording.ts"
-import { NO_FACTS, combinedFacts, type TransactionFacts } from "../src/core/activity.ts"
+import { CHECK_LABELS } from "./wording.ts"
+import { NO_FACTS, combinedFacts, type TransactionFacts } from "./activity.ts"
 import { compareWithHoldingEth, formatAmount, formatMoney, formatPrice, formatReturn, formatSignedMoney, hasStarted, pnlOverTime, pnlStatus as statusOf, returnBps, sumTotals, unconfirmedAssets, type CurrencyCode, type Exclusion, type HoldComparison, type LatestPrices, type LegEffect, type MarkPrice, type Method, type PnlPoint, type Position, type PricedLeg, type Reconciliation, type Totals } from "@pricetag/sdk/core"
-import type { BookPoint, BookPreview, ExplanationLeg, ExplanationResponse, PortfolioPosition, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
-import type { Book } from "../src/core/book.ts"
-import { explainHold, explainPoint, explainTarget, explainTotal, type ExplainTarget, type Metric } from "../src/core/explain.ts"
-import { exportCsv } from "../src/core/export.ts"
-import { foldBook, meterOf, type BookFold, type Question } from "../src/core/resolve.ts"
-import { isMove, movesBetween } from "../src/core/tax.ts"
-import { describeTransaction, movedBetweenSentence } from "../src/core/wording.ts"
+import type { BookPoint, BookPreview, ExplanationLeg, ExplanationResponse, PortfolioPosition, PortfolioResponse, WalletResponse } from "./api.ts"
+import type { Book } from "./book.ts"
+import { explainHold, explainPoint, explainTarget, explainTotal, type ExplainTarget, type Explanation, type Metric } from "./explain.ts"
+import { exportCsv } from "./export.ts"
+import { foldBook, meterOf, type BookFold, type Question } from "./resolve.ts"
+import { isMove, movesBetween } from "./tax.ts"
+import { describeTransaction, movedBetweenSentence } from "./wording.ts"
 import { MAX_LEGS, bookContext, legOf, responseOf } from "./portfolio.ts"
 
 /** What a client asks for in place of an address, for all of its user's wallets at once. */
@@ -40,6 +40,9 @@ export type CombinedPortfolioResponse = Omit<PortfolioResponse, "positions" | "p
 
 /** Which wallets aren't in the numbers yet. */
 export type Unread = { reading: readonly string[]; failed: readonly string[] }
+
+/** Every wallet that could be read, all at one block so a move between them is in both or neither, for a client that runs the fold itself. */
+export type AllYoursRead = { wallets: WalletResponse[]; unread: Unread }
 
 type Folded = { address: string; wallet: WalletResponse; others: WalletResponse[]; fold: BookFold }
 
@@ -286,6 +289,9 @@ export function combinedPortfolioOf(read: readonly WalletResponse[], method: Met
 /** One wallet's side of a number. */
 export type ExplanationPart = { wallet: string; value: string | null; lines: string[] }
 
+/** The same explanation with its legs folded, for a client that shows them itself. `walletOf` says which wallet each is in. */
+export type CombinedExplanation = Explanation & { parts: ExplanationPart[]; walletOf: (leg: PricedLeg) => string }
+
 /** What's behind one number across the wallets: the number, each wallet's side of it, and every leg, saying which wallet it's in. */
 export type CombinedExplanationResponse = Omit<ExplanationResponse, "legs"> & { parts: ExplanationPart[]; legs: (ExplanationLeg & { wallet: string })[] }
 
@@ -313,26 +319,21 @@ function assetValue({ asset, decimals, price, values, returnBps: bps, reconcilia
   }
 }
 
-/** The same explanation a wallet gives for a click on this number, across all of them. null when none of them has it. */
-export function explainCombined(read: readonly WalletResponse[], method: Method, target: ExplainTarget, book: Book, unread: Unread = { reading: [], failed: [] }): CombinedExplanationResponse | null {
+/** The same explanation a wallet gives for a click on this number, across all of them, newest leg first. null when none of them has it. */
+export function explainAcross(read: readonly WalletResponse[], method: Method, target: ExplainTarget, book: Book, unread: Unread = { reading: [], failed: [] }): CombinedExplanation | null {
   const linking = linkingAll(book, [...read.map((wallet) => wallet.address), ...unread.reading, ...unread.failed])
   const combined = combine(read, method, linking, unread)
   const { folded, started, positions, walletPositions, totals, points, holdPositions, holdComparison, walletOf } = combined
   const first = folded[0] as Folded
   const context = bookContext(first.wallet, first.others, method, linking, first.fold.view)
   const { currency } = first.fold.view
-  const legsOf = (effects: readonly LegEffect[]) => ({
-    legCount: effects.length,
-    legs: [...effects]
-      .sort((a, b) => b.leg.blockNum - a.leg.blockNum || b.leg.txIndex - a.leg.txIndex)
-      .slice(0, MAX_LEGS)
-      .map((effect) => ({ ...legOf(effect, currency), wallet: walletOf.get(effect.leg) ?? "" })),
-  })
+  const newestFirst = (effects: readonly LegEffect[]) => [...effects].sort((a, b) => b.leg.blockNum - a.leg.blockNum || b.leg.txIndex - a.leg.txIndex)
+  const whose = (leg: PricedLeg) => walletOf.get(leg) ?? ""
   const usdLess = { ...context, source: null }
 
   if (target.kind === "hold") {
     const { title, value, lines, effects } = explainHold(holdPositions, holdComparison, usdLess, { combined: true })
-    return { currency, title, value, sourceValue: null, lines, parts: [], ...legsOf(effects) }
+    return { currency, title, value, sourceValue: null, lines, parts: [], effects: newestFirst(effects), walletOf: whose }
   }
 
   // Each wallet's own explanation, for the wallets that have this number.
@@ -341,25 +342,33 @@ export function explainCombined(read: readonly WalletResponse[], method: Method,
     const explanation = explainTarget(target, fold, bookContext(wallet, others, method, linking, fold.view))
     if (explanation && (target.kind !== "total" || explanation.effects.length > 0)) parts.push({ wallet: address, explanation })
   }
-  const effects = parts.flatMap(({ explanation }) => explanation.effects)
+  const effects = newestFirst(parts.flatMap(({ explanation }) => explanation.effects))
   const partsOut = parts.map(({ wallet, explanation }) => ({ wallet, value: explanation.value, lines: explanation.lines }))
 
   if (target.kind === "total") {
     const whole = explainTotal(walletPositions, totals as Totals, target.metric, usdLess)
-    return { currency, title: whole.title, value: whole.value, sourceValue: null, lines: target.metric === "pnl" ? whole.lines.slice(0, 1) : [], parts: partsOut, ...legsOf(effects) }
+    return { currency, title: whole.title, value: whole.value, sourceValue: null, lines: target.metric === "pnl" ? whole.lines.slice(0, 1) : [], parts: partsOut, effects, walletOf: whose }
   }
   if (target.kind === "asset") {
     const position = positions.find((p) => p.asset === target.asset)
     if (!position || parts.length === 0) return null
     const { title } = (parts[0] as (typeof parts)[number]).explanation
     const lines = parts.length > 1 ? [`Across ${parts.length} of your wallets.`] : []
-    return { currency, title, value: assetValue(position, target.metric, currency), sourceValue: null, lines, parts: partsOut, ...legsOf(effects) }
+    return { currency, title, value: assetValue(position, target.metric, currency), sourceValue: null, lines, parts: partsOut, effects, walletOf: whose }
   }
   const point = points.find((p) => p.txHash === target.txHash)
   if (!point) return null
   const whole = explainPoint(walletPositions, point, usdLess)
   const lines = [`Total PnL across your wallets after this transaction.${point.excludedCount > 0 ? ` Leaves out ${point.excludedCount} unknown ${point.excludedCount === 1 ? "amount" : "amounts"}.` : ""}`]
-  return { currency, title: whole.title, value: whole.value, sourceValue: null, lines, parts: partsOut, ...legsOf(effects) }
+  return { currency, title: whole.title, value: whole.value, sourceValue: null, lines, parts: partsOut, effects, walletOf: whose }
+}
+
+/** The same, as the server sends it to clients that can't run the fold. */
+export function explainCombined(read: readonly WalletResponse[], method: Method, target: ExplainTarget, book: Book, unread: Unread = { reading: [], failed: [] }): CombinedExplanationResponse | null {
+  const explanation = explainAcross(read, method, target, book, unread)
+  if (!explanation) return null
+  const { effects, walletOf, ...rest } = explanation
+  return { ...rest, legCount: effects.length, legs: effects.slice(0, MAX_LEGS).map((effect) => ({ ...legOf(effect, rest.currency), wallet: walletOf(effect.leg) })) }
 }
 
 /** What each set of answers would make the combined headline say. */

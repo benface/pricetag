@@ -250,6 +250,8 @@ public struct PnlPoint: Codable, Sendable, Equatable, Identifiable {
     public var unknownCost: [String] = []
     /// Which of the user's wallets its transaction is in, when several are shown as one.
     public var wallets: [String]? = nil
+    /// `valueMicros` was worked out for where a chart's range starts, between prices that were read, so it's never from a server.
+    var valueEstimated = false
 
     public var id: String { "\(blockNum):\(txHash ?? "latest")" }
     public var date: Date? { parseTimestamp(timestamp) }

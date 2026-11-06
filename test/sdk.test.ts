@@ -6,7 +6,7 @@ import { describe, it } from "node:test"
 import { createPricetag } from "@pricetag/sdk"
 import { USDC_ADDRESS, buildPortfolio, buildPricedLegs, foldPositions, formatPrice, formatSignedMoney, formatMoney, pnlStatus, sumTotals } from "@pricetag/sdk/core"
 import { createQuery, createWallets, datasetReader, datasetSource, pricetagClient, type Query, type ReadL1Fees } from "@pricetag/sdk/internal"
-import { portfolioOf } from "../server/portfolio.ts"
+import { portfolioOf } from "../src/core/portfolio.ts"
 import { DEMO_REFERENCES, DEMO_ROWS, DEMO_WALLET } from "../src/core/fixtures.ts"
 import { fakeAmp, type Tables } from "./support/fake-amp.ts"
 

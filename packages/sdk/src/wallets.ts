@@ -231,7 +231,8 @@ function feedMark(mark: MarkRead, rounds: MarkRounds, references: Cached["refere
 
 /** What a wallet needs a current price for, of the tokens the dataset has no oracle reads for. */
 function assetsHeld({ rows, opening, closing, lastBalances }: Pick<Cached, "rows" | "opening" | "closing" | "lastBalances">): string[] {
-  return MARKET_ASSETS.filter((asset) => rows.some((r) => tokenByAddress(r.token)?.asset === asset) || [opening?.amounts[asset], closing?.amounts[asset], lastBalances[asset]?.amount].some((amount) => BigInt(amount ?? "0") > 0n))
+  const moved = new Set(rows.map((r) => tokenByAddress(r.token)?.asset))
+  return MARKET_ASSETS.filter((asset) => moved.has(asset) || [opening?.amounts[asset], closing?.amounts[asset], lastBalances[asset]?.amount].some((amount) => BigInt(amount ?? "0") > 0n))
 }
 
 /** A price at `through`, for what's held and has no price in `current`, and one for each movement a trade doesn't already price. */
@@ -345,6 +346,8 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
   const markRounds = new Map<string, FeedRound>()
   /** Where a read worked and a feed gave no answer: how many times, and the chain's head at the last one. */
   const noAnswers = new Map<string, { tries: number; atHead: number }>()
+  /** Goes up whenever a price a response can use changes. */
+  let priceRevision = 0
 
   /** The answers at `block`'s bucket, reading what's missing. A failure leaves those assets out, and it mustn't take the wallet down with it. */
   async function loadFeedRounds(assets: readonly string[], block: number): Promise<Record<string, FeedRound>> {
@@ -387,6 +390,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       const price = marketPrice(await source.readMarketTrades(read.asset, blockBefore(read.bucket, MARKET_MAX_AGE_MS), read.bucket), read.asset, read.bucket)
       if (startedAt !== rewinds) return false
       market.set(marketKey(read), price)
+      priceRevision += 1
       return true
     } catch (error) {
       logger.warn(`Market read failed: ${describeError(error)}`)
@@ -401,6 +405,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       const startedAt = rewinds
       const rounds = await source.readFeedRounds(assets, bucket)
       if (startedAt !== rewinds) return false
+      priceRevision += 1
       for (const asset of assets) {
         const key = marketKey({ asset, bucket })
         const round = rounds[asset]
@@ -475,6 +480,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
 
   /** Prices from a reorg's blocks may be from what it replaced. The trades behind one all come before its bucket's end. */
   function forgetPricesFrom(block: number) {
+    priceRevision += 1
     for (const key of market.keys()) if (Number(key.split(":")[1]) >= block) market.delete(key)
     for (const [asset, round] of latestRounds) if (round.blockNum >= block) latestRounds.delete(asset)
     for (const answers of [markRounds, noAnswers]) for (const key of answers.keys()) if (Number(key.split(":")[1]) >= block) answers.delete(key)
@@ -508,11 +514,18 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
    */
   function unreadSendBlocks(address: string, wallet: Cached): number[] {
     const blocks = oneWaySendBalanceBlocks(wallet.rows).filter((block) => !wallet.ethBalances.has(block))
-    if (blocks.length === 0) return []
-    const data = responseOf(address, wallet)
-    // The same check the wallet's position gets, because a balance can match after ETH left that never arrived. Whether it did doesn't depend on the method.
-    const eth = foldPositions(data.legs, "average", {}, data).find((position) => position.asset === "ETH")
-    return eth?.reconciliation?.status === "incomplete" ? blocks : []
+    return blocks.length > 0 && isEthIncomplete(address, wallet) ? blocks : []
+  }
+
+  /** The same check the wallet's position gets, because a balance can match after ETH left that never arrived. Whether it did doesn't depend on the method. */
+  function isEthIncomplete(address: string, wallet: Cached): boolean {
+    const current = currentOf(address, wallet)
+    if (current.ethIncomplete === undefined) {
+      const { response } = current
+      const eth = foldPositions(response.legs.filter((leg) => leg.asset === "ETH"), "average", {}, response).find((position) => position.asset === "ETH")
+      current.ethIncomplete = eth?.reconciliation?.status === "incomplete"
+    }
+    return current.ethIncomplete
   }
 
   /** A wallet's rows, with each claim settled wherever its balances and fees can say how much arrived. */
@@ -545,13 +558,15 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
 
   /** The balances a wallet still needs to find ETH that its rows don't explain. One whose ETH adds up has nothing to find, so it costs no reads. */
   function unreadUnseenBlocks(address: string, wallet: Cached): number[] {
-    const data = responseOf(address, wallet)
-    const eth = foldPositions(data.legs, "average", {}, data).find((position) => position.asset === "ETH")
-    if (eth?.reconciliation?.status !== "incomplete") return []
+    if (!isEthIncomplete(address, wallet)) return []
     return unseenEthSearchBlocks({ rows: settle(wallet).rows, ethBalances: wallet.ethBalances, fromBlock: wallet.fromBlock, through: wallet.coveredTo })
   }
 
-  const unseenCredits = (address: string, wallet: Cached) => withUnseenEth(address, wallet, settle(wallet).rows).filter((row) => row.kind === "unseen_eth")
+  function unseenCredits(address: string, wallet: Cached): LegRow[] {
+    const current = currentOf(address, wallet)
+    current.unseenCredits ??= withUnseenEth(address, wallet, settle(wallet).rows).filter((row) => row.kind === "unseen_eth")
+    return current.unseenCredits
+  }
 
   const unreadPayerBlocks = (address: string, wallet: Cached) => (source.readPayoutTxs ? unseenCredits(address, wallet).filter((row) => !wallet.ethPayers.has(row.block_num)) : [])
 
@@ -711,7 +726,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       }
       if (closing?.blockNum !== coveredTo || !isComplete(closing) || reorgable) closing = await readBalances(address, coveredTo)
       for (const [asset, amount] of Object.entries(closing?.amounts ?? {})) lastBalances[asset] = { blockNum: coveredTo, amount }
-      if (closing?.amounts.ETH !== undefined && gasUnknown.size === 0 && l1FeeRows(rows, l1Fees).unknownTxs.length === 0 && !settle({ rows, priced, references: known, ethBalances, gasUnknown, l1Fees, staleFeeTxs }).rows.some(isUnwrapClaim)) {
+      if (closing?.amounts.ETH !== undefined && gasUnknown.size === 0 && l1FeeRows(rows, l1Fees).unknownTxs.length === 0 && !(rows.some(isUnwrapClaim) && settle({ rows, priced, references: known, ethBalances, gasUnknown, l1Fees, staleFeeTxs }).rows.some(isUnwrapClaim))) {
         lastCheckableEth = { blockNum: coveredTo, amount: closing.amounts.ETH }
       } else if (lastCheckableEth && lastCheckableEth.blockNum >= replacedFrom) {
         // Its block was just replaced, so what it said may be gone. A failed read leaves it as it was, and the next refresh tries again.
@@ -746,6 +761,19 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     wallets.set(key, next)
     if (wallets.size > maxWallets) wallets.delete(wallets.keys().next().value as string)
     return next
+  }
+
+  /** The last response worked out, with what it depended on that can change after a wallet's read, and what's been worked out from it. */
+  let last: { wallet: Cached; stamp: string; response: WalletData; ethIncomplete?: boolean; unseenCredits?: LegRow[] } | null = null
+
+  /**
+   * A wallet's response, worked out once while nothing it depends on has changed. A read needs it several times, and for a
+   * busy wallet each one takes seconds. Only the last one is kept, because it's about as big as the wallet.
+   */
+  function currentOf(address: string, wallet: Cached) {
+    const stamp = `${wallet.ethBalances.size}:${wallet.ethPayers.size}:${wallet.references.size}:${priceRevision}`
+    if (last?.wallet !== wallet || last.stamp !== stamp) last = { wallet, stamp, response: responseOf(address, wallet) }
+    return last
   }
 
   function responseOf(address: string, wallet: Omit<Cached, "openingReadAt" | "readAtHead" | "tablesReached">, use: (key: string) => boolean = () => true, rounds: MarkRounds = markRounds): WalletData {
@@ -801,7 +829,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
         pending = refresh(account, key, range).finally(() => inflight.delete(key))
         inflight.set(key, pending)
       }
-      return responseOf(account, await pending)
+      return currentOf(account, await pending).response
     },
 
     /**
@@ -906,7 +934,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     peek(address: string): WalletData | null {
       const account = address.toLowerCase()
       const wallet = wallets.get(keyOf(account, {}))
-      return wallet ? responseOf(account, wallet) : null
+      return wallet ? currentOf(account, wallet).response : null
     },
   }
 }

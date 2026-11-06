@@ -153,8 +153,100 @@ import Testing
     }
 }
 
+/// What VoiceOver says has to be what's drawn.
+@Suite struct ValueSpeechTests {
+    private func point(_ second: Int, _ before: Int?, _ after: Int?, _ excluded: Int, _ tx: Bool, _ continues: Bool) -> PnlPoint {
+        ValueSeriesTests().point(second, before: before, after: after, excluded: excluded, tx: tx, continues: continues)
+    }
+
+    @Test func aWithdrawalsHighIsWhatWasThereJustBeforeIt() {
+        let series = ValueSeries(points: [point(0, 0, 100, 0, true, false), point(7200, 300, 150, 0, true, true), point(7300, 150, 150, 0, false, true)])
+        let summary = Spoken.chartSummary(series, .USD, isLive: true)
+        #expect(summary.contains("It went from $100.00 to $150.00, with a high of $300.00 and a low of $0.00."), "\(summary)")
+        #expect(series.spokenPoints(.USD).map(\.value) == [0, 100, 300, 150, 150])
+    }
+
+    @Test func aDepositsHighIsWhatItBrought() {
+        let series = ValueSeries(points: [point(0, 100, 100, 0, true, false), point(60, 110, 310, 0, true, true), point(120, 200, 200, 0, false, true)])
+        let summary = Spoken.chartSummary(series, .USD, isLive: true)
+        #expect(summary.contains("with a high of $310.00 and a low of $100.00."), "\(summary)")
+    }
+
+    /// Two transactions are enough to go higher than where either stands afterward.
+    @Test func twoPointsCanStillHaveAHigh() {
+        let series = ValueSeries(points: [point(0, 100, 100, 0, true, false), point(60, 300, 150, 0, true, true)])
+        #expect(Spoken.chartSummary(series, .USD, isLive: true).contains("with a high of $300.00 and a low of $100.00."))
+    }
+
+    @Test func aHighThatLeavesThingsOutSaysSo() {
+        let series = ValueSeries(points: [point(0, 100, 100, 1, true, false), point(60, 300, 150, 1, true, true), point(120, 150, 150, 1, false, true)])
+        #expect(Spoken.chartSummary(series, .USD, isLive: true).contains("with a high of $300.00 (partial) and a low of $100.00 (partial)."))
+    }
+
+    /// VoiceOver's chart tools go up the jump as the line does, and each end says which it is.
+    @Test func theChartToolsGetBothEndsOfAJump() {
+        var withdrawal = point(60, 300, 150, 0, true, true)
+        withdrawal.summary = "Sent 1 ETH"
+        let points = ValueSeries(points: [point(0, 100, 100, 0, true, false), withdrawal]).spokenPoints(.USD)
+        #expect(points.map(\.value) == [100, 300, 150])
+        #expect(points[1].label.hasSuffix("$300.00, just before its transaction"), "\(points[1].label)")
+        #expect(points[2].label.hasSuffix("$150.00, Sent 1 ETH"), "\(points[2].label)")
+        #expect(points[1].date == points[2].date)
+    }
+
+    @Test func aFlatLineHasNoHighOrLow() {
+        let series = ValueSeries(points: [point(0, 100, 100, 0, true, false), point(60, 100, 100, 0, true, true), point(120, 100, 100, 0, false, true)])
+        let summary = Spoken.chartSummary(series, .USD, isLive: true)
+        #expect(summary.contains("It went from $100.00 to $100.00."), "\(summary)")
+    }
+
+    @Test func aRangeStartBetweenPricesIsAnEstimateEverywhereItsSaid() throws {
+        let window = ChartWindow(points: [point(0, 0, 100, 0, true, false), point(7200, 300, 150, 0, true, true), point(7300, 150, 150, 0, false, true)], range: .hour)
+        let series = ValueSeries(points: window.points)
+        let summary = Spoken.chartSummary(series, .USD, isLive: true)
+        #expect(summary.contains("It went from about $202.78 to $150.00, with a high of $300.00 and a low of $150.00."), "\(summary)")
+        #expect(summary.contains("Estimated where prices weren't read."), "\(summary)")
+        let start = try #require(series.spokenPoints(.USD).first)
+        #expect(start.label.hasSuffix("about $202.78"), "\(start.label)")
+        #expect(Spoken.chartStep(series.plotted[0], .USD, metric: .value).hasSuffix("about $202.78"))
+        #expect(series.spokenPoints(.USD).dropFirst().allSatisfy { !$0.label.contains("about") }, "only the start is worked out")
+    }
+
+    /// Points with no transaction, as when prices are read between transactions, are no more a reason to call the start known.
+    @Test func aRangeStartBetweenPointsWithNoTransactionIsAnEstimateToo() {
+        let window = ChartWindow(points: [point(0, 100, 100, 0, true, false), point(3600, 200, 200, 0, false, true), point(7200, 300, 300, 0, false, true), point(7300, 300, 300, 0, false, true)], range: .hour)
+        #expect(Spoken.chartSummary(ValueSeries(points: window.points), .USD, isLive: true).contains("from about $"))
+    }
+
+    /// With nothing to go between, the start is unknown and not an estimate.
+    @Test func aRangeStartThatsAGapIsUnknownAndNotAnEstimate() {
+        let window = ChartWindow(points: [point(0, 100, 100, 0, true, false), point(7200, 300, 150, 0, true, false), point(7300, 150, 150, 0, false, true)], range: .hour)
+        #expect(window.points[0].valueMicros == nil)
+        #expect(!window.points[0].valueEstimated)
+        #expect(Spoken.chartSummary(ValueSeries(points: window.points), .USD, isLive: true).contains("It went from unknown to $150.00"))
+    }
+
+    @Test func pnlNeverSaysAboutForARangeStart() {
+        var first = point(0, 0, 100, 0, true, false)
+        first = PnlPoint(blockNum: first.blockNum, timestamp: first.timestamp, txHash: first.txHash, pnlMicros: "5000000", excludedCount: 0, valueMicros: first.valueMicros, valueBeforeMicros: first.valueBeforeMicros, valueExcludedCount: 0, valueContinues: false)
+        var second = point(7200, 300, 150, 0, true, true)
+        second = PnlPoint(blockNum: second.blockNum, timestamp: second.timestamp, txHash: second.txHash, pnlMicros: "7000000", excludedCount: 0, valueMicros: second.valueMicros, valueBeforeMicros: second.valueBeforeMicros, valueExcludedCount: 0, valueContinues: true)
+        let window = ChartWindow(points: [first, second, second.withoutTransaction(at: 7300)], range: .hour)
+        let summary = Spoken.chartSummary(PnlSeries(points: window.points), .USD, isLive: true)
+        #expect(summary.contains("It went from +$5.00 to +$7.00"), "\(summary)")
+        #expect(!summary.contains("about") && !summary.contains("Estimated"), "\(summary)")
+    }
+}
+
 private extension PnlPoint {
     var withKnownPnl: PnlPoint {
         PnlPoint(blockNum: blockNum, timestamp: timestamp, txHash: txHash, pnlMicros: "1000000", excludedCount: 0, valueMicros: valueMicros, valueBeforeMicros: valueBeforeMicros, valueExcludedCount: valueExcludedCount, valueContinues: valueContinues)
+    }
+}
+
+private extension PnlPoint {
+    func withoutTransaction(at second: Int) -> PnlPoint {
+        let date = Date(timeIntervalSince1970: 1_800_000_000 + Double(second))
+        return PnlPoint(blockNum: second, timestamp: date.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true)), txHash: nil, pnlMicros: pnlMicros, excludedCount: 0, valueMicros: valueMicros, valueBeforeMicros: valueMicros, valueExcludedCount: 0, valueContinues: true)
     }
 }

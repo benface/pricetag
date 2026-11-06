@@ -39,19 +39,22 @@ describe("the RPC throttle", () => {
 
   it("holds a burst to its rate", async () => {
     const arrivals: number[] = []
+    let started = 0
     await withThrottle(
-      50,
+      20,
       (_req, res) => {
         arrivals.push(Date.now())
         res.end("{}")
       },
       async (url) => {
+        started = Date.now()
         await Promise.all(Array.from({ length: 10 }, () => call(url)))
       },
     )
     assert.equal(arrivals.length, 10)
-    // 9 gaps of 20 ms, with room for timers firing a little early.
-    assert.ok(arrivals.at(-1)! - arrivals[0]! >= 150)
+    // A busy event loop makes arrivals late and bunches them up, so the gaps between them prove nothing. What holds is that
+    // none comes ahead of its slot, 50 ms apart from before the burst, with room for timers firing a little early.
+    arrivals.forEach((arrival, i) => assert.ok(arrival - started >= i * 50 - 5, `arrival ${i} came ${arrival - started} ms in`))
   })
 
   it("retries a 429 instead of passing it on", async () => {

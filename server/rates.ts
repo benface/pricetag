@@ -8,7 +8,8 @@ import { CURRENCIES, normalizeAddress, type CurrencyCode, type PaidRates, type R
 import { settledThrough } from "@pricetag/sdk/internal"
 import type { RoundReader } from "./source.ts"
 
-type ReadRates = (currency: CurrencyCode, wallet: Pick<WalletResponse, "legs" | "latest" | "priceSamples">) => Promise<Rates | null>
+/** `held` also reads the block a wallet's history starts from, which only a cost stored for what it already held needs. */
+type ReadRates = (currency: CurrencyCode, wallet: Pick<WalletResponse, "legs" | "latest" | "priceSamples">, options?: { held?: boolean }) => Promise<Rates | null>
 
 /** Reads rates, and forgets the ones from blocks a reorg replaced, when it can. */
 export type RatesReader = ReadRates & { rewind?(block: number): void }
@@ -20,12 +21,12 @@ export function createRates(readRounds: RoundReader): RatesReader {
   let rewinds = 0
 
   /** A read that fails throws. A block the feed had no answer for is just left out, and isn't remembered, so it's tried again. */
-  const ratesFor: ReadRates = async (currency, wallet) => {
+  const ratesFor: ReadRates = async (currency, wallet, { held = false } = {}) => {
     if (!CURRENCIES[currency].feed) return null
     const known = settled.get(currency) ?? new Map<number, RateRound>()
     settled.set(currency, known)
     const head = wallet.latest.blockNum
-    const blocks = [...new Set([...wallet.legs.filter((leg) => !leg.opening).map((leg) => leg.blockNum), ...(wallet.priceSamples ?? []).map((sample) => sample.blockNum)])]
+    const blocks = [...new Set([...wallet.legs.filter((leg) => held || !leg.opening).map((leg) => leg.blockNum), ...(wallet.priceSamples ?? []).map((sample) => sample.blockNum)])]
     const current = newest.get(currency)
     const wanted = blocks.filter((block) => !known.has(block))
     if (current?.blockNum !== head) wanted.push(head)
@@ -57,18 +58,31 @@ export function createRates(readRounds: RoundReader): RatesReader {
 /**
  * The rates to read what's stored in another currency in `shown`: purchases, entered costs, exchange answers and imported
  * withdrawals. Only at the blocks they could have arrived in, because that's all that's needed. `paidIn` is for a client that
- * folds its own answers and doesn't send them, and reads those currencies at everything that arrived. Undefined when none
- * need one, so a wallet with nothing stored reads nothing more.
+ * folds its own answers and doesn't send them, and reads those currencies at everything that arrived. A cost for what the wallet
+ * already held also needs `shown` at the block its history starts from, since the wallet's own rates leave that block out.
+ * Undefined when none need one, so a wallet with nothing stored reads nothing more.
  */
 export async function readPaidRates(readRates: ReadRates, wallet: Pick<WalletResponse, "address" | "legs" | "latest">, shown: CurrencyCode, books: readonly Book[], paidIn: readonly CurrencyCode[] = []): Promise<PaidRates | undefined> {
   const address = normalizeAddress(wallet.address)
   const arrivals = wallet.legs.filter((leg) => !leg.opening && BigInt(leg.delta) > 0n)
   const wanted = new Map<CurrencyCode, Set<WalletResponse["legs"][number]>>()
-  const want = (currency: CurrencyCode, legs: WalletResponse["legs"]) => {
-    if (currency === shown || currency === "USD" || legs.length === 0) return
+  const add = (currency: CurrencyCode, legs: WalletResponse["legs"]) => {
+    if (currency === "USD" || legs.length === 0) return
     wanted.set(currency, new Set([...(wanted.get(currency) ?? []), ...legs]))
   }
-  for (const currency of paidIn) want(currency, arrivals)
+  const want = (currency: CurrencyCode, legs: WalletResponse["legs"]) => {
+    if (currency !== shown) add(currency, legs)
+  }
+  // Both, even when they're the same: what's in `shown` can still be folded in USD, as the apps do alongside it.
+  const wantHeld = (currency: CurrencyCode, legs: WalletResponse["legs"]) => {
+    add(currency, legs)
+    add(shown, legs)
+  }
+  const held = wallet.legs.filter((leg) => leg.opening)
+  for (const currency of paidIn) {
+    want(currency, arrivals)
+    wantHeld(currency, held)
+  }
   for (const book of books) {
     for (const { wallet: to, cost, txHash, blockNum } of book.purchases ?? []) {
       if (to === address) want(cost.currency, wallet.legs.filter((leg) => leg.txHash.toLowerCase() === txHash || leg.blockNum === blockNum))
@@ -76,6 +90,10 @@ export async function readPaidRates(readRates: ReadRates, wallet: Pick<WalletRes
     for (const leg of arrivals) {
       const cost = book.costs[costKey(address, leg.id)]
       if (cost) want(cost.currency, [leg])
+    }
+    for (const leg of held) {
+      const cost = book.costs[costKey(address, leg.id)]
+      if (cost) wantHeld(cost.currency, [leg])
     }
     for (const answer of Object.values(book.senders)) {
       if (answer.kind !== "my-exchange") continue
@@ -87,7 +105,7 @@ export async function readPaidRates(readRates: ReadRates, wallet: Pick<WalletRes
   }
   const paidRates: PaidRates = {}
   for (const [currency, legs] of wanted) {
-    const rates = await readRates(currency, { legs: [...legs], latest: wallet.latest })
+    const rates = await readRates(currency, { legs: [...legs], latest: wallet.latest }, { held: true })
     if (rates) paidRates[currency] = rates.byBlock
   }
   return Object.keys(paidRates).length > 0 ? paidRates : undefined
