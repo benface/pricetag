@@ -5,9 +5,10 @@
 import { formatAmount, formatDuration, formatMoney, msBetweenBlocks, shortHash, worth, type CostLabel, type CurrencyCode, type FoldLeg, type HoldComparison, type Method, type PricedLeg, type PriceSource, type UnseenEth } from "@pricetag/sdk/core"
 import type { Mode } from "./api.ts"
 import type { ValueGaps } from "./attention.ts"
+import type { ReadFailure } from "./read-failure.ts"
 
 export const METHOD_LABELS: Record<Method, string> = { average: "Average", fifo: "Oldest first" }
-export const METHOD_NAME = "How cost is worked out"
+export const METHOD_NAME = "Cost method"
 export const METHOD_HELP = "Average spreads what you paid across all you hold. Oldest first counts what you sell as what you got earliest."
 
 export const AVERAGE_PRICE_PAID = "Average price paid"
@@ -41,6 +42,14 @@ export const COST_WHY = "Nothing shows what this cost, so PnL leaves it out unti
 export const EXCHANGE_COST_WHY = "You said it came from your exchange account, which knows what you paid. Until you say, PnL leaves it out."
 export const ALL_ANSWERED = "All answered"
 export const NOTHING_LEFT = "That's all for now"
+/** Under what the questions were for, when it still leaves something out. Past the last card, what's still open is what was skipped. */
+export function finishNote({ open, answered, waiting }: { open: number; answered: number; waiting: number }): string {
+  const leftOut = "PnL still leaves some things out."
+  const notAQuestion = "What's left isn't a question, like a balance that doesn't match the chain."
+  if (open > 0) return answered > 0 ? `Not everything's answered, so ${leftOut}` : `Nothing's answered yet, so ${leftOut}`
+  if (waiting > 0) return answered > 0 ? `Every question so far is answered, but ${leftOut}` : `There's nothing to ask so far, but ${leftOut}`
+  return answered > 0 ? `Every question's answered. ${notAQuestion}` : `There's nothing to ask. ${notAQuestion}`
+}
 
 /** The tooltip for a title or sentence that says PnL, or nothing when it doesn't. */
 export const pnlHelp = (text: string): string | undefined => (text.includes("PnL") ? PNL_HELP : undefined)
@@ -281,6 +290,36 @@ export function behindSentence(ms: number): string {
 
 export function staleSentence(lastUpdate: string): string {
   return `These numbers aren't updating. Last update: ${lastUpdate}.`
+}
+
+/** A failed read never touches what's onchain, so this is true of every failure. */
+export const MONEY_UNAFFECTED = "Your money isn't affected."
+
+/** What's wrong, for someone who doesn't know there's a server. What a developer would want stays in `detail`. */
+export type Problem = { message: string; detail: string | null }
+
+const SAID = (said: string) => `The price service said: ${said}`
+
+/** A wallet's read that failed, in `FeedState.problem`'s words on the Mac. `stale` says how old any numbers still on screen are. */
+export function feedProblem(failure: ReadFailure, serverUrl: string, stale: string | null = null): Problem {
+  const say = (what: string, next: string, detail: string) => ({ message: [what, stale, MONEY_UNAFFECTED, next].filter((part) => part !== null).join(" "), detail })
+  switch (failure.kind) {
+    case "unreachable":
+      return say("The price service isn't answering.", "Check your internet connection, then try again.", `Nothing answered at ${serverUrl}.`)
+    case "unavailable":
+      return say("The price service can't get its data right now.", "It usually clears up by itself, and updates start again when it does.", SAID(failure.said))
+    case "noSource":
+      return say("The price service has no data source, so only the demo wallet works.", "Set one up, then restart the price service.", `${SAID(failure.said)} Its data source goes in .env.local.`)
+    case "refused":
+      return say("The price service turned this request down.", "Try again. If it keeps happening, restart the price service.", SAID(failure.said))
+  }
+}
+
+/** A failure in a panel, which answers one question and doesn't update by itself. A refusal already says what about that question went wrong. */
+export function panelProblem(failure: ReadFailure, serverUrl: string): Problem {
+  if (failure.kind === "refused") return { message: failure.said, detail: null }
+  if (failure.kind === "unavailable") return { message: `The price service can't get its data right now. ${MONEY_UNAFFECTED} It usually clears up by itself, so try again in a moment.`, detail: SAID(failure.said) }
+  return feedProblem(failure, serverUrl)
 }
 
 /** The technical side of the status badge, for its tooltip. */

@@ -37,6 +37,7 @@ import {
   coverageSentence,
   feedDetail,
   holdCaveatSentence,
+  feedProblem,
   holdSummarySentence,
   inWallets,
   linkedFailedSentence,
@@ -55,6 +56,7 @@ import { useRules } from "./useRules.ts"
 import type { TaxYear } from "../core/tax.ts"
 import { TaxPanel } from "./TaxPanel.tsx"
 import { useAllYours, useWallet } from "./useWallet.ts"
+import { ProblemNotice } from "./ProblemNotice.tsx"
 import { currenciesIn, walletsBehind, walletsToRead, yourWallets } from "../core/book.ts"
 import { readCheckedAccounts } from "../core/device-accounts.ts"
 import { parseDeviceLink, type DeviceLink } from "../core/device-link.ts"
@@ -321,7 +323,7 @@ export function App() {
   const singleRead = useWallet(single, chosenCurrency, chosenRule, paidIn)
   const allRead = useAllYours(isAll ? yours : null, chosenCurrency, chosenRule, paidIn)
   const { wallet } = singleRead
-  const { error } = isAll ? allRead : singleRead
+  const { error, retry: retryRead } = isAll ? allRead : singleRead
   // A read that came back with none of them yet has nothing to show, and it's still reading until one does.
   const loading = isAll ? allRead.loading || (allRead.read !== null && allRead.read.wallets.length === 0 && allRead.read.unread.reading.length > 0) : singleRead.loading
   const together = useMemo(() => (isAll && allRead.read && allRead.read.wallets.length > 0 ? { read: allRead.read.wallets, unread: allRead.read.unread } : null), [isAll, allRead.read])
@@ -449,6 +451,11 @@ export function App() {
     return explainTarget(target, fold, { view: fold.view, ruleNote: wallet.ruleNote ?? null, source: usd && { positions: usd.positions, totals: usd.totals, points: usd.points, holdComparison: usd.holdComparison } })
   }, [target, together, fold, wallet, others, method, book])
   const close = useCallback(() => setTarget(null), [])
+  const tryRead = (
+    <button type="button" className="link" onClick={retryRead}>
+      Try again
+    </button>
+  )
   const openTotal = (metric: TotalMetric) => setTarget({ kind: "total", metric })
 
   return (
@@ -519,11 +526,11 @@ export function App() {
         </section>
       ) : null}
 
-      {!showing && error ? <p className="notice warn">⚠ {error}</p> : null}
+      {!showing && error ? <ProblemNotice problem={feedProblem(error, location.origin)} action={tryRead} /> : null}
 
       {showing ? (
         <main>
-          {error ? <p className="notice warn">⚠ {error} {staleSentence(formatTime(showing.latest.timestamp))}</p> : null}
+          {error ? <ProblemNotice problem={feedProblem(error, location.origin, started ? staleSentence(formatTime(showing.latest.timestamp)) : null)} action={tryRead} /> : null}
           {combined && combined.linkedReading.length > 0 ? <p className="notice">{allYoursReadingSentence(combined.linkedReading)}</p> : null}
           {combined && combined.linkedFailed.length > 0 ? (
             <p className="notice warn">

@@ -21,7 +21,7 @@
   ],
   "datasets": [],
   "scope": [
-    "Checking the block shows that the data Amp stored matches the block's header. It doesn't show that the header is on Base's real chain, or that the dataset's calculations ran correctly. A dataset's fingerprint only identifies its recipe.",
+    "Checking the block shows that the data Amp stored matches the block's header, and that one of Base's nodes reports the same block. It doesn't show that the header is on Base's real chain, or that the dataset's calculations ran correctly. A dataset's fingerprint only identifies its recipe.",
     "It covers the amounts exchanged. It doesn't cover Chainlink's price, used to value them, because block headers don't record calls to a contract."
   ],
   "unavailable": "This is the demo wallet, so there's no real block to check."

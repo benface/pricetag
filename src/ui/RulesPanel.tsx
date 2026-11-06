@@ -2,24 +2,23 @@ import { useEffect, useState } from "react"
 import { formatTime, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import type { Book } from "../core/book.ts"
 import { showRuleDifference, showRuleValue, type PricingRule, type RuleComparison } from "../core/rules.ts"
-import { RULES_HELP, RULES_TITLE, shortManifestHash } from "../core/wording.ts"
+import { failureOf, readResponse, type ReadFailure } from "../core/read-failure.ts"
+import { panelProblem, RULES_HELP, RULES_TITLE, shortManifestHash } from "../core/wording.ts"
+import { ProblemNotice } from "./ProblemNotice.tsx"
 
 function Comparison({ address, method, currency, book }: { address: string; method: Method; currency: CurrencyCode; book: Book }) {
   const [attempt, setAttempt] = useState(0)
-  const [state, setState] = useState<{ comparison: RuleComparison | null; error: string | null; loading: boolean }>({ comparison: null, error: null, loading: true })
+  const [state, setState] = useState<{ comparison: RuleComparison | null; error: ReadFailure | null; loading: boolean }>({ comparison: null, error: null, loading: true })
 
   useEffect(() => {
     const abort = new AbortController()
     setState((s) => ({ ...s, error: null, loading: true }))
     fetch(`/api/portfolio/${address}/compare`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ method, currency, book }), signal: abort.signal })
-      .then(async (response) => {
-        const body = (await response.json()) as RuleComparison | { error: string }
-        if ("error" in body) throw new Error(body.error)
-        setState({ comparison: body, error: null, loading: false })
-      })
-      .catch((error: Error) => {
+      .then((response) => readResponse<RuleComparison>(response))
+      .then((body) => setState({ comparison: body, error: null, loading: false }))
+      .catch((error: unknown) => {
         // Numbers for another moment or setting aren't kept next to a failure.
-        if (!abort.signal.aborted) setState({ comparison: null, error: error instanceof TypeError ? "Can't reach the server." : error.message, loading: false })
+        if (!abort.signal.aborted) setState({ comparison: null, error: failureOf(error), loading: false })
       })
     return () => abort.abort()
   }, [address, method, currency, book, attempt])
@@ -30,7 +29,7 @@ function Comparison({ address, method, currency, book }: { address: string; meth
       {loading ? "Reading both…" : "Compare again"}
     </button>
   )
-  if (error) return <p className="notice warn">⚠ {error} {again}</p>
+  if (error) return <ProblemNotice problem={panelProblem(error, location.origin)} action={again} />
   if (!comparison) return <p className="muted small">Reading this wallet by both rules. The first read of each can take a minute.</p>
   const shownIn = comparison.currency as CurrencyCode
   return (
