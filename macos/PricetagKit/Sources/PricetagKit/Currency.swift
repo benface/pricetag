@@ -132,6 +132,17 @@ public struct MoneyDisplay: Equatable, Sendable {
         return rateMicros.map { Self.scale(units, by: Self.million, over: $0) } ?? units
     }
 
+    /// An amount in what's shown, in millionths, as USD. Only for turning what someone typed into an amount: what that becomes is shown
+    /// before it's used, so the rate never decides anything unseen.
+    public func usdMicros(ofShown micros: UInt128) -> UInt128 {
+        rateMicros.map { Self.scale(micros, by: Self.million, over: $0) } ?? micros
+    }
+
+    /// The other way: USD as millionths of what's shown.
+    public func shownMicros(_ usdMicros: UInt128) -> UInt128 {
+        rateMicros.map { Self.scale(usdMicros, by: $0, over: Self.million) } ?? usdMicros
+    }
+
     /// a × b ÷ c, through 256 bits. Saturates rather than trapping, which only something absurd could reach.
     private static func scale(_ a: UInt128, by b: UInt128, over c: UInt128) -> UInt128 {
         let product = a.multipliedFullWidth(by: b)

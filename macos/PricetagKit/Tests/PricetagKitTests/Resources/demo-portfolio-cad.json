@@ -449,7 +449,19 @@
       "valueBeforeMicros": "336960750",
       "valueExcludedCount": 1,
       "valueContinues": false,
-      "summary": "Received 5,000 USDC"
+      "summary": "Received 5,000 USDC",
+      "assets": [
+        "USDC"
+      ],
+      "counterparty": "0x00000000000000000000000000000000000de301",
+      "amount": {
+        "direction": "in",
+        "micros": "6737195000"
+      },
+      "gain": null,
+      "unknownCost": [
+        "USDC"
+      ]
     },
     {
       "blockNum": 53500150,
@@ -461,7 +473,19 @@
       "valueBeforeMicros": "7083700500",
       "valueExcludedCount": 1,
       "valueContinues": true,
-      "summary": "Received 0.02 ETH"
+      "summary": "Received 0.02 ETH",
+      "assets": [
+        "ETH"
+      ],
+      "counterparty": "0x000000000000000000000000000000000000be11",
+      "amount": {
+        "direction": "in",
+        "micros": "64561403"
+      },
+      "gain": null,
+      "unknownCost": [
+        "ETH"
+      ]
     },
     {
       "blockNum": 53500300,
@@ -473,7 +497,23 @@
       "valueBeforeMicros": "7177537900",
       "valueExcludedCount": 1,
       "valueContinues": true,
-      "summary": "Bought 1 ETH for 2,400 USDC"
+      "summary": "Bought 1 ETH for 2,400 USDC",
+      "assets": [
+        "USDC",
+        "ETH"
+      ],
+      "counterparty": null,
+      "amount": {
+        "direction": "trade",
+        "micros": "3251382113"
+      },
+      "gain": {
+        "micros": null,
+        "estimated": false
+      },
+      "unknownCost": [
+        "USDC"
+      ]
     },
     {
       "blockNum": 53500900,
@@ -485,7 +525,23 @@
       "valueBeforeMicros": "7267202858",
       "valueExcludedCount": 1,
       "valueContinues": true,
-      "summary": "Bought 800 AERO for 1,000 USDC"
+      "summary": "Bought 800 AERO for 1,000 USDC",
+      "assets": [
+        "USDC",
+        "AERO"
+      ],
+      "counterparty": null,
+      "amount": {
+        "direction": "trade",
+        "micros": "1362125340"
+      },
+      "gain": {
+        "micros": null,
+        "estimated": false
+      },
+      "unknownCost": [
+        "USDC"
+      ]
     },
     {
       "blockNum": 53501200,
@@ -497,7 +553,17 @@
       "valueBeforeMicros": "7372277866",
       "valueExcludedCount": 1,
       "valueContinues": true,
-      "summary": "Received 200 USDT"
+      "summary": "Received 200 USDT",
+      "assets": [
+        "USDT"
+      ],
+      "counterparty": "0x09aea4b2242abc8bb4bb78d537a67a245a7bec64",
+      "amount": {
+        "direction": "in",
+        "micros": "273196600"
+      },
+      "gain": null,
+      "unknownCost": []
     },
     {
       "blockNum": 53501500,
@@ -509,7 +575,15 @@
       "valueBeforeMicros": "7731582766",
       "valueExcludedCount": 1,
       "valueContinues": true,
-      "summary": "Network fee of $0.13"
+      "summary": "Network fee of $0.13",
+      "assets": [],
+      "counterparty": null,
+      "amount": {
+        "direction": "fee",
+        "micros": "134883"
+      },
+      "gain": null,
+      "unknownCost": []
     },
     {
       "blockNum": 53502400,
@@ -521,7 +595,21 @@
       "valueBeforeMicros": "7980195854",
       "valueExcludedCount": 1,
       "valueContinues": true,
-      "summary": "Sold 300 AERO for 450 USDC"
+      "summary": "Sold 300 AERO for 450 USDC",
+      "assets": [
+        "AERO",
+        "USDC"
+      ],
+      "counterparty": null,
+      "amount": {
+        "direction": "trade",
+        "micros": "618008241"
+      },
+      "gain": {
+        "micros": "107211239",
+        "estimated": false
+      },
+      "unknownCost": []
     },
     {
       "blockNum": 53503000,
@@ -533,7 +621,19 @@
       "valueBeforeMicros": "8051345900",
       "valueExcludedCount": 1,
       "valueContinues": true,
-      "summary": "Received 0.02 cbBTC"
+      "summary": "Received 0.02 cbBTC",
+      "assets": [
+        "cbBTC"
+      ],
+      "counterparty": "0x71660c4005ba85c37ccec55d0c4493e66fe775d3",
+      "amount": {
+        "direction": "in",
+        "micros": "1875862068"
+      },
+      "gain": null,
+      "unknownCost": [
+        "cbBTC"
+      ]
     },
     {
       "blockNum": 53503600,
@@ -545,7 +645,23 @@
       "valueBeforeMicros": "8103514620",
       "valueExcludedCount": 1,
       "valueContinues": true,
-      "summary": "Bought 50,000 DEGEN for 0.000001 USDC"
+      "summary": "Bought 50,000 DEGEN for 0.000001 USDC",
+      "assets": [
+        "USDC",
+        "DEGEN"
+      ],
+      "counterparty": null,
+      "amount": {
+        "direction": "trade",
+        "micros": null
+      },
+      "gain": {
+        "micros": null,
+        "estimated": false
+      },
+      "unknownCost": [
+        "DEGEN"
+      ]
     },
     {
       "blockNum": 53504200,
@@ -557,7 +673,24 @@
       "valueBeforeMicros": "8133162019",
       "valueExcludedCount": 1,
       "valueContinues": true,
-      "summary": "Bought 50 VIRTUAL for 100 USDC"
+      "summary": "Bought 50 VIRTUAL for 100 USDC",
+      "assets": [
+        "USDC",
+        "VIRTUAL"
+      ],
+      "counterparty": null,
+      "amount": {
+        "direction": "trade",
+        "micros": null
+      },
+      "gain": {
+        "micros": null,
+        "estimated": false
+      },
+      "unknownCost": [
+        "USDC",
+        "VIRTUAL"
+      ]
     },
     {
       "blockNum": 53504800,
@@ -569,7 +702,23 @@
       "valueBeforeMicros": "8162939431",
       "valueExcludedCount": 1,
       "valueContinues": true,
-      "summary": "Sold 0.5 ETH for 1,300 USDC"
+      "summary": "Sold 0.5 ETH for 1,300 USDC",
+      "assets": [
+        "ETH",
+        "USDC"
+      ],
+      "counterparty": null,
+      "amount": {
+        "direction": "trade",
+        "micros": "1810222841"
+      },
+      "gain": {
+        "micros": null,
+        "estimated": false
+      },
+      "unknownCost": [
+        "ETH"
+      ]
     },
     {
       "blockNum": 53505000,
@@ -581,7 +730,19 @@
       "valueBeforeMicros": "8192764563",
       "valueExcludedCount": 1,
       "valueContinues": true,
-      "summary": "Sent 0.002 ETH"
+      "summary": "Sent 0.002 ETH",
+      "assets": [
+        "ETH"
+      ],
+      "counterparty": "0x00000000000000000000000000000000000de301",
+      "amount": {
+        "direction": "out",
+        "micros": "7318435"
+      },
+      "gain": null,
+      "unknownCost": [
+        "ETH"
+      ]
     },
     {
       "blockNum": 53505400,
@@ -593,7 +754,12 @@
       "valueBeforeMicros": "8211228143",
       "valueExcludedCount": 1,
       "valueContinues": true,
-      "summary": null
+      "summary": null,
+      "assets": [],
+      "counterparty": null,
+      "amount": null,
+      "gain": null,
+      "unknownCost": []
     }
   ],
   "holdComparison": {

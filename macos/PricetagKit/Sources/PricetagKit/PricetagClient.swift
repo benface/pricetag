@@ -31,6 +31,8 @@ public protocol PortfolioSource: Sendable {
     func taxReport(_ request: TaxReportRequest) async throws -> TaxReport
     func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof
     func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification
+    /// What a wallet lets others spend, checked onchain just now.
+    func approvals(address: String) async throws -> WalletApprovals
     /// One element each time the server says there's a new block, until the connection goes. Nil when this source can't say.
     func headEvents() -> AsyncThrowingStream<Void, any Error>?
     /// A provider's page for buying `asset` for this address, and what to ask about its order by. It starts at `fiat`, what was typed, when the provider can start from that currency, and otherwise at `cryptoAmount`.
@@ -50,6 +52,7 @@ extension PortfolioSource {
     public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport { throw FetchError.unreachable }
     public func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof { throw FetchError.unreachable }
     public func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification { throw FetchError.unreachable }
+    public func approvals(address: String) async throws -> WalletApprovals { throw FetchError.unreachable }
     public func rules() async throws -> [PricingRule] { [] }
     public func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> RuleComparison { throw FetchError.rejected("There's only one pricing rule here.") }
     public func onrampCheckout(address: String, asset: String, cryptoAmount: String, fiat: Money?) async throws -> OnrampCheckout { throw FetchError.unreachable }
@@ -59,23 +62,26 @@ extension PortfolioSource {
 
 public struct PricetagClient: PortfolioSource {
     public let serverURL: URL
+    /// What a shared server knows this person by. It only goes over HTTPS, so a server on this Mac, or any other plain address, never gets it.
+    let invite: String?
     private let session: URLSession
 
     /// A block every 2 s means the events are never quiet for this long, unless something's wrong.
     private static let eventsIdleTimeout: TimeInterval = 30
 
-    public init(serverURL: URL) {
-        self.init(serverURL: serverURL, configuration: .ephemeral)
+    public init(serverURL: URL, invite: String? = nil) {
+        self.init(serverURL: serverURL, invite: invite, configuration: .ephemeral)
     }
 
-    init(serverURL: URL, configuration: URLSessionConfiguration) {
+    init(serverURL: URL, invite: String? = nil, configuration: URLSessionConfiguration) {
         self.serverURL = serverURL
+        self.invite = serverURL.scheme == "https" ? invite.flatMap { $0.isEmpty ? nil : $0 } : nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         session = URLSession(configuration: configuration)
     }
 
     public func headEvents() -> AsyncThrowingStream<Void, any Error>? {
-        let request = URLRequest(url: serverURL.appending(path: "/api/events"), timeoutInterval: Self.eventsIdleTimeout)
+        let request = authorized(URLRequest(url: serverURL.appending(path: "/api/events"), timeoutInterval: Self.eventsIdleTimeout))
         let session = session
         return AsyncThrowingStream { continuation in
             let task = Task {
@@ -124,6 +130,11 @@ public struct PricetagClient: PortfolioSource {
     }
 
     /// Reads every wallet in it, so it gets as long as a first read.
+    /// The first read of a wallet's history can take a while, until the dataset has its own table of approvals.
+    public func approvals(address: String) async throws -> WalletApprovals {
+        try await get("/api/approvals/\(address)", query: [], timeout: .seconds(180))
+    }
+
     public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport {
         try await decoded(post("/api/tax-report/\(request.address)", body: request.body, timeout: .seconds(180)))
     }
@@ -198,11 +209,18 @@ public struct PricetagClient: PortfolioSource {
         return try await send(request)
     }
 
+    private func authorized(_ request: URLRequest) -> URLRequest {
+        guard let invite else { return request }
+        var request = request
+        request.setValue("Bearer \(invite)", forHTTPHeaderField: "Authorization")
+        return request
+    }
+
     private func send(_ request: URLRequest) async throws -> Data {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await session.data(for: authorized(request))
         } catch let error as URLError where error.code == .cancelled {
             throw CancellationError()
         } catch let error as URLError where error.code == .timedOut {

@@ -3,6 +3,7 @@ import SwiftUI
 extension WalletKind {
     public var symbol: String {
         switch self {
+        case .allYours: "square.stack.fill"
         case .spendingMoney: "banknote.fill"
         case .savings: "lock.fill"
         case .yours: "wallet.bifold.fill"
@@ -14,6 +15,7 @@ extension WalletKind {
     /// What the icon stands for, for whoever wonders. They're chosen by what the wallet is, and never by hand, so one can't pass for another.
     public var meaning: String {
         switch self {
+        case .allYours: "Every wallet that's yours, added up, with moves between them left out"
         case .spendingMoney: "On this Mac, and ready to send"
         case .savings: "On a hardware device, and where sweeps can go"
         case .yours: "Yours, so costs follow money between it and your other wallets"
@@ -26,7 +28,7 @@ extension WalletKind {
     public var tint: Color {
         switch self {
         case .spendingMoney: .green
-        case .savings, .yours: .blue
+        case .allYours, .savings, .yours: .blue
         case .watching, .demo: .secondary
         }
     }

@@ -49,6 +49,14 @@ describe("the server", () => {
     })
   }
 
+  it("answers the demo's approvals, and says why it can't for anything else", async () => {
+    const demo = JSON.parse((await get(server, "/api/approvals/demo")).body) as { mode: string; approvals: unknown[] }
+    assert.equal(demo.mode, "demo")
+    assert.ok(demo.approvals.length > 0)
+    assert.equal((await get(server, "/api/approvals/nope")).status, 400)
+    assert.equal((await get(server, `/api/approvals/0x${"1".repeat(40)}`)).status, 503)
+  })
+
   it("has no rules to choose from when it has only one", async () => {
     assert.deepEqual(JSON.parse((await get(server, "/api/rules")).body), { rules: [] })
   })

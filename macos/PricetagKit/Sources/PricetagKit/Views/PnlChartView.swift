@@ -3,7 +3,8 @@ import SwiftUI
 
 /// Total PnL after each transaction, or what was held then. PnL holds still between transactions, so it's drawn as steps. Value is only known at them, so it's dashed in between (see `ValueSeries`).
 /// Point at it or drag across it for a value that follows, and click a step for its transaction.
-/// The line stops where nothing is known. The same transactions are in `TransactionsTable`, for the keyboard and VoiceOver.
+/// The line stops where nothing is known. VoiceOver reads it as a summary, and the arrow keys, or VoiceOver's own, step through its transactions.
+/// The same transactions are in `TransactionsTable` too.
 public struct PnlChartView: View {
     /// What's in view, which sets the scales and what you can point at.
     let points: [PnlPoint]
@@ -19,6 +20,7 @@ public struct PnlChartView: View {
     let scrubbedIndex: Int?
     /// Which transaction is pointed at. Only its ID, so what's shown for it is always what the points say now, after a refresh or an answer too.
     @State private var hoveredID: String?
+    @FocusState private var isFocused: Bool
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -31,6 +33,13 @@ public struct PnlChartView: View {
         self.reveal = reveal
         self.scrubbedIndex = scrubbedIndex
         self.onSelect = onSelect
+    }
+
+    private var spokenSummary: String {
+        switch metric {
+        case .value: Spoken.chartSummary(ValueSeries(points: points), currency, isLive: isLive)
+        case .pnl: Spoken.chartSummary(PnlSeries(points: points), currency, isLive: isLive)
+        }
     }
 
     /// A Color, because a chart reads plain styles like `.secondary` as shades of its accent.
@@ -54,6 +63,8 @@ public struct PnlChartView: View {
             ForEach(Array((metric == .value ? drawnValues.gaps : drawn.gaps).enumerated()), id: \.offset) { _, gap in
                 RectangleMark(xStart: .value("Unknown from", gap.lowerBound), xEnd: .value("Unknown to", gap.upperBound))
                     .foregroundStyle(Color.secondary.opacity(Self.gapOpacity(contrast)))
+                    // The summary and the steps say where it's unknown. Each mark on its own would only be a stretch of time.
+                    .accessibilityHidden(true)
             }
             if metric == .value {
                 valueMarks(drawnValues, hovered: hovered, showsEveryDot: values.plotted.count <= 60)
@@ -61,10 +72,11 @@ public struct PnlChartView: View {
                 pnlMarks(drawn, hovered: hovered)
             }
             if let hovered {
-                RuleMark(x: .value("Time", hovered.date)).foregroundStyle(Color.secondary.opacity(0.6))
+                RuleMark(x: .value("Time", hovered.date)).foregroundStyle(Color.secondary.opacity(0.6)).accessibilityHidden(true)
                 PointMark(x: .value("Time", hovered.date), y: .value(metric.label, hovered.value ?? 0))
                     // Only there to carry the tooltip when the value is unknown, not to mark a place on the axis.
                     .foregroundStyle(hovered.value == nil ? Color.clear : lineColor)
+                    .accessibilityHidden(true)
                     // Inside the plot sideways, so at either end it doesn't cover the axis's labels.
                     .annotation(position: .top, spacing: 6, overflowResolution: .init(x: .fit(to: .plot), y: .fit(to: .chart))) {
                         tooltip(hovered.point, date: hovered.date)
@@ -139,16 +151,49 @@ public struct PnlChartView: View {
             let plotted = lookup.plotted.filter { $0.point.txHash != nil }
             hover(index.flatMap { plotted.indices.contains($0) ? plotted[$0].id : nil })
         }
-        .opacity(isLive ? 1 : 0.6)
-        .animation(Motion.state, value: isLive)
-        .accessibilityLabel(accessibilityText)
+        .stale(!isLive)
+        .focusable()
+        .focused($isFocused)
+        .onKeyPress(.leftArrow) { step(-1, in: lookup) }
+        .onKeyPress(.rightArrow) { step(1, in: lookup) }
+        .onKeyPress(.return) { open(hovered) }
+        .onKeyPress(.space) { open(hovered) }
+        .onKeyPress(.escape) {
+            guard hoveredID != nil else { return .ignored }
+            hoveredID = nil
+            return .handled
+        }
+        // Leaving it by the keyboard leaves no pointer behind, which the mouse would have taken away.
+        .onChange(of: isFocused) { if !isFocused, scrubbedIndex == nil { hoveredID = nil } }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(spokenSummary)
+        .accessibilityValue(hovered.map { Spoken.chartStep($0, currency, metric: metric) } ?? "")
+        .accessibilityHint("Arrow keys step through its transactions, and Return opens one.")
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: _ = step(1, in: lookup)
+            case .decrement: _ = step(-1, in: lookup)
+            @unknown default: break
+            }
+        }
+        .accessibilityAction { _ = open(hovered) }
+        .accessibilityChartDescriptor(PnlChartDescriptor(series: lookup, metric: metric, currency: currency, summary: spokenSummary))
     }
 
-    private var accessibilityText: String {
-        switch metric {
-        case .value: "Value over time, ending at \(points.last?.valueMicros.map { Format.money($0, currency) } ?? "unavailable")"
-        case .pnl: "Total PnL over time, ending at \(points.last?.pnlMicros.map { Format.signedMoney($0, currency) } ?? "unavailable")"
-        }
+    /// The next or previous transaction, from the last one when nothing's picked yet, since that's where it stands now.
+    private func step(_ offset: Int, in series: any PlottedSeries) -> KeyPress.Result {
+        let transactions = series.plotted.filter { $0.point.txHash != nil }
+        guard !transactions.isEmpty else { return .ignored }
+        let current = transactions.firstIndex { $0.id == hoveredID }
+        let next = current.map { min(max($0 + offset, 0), transactions.count - 1) } ?? (offset < 0 ? transactions.count - 1 : 0)
+        hover(transactions[next].id)
+        return .handled
+    }
+
+    private func open(_ hovered: PnlSeries.Plotted?) -> KeyPress.Result {
+        guard let hash = hovered?.point.txHash else { return .ignored }
+        onSelect(hash)
+        return .handled
     }
 
     @ChartContentBuilder
@@ -159,6 +204,7 @@ public struct PnlChartView: View {
                     // Known where it's solid. Dashed where only prices moved and nobody read them.
                     .lineStyle(line.known ? StrokeStyle(lineWidth: 2, lineCap: .round) : StrokeStyle(lineWidth: 1.5, lineCap: .round, dash: [3, 4]))
                     .foregroundStyle(line.known ? lineColor : lineColor.opacity(0.75))
+                    .accessibilityHidden(true)
             }
         }
         // Each place it's known, so a line between two of them doesn't read as known too. With many in view they'd be a thick line, so then only where now is, and what nothing else shows.
@@ -167,6 +213,7 @@ public struct PnlChartView: View {
             PointMark(x: .value("Time", item.date), y: .value("Value", item.value ?? 0))
                 .symbolSize(isNow(item) && hovered == nil ? 40 : 14)
                 .foregroundStyle(lineColor)
+                .accessibilityHidden(true)
         }
     }
 
@@ -175,15 +222,18 @@ public struct PnlChartView: View {
         RuleMark(y: .value("Zero", 0))
             .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
             .foregroundStyle(Color.secondary.opacity(0.5))
+            .accessibilityHidden(true)
         ForEach(Array(drawn.segments.enumerated()), id: \.offset) { index, segment in
             ForEach(segment) { step in
                 AreaMark(x: .value("Time", step.date), yStart: .value("Zero", 0), yEnd: .value("PnL", step.value), series: .value("Segment", index))
                     .interpolationMethod(.stepEnd)
                     .foregroundStyle(LinearGradient(colors: [lineColor.opacity(0.18), lineColor.opacity(0.02)], startPoint: .top, endPoint: .bottom))
+                    .accessibilityHidden(true)
                 LineMark(x: .value("Time", step.date), y: .value("PnL", step.value), series: .value("Segment", index))
                     .interpolationMethod(.stepEnd)
                     .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                     .foregroundStyle(lineColor)
+                    .accessibilityHidden(true)
             }
         }
         // Where it stands now, at a glance.
@@ -191,6 +241,7 @@ public struct PnlChartView: View {
             PointMark(x: .value("Time", last.date), y: .value("PnL", last.value))
                 .symbolSize(40)
                 .foregroundStyle(lineColor)
+                .accessibilityHidden(true)
         }
     }
 
@@ -199,9 +250,9 @@ public struct PnlChartView: View {
             if let micros = metric.micros(point) {
                 LiveNumber(metric == .value ? Format.money(micros, currency) : Format.signedMoney(micros, currency)).font(.callout.weight(.medium))
             } else {
-                Text("Unavailable").font(.callout.weight(.medium)).foregroundStyle(.secondary)
+                Text("Unavailable").font(.callout.weight(.medium)).secondaryText()
             }
-            Text(Format.time(date)).monospacedDigit().foregroundStyle(.secondary)
+            Text(Format.time(date)).monospacedDigit().secondaryText()
             let excluded = metric.excludedCount(point)
             if excluded > 0 {
                 Group {
@@ -212,7 +263,7 @@ public struct PnlChartView: View {
                     }
                 }
                 .monospacedDigit()
-                .foregroundStyle(.secondary)
+                .secondaryText()
             }
         }
         .font(.caption)
@@ -304,7 +355,7 @@ public struct PnlHistorySection: View {
             metricPicker
             Text(subtitle)
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .monospacedDigit()
                 .contentTransition(.opacity)
                 .motion(Motion.state, value: shown)
@@ -353,7 +404,7 @@ public struct PnlHistorySection: View {
                 Text("\(metric.label) unknown")
             }
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .secondaryText()
             .fixedSize()
             .help(metric == .value ? Wording.valueChartGap : Wording.chartGap)
             .transition(.opacity)
@@ -389,7 +440,7 @@ public struct PnlHistorySection: View {
     private func placeholder(_ title: String) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "chart.xyaxis.line").foregroundStyle(.tertiary)
-            Text(title).foregroundStyle(.secondary)
+            Text(title).secondaryText()
             Spacer(minLength: 0)
         }
         .font(.callout)
@@ -452,3 +503,44 @@ private struct DrawnPnlChart: View {
     DrawnPnlChart.forget()
 }
 #endif
+
+/// The chart for VoiceOver's own chart tools, like Audio Graph: one value after each transaction, over time. Unknown stretches have no points, as the line has none.
+private struct PnlChartDescriptor: AXChartDescriptorRepresentable {
+    let series: any PlottedSeries
+    let metric: ChartMetric
+    let currency: CurrencyCode
+    let summary: String
+
+    func makeChartDescriptor() -> AXChartDescriptor {
+        let known = series.plotted.filter { $0.value != nil }
+        let times = known.map { $0.date.timeIntervalSince1970 }
+        let values = known.compactMap(\.value)
+        let x = AXNumericDataAxisDescriptor(
+            title: "Time",
+            range: (times.min() ?? 0)...(max(times.max() ?? 1, (times.min() ?? 0) + 1)),
+            gridlinePositions: []
+        ) { Format.time(Date(timeIntervalSince1970: $0)) }
+        let currency = currency
+        let metric = metric
+        let name = Spoken.chartName(metric)
+        let y = AXNumericDataAxisDescriptor(
+            title: name,
+            range: (values.min() ?? 0)...(max(values.max() ?? 1, (values.min() ?? 0) + 1)),
+            gridlinePositions: []
+        ) {
+            let micros = String(Int(($0 * 1_000_000).rounded()))
+            return metric == .value ? Format.money(micros, currency) : Format.signedMoney(micros, currency)
+        }
+        let points = known.map { plotted in
+            AXDataPoint(x: plotted.date.timeIntervalSince1970, y: plotted.value ?? 0, label: Spoken.chartStep(plotted, currency, metric: metric))
+        }
+        return AXChartDescriptor(
+            title: "\(name) over time",
+            summary: summary,
+            xAxis: x,
+            yAxis: y,
+            additionalAxes: [],
+            series: [AXDataSeriesDescriptor(name: name, isContinuous: true, dataPoints: points)]
+        )
+    }
+}
