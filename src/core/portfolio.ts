@@ -2,12 +2,12 @@
 // One source of PnL logic: this calls what the browser calls, and adds nothing to the math.
 
 import { TOKENS, answerToMicros, returnBps, worth, type CurrencyCode, type WalletView, type LegEffect, type Method, type Position, type PricedLeg, type Reference } from "@pricetag/sdk/core"
-import { hasStarted, isBehind, type ExplanationLeg, type ExplanationResponse, type PortfolioExchange, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "../src/core/api.ts"
-import { emptyBook, walletsBehind, type Book } from "../src/core/book.ts"
-import { describeConversion, describeEffect, describeNetting, explainTarget, missingRatesLine, rateSource, type ExplainContext, type ExplainTarget, type Metric, type TotalMetric } from "../src/core/explain.ts"
-import { foldBook, missingWallets, type BookFold, type Question } from "../src/core/resolve.ts"
-import { differenceOf, whySentence, type PricingRule, type RuleComparison, type RuleRow, type RuleTransaction } from "../src/core/rules.ts"
-import { ETH_NOTE, UNPRICED_FEES, estimatedSentence, excludedSentence, feesUnknownSentence, networkFeeUnknownSentence, withheldSentence } from "../src/core/wording.ts"
+import { hasStarted, isBehind, type ExplanationLeg, type ExplanationResponse, type PortfolioExchange, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "./api.ts"
+import { emptyBook, walletsBehind, type Book } from "./book.ts"
+import { describeConversion, describeEffect, describeNetting, explainTarget, missingRatesLine, rateSource, type ExplainContext, type ExplainTarget, type Metric, type TotalMetric } from "./explain.ts"
+import { foldBook, missingWallets, type BookFold, type Question } from "./resolve.ts"
+import { differenceOf, whySentence, type PricingRule, type RuleComparison, type RuleRow, type RuleTransaction } from "./rules.ts"
+import { ETH_NOTE, UNPRICED_FEES, estimatedSentence, excludedSentence, feesUnknownSentence, networkFeeUnknownSentence, withheldSentence } from "./wording.ts"
 
 /** Matches the web panel: a busy wallet has thousands of legs, and the newest are the ones anyone reads. */
 export const MAX_LEGS = 200

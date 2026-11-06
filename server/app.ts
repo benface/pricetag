@@ -12,8 +12,8 @@ import { DEMO_ADDRESS, DEMO_WALLET, demoRates, demoWallet } from "../src/core/fi
 import { foldBook, previewBook } from "../src/core/resolve.ts"
 import { CAUTIOUS_RULE_ID, MARKET_RULE_ID, RULE_TEXT, ruleNote, type PricingRule } from "../src/core/rules.ts"
 import { verifyLink } from "./links.ts"
-import { ALL_YOURS, combinedPortfolioOf, explainCombined, exportCombined, previewCombined, type Unread } from "./combined.ts"
-import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "./portfolio.ts"
+import { ALL_YOURS, combinedPortfolioOf, explainCombined, exportCombined, previewCombined, type AllYoursRead, type Unread } from "../src/core/combined.ts"
+import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "../src/core/portfolio.ts"
 import { createCoinbase } from "./coinbase.ts"
 import { ONRAMP_ASSETS, OnrampError, type FiatAmount, type Onramp } from "./onramp.ts"
 import { createRates, readPaidRates } from "./rates.ts"
@@ -458,9 +458,11 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     const candidates = action === "preview" ? (Array.isArray(body.candidates) ? body.candidates.map(parseBook) : null) : []
     if (!candidates || candidates.includes(null) || candidates.length > 8) return sendJson(res, 400, { error: "Those answers can't be read." })
     const books = action === "preview" ? (candidates as Book[]) : [book]
-    const found = await readAllYours(addresses, currency, rule, books, action === undefined, res)
+    const found = await readAllYours(addresses, currency, rule, books, action === undefined || action === "wallets", res)
     if (!found) return
     const { read, unread } = found
+    // The wallets themselves, because the browser runs the fold, with answers that stay with it.
+    if (action === "wallets") return sendJson(res, 200, { wallets: read, unread } satisfies AllYoursRead)
     if (read.length === 0) {
       res.writeHead(204, { "cache-control": "no-store" })
       res.end()
@@ -527,7 +529,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       return taxReport(taxMatch[1] as string, { country: body.country, method: body.method, scope: body.scope, year: body.year }, also as string[], currency, book, res)
     }
 
-    const match = /^\/api\/portfolio\/([^/]+)(?:\/(explain|preview|export|compare|last))?$/.exec(path)
+    const match = /^\/api\/portfolio\/([^/]+)(?:\/(explain|preview|export|compare|last|wallets))?$/.exec(path)
     if (!match) return sendJson(res, 404, { error: "Not found" })
     const method = parseMethod(typeof body.method === "string" ? body.method : null)
     if (!method) return sendJson(res, 400, { error: "The method is either average or fifo." })
@@ -539,6 +541,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     if (body.rule !== undefined && body.rule !== null && !rule) return sendJson(res, 400, { error: "That pricing rule isn't available here." })
     const action = match[2]
     if (match[1] === ALL_YOURS) return allYours(action, body, req, res, { method, currency, book, rule })
+    if (action === "wallets") return sendJson(res, 404, { error: "Not found" })
 
     const target = action === "explain" ? parseExplainTarget(new URL(req.url ?? "/", "http://localhost").searchParams) : null
     if (action === "explain" && !target) return sendJson(res, 400, { error: "That isn't a number this can explain." })
