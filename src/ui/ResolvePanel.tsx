@@ -6,7 +6,7 @@ import { answerSender, enterExchangeCosts, walletsBehind, type Book, type BookCh
 import { readCheckedAccounts } from "../core/device-accounts.ts"
 import { noteLinkFor, type DeviceLink } from "../core/device-link.ts"
 import { mergeWithdrawals, parseCoinbaseCsv, type ExchangeImport } from "../core/exchange-import.ts"
-import { foldBook, isBalanced, microsOf, previewBook, type Question } from "../core/resolve.ts"
+import { answersOffered, foldBook, isBalanced, microsOf, previewBook, type Question } from "../core/resolve.ts"
 import { ALL_ANSWERED, ANSWER_QUESTIONS, COST_QUESTION, COST_WHY, EXCHANGE_COST_WHY, NOT_SAVED, NOTHING_LEFT, SENDER_QUESTION, SENDER_WHY, finishNote, importedSentence, linkedFailedSentence } from "../core/wording.ts"
 import { linkByProof, type Ethereum } from "./link-proof.ts"
 
@@ -107,14 +107,17 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
   const balanced = isBalanced(fold.meter) && linkedFailed.length === 0 && fold.withheld.length === 0
   const progress = fold.meter.open + fold.meter.answered === 0 ? 1 : fold.meter.answered / (fold.meter.open + fold.meter.answered)
 
-  useEffect(() => onCurrentSender(sender), [sender, onCurrentSender])
+  const offered = current ? answersOffered(current, book) : []
+  const options = OWNERSHIP.filter(({ kind }) => offered.includes(kind))
+  const offersMine = offered.includes("mine")
+
+  // With no My wallet to say anything about, there's no reason to read that address.
+  useEffect(() => onCurrentSender(offersMine ? sender : null), [offersMine, sender, onCurrentSender])
   useEffect(() => {
     setCosts({})
     setMessage(null)
   }, [current?.id])
 
-  // What's already said to be a wallet can't also be an exchange account, and what's asked here is about the wallet it reached.
-  const options = sender && book.senders[sender]?.kind === "mine" ? OWNERSHIP.filter(({ kind }) => kind !== "my-exchange") : OWNERSHIP
   const answer = (next: SenderAnswer) => sender && onChange(answerSender(book, focus, sender, next))
   /** What a book would make the headline say. A sender that would join All Yours hasn't been read yet, so it says that rather than leave it out. */
   const previewOf = (next: Book) => {
@@ -141,8 +144,8 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
   const previews = useMemo(() => {
     if (!sender || takingCost) return null
     const preview = (kind: "mine" | "someone-else") => previewOf(answerSender(book, focus, sender, { kind }))
-    return { mine: preview("mine"), "someone-else": preview("someone-else") }
-  }, [sender, focus, takingCost, wallet, others, all, method, book, failed])
+    return { mine: offersMine ? preview("mine") : null, "someone-else": preview("someone-else") }
+  }, [sender, focus, takingCost, offersMine, wallet, others, all, method, book, failed])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -284,7 +287,7 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
               {options.map(({ kind, title, swipe }, i) => (
                 <button key={kind} type="button" onClick={() => choose(kind)}>
                   <span className="answer-title">{title}</span>
-                  <span className="muted small">{kind === "my-exchange" ? "Then asks what you paid" : previews ? consequence(previews[kind], currency) : "…"}</span>
+                  <span className="muted small">{kind === "my-exchange" ? "Then asks what you paid" : previews?.[kind] ? consequence(previews[kind], currency) : "…"}</span>
                   <span className="muted small key">
                     {i + 1} {swipe}
                   </span>

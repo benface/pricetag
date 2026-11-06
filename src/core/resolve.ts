@@ -409,6 +409,17 @@ export type Question = {
   valueMicros: string | null
 }
 
+/**
+ * The answers a card offers, in order. An address with a name is an exchange's or a contract's, so nobody's wallet, and saying it's
+ * one would try to carry costs over from it. An answer that already says so stays as it is: that card is about the wallet it reached,
+ * so it still needs My wallet, and on the Mac the answer can be changed in Settings > Answers.
+ */
+export function answersOffered({ sender, known }: Pick<Question, "sender" | "known">, book: Book): SenderAnswer["kind"][] {
+  // What's already said to be a wallet can't also be an exchange account.
+  if (sender && book.senders[sender]?.kind === "mine") return ["mine", "someone-else"]
+  return known ? ["my-exchange", "someone-else"] : ["mine", "my-exchange", "someone-else"]
+}
+
 export type Meter = {
   open: number
   answered: number
