@@ -219,6 +219,21 @@
       "text": "Found 2 withdrawals. 1 more had no usable cost."
     }
   ],
+  "importAsk": {
+    "question": "Does this file have your whole Coinbase history?",
+    "notWhole": "Nothing changed. These costs need your whole history, so download it from Coinbase going back to the start, and import that.",
+    "startsLate": "This file starts after a withdrawal you've already imported, so part of your history is missing. Nothing changed. Download your whole history from Coinbase, and import that.",
+    "why": [
+      {
+        "startsAt": "2026-01-05T10:00:00.000Z",
+        "text": "It starts on Jan 5, 2026. What you bought before then changes what these cost, so if anything's missing, they'd be wrong."
+      },
+      {
+        "startsAt": "2025-12-31T23:59:59.000Z",
+        "text": "It starts on Dec 31, 2025. What you bought before then changes what these cost, so if anything's missing, they'd be wrong."
+      }
+    ]
+  },
   "withheld": "0x1234…5678's ETH history can't be confirmed, so what it sent has an unknown cost where it arrived.",
   "answerQuestions": [
     {

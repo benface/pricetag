@@ -388,6 +388,18 @@ public enum Wording {
         return skipped == 0 ? "Found \(withdrawals(found))." : "Found \(withdrawals(found)). \(skipped) more had no usable cost."
     }
 
+    public static let importQuestion = "Does this file have your whole Coinbase history?"
+    public static let importNotWhole = "Nothing changed. These costs need your whole history, so download it from Coinbase going back to the start, and import that."
+    public static let importStartsLate = "This file starts after a withdrawal you've already imported, so part of your history is missing. Nothing changed. Download your whole history from Coinbase, and import that."
+
+    /// Takes the date as the file has it, in UTC, so the Mac and the web say the same day.
+    public static func importWhy(startsAt: String) -> String {
+        let parts = startsAt.prefix(10).split(separator: "-").compactMap { Int($0) }
+        let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        guard parts.count == 3, months.indices.contains(parts[1] - 1) else { return "What you bought before this file starts changes what these cost, so if anything's missing, they'd be wrong." }
+        return "It starts on \(months[parts[1] - 1]) \(parts[2]), \(parts[0]). What you bought before then changes what these cost, so if anything's missing, they'd be wrong."
+    }
+
     public static func linkedFailed(_ count: Int) -> String {
         count == 1 ? "Couldn't read your other wallet, so what came from it may show an unknown cost." : "Couldn't read \(count) of your other wallets, so what came from them may show an unknown cost."
     }

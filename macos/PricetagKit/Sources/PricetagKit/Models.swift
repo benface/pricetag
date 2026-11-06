@@ -749,6 +749,11 @@ public struct ExchangeImport: Codable, Sendable, Equatable {
     public let withdrawals: [ExchangeWithdrawal]
     /// Withdrawals with no usable cost: bought in a currency this app doesn't have, in several at once, or with a history it can't follow.
     public let skipped: Int
+    /// When each asset first shows up in the file, since what came before that is out of its sight.
+    public let firstSeen: [String: String]
+
+    /// Where the file starts: the first date to ask someone about. These all come from one encoder, so they sort as dates.
+    public var startsAt: String? { firstSeen.values.min() }
 
     /// Something in it didn't come through, or nothing did.
     public var needsALook: Bool { withdrawals.isEmpty || skipped > 0 }
@@ -873,6 +878,14 @@ public struct Book: Codable, Sendable, Equatable, Hashable {
         var next = self
         next.withdrawals = withdrawals.filter { !again.contains(key($0)) } + found
         return next
+    }
+
+    /// A withdrawal already imported from before the file starts proves the file isn't the whole history, whatever anyone says about it.
+    public func importStartsLate(_ imported: ExchangeImport) -> Bool {
+        imported.withdrawals.contains { found in
+            guard let start = imported.firstSeen[found.asset] else { return false }
+            return withdrawals.contains { $0.asset == found.asset && $0.at < start }
+        }
     }
 
     /// An order can say more as it goes, like the block its delivery landed in, so a newer read of one takes over.

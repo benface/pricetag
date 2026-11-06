@@ -32,6 +32,13 @@ struct WordingVectors: Decodable {
         let found, skipped: Int
         let text: String
     }
+    struct ImportAsk: Decodable {
+        struct Why: Decodable {
+            let startsAt, text: String
+        }
+        let question, notWhole, startsLate: String
+        let why: [Why]
+    }
     struct Behind: Decodable {
         let ms: Int
         let text: String
@@ -78,6 +85,7 @@ struct WordingVectors: Decodable {
     let pnlHelp: [PnlHelp]
     let linkedFailed: [FeesUnknown]
     let imported: [Imported]
+    let importAsk: ImportAsk
     let withheld: String
     let answerQuestions: [FeesUnknown]
     let sentences: Sentences
@@ -110,6 +118,10 @@ struct WordingVectors: Decodable {
         for status in [Reconciliation.Status.reconciled, .incomplete, .unchecked] { #expect(Wording.checkLabel(status) == vectors.checkLabels[status.rawValue]) }
         for vector in vectors.feesUnknown { #expect(Wording.feesUnknown(vector.count) == vector.text) }
         for vector in vectors.imported { #expect(Wording.imported(found: vector.found, skipped: vector.skipped) == vector.text) }
+        #expect(Wording.importQuestion == vectors.importAsk.question)
+        #expect(Wording.importNotWhole == vectors.importAsk.notWhole)
+        #expect(Wording.importStartsLate == vectors.importAsk.startsLate)
+        for vector in vectors.importAsk.why { #expect(Wording.importWhy(startsAt: vector.startsAt) == vector.text) }
         for vector in vectors.behind { #expect(Wording.behind(ms: vector.ms) == vector.text) }
         #expect(Wording.stale(lastUpdate: "Nov 4 at 5:40 AM") == vectors.stale)
         for vector in vectors.unseenEth { #expect(Wording.unseenEthCause(vector.unseen) == vector.text) }
