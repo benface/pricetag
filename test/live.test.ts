@@ -495,10 +495,10 @@ describe("Amp's stream on the wire", FOLLOWING, () => {
   })
   after(() => close())
 
-  it("reads ranges past a keepalive, and resumes where it's asked with the token", async () => {
+  it("reads ranges past a keepalive, and resumes where it's asked with the token", async (t) => {
     const stream = createRangeStream(`http://127.0.0.1:${port}`, "secret", "base-mainnet")
     const ranges: StreamRange[] = []
-    for await (const range of stream("SELECT 1", { blockNum: 100, hash: "0x100" }, new AbortController().signal)) ranges.push(range)
+    for await (const range of stream("SELECT 1", { blockNum: 100, hash: "0x100" }, t.signal)) ranges.push(range)
     assert.deepEqual(ranges, [{ start: 101, end: 101, hash: "0x101", complete: false }, { start: 101, end: 101, hash: "0x101", complete: true }, { start: 102, end: 102, hash: "0x102", complete: true }])
     assert.deepEqual(seen.at(-1), { stream: "true", resume: JSON.stringify({ "base-mainnet": { number: 100, hash: "0x100" } }), auth: "Bearer secret" })
   })
