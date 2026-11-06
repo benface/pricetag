@@ -220,7 +220,7 @@ struct ConfirmationView<Footer: View>: View {
                 Label("Details", systemImage: "chevron.right")
                     .labelStyle(DetailsLabelStyle(isOpen: showsDetails))
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)

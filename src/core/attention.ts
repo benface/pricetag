@@ -3,7 +3,7 @@
 
 import { formatAmount, formatSignedAmount, type CurrencyCode, type PnlStatus, type Position, type Totals } from "@pricetag/sdk/core"
 import { missingRatesLine, type ExplainTarget } from "./explain.ts"
-import { ALL_BALANCES_MATCH, CHECK_LABELS, MARKET_ESTIMATES, PAST_COSTS_UNKNOWN, PNL_INCOMPLETE, UNPRICED_FEES, excludedSentence, feesUnknownSentence, leavesOutSentence, networkFeeUnknownSentence, pnlLeavesOutSentence, unreadBalancesSentence, unseenEthCause, valueGapsSentence, withheldSentence } from "./wording.ts"
+import { ALL_BALANCES_MATCH, CHECK_LABELS, MARKET_ESTIMATES, PAST_COSTS_UNKNOWN, PNL_INCOMPLETE, UNPRICED_FEES, excludedSentence, feesUnknownSentence, leavesOutSentence, networkFeeUnknownSentence, pnlLeavesOutSentence, unreadBalancesSentence, unseenEthCause, valueGapsSentence, withheldSentence, unrecordedSentence } from "./wording.ts"
 
 /** What these need of a position, which a combined one has too. */
 export type AttentionPosition = Pick<Position, "asset" | "decimals" | "values" | "noMarket" | "reconciliation"> & { state: Pick<Position["state"], "shortfallQty"> }
@@ -100,7 +100,9 @@ export function attentionTarget(positions: readonly AttentionPosition[]): Explai
 export function allBalancesMatch(positions: readonly AttentionPosition[], unread: readonly string[]): string | null {
   const shown = listed(positions)
   // A balance that couldn't be read has no row, and hasn't been shown to match anything.
-  return shown.length > 0 && unread.length === 0 && shown.every((p) => p.reconciliation?.status === "reconciled") ? ALL_BALANCES_MATCH : null
+  if (shown.length === 0 || unread.length > 0 || !shown.every((p) => p.reconciliation?.status === "reconciled")) return null
+  const unrecorded = shown.flatMap(({ asset, decimals, reconciliation }) => (reconciliation?.status === "reconciled" && reconciliation.unrecordedQty ? [unrecordedSentence(reconciliation.unrecordedQty, decimals, asset)] : []))
+  return [ALL_BALANCES_MATCH, ...unrecorded].join(" ")
 }
 
 /** What a row flags about its balance, or null when there's nothing to flag: a balance that matches says nothing. */

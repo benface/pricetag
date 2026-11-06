@@ -125,7 +125,7 @@ Nothing takes focus, but each launch puts an icon in the menu bar for a moment, 
 
 ## Compiling Swift takes turns
 
-Only one thing compiles Swift or runs its tests at a time, across every worktree on this Mac. `pnpm check:mac`, `pnpm check:mac:quick`, `pnpm mac:build`, `pnpm check:keychain`, `pnpm check:extension`, `pnpm check:anvil` and the build in `shot.sh` all queue by themselves, in the order they started, and only hold the lock while compiling or testing. `pnpm mac` never waits. Run anything else through the queue, like one test, with `--scratch-path` so it reuses what `check:mac` compiled:
+Only one thing compiles Swift or runs its tests at a time, across every worktree on this Mac. `pnpm check:mac`, `pnpm check:mac:quick`, `pnpm mac:build`, `pnpm check:keychain`, `pnpm check:extension`, `pnpm check:device-pages`, `pnpm check:anvil` and the build in `shot.sh` all queue by themselves, in the order they started, and only hold the lock while compiling or testing. `pnpm mac` never waits. Run anything else through the queue, like one test, with `--scratch-path` so it reuses what `check:mac` compiled:
 
 ```sh
 macos/swift-queue.sh swift test --package-path macos/PricetagKit --scratch-path macos/.build --filter FeedTests

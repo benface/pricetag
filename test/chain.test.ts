@@ -80,6 +80,27 @@ describe("Base's block times", () => {
   })
 })
 
+describe("a block with no base fee", () => {
+  const ME = "dd8795475306152abe5f45f1ce97c017fd2f02e7"
+  const read = (baseFee: string | null) => {
+    const tx = { block_num: 5, timestamp: 1_730_000_000_000, tx_hash: "ab", tx_index: 0, from: ME, to: null, value: "0", gas_used: "21000", gas_price: null, max_fee_per_gas: "200", max_priority_fee_per_gas: "100", status: true, type: 2 }
+    const query = (async (sql: string) => (sql.includes(".transactions") ? [tx] : sql.includes(".blocks") ? [{ block_num: 5, base_fee_per_gas: baseFee }] : [])) as unknown as Query
+    return rawSource(query, { baseDataset: "base", network: "base_mainnet", historyBlocks: null }).readWindow(`0x${ME}`, 0, 10)
+  }
+
+  it("leaves what a transaction paid unknown, rather than free", async () => {
+    const { rows, gasUnknown } = await read(null)
+    assert.deepEqual(rows.filter((row) => row.kind === "gas"), [])
+    assert.deepEqual(gasUnknown, [{ tx_hash: "0xab", block_num: 5 }])
+  })
+
+  it("works it out when there is one", async () => {
+    const { rows, gasUnknown } = await read("50")
+    assert.equal(rows.find((row) => row.kind === "gas")?.amount, (21000n * 150n).toString())
+    assert.deepEqual(gasUnknown, [])
+  })
+})
+
 describe("where a chart reads prices between transactions", () => {
   const HOUR = 1800
   const DAY = 24 * HOUR

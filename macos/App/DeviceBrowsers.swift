@@ -20,14 +20,34 @@ struct DeviceBrowsers {
             }
             return LedgerBrowserChoice(defaultBrowser: NSWorkspace.shared.urlForApplication(toOpen: page).flatMap(browser), installed: NSWorkspace.shared.urlsForApplications(toOpen: page).compactMap(browser))
         },
-        open: { url, browser in
-            if let browser {
-                NSWorkspace.shared.open([url], withApplicationAt: browser.url, configuration: NSWorkspace.OpenConfiguration())
-            } else {
-                NSWorkspace.shared.open(url)
+        open: { link, browser in
+            Task { @MainActor in
+                do {
+                    let url = try await page(for: link)
+                    if let browser {
+                        NSWorkspace.shared.open([url], withApplicationAt: browser.url, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
+                    } else {
+                        NSWorkspace.shared.open(url)
+                    }
+                } catch {
+                    let alert = NSAlert()
+                    alert.messageText = "Couldn't Open the Hardware Wallet Page"
+                    alert.informativeText = error as? DevicePageServer.Problem == .noPages ? "This copy of \(AppName.current) was built without it. Nothing was sent." : "Nothing was sent. Try again, or quit \(AppName.current) and open it again."
+                    alert.runModal()
+                }
             }
         }
     )
+
+    private static let pages = Bundle.main.url(forResource: "DevicePages", withExtension: nil).map { DevicePageServer(folder: $0) }
+
+    /// Where a link's request gets done. `pnpm mac`'s server has the page. With any other, it's on this Mac for as long as it stays open.
+    static func page(for link: URL) async throws -> URL {
+        guard DeviceFlow.needsItsOwnPage(link) else { return link }
+        guard let pages else { throw DevicePageServer.Problem.noPages }
+        guard let page = DeviceFlow.link(link, on: try await pages.start()) else { throw DevicePageServer.Problem.couldNotListen }
+        return page
+    }
 }
 
 extension View {

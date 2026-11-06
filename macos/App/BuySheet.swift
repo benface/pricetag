@@ -141,7 +141,7 @@ struct BuySheet: View {
                 if plan.aboveCap > 0, hasSavings {
                     Text("Keep \(AppName.current) open until it lands. If it's closed, it moves the next time it opens.")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                 }
             }
             .fixedSize(horizontal: false, vertical: true)

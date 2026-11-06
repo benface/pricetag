@@ -35,6 +35,7 @@ public struct FeedSummary: Equatable, Sendable {
         case .ampUnavailable: (text, isWarning) = ("Prices offline", true)
         case .noAmpConfigured: (text, isWarning) = ("No prices", true)
         case .rejected: (text, isWarning) = ("Can't read", true)
+        case .tooBig: (text, isWarning) = ("Too much history", true)
         case .rateLimited: (text, isWarning) = ("Slowed down", true)
         case .live:
             guard let portfolio else {
@@ -81,6 +82,13 @@ public struct FeedProblem: Equatable, Sendable {
     public let detail: String?
 }
 
+extension URL {
+    /// Where saying "on this Mac" and "start it" is true.
+    public var isOnThisMac: Bool {
+        ["127.0.0.1", "localhost", "::1"].contains(host()?.lowercased() ?? "")
+    }
+}
+
 extension FeedState {
     /// How long a read goes before it's worth saying how long it's been. Most finish sooner.
     public static let longReadSeconds = 5
@@ -95,7 +103,7 @@ extension FeedState {
             what = "Prices are \(Self.age(seconds)) behind the network, so the newest transactions may be missing."
             next = "This usually catches up by itself."
             detail = "The newest block in the data is \(Self.age(seconds)) old."
-        case .serverUnreachable where Self.isOnThisMac(serverURL):
+        case .serverUnreachable where serverURL.isOnThisMac:
             title = "The Price Service Isn't Running"
             what = "The price service on this Mac isn't running."
             next = "Start it, then try again."
@@ -118,12 +126,17 @@ extension FeedState {
         case .noAmpConfigured(let message):
             title = "No Price Data Set Up"
             what = "The price service has no data source, so only the demo wallet works."
-            next = "Set one up, then restart the price service."
-            detail = "The price service said: \(message) Its data source goes in .env.local."
+            next = serverURL.isOnThisMac ? "Set one up, then restart the price service." : "Whoever runs it needs to set one up."
+            detail = "The price service said: \(message)" + (serverURL.isOnThisMac ? " Its data source goes in .env.local." : "")
         case .rejected(let message):
             title = "Couldn't Read This Wallet"
             what = "The price service turned this request down."
-            next = "Try again. If it keeps happening, restart the price service."
+            next = serverURL.isOnThisMac ? "Try again. If it keeps happening, restart the price service." : "Try again. If it keeps happening, let whoever runs the price service know."
+            detail = "The price service said: \(message)"
+        case .tooBig(let message):
+            title = "Too Much History to Read"
+            what = "This is more history than the price service can hold at once, so there are no numbers to show rather than incomplete ones."
+            next = "Trying again won't change this."
             detail = "The price service said: \(message)"
         case .rateLimited(let message):
             title = "Slowed Down for a Moment"
@@ -153,13 +166,9 @@ extension FeedState {
         case .ampUnavailable: "Prices unavailable for now"
         case .noAmpConfigured: "No price data set up"
         case .rejected: "Couldn't read this wallet"
+        case .tooBig: "Too much history to read"
         case .rateLimited: "Slowed down for a moment"
         }
-    }
-
-    /// Where saying "on this Mac" and "start it" is true.
-    private static func isOnThisMac(_ url: URL) -> Bool {
-        ["127.0.0.1", "localhost", "::1"].contains(url.host() ?? "")
     }
 
     private static func age(_ seconds: Int) -> String {

@@ -164,9 +164,11 @@ extension View {
 private struct SecondaryText: ViewModifier {
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.isStale) private var isStale
+    /// On a selected row's accent color, like `LiveNumber`.
+    @Environment(\.backgroundProminence) private var prominence
 
     func body(content: Content) -> some View {
-        content.foregroundStyle(isStale ? Tone.neutral.style : AnyShapeStyle(Tone.readableSecondary(contrast)))
+        content.foregroundStyle(prominence == .increased || isStale ? Tone.neutral.style : AnyShapeStyle(Tone.readableSecondary(contrast)))
     }
 }
 
@@ -415,6 +417,8 @@ public struct FeedBadge: View {
             if portfolio.mode == .demo { return Mode.demo.label }
             return "Live"
         case .catchingUp: return "Catching up"
+        // A first read that's slow is still going, and with no numbers there's nothing to have stopped updating.
+        case .tooSlow where portfolio == nil: return "Slow to read"
         default:
             // A retry that's taking a while may be about to work, so it says it's trying rather than only that it's stopped.
             guard let seconds, seconds >= FeedState.longReadSeconds else { return "Not updating" }

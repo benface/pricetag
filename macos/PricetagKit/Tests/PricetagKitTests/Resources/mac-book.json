@@ -1,0 +1,39 @@
+{
+  "costs" : {
+    "key" : {
+      "currency" : "USD",
+      "micros" : "5"
+    }
+  },
+  "purchases" : [
+    {
+      "asset" : "ETH",
+      "cost" : {
+        "currency" : "USD",
+        "micros" : "5"
+      },
+      "order" : "1",
+      "provider" : "coinbase",
+      "txHash" : "0xabc",
+      "units" : "1",
+      "wallet" : "0x00000000000000000000000000000000000000aa"
+    }
+  ],
+  "senders" : {
+    "0x00000000000000000000000000000000000000aa" : {
+      "kind" : "my-exchange"
+    }
+  },
+  "withdrawals" : [
+    {
+      "asset" : "ETH",
+      "at" : "2026-11-04T00:00:00.000Z",
+      "cost" : {
+        "currency" : "USD",
+        "micros" : "5"
+      },
+      "exchange" : "Coinbase",
+      "units" : "1"
+    }
+  ]
+}

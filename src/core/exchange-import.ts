@@ -57,28 +57,46 @@ export function parseCoinbaseCsv(text: string): ExchangeImport | null {
   const at = { time: column("timestamp"), type: column("transaction type"), asset: column("asset"), qty: column("quantity"), currency: header.findIndex((h) => h.endsWith("currency")), total: column("total"), notes: column("notes") }
   if (at.time < 0 || at.type < 0 || at.asset < 0 || at.qty < 0 || at.total < 0) return null
 
-  const rows = lines
+  const parsed = lines
     .slice(headerAt + 1)
     .filter((line) => line.trim() !== "")
     .map(parseCsvLine)
     .map((cells) => ({ cells, time: Date.parse((cells[at.time] ?? "").replace(" UTC", "Z").replace(" ", "T")) }))
-    .filter((row) => !Number.isNaN(row.time))
-    .sort((a, b) => a.time - b.time)
 
   const pools = new Map<string, Pool>()
   const withdrawals: ExchangeWithdrawal[] = []
   let skipped = 0
-  for (const { cells, time } of rows) {
+  const assetOf = (cells: string[]) => {
     const symbol = (cells[at.asset] ?? "").trim()
-    const asset = symbol === "WETH" ? "ETH" : symbol
+    return symbol === "WETH" ? "ETH" : symbol
+  }
+  const typeOf = (cells: string[]) => (cells[at.type] ?? "").trim().toLowerCase()
+  const poolOf = (asset: string) => {
+    const pool = pools.get(asset) ?? { units: 0n, cost: 0n, known: true, currency: null }
+    pools.set(asset, pool)
+    return pool
+  }
+  // A row with no readable time can't be put in order, so it could be behind any of that asset's costs.
+  for (const { cells } of parsed.filter((row) => Number.isNaN(row.time))) {
+    if (!ASSETS.includes(assetOf(cells))) continue
+    poolOf(assetOf(cells)).known = false
+    if (SENDS.has(typeOf(cells))) skipped++
+  }
+  for (const { cells, time } of parsed.filter((row) => !Number.isNaN(row.time)).sort((a, b) => a.time - b.time)) {
+    const asset = assetOf(cells)
     if (!ASSETS.includes(asset)) continue
     const decimals = decimalsOf(asset)
     const units = unitsOf(cells[at.qty] ?? "", decimals)
-    const type = (cells[at.type] ?? "").trim().toLowerCase()
-    const pool = pools.get(asset) ?? { units: 0n, cost: 0n, known: true, currency: null }
-    pools.set(asset, pool)
+    const type = typeOf(cells)
+    const pool = poolOf(asset)
     const currency = at.currency < 0 ? "USD" : (cells[at.currency] ?? "").trim().toUpperCase()
-    if (units === null || units === 0n) continue
+    if (units === 0n) continue
+    if (units === null) {
+      // How much moved is anyone's guess, and so is what's left and what it cost.
+      pool.known = false
+      if (SENDS.has(type)) skipped++
+      continue
+    }
     if (BUYS.has(type)) {
       const total = unitsOf(cells[at.total] ?? "", 6)
       // Adding up two currencies would need a rate at each purchase, so a mix has no usable cost.
@@ -97,6 +115,8 @@ export function parseCoinbaseCsv(text: string): ExchangeImport | null {
           withdrawals.push({ exchange: "Coinbase", asset, units: units.toString(), at: new Date(time).toISOString(), cost: { micros: cost.toString(), currency: pool.currency as CurrencyCode }, toAddress: to && isAddress(to) ? normalizeAddress(to) : null })
         } else skipped++
       }
+      // More went out than this history shows coming in, so it's missing something, and no cost after this can be trusted.
+      if (units > pool.units) pool.known = false
       pool.cost -= cost
       pool.units = units <= pool.units ? pool.units - units : 0n
     } else {
@@ -106,6 +126,17 @@ export function parseCoinbaseCsv(text: string): ExchangeImport | null {
     }
   }
   return { withdrawals, skipped }
+}
+
+const withdrawalKey = ({ exchange, asset, units, at, toAddress }: ExchangeWithdrawal) => JSON.stringify([exchange, asset, units, at, toAddress])
+
+/**
+ * What an import adds to what earlier ones found. A file that has the same withdrawal again takes over for it, since it's the
+ * latest word on what it cost. Two alike in one file are two withdrawals, so both stay.
+ */
+export function mergeWithdrawals(earlier: readonly ExchangeWithdrawal[], found: readonly ExchangeWithdrawal[]): ExchangeWithdrawal[] {
+  const again = new Set(found.map(withdrawalKey))
+  return [...earlier.filter((withdrawal) => !again.has(withdrawalKey(withdrawal))), ...found]
 }
 
 const MATCH_BEFORE_MS = 5 * 60_000

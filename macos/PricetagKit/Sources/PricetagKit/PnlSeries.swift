@@ -25,7 +25,7 @@ struct PnlSeries {
 
     init(points: [PnlPoint]) {
         let plotted = points.compactMap { point -> Plotted? in
-            point.date.map { Plotted(point: point, date: $0, value: point.pnlMicros.map(Format.chartValue)) }
+            point.date.map { Plotted(point: point, date: $0, value: point.pnlMicros.flatMap(Format.chartValue)) }
         }
         var segments: [[Step]] = []
         var gaps: [ClosedRange<Date>] = []
@@ -109,7 +109,7 @@ struct ValueSeries: PlottedSeries {
 
     init(points: [PnlPoint]) {
         let plotted = points.compactMap { point -> PnlSeries.Plotted? in
-            point.date.map { PnlSeries.Plotted(point: point, date: $0, value: point.valueMicros.map(Format.chartValue)) }
+            point.date.map { PnlSeries.Plotted(point: point, date: $0, value: point.valueMicros.flatMap(Format.chartValue)) }
         }
         var lines: [Line] = []
         var gaps: [ClosedRange<Date>] = []
@@ -126,7 +126,7 @@ struct ValueSeries: PlottedSeries {
                 gaps.append(start...item.date)
                 gapStart = nil
             }
-            let before = item.point.valueBeforeMicros.map(Format.chartValue)
+            let before = item.point.valueBeforeMicros.flatMap(Format.chartValue)
             if let previous, let from = previous.value {
                 if let before, item.point.valueContinues == true {
                     lines.append(Line(id: lines.count, known: item.point.valueRead == true, steps: [PnlSeries.Step(id: previous.id, date: previous.date, value: from), PnlSeries.Step(id: "\(item.id):before", date: item.date, value: before)]))

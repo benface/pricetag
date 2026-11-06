@@ -53,6 +53,14 @@ public struct ResolveFlow: View {
                 }
             }
             .frame(maxWidth: .infinity, minHeight: 330, alignment: .top)
+            if let imported = model.lastImport {
+                let sentence = Wording.imported(found: imported.withdrawals.count, skipped: imported.skipped)
+                if imported.needsALook {
+                    WarningText(sentence).font(.callout).fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text(sentence).font(.callout).secondaryText()
+                }
+            }
             footer
         }
         // One question to the next, and the last to the finish, fade rather than swap.
@@ -140,7 +148,7 @@ public struct ResolveFlow: View {
             // At the end, the number takes the middle of the sheet instead.
             if model.current != nil {
                 HStack(spacing: 6) {
-                    Text("Now").foregroundStyle(.secondary)
+                    Text("Now").secondaryText()
                     if let portfolio = store.portfolio {
                         LiveNumber(nowText(portfolio))
                     }
@@ -324,7 +332,7 @@ public struct ResolveFlow: View {
             }
             Text("This stays on this Mac.")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .help("Publishing a cost onchain would tie your wallets together in public, so that's never done without asking.")
             if let failure = model.failure { WarningText(failure).font(.callout) }
         }

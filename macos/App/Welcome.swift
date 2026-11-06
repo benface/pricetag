@@ -209,46 +209,22 @@ private struct WelcomeChoice<Action: View>: View {
 struct FirstRead: View {
     let store: PortfolioStore
     let firstRun: FirstRun
+    /// Inside a page that already scrolls, this mustn't scroll too.
+    var isInsidePage = false
     @State private var progress: FirstReadProgress?
 
-    private var isContract: Bool { firstRun.warnsOfContract(store.address) }
+    /// Why this read can be slow, so unlike the note with the numbers, it's for every read of a contract, seen before or not.
+    private var isContract: Bool { progress?.isContract == true }
 
     var body: some View {
-        WelcomePage {
-            VStack(spacing: 18) {
-                Text(Wording.readingTitle)
-                    .font(.displaySmall)
-                    .multilineTextAlignment(.center)
-                    .accessibilityAddTraits(.isHeader)
-                if let progress {
-                    GroupBox {
-                        VStack(alignment: .leading, spacing: 10) {
-                            ForEach(progress.steps) { StepRow(step: $0) }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(6)
-                    }
-                    .transition(.opacity)
-                } else {
-                    ProgressView().controlSize(.large)
-                }
-                ReadingClock(since: store.readingSince ?? .now) { seconds in
-                    Text(store.feed == .tooSlow ? Wording.readTakingLong : seconds < FeedState.longReadSeconds ? Wording.reading : Wording.stillReading(seconds: seconds))
-                        .font(.callout)
-                        .multilineTextAlignment(.center)
-                        .secondaryText()
-                        .contentTransition(.numericText())
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if isContract {
-                    Notice(.warning, Wording.contractNotice)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .arrives()
-                }
-                Button("Choose Another Wallet") { store.setWallet(nil) }
+        Group {
+            if isInsidePage {
+                steps
+                    .frame(maxWidth: 440)
+                    .frame(maxWidth: .infinity)
+            } else {
+                WelcomePage { steps }
             }
-            .motion(Motion.state, value: progress?.stage)
-            .motion(Motion.state, value: isContract)
         }
         .task(id: store.address) {
             progress = nil
@@ -266,6 +242,46 @@ struct FirstRead: View {
             guard let step = progress?.steps.first(where: { $0.id == stage }) else { return }
             AccessibilityNotification.Announcement(step.title).post()
         }
+    }
+
+    private var steps: some View {
+        VStack(spacing: 18) {
+            Text(Wording.readingTitle)
+                .font(.displaySmall)
+                .multilineTextAlignment(.center)
+                .accessibilityAddTraits(.isHeader)
+            if let progress {
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(progress.steps) { StepRow(step: $0) }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(6)
+                }
+                .transition(.opacity)
+            } else {
+                ProgressView().controlSize(.large)
+            }
+            ReadingClock(since: store.readingSince ?? .now) { seconds in
+                Text(store.feed == .tooSlow ? Wording.readTakingLong : seconds < FeedState.longReadSeconds ? Wording.reading : Wording.stillReading(seconds: seconds))
+                    .font(.callout)
+                    .multilineTextAlignment(.center)
+                    .secondaryText()
+                    .contentTransition(.numericText())
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if isContract {
+                Notice(.warning, Wording.contractNotice)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .arrives()
+            }
+            // Past the welcome, the wallet menu in the toolbar does this, and no wallet at all isn't a place to send anyone.
+            if firstRun.isWelcoming {
+                Button("Choose Another Wallet") { store.setWallet(nil) }
+            }
+        }
+        .motion(Motion.state, value: progress?.stage)
+        .motion(Motion.state, value: isContract)
     }
 }
 
