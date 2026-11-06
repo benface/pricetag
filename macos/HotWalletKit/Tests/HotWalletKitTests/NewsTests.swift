@@ -101,7 +101,7 @@ private final class Heard {
         let heard = Heard(rig.wallet)
         await rig.chain.setSendFailure(.rejected("insufficient funds"))
         await rig.wallet.tick()
-        #expect(heard.news == [.sweepDidntGoOut("A sweep of USDC didn't go out: insufficient funds")])
+        #expect(heard.news == [.sweepDidntGoOut("A sweep of USDC didn't go out. There isn't enough ETH for this and its network fee. Add some ETH, then try again.")])
         clock.advance(HotWallet.pauseAfterFailure + 1)
         await rig.wallet.tick()
         #expect(await rig.signer.signed.count == 2, "it tried again")

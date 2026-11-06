@@ -109,7 +109,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         let rig = await Rig(over, now: { clock.now })
         await rig.chain.setSendFailure(.rejected("insufficient funds"))
         await rig.wallet.tick()
-        #expect(rig.wallet.sweepProblem?.contains("insufficient funds") == true)
+        #expect(rig.wallet.sweepProblem == "A sweep of USDC didn't go out. \(HotWalletWording.refusal("insufficient funds"))")
         #expect(rig.wallet.records.first?.status == .dropped)
 
         await rig.chain.setSendFailure(nil)
@@ -135,7 +135,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         await rig.chain.setEstimateFailure(.rejected("execution reverted"))
         await rig.wallet.tick()
         #expect(await rig.signer.signed.isEmpty)
-        #expect(rig.wallet.sweepProblem?.contains("execution reverted") == true)
+        #expect(rig.wallet.sweepProblem?.hasSuffix(HotWalletWording.refusal("execution reverted")) == true)
     }
 
     @Test func aBroadcastThatMightHaveWorkedStaysPending() async throws {
