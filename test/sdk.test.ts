@@ -410,6 +410,66 @@ describe("getPortfolio's current prices", () => {
     assert.deepEqual([aero.price, aero.values.valueMicros], [null, null])
   })
 
+  describe("as of a fixed block", () => {
+    const RANGE = { from: 50, to: 150 }
+    const AERO_FEED = { AERO: { answer: 63_000_000n, updatedAt: NOW - 60 } }
+    const fixedTables = (feeds: Tables["feeds"]): Tables => ({ ...tables(feeds), balances: { 49: { AERO: HELD }, 150: { AERO: HELD } } })
+    /** A client whose chain has reached `head.block`, with what's asked of the feeds and how many of those should fail. */
+    const fixedClient = (feeds: Tables["feeds"], failures = 0) => {
+      const { query } = fakeAmp(fixedTables(feeds))
+      const head = { block: 200 }
+      const feedReads: string[] = []
+      const answers: Query = async <T,>(sql: string, timeoutMs?: number) => {
+        if (sql.includes("latestRoundData()")) {
+          feedReads.push(sql)
+          if (feedReads.length <= failures) throw new Error("boom")
+        }
+        const rows = await query<T>(sql, timeoutMs)
+        return sql.includes(".blocks") && !sql.includes("latestRoundData()") ? (rows.map((row) => ({ ...row, block_num: String(head.block) })) as T[]) : rows
+      }
+      return { client: pricetagClient(answers, { dataset: "benface/pricetag@0.0.1", logger: { warn() {} } }), head, feedReads }
+    }
+    const aero = async (client: ReturnType<typeof pricetagClient>) => (await client.getPortfolio(`0x${ME}`, RANGE)).positions.find((p) => p.asset === "AERO")!
+
+    it("reads a feed again after a failed read, with no new block, and stops once it has the answer", async () => {
+      const { client, feedReads } = fixedClient(AERO_FEED, 1)
+      const first = await aero(client)
+      assert.deepEqual([first.price, first.values.valueMicros], [null, null], "unknown, never $0")
+      const recovered = await aero(client)
+      assert.deepEqual([recovered.price?.micros, recovered.values.valueMicros], ["630000", "315000000"])
+      assert.equal(feedReads.length, 2)
+      assert.ok(feedReads.every((sql) => sql.includes("block_num IN (150)")), "still as of the fixed block")
+      await aero(client)
+      assert.equal(feedReads.length, 2)
+    })
+
+    it("keeps an answer it has, whatever the head does next", async () => {
+      const { client, head, feedReads } = fixedClient(AERO_FEED)
+      await aero(client)
+      head.block = 5_000
+      assert.equal((await aero(client)).values.valueMicros, "315000000")
+      assert.equal(feedReads.length, 1)
+    })
+
+    it("asks a feed that gives no answer less and less, then stops", async () => {
+      const { client, head, feedReads } = fixedClient({})
+      const askedAt = async (block: number) => {
+        head.block = block
+        assert.equal((await aero(client)).values.valueMicros, null)
+        return feedReads.length
+      }
+      assert.equal(await askedAt(200), 1)
+      assert.equal(await askedAt(200), 1, "not again at the same head")
+      assert.equal(await askedAt(229), 1, "not again before its wait")
+      assert.equal(await askedAt(230), 2)
+      assert.equal(await askedAt(290), 3)
+      assert.equal(await askedAt(410), 4)
+      assert.equal(await askedAt(650), 5)
+      assert.equal(await askedAt(1_130), 6)
+      assert.equal(await askedAt(100_000), 6)
+    })
+  })
+
   it("reads the same prices the app's server does", async () => {
     const answers = tables({ AERO: { answer: 63_000_000n, updatedAt: NOW - 60 } })
     const { query, client } = fakeAmp(answers)
