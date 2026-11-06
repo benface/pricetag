@@ -5,6 +5,7 @@
 import { asIso, asNumber, decimalString, hexOf, isNotStarted, prefixed, type BlockMark, type Query } from "./amp.ts"
 import { blockBefore } from "./chain.ts"
 import { MULTICALL3, decodeEthBalance, encodeEthBalanceCall, readBalancesAt } from "./balances.ts"
+import type { Followed } from "./followed.ts"
 import type { LegRow, PayoutTx, PricedRow, Reference } from "./legs.ts"
 import type { Head } from "./portfolio.ts"
 import type { PriceFeed } from "./tokens.ts"
@@ -100,8 +101,8 @@ export const followRawSql = (baseDataset: string) => `SELECT block_num FROM "${b
 /** A derived table runs a few seconds behind the head, and older than this isn't a current price. */
 const MAX_PRICE_AGE_MS = 120_000
 
-const LEG_COLUMNS = "block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind"
-const PRICED_COLUMNS = "block_num, tx_hash, account, sold_token, sold_amount, bought_token, bought_amount, priced"
+export const LEG_COLUMNS = "block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind"
+export const PRICED_COLUMNS = "block_num, tx_hash, account, sold_token, sold_amount, bought_token, bought_amount, priced"
 const ORACLE_COLUMNS = { eth: "eth_answer", usdc: "usdc_answer" }
 const REFERENCE_COLUMNS = `block_num, ${ORACLE_COLUMNS.eth} AS eth_usd, ${ORACLE_COLUMNS.usdc} AS usdc_usd, eth_tx, usdc_tx`
 
@@ -153,7 +154,20 @@ export const SWAP_TABLES = ["legs", "unlisted_legs", "priced_legs"]
 /** The tables a pricing rule decides. Everything else is what happened on the chain, whichever rule prices it. */
 const PRICE_TABLES = ["priced_legs", "reference_prices"]
 
-export function datasetReader(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined }) {
+/** What can come from a stream instead of a query. `counterparty_logs` is only read by the server. */
+export type StreamedTable = "legs" | "unlisted_legs" | "priced_legs" | "counterparty_logs"
+
+/** What to follow for a wallet's `readWindow`. They're the queries below with no range of blocks. */
+export function followedWindowSql(address: string, dataset: string, priceDataset = dataset): Record<"legs" | "unlisted_legs" | "priced_legs", string> {
+  const where = `WHERE account = X'${hexOf(address)}'`
+  return {
+    legs: `SELECT ${LEG_COLUMNS} FROM "${dataset}".legs ${where}`,
+    unlisted_legs: `SELECT ${LEG_COLUMNS} FROM "${dataset}".unlisted_legs ${where}`,
+    priced_legs: `SELECT ${PRICED_COLUMNS} FROM "${priceDataset}".priced_legs ${where}`,
+  }
+}
+
+export function datasetReader(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined; followed?: Followed<StreamedTable> | undefined }) {
   const ds = `"${config.dataset}"`
   // A fork of the pricing rule only needs the tables the rule reaches, so these can come from somewhere else.
   const prices = `"${config.priceDataset ?? config.dataset}"`
@@ -167,7 +181,9 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
   async function readLegs(address: string, from: number, to: number) {
     const me = hexOf(address)
     const where = `WHERE block_num BETWEEN ${from} AND ${to} AND account = X'${me}'`
-    const rows = (await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.legs ${where} UNION ALL SELECT ${LEG_COLUMNS} FROM ${ds}.unlisted_legs ${where}`)).map(toLegRow)
+    const listed = await config.followed?.read(address, "legs", from, to)
+    const unlisted = listed && (await config.followed?.read(address, "unlisted_legs", from, to))
+    const rows = (listed && unlisted ? [...listed, ...unlisted] : await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.legs ${where} UNION ALL SELECT ${LEG_COLUMNS} FROM ${ds}.unlisted_legs ${where}`)).map(toLegRow)
     const isUnlisted = (r: LegRow) => r.kind === "unlisted" || r.kind === "unlisted_nft"
     return {
       // pt_gas leaves the amount empty when the gas can't be worked out, and BigInt can't read that.
@@ -179,7 +195,7 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
 
   /** What this rule's `priced_legs` says about a wallet. */
   async function readPriced(address: string, from: number, to: number) {
-    const pricedRows = await query<Row>(`SELECT ${PRICED_COLUMNS} FROM ${prices}.priced_legs WHERE block_num BETWEEN ${from} AND ${to} AND account = X'${hexOf(address)}'`)
+    const pricedRows = (await config.followed?.read(address, "priced_legs", from, to)) ?? (await query<Row>(`SELECT ${PRICED_COLUMNS} FROM ${prices}.priced_legs WHERE block_num BETWEEN ${from} AND ${to} AND account = X'${hexOf(address)}'`))
     return pricedRows.map(toPricedRow)
   }
 
