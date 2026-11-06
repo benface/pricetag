@@ -133,7 +133,7 @@ Deploy with `POST /controller/materialized-datasets/benface/pricetag_cautious/ve
 
 **Replacing the dataset it forks means replacing the fork too.** The fork reads the job of the version it names, so stopping that job stops the fork. Deploy a fork of the new version before stopping the old one, then change all four lines together.
 
-**A new dataset name needs a new manifest hash.** Amp finds a dataset's active tables by hash and table name, not by dataset name, so one manifest under two names can read and write the same tables. That's why `benface/pricetag@0.0.1` is `dataset/pricetag.json` at this start block plus a one-line SQL comment. A manifest with new SQL already has its own hash.
+**A new dataset name needs a new manifest hash.** Amp finds a dataset's active tables by hash and table name, not by dataset name, so one manifest under two names can read and write the same tables. That's why staging's `benface/pricetag@0.0.1` was `dataset/pricetag.json` at this start block plus a one-line SQL comment. A manifest with new SQL already has its own hash.
 
 `pnpm amp:start` turns the fork off while it runs, because it isn't registered on a local Amp. Hot wallet decisions and tax reports always read by the default rule, whatever the switch says.
 
@@ -311,7 +311,9 @@ The Mac app's Security page (⌘5) has a short checklist, each item checked wher
 
 ## Known gaps
 
-- Sending isn't in the app yet, so "Is this yours?" at send time and linking every account from one device or recovery phrase wait for that. Neither can the app write a note yet, only read one.
+- Sending only covers ETH and the tokens the app tracks, so nothing else in a wallet can be moved from here.
+- A device's accounts are listed 5 at a time, and only what's been listed gets linked, so an account in use further down stays out until you list it. The device is the only way to find them, because the app never sees a recovery phrase.
+- The hardware wallet flows haven't run against a real device yet. See [the checklist](HARDWARE-WALLETS.md#checklist-for-a-real-device).
 - Exchange names are only as good as the list in `src/core/senders.ts`. Each comes from a Basescan name tag or a confirmed withdrawal. A withdrawal from an address not on the list won't say where it came from, and that includes some from Coinbase and any from another exchange. An imported history still matches them.
 - A cost entered in CAD can't be shown in USD for a wallet read in USD, because that read has no rates. It shows as unresolved there, and never as the wrong number.
 - Only the allowlist in `packages/sdk/src/tokens.ts` gets a position and a price. A transaction that also moves another token is never valued as a swap, because its payment can't be split: what arrived has an unknown cost, and what left has unknown proceeds. Internal ETH isn't seen without traces, so it can't trigger this.
