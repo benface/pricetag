@@ -560,6 +560,21 @@ describe("the book in two browser tabs", { skip: existsSync(CHROME) ? false : "C
     await until(async () => (await evaluate(a, "unreadableSaved.unreadable")) && !(await evaluate(a, "unreadableSaved.copyFailed")), "a copy in localStorage to be reported")
     assert.deepEqual(JSON.parse(await evaluate<string>(a, `localStorage.getItem("patina.unreadable")`)).entries, [{ key: "patina.book", text: unreadable }])
 
+    await evaluate(a, "unreadableSaved.dismiss()")
+    await until(async () => !(await evaluate(a, "unreadableSaved.unreadable")), "the notice to close")
+    await until(async () => JSON.parse(await evaluate<string>(a, `localStorage.getItem("patina.unreadable")`)).seen === 1, "the dismissal to be kept where the notice came from")
+    await reload(a)
+    assert.equal(await evaluate(a, "unreadableSaved.unreadable"), false, "it's only said once")
+    assert.equal(await evaluate(a, `localStorage.getItem("patina.book")`), unreadable)
+
+    const newer = failedCopies["patina.purchases"]
+    await evaluate(a, `localStorage.setItem("patina.purchases", ${JSON.stringify(newer)})`)
+    await reload(a)
+    await until(() => evaluate(a, "unreadableSaved.unreadable"), "something new to be said")
+    assert.equal(await evaluate(a, "unreadableSaved.copyFailed"), false)
+    assert.deepEqual(JSON.parse(await evaluate<string>(a, `localStorage.getItem("patina.unreadable")`)).entries, [{ key: "patina.book", text: unreadable }, { key: "patina.purchases", text: newer }])
+    await evaluate(a, `localStorage.removeItem("patina.purchases")`)
+
     await evaluate(a, `localStorage.removeItem("patina.unreadable"); sessionStorage.setItem("fail copies", "1")`)
     await reload(a)
     await until(() => evaluate(a, "unreadableSaved.copyFailed"), "the failed copy to be reported")

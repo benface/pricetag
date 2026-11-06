@@ -121,6 +121,9 @@ export function useBook() {
   return { book, change, undo, canUndo, notSaved, linkAccounts, addPurchase }
 }
 
+/** What's on screen is the copy in localStorage when the shelf can't be read, so that's what the notice is about then, and where it's dismissed. */
+const withUsableShelf = <T>(work: (from: Shelf) => Promise<T>) => work(shelf).catch(() => work(plainShelf(localStorage)))
+
 /** Reading is what sets something aside, so that comes first. */
 async function unreadableIn(from: Shelf) {
   await Promise.all([readStoredBook(from), readStoredPurchases(from)])
@@ -135,14 +138,11 @@ export function useUnreadableSaved() {
   const [unseen, setUnseen] = useState(false)
   const [copyFailed, setCopyFailed] = useState(false)
 
-  // What's on screen is the copy in localStorage when the shelf can't be read, so that's what this is about then.
   const read = useCallback(() => {
-    void unreadableIn(shelf)
-      .catch(() => unreadableIn(plainShelf(localStorage)))
-      .then((found) => {
-        setUnseen(found.unseen)
-        setCopyFailed(found.copyFailed)
-      }, console.error)
+    void withUsableShelf(unreadableIn).then((found) => {
+      setUnseen(found.unseen)
+      setCopyFailed(found.copyFailed)
+    }, console.error)
   }, [])
 
   useEffect(() => {
@@ -162,7 +162,7 @@ export function useUnreadableSaved() {
 
   const dismiss = useCallback(() => {
     setUnseen(false)
-    markSetAsideSeen(shelf).catch(console.error)
+    withUsableShelf(markSetAsideSeen).catch(console.error)
   }, [])
 
   return { unreadable: unseen || copyFailed, copyFailed, dismiss }
