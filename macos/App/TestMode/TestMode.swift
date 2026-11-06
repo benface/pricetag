@@ -1589,6 +1589,7 @@ final class FixtureSource: PortfolioSource {
                 object["withheld"] = [["wallet": "0x00000000000000000000000000000000000de301", "asset": "USDC"]]
                 let asked: [String: Any] = ["id": "cost:0xdemo:0xwithheld:USDC", "kind": "cost", "wallet": object["address"] ?? "", "receipts": [["wallet": object["address"] ?? "", "legId": "0xwithheld:USDC", "asset": "USDC", "units": "500000000"]], "costKey": "0xdemo:0xwithheld:USDC", "sender": feed == .costOnSavings ? "0x00000000000000000000000000000000000de301" : NSNull(), "noteAbout": feed == .costOnSavings ? "0x" + String(repeating: "ab", count: 32) : NSNull(), "needsCost": false, "arrivals": [["asset": "USDC", "decimals": 6, "units": "500000000"]], "transfers": 1, "firstAt": "2026-11-04T12:00:00.000Z", "lastAt": "2026-11-04T12:00:00.000Z", "evidence": ["0x0000…e301, your wallet, sent this, and its USDC history can't be confirmed"], "valueMicros": "500000000"]
                 object["questions"] = [asked] + (object["questions"] as? [[String: Any]] ?? [])
+                object["meter"] = ["open": (object["questions"] as? [[String: Any]])?.count ?? 0, "answered": 0, "waiting": 0]
             }
         case .smallAmounts:
             // A wallet's first minute: fractions of a cent in PnL, and the longest amounts a warning can sit beside.
@@ -1653,7 +1654,13 @@ final class FixtureSource: PortfolioSource {
                 questions[0] = first
                 object["questions"] = questions
             }
-        case .allAnswered: return try demo { $0["questions"] = [Any]() }
+        case .allAnswered:
+            // A finished wallet's meter comes from the server, so it has to agree with the questions being gone.
+            return try demo { object in
+                let open = (object["questions"] as? [[String: Any]])?.count ?? 0
+                object["questions"] = [Any]()
+                object["meter"] = ["open": 0, "answered": open, "waiting": 0]
+            }
         case .empty: return try newWallet(started: true, readingLinked: false, address: address)
         case .emptyReadingLinked: return try newWallet(started: true, readingLinked: true, address: address)
         case .notStarted: return try newWallet(started: false, readingLinked: false, address: address)
