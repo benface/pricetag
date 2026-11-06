@@ -8,8 +8,7 @@
 //   FORK_OF=benface/pricetag@0.1.0 AMP_ADMIN_URL=... node dataset/build.ts --fork [start block]
 //
 // Writes dataset/rates.json with --rates: exchange rates, as their own small dataset, so adding a currency doesn't replace the one
-// the app's prices come from. The start block is the Pricetag dataset's, and it reaches back from there. It defaults to the fork's,
-// which is the one staging serves.
+// the app's prices come from. The start block is the Pricetag dataset's, and it reaches back from there.
 //
 //   AMP_ADMIN_URL=... node dataset/build.ts --rates [start block]
 //
@@ -413,7 +412,7 @@ async function build() {
     return
   }
   if (args[0] === "--rates") {
-    await write(admin, RATES_MANIFEST, { dependencies: DEPENDENCIES, tables: { rate_updates: rateUpdatesSql(Number(args[1] ?? startOf(CAUTIOUS_MANIFEST))) }, functions: {} })
+    await write(admin, RATES_MANIFEST, { dependencies: DEPENDENCIES, tables: { rate_updates: rateUpdatesSql(Number(args[1] ?? startOf(MANIFEST))) }, functions: {} })
     return
   }
   await write(admin, MANIFEST, { dependencies: DEPENDENCIES, tables: tablesSql(Number(args[0] ?? startOf(MANIFEST))), functions: functions() })

@@ -4,7 +4,7 @@ import type { PricedLeg } from "@pricetag/sdk/core"
 import { legsByTransaction, transactionFacts } from "../src/core/activity.ts"
 import type { BookPoint, WalletResponse } from "../src/core/api.ts"
 import { DEMO_SAVINGS_ADDRESS, DEMO_WALLET } from "../src/core/fixtures.ts"
-import { portfolioOf } from "../server/portfolio.ts"
+import { portfolioOf } from "../src/core/portfolio.ts"
 
 const points = portfolioOf(DEMO_WALLET, "average").points
 const point = (summary: string, from: readonly BookPoint[] = points) => from.find((p) => p.summary === summary) as BookPoint

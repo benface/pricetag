@@ -128,18 +128,15 @@ struct MacApp: App {
                         .keyboardShortcut(section.shortcut, modifiers: .command)
                 }
                 Divider()
-                Button(navigation.target == nil ? "Show Details" : "Hide Details") { navigation.toggleDetails() }
+                MainWindowCommand(navigation.target == nil ? "Show Details" : "Hide Details") { navigation.toggleDetails() }
                     .keyboardShortcut("i", modifiers: [.command, .control])
                     .disabled(!navigation.canShowDetails || store.portfolio == nil)
                 Divider()
-                Picker("Cost", selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
-                    ForEach(CostMethod.allCases) { Text($0.label).tag($0) }
-                }
                 Button("Refresh") { store.refresh() }
                     .keyboardShortcut("r", modifiers: .command)
             }
             CommandGroup(after: .textEditing) {
-                Button(navigation.findTitle) { navigation.find() }
+                MainWindowCommand(navigation.findTitle) { navigation.find() }
                     .keyboardShortcut("f", modifiers: .command)
                     .disabled(!navigation.canFind)
             }
@@ -147,10 +144,10 @@ struct MacApp: App {
                 WalletCommands(store: store, hotWallet: hotWallet, navigation: navigation)
             }
             CommandGroup(after: .newItem) {
-                Button("\(Wording.answerQuestions)…") { navigation.resolve() }
+                MainWindowCommand("\(Wording.answerQuestions)…") { navigation.resolve() }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
                     .disabled(store.portfolio?.questions.isEmpty != false)
-                Button("Export as CSV…") { navigation.isExporting = true }
+                MainWindowCommand("Export as CSV…") { navigation.isExporting = true }
                     .keyboardShortcut("e", modifiers: [.command, .shift])
                     .disabled(store.portfolio == nil)
                 YourAnswersCommand(navigation: navigation)
@@ -173,7 +170,7 @@ struct MacApp: App {
         .restorationBehavior(.disabled)
 
         Settings {
-            SettingsView(store: store, hotWallet: hotWallet, notifications: notifications, tab: Bindable(navigation).settingsPane)
+            SettingsView(store: store, notifications: notifications, tab: Bindable(navigation).settingsPane)
                 .holdsDockPresence()
         }
     }
@@ -303,6 +300,26 @@ private struct YourAnswersCommand: View {
         Button("Your Answers…") {
             navigation.settingsPane = .answers
             openSettings()
+            DockPresence.bringForward()
+        }
+    }
+}
+
+/// What it asks for happens in the window, which may be closed, so this opens it too.
+private struct MainWindowCommand: View {
+    let title: String
+    let action: () -> Void
+    @Environment(\.openWindow) private var openWindow
+
+    init(_ title: String, action: @escaping () -> Void) {
+        self.title = title
+        self.action = action
+    }
+
+    var body: some View {
+        Button(title) {
+            action()
+            openWindow(id: WindowID.main)
             DockPresence.bringForward()
         }
     }

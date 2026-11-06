@@ -1,9 +1,9 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { portfolioOf } from "../server/portfolio.ts"
+import { portfolioOf } from "../src/core/portfolio.ts"
 import { USD_CONTEXT, explainMetric } from "../src/core/explain.ts"
 import { createWallets, sharedMarket, type ReadL1Fees, type Source, type WindowRows } from "@pricetag/sdk/internal"
-import { ASSETS, ETH_ADDRESS, LAST_2S_BLOCK, USDC_ADDRESS, foldWallet, msBetweenBlocks, pnlOverTime, shortHash, usdView, type FeedRound, type LegRow, type Reference } from "@pricetag/sdk/core"
+import { ASSETS, ETH_ADDRESS, LAST_2S_BLOCK, USDC_ADDRESS, foldWallet, msBetweenBlocks, pnlOverTime, priceSampleBlocks, shortHash, usdView, type FeedRound, type LegRow, type Reference } from "@pricetag/sdk/core"
 
 const ME = "0x00000000000000000000000000000000000000aa"
 
@@ -668,6 +668,21 @@ describe("reconciling", () => {
   })
 })
 
+describe("working out a wallet's response", () => {
+  it("does it once until there's a new block", async () => {
+    let head = 1000
+    const { source } = fake(new Map([[950, [row(950)]], [1001, [row(1001)]]]), () => reference(1000))
+    const wallets = createWallets(source, async () => headAt(head)(), noFees)
+    const first = await wallets.get(ME)
+    assert.equal(await wallets.get(ME), first)
+    assert.equal(wallets.peek(ME), first)
+    head = 1001
+    const next = await wallets.get(ME)
+    assert.notEqual(next, first)
+    assert.deepEqual(next.legs.filter((leg) => !leg.opening).map((leg) => leg.blockNum), [950, 1001])
+  })
+})
+
 describe("current prices from the token feeds", () => {
   const AERO = "0x940181a94a35a4569e4529a3cdfb74e38fd98631"
   const DAI = "0x50c5725949a6f0c72e6c4a641f24049a917db0cb"
@@ -704,6 +719,21 @@ describe("current prices from the token feeds", () => {
     assert.equal(wallet.marketChecked, true)
     assert.ok(marketReads.every((asset) => asset === "AERO"))
     assert.equal(wallet.legs[0]?.priceSource, "market", "a past leg's price isn't what this changes")
+  })
+
+  it("shows a price read for a wallet after its response was worked out", async () => {
+    let down = true
+    const { source } = feedFake([held(950, AERO)], {}, {
+      async readMarketTrades(asset, _from, to) {
+        if (down) throw new Error("no market")
+        return [1, 2, 3].map((n) => ({ blockNum: to - n, txHash: `0x${n}`, asset, usdMicros: "1300000", notionalUsdMicros: "500000000" }))
+      },
+    })
+    const wallets = createWallets(source, headAt(1000), noFees, { warn() {} })
+    assert.equal((await wallets.get(ME)).marketMarks[950]?.AERO, undefined)
+    down = false
+    await wallets.marketOn(ME, (await wallets.factsAt(ME, 1000, { withBalances: false }))!, {})
+    assert.equal(wallets.peek(ME)?.marketMarks[950]?.AERO, "1300000")
   })
 
   it("reads nothing for what a wallet doesn't hold", async () => {
@@ -1936,5 +1966,161 @@ describe("a wallet read with nothing new", () => {
     failing = false
     assert.equal((await wallets.get(ME)).legs.length, 1)
     assert.deepEqual(windows, [[900, 1000], [900, 1000]])
+  })
+})
+
+describe("prices between a wallet's transactions", () => {
+  const HEAD = 4000
+  const started = (head: () => number = () => HEAD) => {
+    const chain = new Map([[1000, [row(1000)]]])
+    const faked = fake(chain, () => reference(head()), () => head())
+    faked.source.historyFrom = () => 900
+    return { ...faked, chain, wallets: createWallets(faked.source, async () => headAt(head())(), noFees, quiet, { priceSamples: true }) }
+  }
+  const quiet = { info() {}, warn() {}, error() {} } as unknown as Parameters<typeof createWallets>[3]
+  const wanted = (from: number, to: number) => priceSampleBlocks(from, to)
+  /** What the row says, so ETH is confirmed, and a price is all a point could be missing. */
+  const matching = async (block: number) => Object.fromEntries(ASSETS.map((asset) => [asset, asset === "ETH" && block >= 1000 ? "5" : "0"]))
+
+  it("reads none unless asked to, like for an SDK's legs", async () => {
+    const { source, referenceReads } = fake(new Map([[950, [row(950)]]]), () => reference(1000))
+    const wallet = await createWallets(source, headAt(1000), noFees).get(ME)
+    assert.equal(wallet.priceSamples, undefined)
+    assert.deepEqual(referenceReads, [[950]])
+  })
+
+  it("reads each from the wallet's first movement to its head, once", async () => {
+    let head = HEAD
+    const { wallets, referenceReads, chain } = started(() => head)
+    const wallet = await wallets.get(ME)
+    assert.deepEqual(wallet.priceSamples?.map((sample) => sample.blockNum), wanted(1000, HEAD))
+    assert.ok(wallet.priceSamples!.every((sample) => sample.ethUsd === "240000000000"))
+    assert.deepEqual(wallet.references.map((r) => r.blockNum), [1000], "they aren't the wallet's own references")
+    const read = referenceReads.flat()
+    head += 1
+    chain.set(HEAD + 1, [row(HEAD + 1)])
+    const before = referenceReads.length
+    await wallets.get(ME)
+    assert.deepEqual(referenceReads.slice(before), [[HEAD + 1]], "nothing it already has")
+    assert.ok(read.length > 1)
+  })
+
+  it("marks the chart with them", async () => {
+    const { wallets } = started()
+    const wallet = await wallets.get(ME)
+    const { points } = foldWallet(wallet, "average")
+    const between = points.filter((p) => p.txHash === null).slice(0, -1)
+    assert.equal(between.length, wanted(1000, HEAD).filter((block) => block > 1000 && block < HEAD).length)
+    assert.ok(points.slice(1).every((p) => p.valueRead === true))
+  })
+
+  it("keeps the wallet up when a read fails, says it's unread, and tries again", async () => {
+    let failing = true
+    const { source, referenceReads } = fake(new Map([[1000, [row(1000)]]]), () => reference(HEAD), (at) => at, matching)
+    source.historyFrom = () => 900
+    const read = source.readReferences
+    source.readReferences = async (blocks) => {
+      if (failing && !blocks.includes(1000)) throw new Error("no")
+      return read(blocks)
+    }
+    let head = HEAD
+    const wallets = createWallets(source, async () => headAt(head)(), noFees, quiet, { priceSamples: true })
+    const wallet = await wallets.get(ME)
+    assert.equal(wallet.legs.length, 1)
+    assert.deepEqual(wallet.priceSamples?.map((sample) => sample.blockNum), wanted(1000, HEAD), "still where a chart wants a price")
+    assert.ok(wallet.priceSamples!.every((sample) => sample.ethUsd === ""))
+    const { points } = foldWallet(wallet, "average")
+    assert.deepEqual(points.map((p) => [p.txHash, p.valueRead]), [["0x3e8", undefined], [null, undefined]], "so what's between them stays a guess")
+    failing = false
+    head += 1
+    assert.ok((await wallets.get(ME)).priceSamples!.every((sample) => sample.ethUsd === "240000000000"))
+    assert.ok(referenceReads.length > 0)
+  })
+
+  describe("at a block with a transaction in it", () => {
+    const BLOCK = 3600
+    const reading = (failing: () => boolean) => {
+      const { source, referenceReads } = fake(new Map([[BLOCK, [row(BLOCK)]]]), () => reference(HEAD), (at) => at, async (block) => Object.fromEntries(ASSETS.map((asset) => [asset, asset === "ETH" && block >= BLOCK ? "5" : "0"])))
+      source.historyFrom = () => 900
+      const read = source.readReferences
+      source.readReferences = async (blocks) => {
+        if (failing() && !blocks.includes(BLOCK)) throw new Error("no")
+        return read(blocks)
+      }
+      return { source, referenceReads, wallets: createWallets(source, async () => headAt(HEAD)(), noFees, quiet, { priceSamples: true }) }
+    }
+
+    it("uses the read it has, rather than reading it twice", async () => {
+      assert.ok(wanted(BLOCK, HEAD).includes(BLOCK))
+      const { wallets, referenceReads } = reading(() => false)
+      const wallet = await wallets.get(ME)
+      assert.equal(referenceReads.flat().filter((block) => block === BLOCK).length, 1)
+      assert.equal(wallet.priceSamples?.find((sample) => sample.blockNum === BLOCK)?.ethUsd, "240000000000")
+    })
+
+    it("keeps its value when the other reads fail", async () => {
+      const { source, wallets } = reading(() => true)
+      const wallet = await wallets.get(ME)
+      assert.ok(wallet.priceSamples!.some((sample) => sample.ethUsd === ""), "so the other samples are empty")
+      const without = await createWallets(source, async () => headAt(HEAD)(), noFees, quiet).get(ME)
+      const atTx = ({ points }: ReturnType<typeof foldWallet>) => points.filter((p) => p.txHash !== null).map((p) => [p.txHash, p.pnlMicros, p.valueMicros])
+      assert.deepEqual(atTx(foldWallet(wallet, "average")), atTx(foldWallet(without, "average")))
+      assert.ok(atTx(foldWallet(wallet, "average"))[0]![2] !== null)
+    })
+  })
+
+  it("doesn't ask again about a block the table has no row for", async () => {
+    const { source, referenceReads } = fake(new Map([[1000, [row(1000)]]]), () => reference(HEAD))
+    source.historyFrom = () => 900
+    source.readReferences = async (blocks) => {
+      referenceReads.push([...blocks])
+      return blocks.filter((block) => block === 1000).map(reference)
+    }
+    let head = HEAD
+    const wallets = createWallets(source, async () => headAt(head)(), noFees, quiet, { priceSamples: true })
+    await wallets.get(ME)
+    head += 1
+    const before = referenceReads.length
+    await wallets.get(ME)
+    assert.equal(referenceReads.slice(before).flat().length, 0)
+  })
+
+  it("waits for what a table that's behind hasn't reached, which stays unread until it does", async () => {
+    let through = 3000
+    let head = HEAD
+    const { source } = fake(new Map([[1000, [row(1000)]]]), () => reference(HEAD), () => through, matching)
+    source.historyFrom = () => 900
+    const wallets = createWallets(source, async () => headAt(head)(), noFees, quiet, { priceSamples: true })
+    const behind = await wallets.get(ME)
+    const after = behind.priceSamples!.filter((sample) => sample.blockNum > 3000)
+    assert.ok(after.length > 0)
+    assert.ok(after.every((sample) => sample.ethUsd === ""))
+    const { points } = foldWallet(behind, "average")
+    assert.equal(points.at(-1)!.valueRead, undefined, "so the stretch up to now is still a guess")
+    through = HEAD + 1
+    head = HEAD + 1
+    assert.ok((await wallets.get(ME)).priceSamples!.every((sample) => sample.ethUsd !== ""))
+  })
+
+  it("reads again what a reorg replaced", async () => {
+    const { source, referenceReads } = fake(new Map([[1000, [row(1000)]]]), () => reference(HEAD))
+    source.historyFrom = () => 900
+    let head = HEAD
+    const wallets = createWallets(source, async () => headAt(head)(), noFees, quiet, { priceSamples: true })
+    await wallets.get(ME)
+    const before = referenceReads.length
+    await wallets.rewind(3500, HEAD)
+    head += 1
+    const wallet = await wallets.get(ME)
+    assert.ok(referenceReads.slice(before).flat().some((block) => block >= 3500 && wanted(1000, HEAD).includes(block)))
+    assert.ok(wallet.priceSamples!.every((sample) => sample.ethUsd !== ""))
+  })
+
+  it("leaves them out when two rules are compared at one block", async () => {
+    const { wallets } = started()
+    await wallets.get(ME)
+    const facts = await wallets.factsAt(ME, HEAD, { withBalances: false })
+    const priced = wallets.pricedOn(ME, facts!, {}, { priced: new Set(), checked: true })
+    assert.equal(priced?.priceSamples, undefined)
   })
 })

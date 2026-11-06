@@ -60,3 +60,5 @@ export function ledgerMessage(error: unknown): string {
 
 /** Addresses in groups, because nobody really compares 40 characters in one run. */
 export const groupAddress = (address: string) => `0x ${address.slice(2).match(/.{1,4}/g)?.join(" ") ?? ""}`
+
+export const ALL_YOURS_DEVICE = "You're looking at all your wallets. Your device's accounts are listed next, and sending says which one it comes from before you sign."

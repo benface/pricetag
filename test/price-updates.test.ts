@@ -18,7 +18,7 @@ const FIXTURE = JSON.parse(readFileSync(new URL("./support/base-update-block.jso
   deposits: Record<string, DepositDetails>
 }
 const data = FIXTURE.block
-const read: BlockRead = { data, deposits: new Map(Object.entries(FIXTURE.deposits)) }
+const read: BlockRead = { data, deposits: new Map(Object.entries(FIXTURE.deposits)), nodeHash: data.block.hash }
 const log = data.logs.find((candidate) => candidate.log_index === 2) as LogRow
 const tx = data.txs.find((candidate) => candidate.tx_index === log.tx_index) as TxRow
 const blockNum = Number(data.block.block_num)
@@ -196,9 +196,20 @@ describe("checking an update", () => {
   })
 
   it("says both were checked when everything passes", () => {
-    const verification = verificationOf(leg({ txHash: `0x${tx.tx_hash}` }), [], data, read.deposits, { behind, read })
+    const verification = verificationOf(leg({ txHash: `0x${tx.tx_hash}` }), [], data, read.deposits, { behind, read }, read.nodeHash)
     assert.equal(verification.status, "passed")
     assert.match(verification.summary, /and so does Chainlink's update/)
+    assert.match(verification.summary, /Base's node agrees on both/)
+  })
+
+  it("compares the update's block with Base's node too", () => {
+    assert.match(checkOf(verify())?.detail ?? "", /what Base's node reports/)
+    const replaced = checkOf(verify({}, { read: { ...read, nodeHash: "00".repeat(32) } }))
+    assert.equal(replaced?.status, "failed")
+    assert.match(replaced?.detail ?? "", /which has this update: Base's node says/)
+    const silent = checkOf(verify({}, { read: { ...read, nodeHash: null } }))
+    assert.equal(silent?.status, "unchecked")
+    assert.match(silent?.detail ?? "", /which has this update: Base's node didn't report/)
   })
 
   it("adds nothing when prices come from calling the contract", () => {
@@ -233,7 +244,7 @@ describe("checking an update", () => {
 
   it("fails when the update's block doesn't match its header, whatever the log says", () => {
     const tampered = { ...data, logs: data.logs.filter((candidate) => candidate.log_index !== 0) }
-    const check = checkOf(verify({}, { read: { data: tampered, deposits: read.deposits } }))
+    const check = checkOf(verify({}, { read: { ...read, data: tampered } }))
     assert.equal(check?.status, "failed")
     assert.match(check?.detail ?? "", /which has this update/)
   })
@@ -241,7 +252,7 @@ describe("checking an update", () => {
   it("isn't confirmed when something's missing, which isn't a failure", () => {
     assert.equal(checkOf(verify({}, { behind: { feed, update: null }, read: null }))?.status, "unchecked")
     assert.equal(checkOf(verify({}, { read: null }))?.status, "unchecked")
-    assert.equal(checkOf(verify({}, { read: { data, deposits: null } }))?.status, "unchecked")
+    assert.equal(checkOf(verify({}, { read: { ...read, deposits: null } }))?.status, "unchecked")
     // With a row that's in the block, and so nothing failing, that's the whole result.
     const verification = verificationOf(leg({ txHash: `0x${tx.tx_hash}` }), [], data, read.deposits, { behind, read: null })
     assert.equal(verification.status, "unchecked")
@@ -272,7 +283,7 @@ describe("reading an update", () => {
       queries.push(sql)
       return answers(sql)
     }) as Query
-    return { queries, proofs: createProofs(query, { baseDataset: "a/base@1", dataset, readDeposits: async () => new Map(), readManifestHash: async () => null, retryPauseMs: 0 }) }
+    return { queries, proofs: createProofs(query, { baseDataset: "a/base@1", dataset, readDeposits: async () => new Map(), readBlockHash: async () => null, readManifestHash: async () => null, retryPauseMs: 0 }) }
   }
 
   it("follows the block's transaction to its update, and stays in the feed's window", async () => {
@@ -470,7 +481,7 @@ describe("a version tag that moves after the wallet was pinned", () => {
   it("asks the admin API only about what isn't pinned, and shows no moved tag's fingerprint", async () => {
     const asked: string[] = []
     const dataset = { name: TAG, reference: "pricetag", hash: HASH_A }
-    const proofs = createProofs(amp({}).query, { baseDataset: "a/base@1", dataset, readDeposits: async () => new Map(), readManifestHash: async (name) => (asked.push(name), "b".repeat(64)), retryPauseMs: 0 })
+    const proofs = createProofs(amp({}).query, { baseDataset: "a/base@1", dataset, readDeposits: async () => new Map(), readBlockHash: async () => null, readManifestHash: async (name) => (asked.push(name), "b".repeat(64)), retryPauseMs: 0 })
     assert.deepEqual((await proofs.datasets()).map(({ hash }) => hash), [HASH_A, "b".repeat(64)])
     assert.deepEqual(asked, ["a/base@1"])
   })

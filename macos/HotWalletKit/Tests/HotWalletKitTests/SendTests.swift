@@ -747,7 +747,7 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         let rig = await Rig(funded)
         let store = makeStore()
         _ = makeModel(rig, store: store)
-        try rig.wallet.addColdWallet(address: friend.lowercased, name: "Keystone")
+        try await rig.wallet.addColdWallet(address: friend.lowercased, name: "Keystone")
         #expect(store.book.senders[friend.lowercased]?.kind == .mine)
         rig.wallet.removeColdWallet(friend)
         #expect(store.book.senders[friend.lowercased] == nil)
