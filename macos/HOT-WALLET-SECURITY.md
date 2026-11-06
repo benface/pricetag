@@ -19,7 +19,7 @@ To check it yourself: `pnpm check:mac` for the logic, `pnpm check:keychain` for 
 
 ## Touch ID
 
-Manual sends (Send, Publish a Cost, Sweep Everything, Replace Key, Delete) and anything a site asks to send or sign ask for Touch ID, or the login password where there's none. Automatic sweeps don't, because they have to run with nobody there.
+Manual sends (Send, Publish a Cost, Sweep Everything, Replace Key, Delete) and anything a site asks to send or sign ask for Touch ID, or the login password where there's none. So do the settings that decide what a sweep does: adding a savings wallet, changing which one sweeps go to, lowering the cap, and changing the node. Those ask in macOS's own dialog, which names the address, the cap or the node. Automatic sweeps don't ask, because they have to run with nobody there. Raising the cap and removing a savings wallet don't either, since neither can send money anywhere that didn't already ask.
 
 Send, Sweep Everything and site requests ask with no click, as soon as what's being approved is on screen, inside the same window (`LAAuthenticationView`), so nothing covers it. Where that isn't possible, like with no sensor in reach or after too many tries, macOS's own dialog asks, and its text names the site and what leaves. What keeps a touch from approving something unseen (`ApprovalPrompt`):
 
@@ -31,11 +31,11 @@ Send, Sweep Everything and site requests ask with no click, as soon as what's be
 - [x] Backing out works up to the touch. It calls off the prompt the moment it's accepted, before anything changes on screen, so a touch landing just after can't send what's been left. Past the touch, nothing offers to back out, because what's been approved is on its way.
 - [x] An interrupted prompt doesn't ask again until the view on screen is paired with its new context, or it would be a dialog over the details. `macos/shot.sh site-refocused` fails if that doesn't happen.
 
-- [ ] **It isn't enforced by the enclave.** The same wrapping key has to open with no prompt for sweeps, so the prompt lives in the app. It stops someone at an unlocked Mac, not malware running as this user.
+- [ ] **It isn't enforced by the enclave.** The same wrapping key has to open with no prompt for sweeps, so the prompt lives in the app. It stops someone using this app at an unlocked Mac, not malware running as this user, or someone at that Mac who's willing to use Terminal. See savings wallets below.
 
 ## Where money can go
 
-- [x] Automatic sweeps only go to the chosen cold wallet, and only ever call a contract on the compiled-in allowlist. A test checks both the allowlist and the feeds against `src/core/tokens.ts`.
+- [x] Automatic sweeps only go to the chosen cold wallet, and only ever call a contract on the compiled-in allowlist. A test checks both the allowlist and the feeds against `packages/sdk/src/tokens.ts`.
 - [x] A send goes wherever the user says, after Touch ID, but only ever moves ETH or calls a token on the allowlist. It refuses zero, this wallet, retired keys and token contracts, and an address with a wrong EIP-55 checksum. It's checked again against a fresh read before signing, and it stops during an alarm or a rotation.
 - [x] A send of ETH leaves the gas reserve, so it can't strand the tokens that are left.
 - [x] Publishing a cost signs a zero-value transaction from this wallet to itself, with data that says only the transaction, token and amount, and warns first that it's public for good. It can only come from this app's Resolve screen.
@@ -47,7 +47,7 @@ Send, Sweep Everything and site requests ask with no click, as soon as what's be
 - [x] Sweeps move tokens as they are, with no selling.
 - [x] A cold wallet's address must be confirmed by the user against the device's screen. The app has no device code, so it can't check that itself. It does check the EIP-55 checksum, and refuses this wallet's own address, retired keys and zero. A `patina://add-savings` link from the web app's device flow can fill in that sheet, and so can the camera reading a Keystone's receive screen, but anyone can make a link and a compromised Mac could change what's read, so it still adds nothing until the user says the address matches. A new link takes that answer back. Any other accounts a link names are listed, and only link costs if the user ticks them. Nothing's ever swept to them.
 - [x] The camera entitlement is only for that read. It starts on that step and stops when it's left. Frames stay in memory while they're read and are never saved, and only a plain address counts: any other code's contents are dropped without being shown.
-- [ ] **Savings wallets aren't locked down.** Malware running as this user could edit the settings to add its own address, then wait for a sweep. Protecting that needs a contract account (WORK-332).
+- [ ] **Savings wallets aren't locked down.** The app asks for Touch ID to add one or point sweeps at it, but its settings are an ordinary preferences file. Malware running as this user, or someone at an unlocked Mac with Terminal, could edit them to add their own address, then wait for a sweep. Protecting that needs a contract account (WORK-332).
 - [ ] **Sweeps need the app running.** Nothing runs while it's closed. A plain address can't enforce a cap onchain: it's a trigger for sweeping, not a limit.
 
 ## Sites
@@ -83,7 +83,7 @@ A browser extension lets websites use this wallet. A site can do real damage wit
 - [ ] **Malware running as this user can fake a site.** It can start the host itself and claim any origin, so the window would show the wrong one. It would still need someone to approve it, and it could reach the key anyway. See the enclave's limits above.
 - [ ] **Someone can load another extension with this ID,** because the manifest's public key is what sets it. That takes Developer mode on this Mac, and it gets what this one gets: it can ask, not approve.
 - [ ] **The fee shown is an estimate.** The chain charges for L1 data on top of gas, at whatever L1 costs when the transaction lands, and no signature can limit that. It's worked out from the transaction's real size and allows for twice the current price.
-- [ ] **A contract call can do anything.** A swap's calldata isn't decoded, so nothing here tells a good router from a drainer. The warnings only cover what can be recognized. Simulating is left for WORK-337.
+- [ ] **A contract call can do anything.** A swap's calldata isn't decoded, so nothing here tells a good router from a drainer. The warnings only cover what can be recognized, and a preview is only an estimate.
 - [ ] **What's in a token approval can outlast it.** Disconnecting a site doesn't undo approvals it was given. Replacing the key does.
 - [ ] **An approved site can still ask to be trusted.** The origin says who's asking. It can't say a site hasn't been hacked.
 
@@ -92,7 +92,7 @@ A browser extension lets websites use this wallet. A site can do real damage wit
 The RPC is configurable and untrusted.
 
 - [x] It can't change where money goes, since destinations are local and go into what's signed.
-- [x] Calls to the public node are held to 20 a second, under its limit of 25, and what it refuses for going over is asked again. It says that inside an HTTP 200 for part of a batch, or with a 429. It's never taken as an answer.
+- [x] Calls to the public node are held to 15 a second with bursts of 8, under its limit of 25, and what it refuses for going over is asked again. It says that inside an HTTP 200 for part of a batch, or with a 429. It's never taken as an answer.
 - [x] It can't get an absurd fee signed: quotes above 100 gwei are refused.
 - [x] A failed read fails the whole tick, so it can't look like an empty wallet.
 - [x] Every read in a tick is pinned to one block, and nothing is signed from a read older than the last receipt, so a slow node can't cause the same excess to be swept twice.
