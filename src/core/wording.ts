@@ -327,12 +327,14 @@ export function feedProblem(failure: ReadFailure, serverUrl: string, stale: stri
       return say("The price service has no data source, so only the demo wallet works.", "Set one up, then restart the price service.", `${SAID(failure.said)} Its data source goes in .env.local.`)
     case "refused":
       return say("The price service turned this request down.", "Try again. If it keeps happening, restart the price service.", SAID(failure.said))
+    case "slowedDown":
+      return say("The price service asked this app to slow down.", "Updates start again by themselves.", SAID(failure.said))
   }
 }
 
 /** A failure in a panel, which answers one question and doesn't update by itself. A refusal already says what about that question went wrong. */
 export function panelProblem(failure: ReadFailure, serverUrl: string): Problem {
-  if (failure.kind === "refused") return { message: failure.said, detail: null }
+  if (failure.kind === "refused" || failure.kind === "slowedDown") return { message: failure.said, detail: null }
   if (failure.kind === "unavailable") return { message: `The price service can't get its data right now. ${MONEY_UNAFFECTED} It usually clears up by itself, so try again in a moment.`, detail: SAID(failure.said) }
   return feedProblem(failure, serverUrl)
 }
