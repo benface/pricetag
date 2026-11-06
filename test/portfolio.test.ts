@@ -101,14 +101,14 @@ describe("portfolioOf", () => {
     assert.equal(aero.returnBps, "1202")
     const aeroReturn = explainPortfolio(DEMO_WALLET, "average", { kind: "asset", asset: "AERO", metric: "return" })!
     assert.equal(aeroReturn.title, "AERO: Return")
-    assert.equal(aeroReturn.value, "+12.0%")
-    assert.match(aeroReturn.lines.join(" "), /\+\$75\.13 unrealized ÷ \$624\.88 cost/)
+    assert.equal(aeroReturn.value, "≈+12.0%")
+    assert.match(aeroReturn.lines.join(" "), /≈\+\$75\.13 unrealized ÷ ≈?\$624\.88 cost/)
     const daiReturn = explainPortfolio(DEMO_WALLET, "average", { kind: "asset", asset: "DAI", metric: "return" })!
     assert.equal(daiReturn.value, null)
     assert.match(daiReturn.lines.join(" "), /unknown cost, so there's no return/)
     const price = explainPortfolio(DEMO_WALLET, "average", { kind: "asset", asset: "AERO", metric: "price" })!
     assert.equal(price.title, "AERO: Price")
-    assert.equal(price.value, "$1.40")
+    assert.equal(price.value, "≈$1.40")
     assert.match(price.lines[0] as string, /^Current price: \$1\.40/)
     for (const metric of ["price", "return"]) assert.deepEqual(parseExplainTarget(new URLSearchParams({ asset: "AERO", metric })), { kind: "asset", asset: "AERO", metric })
   })
@@ -189,7 +189,7 @@ describe("portfolioOf", () => {
   })
 
   it("still explains a total that's only partial, with its value", () => {
-    assert.equal(explainPortfolio(DEMO_WALLET, "average", { kind: "total", metric: "pnl" })?.value, "+$149.30")
+    assert.equal(explainPortfolio(DEMO_WALLET, "average", { kind: "total", metric: "pnl" })?.value, "≈+$149.30")
   })
 
   it("leads each movement with a plain sentence in money, and says what isn't known", () => {
@@ -203,7 +203,7 @@ describe("portfolioOf", () => {
     assert.ok(eth.some(([summary]) => summary === "Paid $0.10 in network fees."))
     assert.ok(eth.some(([summary, unknown]) => summary === "Received $47.84 of ETH." && unknown === "What this cost isn't known yet."))
     // Money after "Bought" would read as what was paid, which isn't known here.
-    assert.deepEqual(legs("VIRTUAL"), [["Bought 50 VIRTUAL, worth $105.00.", "What this cost isn't known yet."]])
+    assert.deepEqual(legs("VIRTUAL"), [["Bought 50 VIRTUAL, worth about $105.00.", "What this cost isn't known yet."]])
   })
 
   describe("says what's actually missing when a gain isn't known", () => {
@@ -839,7 +839,9 @@ describe("wording", () => {
     },
     finishNotes: FINISH_METERS.map((meter) => ({ ...meter, text: wording.finishNote(meter) })),
     problems: READ_FAILURES.map((failure) => ({ ...failure, ...wording.feedProblem(failure, "https://prices.example.com") })),
+    problemsOnThisMachine: READ_FAILURES.filter((failure) => failure.kind === "noSource" || failure.kind === "refused").map((failure) => ({ ...failure, ...wording.feedProblem(failure, "http://127.0.0.1:8787") })),
     unseenEth: UNSEEN_ETH_CASES.map((unseen) => ({ unseen, text: wording.unseenEthCause(unseen) })),
+    unrecorded: wording.unrecordedSentence("2061830000000000", 18, "ETH"),
     manifestHash: wording.shortManifestHash("bea12f7575e74575f2f0318213d61d421706eea0314e5d7116edebd4e77818a1"),
   }
 
@@ -860,6 +862,17 @@ describe("wording", () => {
     assert.ok(wording.feedProblem(READ_FAILURES[1]!, "https://prices.example.com", stale).message.includes(`right now. ${stale} ${wording.MONEY_UNAFFECTED}`))
     assert.equal(wording.feedProblem({ kind: "unreachable" }, "https://prices.example.com").detail, "Nothing answered at https://prices.example.com.")
     assert.equal(wording.feedProblem({ kind: "unavailable", said: "Couldn't read this wallet's data." }, "x").detail, "The price service said: Couldn't read this wallet's data.")
+  })
+
+  it("only asks someone to restart a server on their own machine", () => {
+    for (const failure of READ_FAILURES) {
+      const hosted = wording.feedProblem(failure, "https://prices.example.com")
+      assert.doesNotMatch(`${hosted.message} ${hosted.detail}`, /restart|\.env\.local/i)
+    }
+    for (const server of ["http://127.0.0.1:8787", "http://localhost:5173", "http://[::1]:8787"]) {
+      assert.match(wording.feedProblem({ kind: "refused", said: "Nope." }, server).message, /restart the price service/)
+      assert.match(wording.feedProblem({ kind: "noSource", said: "None." }, server).detail ?? "", /\.env\.local/)
+    }
   })
 
   it("lets a panel say what a refusal said, since that's about the question it asked", () => {

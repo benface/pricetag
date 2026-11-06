@@ -32,6 +32,8 @@ export type QueryOptions = {
   laneOf?: (() => string | undefined) | undefined
   /** How many queries with no lane can run at once. It defaults to 1, because a hosted Amp is shared. */
   maxConcurrent?: number | undefined
+  /** How long to wait before reading again after a dropped connection, in ms, doubling each time. It defaults to 500 ms. */
+  retryPauseMs?: number | undefined
 }
 
 /** A query that can also read through dataset aliases. */
@@ -44,6 +46,8 @@ export type AmpQuery = Query & {
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000
+const QUERY_ATTEMPTS = 3
+const RETRY_PAUSE_MS = 500
 
 /** Amp's client returns Decimal128 values as Arrow big numbers, not strings. */
 export const decimalString = (value: unknown): string | null => (value == null ? null : String(value).replaceAll('"', ""))
@@ -64,6 +68,9 @@ export function describeError(error: unknown): string {
 
 /** What Amp answers when a table's job hasn't written anything yet. It isn't an outage: that table just has no blocks. */
 export const isNotStarted = (error: unknown) => describeError(error).includes("no common canonical watermark")
+
+/** A connection to Amp that was refused or dropped, by its gateway or the network, as opposed to Amp answering with an error or taking too long. */
+const isConnectionDrop = (error: unknown) => /upstream connect error|disconnect\/reset before headers|connection refused|ECONNREFUSED|ECONNRESET/i.test(describeError(error))
 
 /**
  * Runs reads in turns, so a slow one only holds up whoever's it is. Each lane runs one at a time, up to `lanesAtOnce` of them,
@@ -107,7 +114,7 @@ export function createTurns(lanesAtOnce = 1, laneOf: () => string | undefined = 
     })
 }
 
-export function createQuery(url: string, token: string | undefined, { timeoutMs: maxTimeoutMs = DEFAULT_TIMEOUT_MS, logger = console, lanesAtOnce, laneOf, maxConcurrent }: QueryOptions = {}): AmpQuery {
+export function createQuery(url: string, token: string | undefined, { timeoutMs: maxTimeoutMs = DEFAULT_TIMEOUT_MS, logger = console, lanesAtOnce, laneOf, maxConcurrent, retryPauseMs = RETRY_PAUSE_MS }: QueryOptions = {}): AmpQuery {
   const transportWith = (aliases?: Record<string, string>) => {
     const auth: Interceptor[] = token ? [createAuthInterceptor(token)] : []
     const alias: Interceptor[] = aliases
@@ -146,7 +153,7 @@ export function createQuery(url: string, token: string | undefined, { timeoutMs:
   }
 
   /** In its turn, and logged if it's slow. */
-  const queued = <R>(sql: string, read: () => Promise<R>, count: (result: R) => number) =>
+  const attempt = <R>(sql: string, read: () => Promise<R>, count: (result: R) => number) =>
     inTurn(async () => {
       const started = Date.now()
       const value = await read()
@@ -154,6 +161,23 @@ export function createQuery(url: string, token: string | undefined, { timeoutMs:
       if (took > 5000) logger.warn(`Slow Amp query: ${took} ms, ${count(value)} rows: ${sql.replace(/\s+/g, " ").slice(0, 100)}…`)
       return value
     })
+
+  /**
+   * Staging's gateway drops the odd connection, and a wallet shouldn't fail because of one. These are all reads, and each attempt
+   * starts over and asks Amp again, so what comes back is as new as any other read. Each attempt takes its own turn, and the
+   * pause is between turns, so it holds up nobody.
+   */
+  const queued = async <R>(sql: string, read: () => Promise<R>, count: (result: R) => number) => {
+    for (let tries = 1; ; tries++) {
+      try {
+        return await attempt(sql, read, count)
+      } catch (error) {
+        if (tries === QUERY_ATTEMPTS || !isConnectionDrop(error)) throw error
+        logger.warn(`Reading from Amp again after a dropped connection: ${describeError(error)}`)
+        await new Promise((resolve) => setTimeout(resolve, retryPauseMs * 2 ** (tries - 1)))
+      }
+    }
+  }
 
   const queryWith = (transport: ReturnType<typeof transportWith>): Query => {
     const client = createClient(transport)

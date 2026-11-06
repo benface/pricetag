@@ -48,26 +48,10 @@ svg {
   stroke-linejoin: round;
 }
 
-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
 h1 {
   margin: 0;
   font-size: 13px;
   font-weight: 600;
-  white-space: nowrap;
-}
-
-.label {
-  padding: 1px 7px;
-  border-radius: 999px;
-  background: var(--fill);
-  color: var(--secondary);
-  font-size: 10.5px;
   white-space: nowrap;
 }
 

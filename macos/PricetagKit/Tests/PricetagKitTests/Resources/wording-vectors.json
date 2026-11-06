@@ -322,6 +322,20 @@
     {
       "kind": "noSource",
       "said": "No data source is set up, so only the demo wallet is available.",
+      "message": "The price service has no data source, so only the demo wallet works. Your money isn't affected. Whoever runs it needs to set one up.",
+      "detail": "The price service said: No data source is set up, so only the demo wallet is available."
+    },
+    {
+      "kind": "refused",
+      "said": "That isn't a Base address.",
+      "message": "The price service turned this request down. Your money isn't affected. Try again. If it keeps happening, let whoever runs the price service know.",
+      "detail": "The price service said: That isn't a Base address."
+    }
+  ],
+  "problemsOnThisMachine": [
+    {
+      "kind": "noSource",
+      "said": "No data source is set up, so only the demo wallet is available.",
       "message": "The price service has no data source, so only the demo wallet works. Your money isn't affected. Set one up, then restart the price service.",
       "detail": "The price service said: No data source is set up, so only the demo wallet is available. Its data source goes in .env.local."
     },
@@ -394,5 +408,6 @@
       "text": "It lines up with what left this wallet in 0xaaaa…0000, 0xbbbb…0000 (+0.000000000000000005 ETH), 0x2222…2222 (+1 ETH), 0x3333…3333 (+1 ETH), 0x4444…4444 (+1 ETH), 0x5555…5555 (+1 ETH), and 1 more: ETH rose by that much in the same block, with no transaction showing it."
     }
   ],
+  "unrecorded": "0.00206 ETH arrived with no transaction to show for it, so that part comes from the balance, and the match doesn't confirm it.",
   "manifestHash": "bea12f7575e7…18a1"
 }

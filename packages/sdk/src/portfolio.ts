@@ -4,7 +4,7 @@ import { applyLeg, emptyPosition, worth, valuePosition, type Method, type Positi
 import { timestampOfBlock } from "./chain.ts"
 import type { RateRound } from "./currency.ts"
 import { answerToMicros, isSanePrice, type PricedLeg, type Reference } from "./legs.ts"
-import type { MarketMarks } from "./market.ts"
+import type { FeedMarks, MarketMarks } from "./market.ts"
 import { decimalsOf, estimateHeld, reconcile, type Onchain, type Reconciliation } from "./reconcile.ts"
 import { TOKENS, TOKEN_FEEDS } from "./tokens.ts"
 
@@ -102,7 +102,186 @@ export function unreadAssets(positions: readonly Position[], { unreadBalances }:
 /** The assets `pnlOverTime` has to leave out. */
 export const unconfirmedAssets = (positions: readonly Position[], unread: readonly string[] = []) => new Set([...positions.filter(isUnconfirmed).map((p) => p.asset), ...unread])
 
+/** Oldest first holds every lot at every step, so its memory grows with the lots times the steps (WORK-559). Average has no such limit. */
+export class OldestFirstTooBigError extends Error {
+  constructor() {
+    super("This history is too long to work out by oldest first in this much memory. Average cost still works.")
+    this.name = "OldestFirstTooBigError"
+  }
+}
+
+/** Wallets that each fit in memory, but not all at once. Each one can still be read on its own. */
+export class WalletsTooBigError extends Error {
+  constructor() {
+    super("These wallets have too much history to add up in this much memory.")
+    this.name = "WalletsTooBigError"
+  }
+}
+
+/** No limit in a browser, where running out only costs that one tab. A process that others rely on sets one. */
+let foldBytes = Number.POSITIVE_INFINITY
+export function limitFolds(bytes: number) {
+  foldBytes = bytes
+}
+
+// Measured through the server's API on a 640 MB heap (WORK-570).
+/** What a leg costs at the peak of reading and folding it, the same as a row in the budget wallets are read under. */
+const BYTES_PER_LEG = 10_000
+/** What each wallet beyond the first adds to every leg, because each fold looks through all of them: 21 wallets of 1,000 legs fit, and of 1,400 didn't. */
+const BYTES_PER_LEG_PER_OTHER_WALLET = 1_000
+/** 8,000 incoming transfers fit and 9,000 didn't, which is about 12 bytes a lot. This leaves room for wallets kept in memory too. */
+const BYTES_PER_LOT = 20
+/** What a lot that arrived from another wallet costs on top, because the leg it arrived on keeps its own copy of it. */
+const BYTES_PER_INHERITED_LOT = 500
+/** 3,000 lots moved between two wallets 400 times fit by average, and 1,000 times didn't, which is 3 million of these. */
+const BYTES_PER_MOVE_LINE = 150
+
+type FoldedLeg = Pick<PricedLeg, "asset" | "delta" | "blockNum" | "txIndex" | "txHash" | "parts" | "pieces">
+/** The address is what lets a transfer from one of these wallets to another carry its lots across. */
+type FoldedHistory = { address?: string; legs: readonly FoldedLeg[] }
+type OpenLot = { units: bigint; acquired: number }
+type OpenLots = { lots: OpenLot[]; first: number }
+
+/** Oldest first by when it was acquired, the way the fold keeps them. */
+function openLot(open: OpenLots, lot: OpenLot) {
+  const last = open.lots.at(-1)
+  const at = !last || last.acquired <= lot.acquired ? -1 : open.lots.findIndex((other, index) => index >= open.first && other.acquired > lot.acquired)
+  if (at < 0) open.lots.push(lot)
+  else open.lots.splice(at, 0, lot)
+}
+
+/** Takes from the oldest lots, and says what it took. */
+function closeLots(open: OpenLots, units: bigint): OpenLot[] {
+  const taken: OpenLot[] = []
+  for (let left = units; left > 0n && open.first < open.lots.length; ) {
+    const lot = open.lots[open.first] as OpenLot
+    const size = lot.units < left ? lot.units : left
+    taken.push({ units: size, acquired: lot.acquired })
+    lot.units -= size
+    if (lot.units === 0n) open.first++
+    left -= size
+  }
+  // Spent lots go once they're most of the list, so what's kept follows what's open however many times lots move.
+  if (open.first * 2 > open.lots.length) {
+    open.lots.splice(0, open.first)
+    open.first = 0
+  }
+  return taken
+}
+
+const addressesOf = (histories: readonly FoldedHistory[]) => new Set(histories.flatMap(({ address }) => address ?? []))
+const goesTo = ({ parts }: FoldedLeg, addresses: ReadonlySet<string>) => parts.some(({ counterparty }) => counterparty && addresses.has(counterparty.toLowerCase()))
+
+/** With what left before what arrived, the way costs carry between wallets. */
+const chainOrder = (histories: readonly FoldedHistory[]) =>
+  histories
+    .flatMap(({ address, legs }, wallet) => legs.map((leg) => ({ leg, wallet, address, delta: BigInt(leg.delta) })))
+    .sort((a, b) => a.leg.blockNum - b.leg.blockNum || a.leg.txIndex - b.leg.txIndex || Number(a.delta > 0n) - Number(b.delta > 0n))
+
+/**
+ * A dry run of oldest first over wallets that can pass lots between them, cheap enough to run before any of the fold does.
+ * A transfer it can't rule out counts as carrying its lots, so this can say more than the fold will hold, but not less.
+ * `bytesFor` gets, for each wallet, the lots open after each leg, added up, and the lots that arrived from another wallet.
+ * Neither ever goes down, so this stops as soon as they're past the limit, rather than counting a history that may not fit in memory just to count it.
+ */
+function dryRunFits(histories: readonly FoldedHistory[], bytesFor: (held: readonly number[], inherited: number) => number): boolean {
+  const held = histories.map(() => 0)
+  let inherited = 0
+  const addresses = addressesOf(histories)
+  const open = new Map<string, OpenLots>()
+  const carried = new Map<string, OpenLot[]>()
+  let at: FoldedLeg | null = null
+  for (const { leg, wallet, address, delta } of chainOrder(histories)) {
+    // What's carried is only for this transaction, the same as when costs carry for real.
+    if (at && (at.blockNum !== leg.blockNum || at.txIndex !== leg.txIndex)) carried.clear()
+    at = leg
+    const key = `${wallet}:${leg.asset}`
+    const lots = open.get(key) ?? { lots: [], first: 0 }
+    open.set(key, lots)
+    if (delta < 0n) {
+      const taken = closeLots(lots, -delta)
+      if (address && goesTo(leg, addresses)) carried.set(`${leg.txHash}:${address}:${leg.asset}`, taken)
+    } else if (leg.pieces) {
+      for (const piece of leg.pieces) openLot(lots, { units: BigInt(piece.qty), acquired: piece.acquiredBlock ?? leg.blockNum })
+      inherited += leg.pieces.length
+    } else if (delta > 0n) {
+      let left = delta
+      for (const part of leg.parts) {
+        const pool = part.side === "credit" && part.counterparty ? carried.get(`${leg.txHash}:${part.counterparty.toLowerCase()}:${leg.asset}`) : undefined
+        for (let need = pool ? BigInt(part.amount) : 0n; pool && need > 0n && pool.length > 0 && left > 0n; ) {
+          const lot = pool[0] as OpenLot
+          const size = lot.units < need ? lot.units : need
+          openLot(lots, { units: size, acquired: lot.acquired })
+          inherited++
+          lot.units -= size
+          if (lot.units === 0n) pool.shift()
+          need -= size
+          left -= size
+        }
+      }
+      if (left > 0n) openLot(lots, { units: left, acquired: leg.blockNum })
+    }
+    held[wallet] = (held[wallet] as number) + lots.lots.length - lots.first
+    if (bytesFor(held, inherited) > foldBytes) return false
+  }
+  return true
+}
+
+/**
+ * What average's moves between wallets hold: each one's cost keeps a line for every block the wallet paid at, however little
+ * moved. A line for each block it could have got from anywhere, since costs that aren't known yet may become known.
+ */
+function averageMoveLines(histories: readonly FoldedHistory[]): number {
+  const addresses = addressesOf(histories)
+  const lines = new Map<string, number>()
+  const blocks = new Map<string, number>()
+  const carried = new Map<string, number>()
+  let total = 0
+  for (const { leg, wallet, address, delta } of chainOrder(histories)) {
+    const key = `${wallet}:${leg.asset}`
+    const had = lines.get(key) ?? 0
+    if (delta < 0n && address && goesTo(leg, addresses)) carried.set(`${leg.txHash}:${address}:${leg.asset}`, had)
+    if (delta <= 0n) continue
+    const arrived = leg.parts.reduce((sum, { side, counterparty }) => sum + ((side === "credit" && counterparty && carried.get(`${leg.txHash}:${counterparty.toLowerCase()}:${leg.asset}`)) || 0), 0)
+    const paidAt = (blocks.get(leg.asset) ?? 0) + (arrived > 0 ? 0 : 1)
+    blocks.set(leg.asset, paidAt)
+    total += arrived
+    lines.set(key, Math.min(had + (arrived > 0 ? arrived : 1), paidAt))
+  }
+  return total
+}
+
+const sumOf = (counts: readonly number[]) => counts.reduce((sum, count) => sum + count, 0)
+const legsIn = (histories: readonly FoldedHistory[]) => sumOf(histories.map(({ legs }) => legs.length))
+
+/** Throws unless folding all of these wallets' histories and keeping every result fits, before any of it is allocated. */
+export function assertFoldsFit(histories: readonly FoldedHistory[], method: Method) {
+  if (foldBytes === Number.POSITIVE_INFINITY) return
+  const bytes = legsIn(histories) * (BYTES_PER_LEG + BYTES_PER_LEG_PER_OTHER_WALLET * (histories.length - 1))
+  // One wallet's legs are what the budget it was read under already counted.
+  if (histories.length > 1 && bytes > foldBytes) throw new WalletsTooBigError()
+  if (method !== "fifo") {
+    if (bytes + averageMoveLines(histories) * BYTES_PER_MOVE_LINE > foldBytes) throw new WalletsTooBigError()
+    return
+  }
+  // Each fold is still held when the next starts, and a wallet's costs can look through another's whole history on top of that, so more than one wallet counts the biggest twice.
+  const fits = dryRunFits(histories, (held, inherited) => bytes + (sumOf(held) + (held.length > 1 ? Math.max(...held) : 0)) * BYTES_PER_LOT + inherited * BYTES_PER_INHERITED_LOT)
+  if (!fits) throw new OldestFirstTooBigError()
+}
+
+/** Throws unless folding this wallet fits, with the others only there to say what it inherits. Only its fold is kept, but working out what it inherits holds all of what they pass around. */
+export function assertFoldFits(focus: FoldedHistory, others: readonly FoldedHistory[], method: Method) {
+  if (foldBytes === Number.POSITIVE_INFINITY) return
+  if (method !== "fifo") {
+    if (focus.legs.length * BYTES_PER_LEG + averageMoveLines([focus, ...others]) * BYTES_PER_MOVE_LINE > foldBytes) throw new WalletsTooBigError()
+    return
+  }
+  const fits = dryRunFits([focus, ...others], (held, inherited) => focus.legs.length * BYTES_PER_LEG + (held[0] as number) * BYTES_PER_LOT + inherited * BYTES_PER_INHERITED_LOT)
+  if (!fits) throw new OldestFirstTooBigError()
+}
+
 export function foldPositions(legs: readonly PricedLeg[], method: Method, prices: LatestPrices, onchain?: Onchain): Position[] {
+  if (method === "fifo") assertFoldsFit([{ legs }], method)
   const positions = new Map<string, { state: PositionState; effects: LegEffect[]; decimals: number }>()
   for (const leg of legs) {
     const position = positions.get(leg.asset) ?? { state: emptyPosition(method, leg.decimals), effects: [], decimals: leg.decimals }
@@ -340,6 +519,14 @@ export function referenceMarks(references: readonly Reference[], market: MarketM
     return market[blockNum]?.[asset] ?? null
   }
 }
+
+/** Whether a token's price at a block is an estimate, so a chart can say so. It's only asked about a price there is. */
+export type MarkEstimated = (blockNum: number, asset: string) => boolean
+
+/** Whether `referenceMarks` got a price from a market. Oracle reads and feeds aren't estimates. */
+export function marketMarked(market: MarketMarks = {}, feeds: FeedMarks = {}): MarkEstimated {
+  return (blockNum, asset) => asset !== "ETH" && asset !== "USDC" && market[blockNum]?.[asset] !== undefined && !feeds[blockNum]?.includes(asset)
+}
 export type Portfolio = { method: Method; positions: Position[]; totals: Totals }
 
 /** cost = fold(pricedLegs, method). Without `prices`, every position's value and unrealized PnL stay unknown. */
@@ -366,6 +553,8 @@ export type PnlPoint = {
   txHash: string | null
   /** Realized, plus unrealized at that moment's prices, less gas. Only what's known, and null when nothing is. */
   pnlMicros: string | null
+  /** What `pnlMicros` is made of includes an estimated cost or proceeds, or a price from a market at that moment. Only there when it's true. */
+  pnlEstimated?: boolean
   excludedCount: number
   /** What was held right after it, at that moment's prices. Only what's known, and null when nothing is. */
   valueMicros: string | null
@@ -407,13 +596,16 @@ export function pnlOverTime(
   noMarket: ReadonlySet<string> = new Set(),
   /** Blocks with prices that aren't there for a transaction. */
   sampleBlocks: readonly number[] = [],
+  /** Which of `markPrice`'s prices are estimates. */
+  markEstimated: MarkEstimated = () => false,
 ): PnlPoint[] {
   const states = new Map<string, PositionState>()
   const points: PnlPoint[] = []
-  const measure = (priceOf: (asset: string) => string | null) => {
+  const measure = (priceOf: (asset: string) => string | null, priceEstimated: (asset: string) => boolean) => {
     const coverage: Coverage = { known: 0, missing: 0 }
     let pnl = 0n
     let excludedCount = 0
+    let pnlEstimated = false
     for (const [asset, state] of states) {
       if (noMarket.has(asset)) continue
       const v = valuePosition(state, priceOf(asset))
@@ -431,11 +623,15 @@ export function pnlOverTime(
         coverage.missing++
       } else {
         pnl += BigInt(v.realizedMicros)
+        if (BigInt(v.estimatedRealizedMicros) > 0n) pnlEstimated = true
         if (BigInt(state.resolvedDisposedQty) > 0n) coverage.known++
       }
       if (v.unrealizedMicros !== null) {
         pnl += BigInt(v.unrealizedMicros)
-        if (BigInt(v.qty) > 0n) coverage.known++
+        if (BigInt(v.qty) > 0n) {
+          coverage.known++
+          if (BigInt(v.estimatedCostMicros) > 0n || priceEstimated(asset)) pnlEstimated = true
+        }
       } else if (BigInt(v.qty) > 0n) {
         excludedCount++
         coverage.missing++
@@ -447,7 +643,7 @@ export function pnlOverTime(
       excludedCount++
       coverage.missing++
     }
-    return { pnlMicros: answer(pnl, coverage), excludedCount }
+    return { pnlMicros: answer(pnl, coverage), excludedCount, ...(pnlEstimated ? { pnlEstimated } : {}) }
   }
   // What's held, and nothing about cost. A quantity history can't vouch for is left out, like one with no price.
   const worthNow = (priceOf: (asset: string) => string | null) => {
@@ -518,13 +714,13 @@ export function pnlOverTime(
     }
     if (legs[i + 1]?.txHash === leg.txHash) return
     const after = worthNow(at)
-    lastPoint = { blockNum: leg.blockNum, timestamp: leg.timestamp, txHash: leg.txHash, ...measure(at), ...valueAround(before, after) }
+    lastPoint = { blockNum: leg.blockNum, timestamp: leg.timestamp, txHash: leg.txHash, ...measure(at, (asset) => markEstimated(leg.blockNum, asset)), ...valueAround(before, after) }
     points.push(lastPoint)
   })
   if (latest && (states.size > 0 || unconfirmed.size > 0)) {
     sampleBefore(latest.blockNum)
     const now = worthNow((asset) => prices[asset]?.micros ?? null)
-    points.push({ blockNum: latest.blockNum, timestamp: latest.timestamp, txHash: null, ...measure((asset) => prices[asset]?.micros ?? null), ...valueAround(now, now) })
+    points.push({ blockNum: latest.blockNum, timestamp: latest.timestamp, txHash: null, ...measure((asset) => prices[asset]?.micros ?? null, (asset) => prices[asset]?.source === "market"), ...valueAround(now, now) })
   }
   return points
 }
