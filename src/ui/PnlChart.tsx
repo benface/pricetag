@@ -13,7 +13,9 @@ type Point = BookPoint & { wallets?: string[] }
 
 type Props = { points: Point[]; currency: CurrencyCode; onSelect: (point: Point) => void }
 
-export function PnlChart({ points, currency, onSelect }: Props) {
+export function PnlChart({ points: every, currency, onSelect }: Props) {
+  // This chart is PnL, which holds still between transactions, so it has no use for the points that are only about value.
+  const points = useMemo(() => every.filter((point, i) => point.txHash !== null || i === every.length - 1), [every])
   const acrossWallets = points.some((point) => point.wallets !== undefined)
   const showPnl = (point: Point) => (point.pnlMicros === null ? "⚠ Unavailable" : formatSignedMoney(point.pnlMicros, currency))
   const box = useRef<HTMLDivElement>(null)
