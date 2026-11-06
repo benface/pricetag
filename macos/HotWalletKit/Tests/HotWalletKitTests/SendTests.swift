@@ -433,7 +433,7 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         // What went has to land first, so trying again can't reuse its nonce. Then only what's left goes.
         await rig.chain.setSendFailure(nil)
         #expect(await rig.wallet.sweepEverything(in: PresencePrompt()) == false)
-        #expect(rig.wallet.sweepProblem == "A sweep is still on its way. Try again in a moment.")
+        #expect(rig.wallet.sweepProblem == HotWalletWording.lastOneOnItsWay)
         #expect(await rig.chain.sent.count == 1)
 
         await rig.chain.confirmAll()
@@ -566,6 +566,21 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         let rig = await Rig(snapshot(eth: 0, tokens: [usdc: usdcUnits(5)]))
         #expect(await rig.wallet.send(SendRequest(token: usdc, amount: usdcUnits(5), to: friend)) == false)
         #expect(rig.wallet.sweepProblem == HotWalletWording.noGasToSend)
+    }
+
+    /// What's in the way isn't always a sweep, so the wait doesn't call it one.
+    @Test func sweepingAfterASendSaysTheLastTransactionIsInTheWay() async throws {
+        let rig = await Rig(funded)
+        #expect(await rig.wallet.send(SendRequest(token: usdc, amount: usdcUnits(5), to: friend)))
+        #expect(await rig.wallet.sweepEverything(in: PresencePrompt()) == false)
+        #expect(rig.wallet.sweepProblem == HotWalletWording.lastOneOnItsWay)
+
+        await rig.chain.confirmAll()
+        await rig.wallet.tick()
+        #expect(rig.stateStore.saved.settledThroughBlock == 1001)
+        #expect(await rig.wallet.sweepEverything(in: PresencePrompt()) == false)
+        #expect(rig.wallet.sweepProblem == HotWalletWording.lastOneStillShowingUp)
+        #expect(await rig.chain.sent.count == 1)
     }
 
     @Test func oneAtATimeUntilTheLastHasLanded() async throws {
