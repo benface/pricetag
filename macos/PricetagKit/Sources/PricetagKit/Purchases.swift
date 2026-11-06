@@ -266,6 +266,9 @@ public final class PurchaseTracker {
     /// Reads every unresolved order. A failed read changes nothing, so a purchase can't get lost, and it's tried again.
     public func check() async {
         var failure: String?
+        var justFinished: Set<String> = []
+        // Also when a read's cancelled, or a row that finished before it would be up for trimming with nothing to say it's new.
+        defer { trim(keeping: justFinished) }
         for purchase in purchases where !isResolved(purchase) {
             do {
                 let orders = try await store.currentSource.onrampOrders(ref: purchase.ref)
@@ -276,6 +279,7 @@ public final class PurchaseTracker {
                     save()
                 }
                 if let recorded = order.purchase { store.recordPurchase(recorded) }
+                if isResolved(purchases[index]) { justFinished.insert(purchase.ref) }
             } catch is CancellationError {
                 return
             } catch {
@@ -283,7 +287,6 @@ public final class PurchaseTracker {
             }
         }
         problem = failure
-        trim()
     }
 
     /// Someone who's left the page without paying says so. It's kept going if an order has already started.
@@ -306,11 +309,12 @@ public final class PurchaseTracker {
         !isResolved(purchase) && now().timeIntervalSince(purchase.startedAt) <= Self.followedFor
     }
 
-    /// What's finished only matters for a while, and what's still going stays however long this gets.
-    private func trim() {
+    /// What's finished only matters for a while, and what's still going stays however long this gets. What just finished is the last to go, because an older order finishing last hasn't been seen yet.
+    private func trim(keeping justFinished: Set<String>) {
         let finished = purchases.filter(isResolved)
         guard finished.count > Self.shownFinished else { return }
-        let dropped = Set(finished.dropLast(Self.shownFinished).map(\.ref))
+        let lastToGo = finished.filter { !justFinished.contains($0.ref) } + finished.filter { justFinished.contains($0.ref) }
+        let dropped = Set(lastToGo.dropLast(Self.shownFinished).map(\.ref))
         purchases.removeAll { dropped.contains($0.ref) }
         save()
     }

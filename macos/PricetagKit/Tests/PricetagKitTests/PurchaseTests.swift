@@ -331,6 +331,39 @@ struct PurchaseTrackerTests {
         #expect(tracker.purchases.count == 6, "That and the newest five")
     }
 
+    private func finishing(_ refs: [String], after newer: Int) async throws -> (PurchaseTracker, PortfolioStore, Orders) {
+        let (_, store, source, defaults) = setup()
+        let going = refs.map { TrackedPurchase(ref: $0, wallet: wallet, asset: "ETH", dollars: 25, startedAt: .now, order: OnrampOrder(id: $0, status: .pending)) }
+        let settled = (0..<newer).map { TrackedPurchase(ref: "done\($0)", wallet: wallet, asset: "ETH", dollars: 25, startedAt: .now, order: delivered(id: "done\($0)")) }
+        defaults.set(try JSONEncoder().encode(going + settled), forKey: "purchases")
+        await source.say([delivered(id: "older")])
+        return (PurchaseTracker(store: store, defaults: defaults, matchOf: { _ in .recorded }), store, source)
+    }
+
+    @Test func anOlderPurchaseThatFinishesLastKeepsItsRow() async throws {
+        let (tracker, store, _) = try await finishing(["older"], after: 5)
+        await tracker.check()
+        #expect(store.book.purchases.map(\.order) == ["older"])
+        #expect(tracker.purchases.map(\.ref) == ["older", "done1", "done2", "done3", "done4"], "It stays, and the oldest of what's already been seen goes")
+        await tracker.check()
+        #expect(tracker.purchases.map(\.ref) == ["older", "done1", "done2", "done3", "done4"], "And it's still there the next time")
+    }
+
+    @Test func olderPurchasesThatFinishTogetherAllKeepTheirRows() async throws {
+        let (tracker, _, _) = try await finishing(["older", "older2"], after: 5)
+        await tracker.check()
+        #expect(tracker.purchases.map(\.ref) == ["older", "older2", "done2", "done3", "done4"])
+    }
+
+    @Test func aPurchaseSeenFinishedIsTrimmedInItsTurn() async throws {
+        let (tracker, _, source) = try await finishing(["older"], after: 5)
+        await tracker.check()
+        await source.say([delivered(id: "newest")])
+        _ = try await tracker.begin(wallet: wallet, asset: "ETH", dollars: 25, cryptoAmount: "0.008")
+        try await until { tracker.purchases.count == 5 && tracker.purchases.last?.order?.id == "newest" }
+        #expect(tracker.purchases.map(\.ref) == ["done1", "done2", "done3", "done4", "ref"], "A later one finishing makes room from the top, as it always has")
+    }
+
     @Test func dismissingForgetsThePurchaseAndNotItsCost() async throws {
         let (tracker, store, source, _) = setup()
         _ = try await tracker.begin(wallet: wallet, asset: "ETH", dollars: 25, cryptoAmount: "0.008")
