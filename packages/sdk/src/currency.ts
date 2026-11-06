@@ -68,7 +68,7 @@ export type RateRound = {
   updatedAt: number
 }
 
-/** Each feed's answers at the blocks where something with a cost stored in that currency arrived, for reading it in another. */
+/** Each feed's answers at the blocks where something with a cost stored in that currency arrived or was already held, for reading it in another. */
 export type PaidRates = Partial<Record<CurrencyCode, Rates["byBlock"]>>
 
 /** What a client needs to convert a wallet. Blocks the feed had no answer for are left out. */

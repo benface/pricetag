@@ -267,7 +267,7 @@ export function App() {
   const [chosenCurrency, setChosenCurrency] = useState<CurrencyCode>(readCurrency)
   const { rules, chosen: chosenRule, choose: chooseRule } = useRules()
   const { book, change, undo, canUndo, linkAccounts } = useBook()
-  const paidIn = currenciesIn(book).filter((code) => code !== "USD").join(",")
+  const paidIn = currenciesIn(book).join(",")
   const { wallet, loading, error } = useWallet(address, chosenCurrency, chosenRule, paidIn)
   const [device, setDevice] = useState<{ link: DeviceLink | null } | null>(() => {
     const link = parseDeviceLink(window.location.search)
