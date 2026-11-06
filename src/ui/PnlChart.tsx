@@ -149,7 +149,7 @@ export function PnlChart({ points, currency, onSelect }: Props) {
           </table>
         </div>
       ) : null}
-      {!asTable && !chart.hasData ? <p className="notice warn chart-empty">⚠ {NOTHING_TO_CHART}</p> : null}
+      {!asTable && !chart.hasData ? <p className="notice chart-empty">{NOTHING_TO_CHART}</p> : null}
       <div
         ref={box}
         className="chart"
