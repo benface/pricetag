@@ -1,7 +1,7 @@
 {
   "kind": "manifest",
   "dependencies": {
-    "pricetag": "benface/pricetag@0.1.0"
+    "pricetag": "benface/pricetag@0.2.0"
   },
   "tables": {
     "reference_prices": {

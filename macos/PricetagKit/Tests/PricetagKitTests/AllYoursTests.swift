@@ -39,6 +39,16 @@ struct AllYoursTests {
         #expect(!log.filtered(query: "savings", asset: nil).map(\.txHash).contains("0x1"))
     }
 
+    @Test func holdingsCanBeFoundByWhichWallet() throws {
+        let portfolio = try resource("all-yours-portfolio", as: Portfolio.self)
+        let eth = try #require(portfolio.positions.first { $0.asset == "ETH" })
+        #expect(eth.matches("savings", names: [c: "Savings"]))
+        #expect(eth.matches("eth savings", names: [c: "Savings"]))
+        #expect(eth.matches(c))
+        #expect(!eth.matches("savings"))
+        #expect(!eth.matches("usdc savings", names: [c: "Savings"]))
+    }
+
     @Test func readsWhatTheServerSends() throws {
         let portfolio = try resource("all-yours-portfolio", as: Portfolio.self)
         #expect(portfolio.isAllYours)

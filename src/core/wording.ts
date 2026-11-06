@@ -4,12 +4,14 @@
 
 import { formatAmount, formatDuration, formatMoney, msBetweenBlocks, shortHash, worth, type CostLabel, type CurrencyCode, type FoldLeg, type HoldComparison, type Method, type PricedLeg, type PriceSource, type UnseenEth } from "@pricetag/sdk/core"
 import type { Mode } from "./api.ts"
+import type { ValueGaps } from "./attention.ts"
 
 export const METHOD_LABELS: Record<Method, string> = { average: "Average", fifo: "Oldest first" }
 export const METHOD_NAME = "How cost is worked out"
 export const METHOD_HELP = "Average spreads what you paid across all you hold. Oldest first counts what you sell as what you got earliest."
 
 export const AVERAGE_PRICE_PAID = "Average price paid"
+export const AVERAGE_PAID = "Average paid"
 export const NETWORK_FEES = "Network fees"
 export const BALANCE_CHECK = "Balance check"
 export const CHECK_LABELS = { reconciled: "Matches", incomplete: "Doesn't match", unchecked: "Not checked" }
@@ -21,12 +23,15 @@ export const RETURN_HELP = "Unrealized PnL as a share of what you paid for what 
 
 export const HOLD_TITLE = "Compared with holding ETH"
 export const HOLD_WALLET = "This wallet, after network fees"
+export const HOLD_WALLETS = "Your wallets, after network fees"
 export const HOLD_ETH = "If you'd held ETH instead"
 export const HOLD_PAST = "Past results don't predict future ones."
 
 /** Fixing an unknown cost is answering questions, wherever it's offered, so it has one name. A count always says what it counts. */
 export const ANSWER_QUESTIONS = "Answer Questions"
 export const answerQuestionsLabel = (count: number) => (count === 1 ? "Answer 1 Question" : `Answer ${count.toLocaleString("en-US")} Questions`)
+/** When questions remain, but nothing on the page leaves anything out: what they ask about has already left. */
+export const PAST_COSTS_UNKNOWN = "Not every past cost is known yet."
 /** When there's nothing to answer, but something's still left out. */
 export const SHOW_MISSING = "Show What's Missing"
 export const SENDER_QUESTION = "Who sent you this?"
@@ -46,9 +51,19 @@ export const tokenLabel = (symbol: string) => (symbol === "WETH" ? "wrapped ETH"
 export const ETH_NOTE = "incl. wrapped ETH"
 export const DEMO_NOTICE = "Demo data, not a real wallet."
 export const PNL_UNAVAILABLE = "PnL unavailable"
+export const UNKNOWN = "Unknown"
+export const NO_PRICE = "No price"
+export const UNAVAILABLE = "Unavailable"
+export const ABOUT_THIS_DATA = "What this covers"
+export const MARKET_ESTIMATES = "Some prices are estimates, from the market."
+export const PNL_INCOMPLETE = "PnL isn't complete"
+export const ALL_BALANCES_MATCH = "Every balance matches the chain."
 export const NOTHING_TO_CHART = "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't zero."
 export const UNPRICED_FEES = "Some network fees had no price at the time, and aren't in this total."
 export const READING = "Reading this wallet. The first read can take a minute."
+export const READING_ALL = "Reading your wallets. The first read can take a minute."
+export const ALL_YOURS_TITLE = "All Yours"
+export const IN_EACH_WALLET = "In Each Wallet"
 export const NOT_AN_ADDRESS = "That isn't a Base address. It should start with 0x, then 40 letters and numbers."
 
 export const RULES_TITLE = "Pricing rule"
@@ -148,11 +163,47 @@ export function activityTitle(count: number, shown: number): string {
 /** How much of a wallet's PnL rests on an estimate, or null when none does. */
 export const estimatedSentence = (micros: string, currency: CurrencyCode): string | null => (BigInt(micros) > 0n ? `${formatMoney(micros, currency)} of this is an estimate, from market prices or exchange rates.` : null)
 
+/** A few assets by name, the way a sentence says them. */
+const listAssets = (assets: readonly string[]) => new Intl.ListFormat("en-US", { type: "conjunction" }).format(assets)
+
+/** Why a value is partial. What's left out says so. A balance that couldn't be checked, or a history that's incomplete, is still in the value, so it's only said to be uncertain. */
+export function valueGapsSentence({ noPrice, unread, unchecked, incompleteHistory }: ValueGaps): string {
+  const sentences = [
+    noPrice.length > 0 ? `The value leaves out ${listAssets(noPrice)}, which ${noPrice.length === 1 ? "has" : "have"} no price right now.` : null,
+    unread.length > 0 ? `The value leaves out ${listAssets(unread)}, whose ${unread.length === 1 ? "balance" : "balances"} couldn't be read.` : null,
+    unchecked.length > 0 ? `Couldn't check the balance of ${listAssets(unchecked)}, so ${unchecked.length === 1 ? "its value is" : "their values are"} an estimate.` : null,
+    incompleteHistory.length > 0 ? `Incomplete history for ${listAssets(incompleteHistory)}, so ${incompleteHistory.length === 1 ? "its numbers" : "their numbers"} may not be all of it.` : null,
+  ].filter((sentence) => sentence !== null)
+  return sentences.length > 0 ? sentences.join(" ") : "The value isn't complete."
+}
+
+/** What a partial PnL leaves out, without a period. `also` when something before it already says part of it. */
+export const pnlLeavesOutSentence = (assets: readonly string[], also: boolean) => `PnL ${also ? "also " : ""}leaves out ${listAssets(assets)}`
+
+/** How much of the totals is unknown or estimated, or null when none is. */
+export function leavesOutSentence({ unresolvedMicros, estimatedMicros }: { unresolvedMicros: string; estimatedMicros: string }, currency: CurrencyCode): string | null {
+  const parts = [
+    BigInt(unresolvedMicros) > 0n ? `${formatMoney(unresolvedMicros, currency)} has an unknown cost, so it isn't in the PnL.` : null,
+    BigInt(estimatedMicros) > 0n ? `${formatMoney(estimatedMicros, currency)} is estimated.` : null,
+  ].filter((part) => part !== null)
+  return parts.length > 0 ? parts.join(" ") : null
+}
+
+export const unreadBalancesSentence = (assets: readonly string[]) => `Couldn't read the ${assets.join(", ")} ${assets.length === 1 ? "balance" : "balances"}.`
+
+/** What isn't listed with the holdings, and why it doesn't matter to the numbers. null when there's nothing. */
+export function noMarketSentence(listed: readonly string[], unlisted: number): string | null {
+  const total = listed.length + unlisted
+  if (total === 0) return null
+  const off = unlisted > 0 ? `${listed.length > 0 ? ", plus " : ""}${unlisted} we don't track` : ""
+  return `${total} ${total === 1 ? "token" : "tokens"} with no market: ${listed.join(", ")}${off}. Often spam, and not counted in any total.`
+}
+
 /** What a total leaves out, or null when it leaves out nothing. */
-export function excludedSentence(excluded: readonly { asset: string; reason: string }[]): string | null {
+export function excludedSentence(excluded: readonly { asset: string; reason: string; wallet?: string }[]): string | null {
   if (excluded.length === 0) return null
   const byReason = new Map<string, string[]>()
-  for (const { asset, reason } of excluded) byReason.set(reason, [...(byReason.get(reason) ?? []), asset])
+  for (const { asset, reason, wallet } of excluded) byReason.set(reason, [...(byReason.get(reason) ?? []), wallet ? `${asset} in ${shortHash(wallet)}` : asset])
   return `Excludes ${[...byReason.entries()].map(([reason, assets]) => `${assets.join(", ")} (${reason})`).join("; ")}.`
 }
 
@@ -164,19 +215,27 @@ export function holdDifferenceSentence(micros: string, currency: CurrencyCode, e
   return `${about}${formatMoney(difference < 0n ? -difference : difference, currency)} ${difference > 0n ? "more" : "less"} than holding ETH.`
 }
 
-/** What keeps the two from being set against each other, or null when nothing does. */
-export function holdCaveatSentence({ status, unavailable, putInMicros, unknownAmounts, walletLeavesOut }: Pick<HoldComparison, "status" | "unavailable" | "putInMicros" | "unknownAmounts" | "walletLeavesOut">, currency: CurrencyCode): string | null {
-  if (status === "complete") return null
-  if (unavailable === "no current eth price") return "Unavailable, because there's no current ETH price to compare with."
-  if (unavailable === "left with no known value") return "Unavailable, because something left this wallet with no known value, so what holding ETH would have left can't be worked out."
-  if (unavailable === "left with no known share") return "Unavailable, because something left this wallet after an exchange of several tokens at once, so how much of it came from what was put in can't be worked out."
-  if (unavailable === "nothing known put in") return "Unavailable, because nothing put in this wallet has a known value yet."
-  const amounts = unknownAmounts === 1 ? "1 other amount has no known value, and isn't counted." : `${unknownAmounts.toLocaleString("en-US")} other amounts have no known value, and aren't counted.`
-  return [`Partial, so the two don't cover the same money. Holding ETH counts the ${formatMoney(putInMicros, currency)} put in with a known value.`, unknownAmounts > 0 ? amounts : null, walletLeavesOut ? "This wallet's total leaves some things out." : null].filter((part) => part !== null).join(" ")
+/** The comparison in a few words, for the line that opens the whole of it. */
+export function holdSummarySentence({ status, differenceMicros, walletEstimated, estimated }: Pick<HoldComparison, "status" | "differenceMicros" | "walletEstimated" | "estimated">, currency: CurrencyCode): string {
+  if (status === "partial") return "Not comparable yet"
+  return status === "complete" && differenceMicros !== null ? holdDifferenceSentence(differenceMicros, currency, walletEstimated || estimated) : "Not available yet"
 }
 
-export function coverageSentence(coverage: { fromBlock: number; toBlock: number }, trackedTokens: number, openingUnread: boolean): string {
-  const opening = openingUnread ? "What the wallet held before that couldn't all be read yet, so some amounts may not be full balances." : "What the wallet held before that is included, at an unknown cost."
+/** What keeps the two from being set against each other, or null when nothing does. */
+export function holdCaveatSentence({ status, unavailable, putInMicros, unknownAmounts, walletLeavesOut }: Pick<HoldComparison, "status" | "unavailable" | "putInMicros" | "unknownAmounts" | "walletLeavesOut">, currency: CurrencyCode, { combined = false } = {}): string | null {
+  if (status === "complete") return null
+  const here = combined ? "your wallets" : "this wallet"
+  if (unavailable === "no current eth price") return "Unavailable, because there's no current ETH price to compare with."
+  if (unavailable === "left with no known value") return `Unavailable, because something left ${here} with no known value, so what holding ETH would have left can't be worked out.`
+  if (unavailable === "left with no known share") return `Unavailable, because something left ${here} after an exchange of several tokens at once, so how much of it came from what was put in can't be worked out.`
+  if (unavailable === "nothing known put in") return `Unavailable, because nothing put in ${here} has a known value yet.`
+  const amounts = unknownAmounts === 1 ? "1 other amount has no known value, and isn't counted." : `${unknownAmounts.toLocaleString("en-US")} other amounts have no known value, and aren't counted.`
+  return [`Partial, so the two don't cover the same money. Holding ETH counts the ${formatMoney(putInMicros, currency)} put in with a known value.`, unknownAmounts > 0 ? amounts : null, walletLeavesOut ? combined ? "Your wallets' total leaves some things out." : "This wallet's total leaves some things out." : null].filter((part) => part !== null).join(" ")
+}
+
+export function coverageSentence(coverage: { fromBlock: number; toBlock: number }, trackedTokens: number, openingUnread: boolean, { combined = false } = {}): string {
+  const who = combined ? "your wallets" : "the wallet"
+  const opening = openingUnread ? `What ${who} held before that couldn't all be read yet, so some amounts may not be full balances.` : `What ${who} held before that is included, at an unknown cost.`
   return `Covers about ${formatDuration(msBetweenBlocks(coverage.fromBlock, coverage.toBlock))} of history and ${trackedTokens} tokens plus ETH. ${opening} Other tokens aren't counted.`
 }
 
@@ -187,6 +246,22 @@ export function networkFeeUnknownSentence(count: number): string {
 export function linkedFailedSentence(count: number): string {
   return count === 1 ? "Couldn't read your other wallet, so what came from it may show an unknown cost." : `Couldn't read ${count} of your other wallets, so what came from them may show an unknown cost.`
 }
+
+const walletList = (wallets: readonly string[]) => new Intl.ListFormat("en-US").format(wallets.map(shortHash))
+
+/** How many wallets All Yours adds up. */
+export const walletCount = (count: number) => (count === 1 ? "1 wallet" : `${count} wallets`)
+
+/** Where a total across several wallets finds something, in the wallet's short form. */
+export const inWallets = (wallets: readonly string[]) => `In ${walletList(wallets)}`
+
+export const unknownCostIn = (wallets: readonly string[]) => `Unknown cost in ${walletList(wallets)}`
+
+/** Wallets in All Yours that aren't in its numbers yet, because they're still being read. */
+export const allYoursReadingSentence = (wallets: readonly string[]) => `Still reading ${walletList(wallets)}, so ${wallets.length === 1 ? "it isn't" : "they aren't"} in these numbers yet.`
+
+/** Wallets in All Yours whose read failed, which aren't in its numbers. */
+export const allYoursFailedSentence = (wallets: readonly string[]) => `Couldn't read ${walletList(wallets)}, so ${wallets.length === 1 ? "it isn't" : "they aren't"} in these numbers.`
 
 /** A wallet's history that doesn't add up, or can't be checked, and what that does to what it sent. */
 export function withheldSentence(wallet: string, asset: string): string {

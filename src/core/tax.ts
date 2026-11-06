@@ -405,14 +405,21 @@ export function taxRows(wallets: readonly WalletResponse[], { method, scope, cou
   return rowsFrom(sourcesOf(wallets, method, context), method, scope, country ? TAX_COUNTRIES[country] : null)
 }
 
+const walletWords = (text: string) => text.split(/[\s,]+/).filter(Boolean)
+
 /**
  * The wallets someone typed in, and the first that can't be one. The demo wallet can't be combined with anything, so
  * what's saved from another wallet is ignored there: it mustn't block a report whose field for fixing it isn't shown.
  */
 export function readOtherWallets(text: string, address: string): { others: string[]; bad: string | null } {
   if (address === "demo") return { others: [], bad: null }
-  const others = text.split(/[\s,]+/).filter(Boolean)
+  const others = walletWords(text)
   return { others: others.map((other) => other.toLowerCase()), bad: others.find((other) => !isAddress(other)) ?? null }
+}
+
+/** What's worth keeping of that text: only its addresses, so anything pasted there by mistake isn't saved. */
+export function savedOtherWallets(text: string): string {
+  return [...new Set(walletWords(text).filter(isAddress).map((other) => other.toLowerCase()))].join("\n")
 }
 
 const plural = (count: number, one: string, many = `${one}s`) => `${count.toLocaleString("en-US")} ${count === 1 ? one : many}`

@@ -122,6 +122,12 @@ export const walletsBehind = (book: Book, wallet: { address: string; mode?: stri
 /** The other wallets to read alongside the one on screen. Until it has loaded nothing says which side it's on, so none. */
 export const walletsToRead = (book: Book, shown: string | null, sender: string | null) => (shown === null ? [] : [...new Set([...linkedWallets(book), ...(sender ? [sender] : [])])].filter((address) => address !== shown && isDemoWallet(address) === isDemoWallet(shown)))
 
+/**
+ * The wallets All Yours adds up: the ones the answers say are the user's, plus their device accounts. A wallet that's only being
+ * watched isn't one, and neither are the demo's, which nobody owns even after answering for them.
+ */
+export const yourWallets = (book: Book, deviceAccounts: readonly string[] = []) => [...new Set([...linkedWallets(book), ...deviceAccounts.map(normalizeAddress)])].filter((wallet) => wallet !== DEMO_ADDRESS && wallet !== DEMO_SAVINGS_ADDRESS)
+
 const plainRecord = (value: unknown): Record<string, unknown> | null => (typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null)
 
 const isMicros = (value: unknown): value is string => typeof value === "string" && /^\d{1,30}$/.test(value)
