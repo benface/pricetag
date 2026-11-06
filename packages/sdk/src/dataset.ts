@@ -5,9 +5,10 @@
 import { asIso, asNumber, decimalString, hexOf, isNotStarted, prefixed, type BlockMark, type Query } from "./amp.ts"
 import { blockBefore } from "./chain.ts"
 import { MULTICALL3, decodeEthBalance, encodeEthBalanceCall, readBalancesAt } from "./balances.ts"
+import type { RateRound } from "./currency.ts"
 import type { LegRow, PayoutTx, PricedRow, Reference } from "./legs.ts"
-import type { Head } from "./portfolio.ts"
-import type { PriceFeed } from "./tokens.ts"
+import type { FeedRound, Head } from "./portfolio.ts"
+import { TOKEN_FEEDS, type PriceFeed } from "./tokens.ts"
 import type { Source } from "./wallets.ts"
 
 export type Row = Record<string, unknown>
@@ -318,6 +319,46 @@ export async function readPayoutTxsAt(query: Query, baseDataset: string, address
   return txs
 }
 
+/** The `answer` word of a `latestRoundData()` result, or "" when the read failed. */
+export function decodeRoundAnswer(data: string | null | undefined): string {
+  const word = data?.slice(64, 128)
+  if (!word || word.length !== 64) return ""
+  const answer = BigInt(`0x${word}`)
+  return answer >> 255n === 1n ? "" : answer.toString()
+}
+
+/** A `latestRoundData()` result's answer and when it last updated, or null when the read failed or it isn't a positive answer. */
+export function decodeRound(data: string | null | undefined): RateRound | null {
+  const answer = decodeRoundAnswer(data)
+  const updatedAt = data?.slice(192, 256)
+  if (!answer || answer === "0" || !updatedAt || updatedAt.length !== 64) return null
+  return { answer, updatedAt: Number(BigInt(`0x${updatedAt}`)) }
+}
+
+/**
+ * One query however many feeds: a wallet that holds several asks for them all at once. The filter sits in an inner subquery
+ * with a LIMIT, and the outer query reads no field of the result. WORK-320 found the other shapes can run eth_call on every block on the chain.
+ */
+export function readFeedRoundsAt(query: Query, config: { baseDataset: string; network: string }): NonNullable<Source["readFeedRounds"]> {
+  return async (assets, block) => {
+    const feeds = assets.flatMap((asset) => {
+      const feed = TOKEN_FEEDS[asset]
+      return feed ? [{ asset, address: feed.address }] : []
+    })
+    if (feeds.length === 0) return {}
+    const calls = feeds.map(({ address }, i) => `rpc.${config.network}.eth_call(NULL, evm_encode_hex('${address}'), evm_encode_params('latestRoundData()'), block_num) AS f${i}`)
+    const { filter, count } = blockFilters([block])[0] as { filter: string; count: number }
+    const [row] = await query<Row>(`SELECT block_num, timestamp, ${calls.join(", ")} FROM (SELECT block_num, timestamp FROM "${config.baseDataset}".blocks WHERE ${filter} LIMIT ${count})`)
+    if (!row) return {}
+    const rounds: Record<string, FeedRound> = {}
+    feeds.forEach(({ asset }, i) => {
+      const round = decodeRound((row[`f${i}`] as { data?: string } | null)?.data)
+      if (round) rounds[asset] = { ...round, blockNum: asNumber(row.block_num), timestamp: asIso(row.timestamp) }
+    })
+    return rounds
+  }
+}
+
 export function datasetSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined; startBlock: number | null; network: string }): Source {
   return {
     mode: "dataset",
@@ -326,6 +367,7 @@ export function datasetSource(query: Query, config: { baseDataset: string; datas
     readBalances: (address, block) => readBalancesAt(query, config.network, address, block),
     readEthBalances: (address, blocks) => readEthBalancesAt(query, config.network, config.baseDataset, address, blocks),
     readPayoutTxs: (address, blocks) => readPayoutTxsAt(query, config.baseDataset, address, blocks),
+    readFeedRounds: readFeedRoundsAt(query, config),
     ...datasetReader(query, config),
   }
 }

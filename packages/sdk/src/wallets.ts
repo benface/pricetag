@@ -243,7 +243,7 @@ function marketWanted(wallet: Pick<Cached, "rows" | "opening" | "closing" | "las
 }
 
 /** The feeds' prices, given what ETH's worth. Each rule has its own ETH price, so this isn't part of a wallet's facts. */
-function feedPrices(rounds: Record<string, FeedRound>, prices: LatestPrices): LatestPrices {
+export function feedPrices(rounds: Record<string, FeedRound>, prices: LatestPrices): LatestPrices {
   return Object.fromEntries(Object.entries(rounds).flatMap(([asset, round]) => {
     const micros = feedPrice(asset, round, prices.ETH?.micros ?? null)
     return micros ? [[asset, { micros, source: "oracle" as const, blockNum: round.blockNum }]] : []

@@ -56,7 +56,7 @@ Amounts are in a token's smallest unit, and USD values are in micros (millionths
 | `watchWallet(address, { method?, from?, signal? })` | The same portfolio now, then again after each new block, as an async iterable. See [watching a wallet](#watching-a-wallet). |
 | `getLegs(address, { from?, to? })` | `{ legs, blocks, references, gasUnknownTxs, l1Fees, l1FeeUnknownTxs }`: what moved in the range, priced and labeled, in the order the fold reads them. It doesn't include opening balances. With an `rpcUrl`, these are the same legs as the app's and `getPortfolio`'s, L1 fees included. Without one, gas leaves out L1 fees, and a swap paid out in unwrapped ETH stays unknown. |
 | `getPrices(token, { from?, to? })` | `{ token, prices, blocks }`: a token's prices, by symbol or address. It throws on a token off the allowlist, which has no prices to give. |
-| `getLatestPrices()` | The current prices to value positions at. Only ETH and USDC have one, and only with a recent oracle read. |
+| `getLatestPrices()` | The current prices to value positions at, for every token on the allowlist, in one query: ETH and USDC from a recent oracle read, and the rest from their Chainlink feeds. A token whose answer is too old, implausible or failed isn't in it, and a feed read that fails goes to `logger`. |
 | `buildPortfolio(legs, method, prices?)` | `{ method, positions, totals }` from `getLegs`' legs. It's pure, so it needs no Amp. Nothing in it is checked against the chain, so prefer `getPortfolio`. |
 | `pnlStatus(totals, gasUnknownTxs?)` | Whether `totals.pnlMicros` can be read as the wallet's PnL: `complete`, `partial` or `unavailable`. `getPortfolio` already includes it. |
 | `pnlOverTime(legs, method, prices, markPrice, latest, unconfirmed?)` | PnL after each transaction, where `referenceMarks(references)` gives `markPrice`. `getPortfolio` already includes it, as `points`. |
@@ -85,7 +85,7 @@ There are three entry points:
 | `rpcUrl` | Where `getPortfolio` and `getLegs` read L1 fees from. See below. |
 | `rpcRateLimit` | Calls a second `rpcUrl` allows, of which L1 fees use up to 40%. It defaults to 25, for the public RPC. |
 | `baseDataset` | The raw dataset the chain's head is read from. It defaults to `edgeandnode/base_mainnet@0.0.2`. |
-| `network` | Amp's name for the chain, used to read onchain balances. It defaults to `base_mainnet`. |
+| `network` | Amp's name for the chain, used to read onchain balances and price feeds. It defaults to `base_mainnet`. |
 | `timeoutMs` | How long one query can take. It defaults to 60 s. |
 | `logger` | Gets slow queries, and reads that failed and will be retried, through its `warn(message)`. It defaults to `console`. Pass `{ warn() {} }` to silence it. |
 
@@ -247,7 +247,7 @@ SQL stops at cost, because a cost depends on every earlier leg. To get cost and 
 - A sender's swap paid out in unwrapped ETH stays unknown, with a note saying why, in `getLegs` without an `rpcUrl`, and always in `getPrices`. An `unwrap` credit in `legs` only says a contract turned WETH into ETH in that transaction, not that the ETH reached the sender, and its amount can be wrong. Confirming it takes balances and L1 fees, so only `getPortfolio`, and `getLegs` with an `rpcUrl`, do, like the app. `getPrices` would need those reads for every swap's wallet, and another account's row in the same transaction, like the pool's, usually still prices it. `priced_legs` still has a row for them, so if you query it directly, don't take a `bought_token` of ETH on trust.
 - ETH that reaches a wallet inside someone else's transaction, like a batched payout, has no row in `legs`. `getPortfolio`, and `getLegs` with an `rpcUrl`, find the block from the wallet's balance when its ETH doesn't add up, and add a leg with a part of kind `unseen_eth`, for exactly how far the balance rose, with an unknown cost. Its `txHash` is the likeliest transaction, or empty when there's no telling, and its `id` stays `unseen:<block>:ETH` either way. When anything else moved ETH in that block, even a fee, those legs say `orderUnknown`, with the method it matters to, and their costs stay unknown there. When something left, so does the cost of everything still held. Nothing else has these legs. ETH that leaves this way stays `incomplete`.
 - Only tokens on the allowlist in [`src/tokens.ts`](src/tokens.ts) get a position or a price.
-- Only ETH and USDC have a current price, so other tokens show a cost but no value yet.
+- A token's current price comes from its oracle read or feed, and its position shows a cost but no value without one. The app can also use recent trades (`market`), and the SDK doesn't read those yet.
 - `getLegs` with `buildPortfolio` is only what moved in the range, so its numbers won't match `getPortfolio`'s. Read them as what those legs add up to, not as the wallet's PnL.
 
 The app's other limits are in the [main README](../../README.md#known-gaps).
