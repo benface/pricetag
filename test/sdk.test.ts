@@ -6,6 +6,7 @@ import { describe, it } from "node:test"
 import { createPricetag } from "@pricetag/sdk"
 import { TOKEN_FEEDS, USDC_ADDRESS, buildPortfolio, buildPricedLegs, foldPositions, formatPrice, formatSignedMoney, formatMoney, pnlStatus, sumTotals } from "@pricetag/sdk/core"
 import { createQuery, createRates, createWallets, datasetReader, datasetSource, feedRounds, pricetagClient, type Query, type ReadL1Fees } from "@pricetag/sdk/internal"
+import { inLane, laneOf } from "../server/lanes.ts"
 import { resolvingSource } from "../server/source.ts"
 import { portfolioOf } from "../src/core/portfolio.ts"
 import { DEMO_REFERENCES, DEMO_ROWS, DEMO_WALLET } from "../src/core/fixtures.ts"
@@ -1184,29 +1185,78 @@ describe("a dropped connection to Amp", () => {
   }
 
   it("doesn't ask again after a timeout", async () => {
-    const seen = { requests: 0 }
-    const server = createServer((req) => {
-      req.resume()
-      seen.requests += 1
-    })
+    const server = createServer((req) => req.resume())
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
-    const query = createQuery(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, undefined, { timeoutMs: 20, logger: quiet(), retryPauseMs: 0 })
+    const warnings: string[] = []
+    const query = createQuery(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, undefined, { timeoutMs: 20, logger: quiet(warnings), retryPauseMs: 0 })
     await assert.rejects(query("SELECT 1"), /timed out/)
     server.close()
     server.unref()
-    assert.equal(seen.requests, 1)
+    assert.deepEqual(warnings, [])
   })
 
-  it("lets other queries run during the pause", async () => {
+  it("lets other queries run during the pause", async (t) => {
     const { seen, url, close } = await flakyServer(1, GATEWAY_DROP)
-    const query = createQuery(url, undefined, { logger: quiet(), retryPauseMs: 200 })
-    const first = query("SELECT 1")
+    t.after(close)
+    const query = createQuery(url, undefined, { logger: quiet(), retryPauseMs: 1000 })
+    let firstDone = false
+    const first = query("SELECT 1").then(() => (firstDone = true))
     while (seen.requests === 0) await new Promise((resolve) => setTimeout(resolve, 5))
-    const started = Date.now()
     await query("SELECT 2")
-    assert.ok(Date.now() - started < 150, "the second didn't wait for the first's pause")
+    assert.equal(firstDone, false, "the second didn't wait for the first's pause")
     await first
-    close()
+  })
+
+  it("gives up its lane during the pause, so its next query and other lanes don't wait", async (t) => {
+    const { seen, url, close } = await flakyServer(1, GATEWAY_DROP)
+    t.after(close)
+    const query = createQuery(url, undefined, { lanesAtOnce: 1, laneOf, logger: quiet(), retryPauseMs: 1000 })
+    let firstDone = false
+    const first = inLane("a", () => query("SELECT 1")).then(() => (firstDone = true))
+    while (seen.requests === 0) await new Promise((resolve) => setTimeout(resolve, 5))
+    await inLane("b", () => query("SELECT 2"))
+    await inLane("a", () => query("SELECT 3"))
+    assert.equal(firstDone, false, "neither waited for the first's pause")
+    await first
+  })
+
+  it("keeps a retry in its lane, within the limit on lanes", async (t) => {
+    // Each lane names itself in its aliases, so the server can tell them apart. It drops every query's first try.
+    const running = new Map<string, number>()
+    const tries = new Map<string, number>()
+    const most = { total: 0, inALane: 0, drops: 0, gets: 0 }
+    const server = createServer((req, res) => {
+      req.resume()
+      const lane = req.headers["amp-alias"] as string
+      running.set(lane, (running.get(lane) ?? 0) + 1)
+      most.total = Math.max(most.total, [...running.values()].reduce((sum, n) => sum + n, 0))
+      most.inALane = Math.max(most.inALane, running.get(lane) as number)
+      setTimeout(() => {
+        running.set(lane, (running.get(lane) as number) - 1)
+        const isInfo = req.url.endsWith("/GetFlightInfo")
+        if (isInfo) tries.set(lane, (tries.get(lane) ?? 0) + 1)
+        if (isInfo && (tries.get(lane) as number) % 2 === 1) {
+          most.drops += 1
+          res.writeHead(200, { "content-type": "application/grpc", "grpc-status": "14", "grpc-message": encodeURIComponent(GATEWAY_DROP) })
+          res.end()
+          return
+        }
+        res.writeHead(200, { "content-type": "application/grpc+proto" })
+        if (isInfo) res.write(flightInfo)
+        else most.gets += 1
+        res.addTrailers({ "grpc-status": "0" })
+        res.end()
+      }, 5)
+    })
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    t.after(() => server.close())
+    const query = createQuery(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, undefined, { lanesAtOnce: 2, laneOf, logger: quiet(), retryPauseMs: 1 })
+    const reads = ["a", "b", "c"].flatMap((lane) => [1, 2, 3].map((n) => inLane(lane, () => query.aliased({ lane })(`SELECT ${n}`))))
+    await Promise.all(reads)
+    assert.equal(most.drops, reads.length, "each was retried")
+    assert.equal(most.gets, reads.length, "and every read finished")
+    assert.equal(most.total, 2, "2 lanes at once, the limit, and never more")
+    assert.equal(most.inALane, 1, "one at a time in each lane")
   })
 })
 

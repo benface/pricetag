@@ -9,6 +9,8 @@ export type ReadFailure =
   | { kind: "noSource"; said: string }
   /** The server refused this request, and `said` says why. */
   | { kind: "refused"; said: string }
+  /** The server is holding this client back for `retryAfter` seconds, which clears by itself. */
+  | { kind: "slowedDown"; said: string; retryAfter: number }
 
 export class ReadError extends Error {
   readonly failure: ReadFailure
@@ -21,11 +23,18 @@ export class ReadError extends Error {
 /** A failed `fetch` throws something that isn't ours, which only happens when nothing answered. */
 export const failureOf = (error: unknown): ReadFailure => (error instanceof ReadError ? error.failure : { kind: "unreachable" })
 
+/** In seconds, as this server sends it. Anything else waits a minute, which is as long as its shortest limit lasts. */
+function retryAfterOf(response: Response): number {
+  const seconds = Number(response.headers.get("retry-after"))
+  return Number.isSafeInteger(seconds) && seconds > 0 ? seconds : 60
+}
+
 /** A response's JSON body, or a `ReadError` that says why there isn't one. */
 export async function readResponse<T>(response: Response): Promise<T> {
   const body = (await response.json().catch(() => null)) as { error?: unknown } | null
   const said = body?.error
   if (body !== null && typeof said !== "string" && response.ok) return body as T
   if (typeof said !== "string") throw new ReadError({ kind: "unreachable" })
+  if (response.status === 429) throw new ReadError({ kind: "slowedDown", said, retryAfter: retryAfterOf(response) })
   throw new ReadError({ kind: response.status === 502 ? "unavailable" : response.status === 503 ? "noSource" : "refused", said })
 }
