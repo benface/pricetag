@@ -129,6 +129,7 @@ const toLegRow = (l: Row): LegRow => ({
   side: l.side as LegRow["side"],
   amount: l.amount == null ? "" : String(l.amount),
   kind: l.kind as LegRow["kind"],
+  ...(l.counterparty == null ? {} : { counterparty: prefixed(String(l.counterparty)) }),
 })
 
 const toPricedRow = (p: Row): PricedRow => ({
@@ -158,8 +159,11 @@ export const SWAP_TABLES = ["legs", "unlisted_legs", "priced_legs"]
 /** The tables a pricing rule decides. Everything else is what happened on the chain, whichever rule prices it. */
 const PRICE_TABLES = ["priced_legs", "reference_prices"]
 
-export function datasetReader(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined; startBlock?: number | null | undefined }) {
+export function datasetReader(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined; startBlock?: number | null | undefined; counterparties?: boolean | undefined }) {
   const ds = `"${config.dataset}"`
+  // Only `legs` has a counterparty, so `unlisted_legs` needs a null of the same type to share its query.
+  const listedLegColumns = config.counterparties ? `${LEG_COLUMNS}, counterparty` : LEG_COLUMNS
+  const unlistedLegColumns = config.counterparties ? `${LEG_COLUMNS}, arrow_cast(NULL, 'FixedSizeBinary(20)') AS counterparty` : LEG_COLUMNS
   // A fork of the pricing rule only needs the tables the rule reaches, so these can come from somewhere else.
   const prices = `"${config.priceDataset ?? config.dataset}"`
   const readOrEmpty = (sql: string) =>
@@ -172,7 +176,7 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
   async function readLegs(address: string, from: number, to: number) {
     const me = hexOf(address)
     const where = `WHERE block_num BETWEEN ${from} AND ${to} AND account = X'${me}'`
-    const rows = (await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.legs ${where} UNION ALL SELECT ${LEG_COLUMNS} FROM ${ds}.unlisted_legs ${where}`)).map(toLegRow)
+    const rows = (await query<Row>(`SELECT ${listedLegColumns} FROM ${ds}.legs ${where} UNION ALL SELECT ${unlistedLegColumns} FROM ${ds}.unlisted_legs ${where}`)).map(toLegRow)
     const isUnlisted = (r: LegRow) => r.kind === "unlisted" || r.kind === "unlisted_nft"
     return {
       // pt_gas leaves the amount empty when the gas can't be worked out, and BigInt can't read that.

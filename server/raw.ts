@@ -155,29 +155,3 @@ export function legRowsFromRaw({ account, txs, logs, withdrawals, gas }: RawInpu
   }
   return { rows, gasUnknown }
 }
-
-/**
- * Fills in who was on the other side of each ERC-20 and plain ETH row, from `Transfer` logs and the transactions behind them.
- * The dataset's `legs` table has one row per side, and doesn't say.
- */
-export function withCounterparties(rows: readonly LegRow[], logs: readonly Pick<RawLog, "tx_hash" | "log_index" | "topic1" | "topic2">[], txs: readonly Pick<RawTx, "tx_hash" | "from" | "to">[]): LegRow[] {
-  const byLog = new Map(logs.map((log) => [`${normalizeAddress(log.tx_hash)}:${log.log_index}`, log]))
-  const byTx = new Map(txs.map((tx) => [normalizeAddress(tx.tx_hash), tx]))
-  return rows.map((row) => {
-    if (row.kind === "erc20") {
-      const log = byLog.get(`${row.tx_hash}:${row.log_index}`)
-      if (!log) return row
-      return { ...row, counterparty: topicToAddress(row.side === "credit" ? log.topic1 : log.topic2) }
-    }
-    if (row.kind === "eth") {
-      const tx = byTx.get(row.tx_hash)
-      if (!tx) return row
-      if (row.side === "credit") return { ...row, counterparty: normalizeAddress(tx.from) }
-      return { ...row, counterparty: tx.to === null ? null : normalizeAddress(tx.to) }
-    }
-    return row
-  })
-}
-
-/** The blocks worth looking up for one kind of row, so a wallet's first read doesn't scan every block for the few that touch it. */
-export const counterpartyBlocks = (rows: readonly LegRow[], kind: "erc20" | "eth"): number[] => [...new Set(rows.filter((r) => r.kind === kind).map((r) => r.block_num))]
