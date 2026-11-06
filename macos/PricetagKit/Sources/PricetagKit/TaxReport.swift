@@ -297,7 +297,7 @@ public final class TaxReportModel {
 
     private static func message(for error: any Error) -> String {
         switch error as? FetchError {
-        case .ampUnavailable(let message), .noAmpConfigured(let message), .rejected(let message), .needsInvite(let message), .priceChanged(let message), .rateLimited(let message, _): message
+        case .ampUnavailable(let message), .noAmpConfigured(let message), .rejected(let message), .tooBig(let message), .needsInvite(let message), .priceChanged(let message), .rateLimited(let message, _): message
         case .timedOut: Wording.serverTooSlow
         case .unreachable, nil: Wording.cantReachServer
         }

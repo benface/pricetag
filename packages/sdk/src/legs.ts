@@ -77,8 +77,11 @@ export const isUnwrapClaim = (row: LegRow) => row.kind === "unwrap" && row.side 
  */
 export type UnseenEth = { blockNum: number; amount: string; txHashes: string[] }
 
-/** A successful transaction in a block where ETH arrived with no row: one that names the wallet in its calldata, or that it sent. */
-export type PayoutTx = { blockNum: number; txHash: string; from: string; to: string | null; input: string }
+/**
+ * A transaction in a block where ETH arrived with no row: a successful one that names the wallet in its calldata, or any
+ * the wallet sent. `failed` can't be behind the ETH, though its sender still paid its fee. `deposit` is an OP Stack deposit, which pays no fee here.
+ */
+export type PayoutTx = { blockNum: number; txHash: string; from: string; to: string | null; input: string; failed?: boolean; deposit?: boolean }
 
 /** Who to ask about ETH that arrived with no row. A null sender means there's nobody to name, only what it cost. */
 export type EthPayer = { txHash: string; sender: string | null }
@@ -539,11 +542,23 @@ export function creditUnseenEth({ rows, ethBalances, feeUnknownTxs, gasUnknownBl
 export function payerOf(candidates: readonly PayoutTx[], account: string, amount: string): EthPayer | null {
   const me = normalizeAddress(account).slice(2)
   const word = BigInt(amount).toString(16).padStart(64, "0")
-  const exact = candidates.filter(({ input }) => input.includes(me) && input.includes(word))
-  const tx = exact.length === 1 ? exact[0] : candidates.length === 1 ? candidates[0] : undefined
+  const succeeded = candidates.filter((tx) => !tx.failed)
+  const exact = succeeded.filter(({ input }) => input.includes(me) && input.includes(word))
+  const tx = exact.length === 1 ? exact[0] : succeeded.length === 1 ? succeeded[0] : undefined
   if (!tx) return null
   const sender = tx.to === null ? null : normalizeAddress(tx.to)
   return { txHash: tx.txHash, sender: sender === normalizeAddress(account) ? null : sender }
+}
+
+/**
+ * Transactions the wallet sent with no gas row. Each paid a fee nothing here counts, and a credit for that block would
+ * take it out of what arrived, so the balance would match with the fee gone. Treated like gas that couldn't be worked
+ * out, which leaves the block's credit out and the difference showing.
+ */
+export function sentWithNoFee(txs: readonly PayoutTx[], rows: readonly LegRow[], account: string): GasUnknownTx[] {
+  const me = normalizeAddress(account)
+  const paid = new Set(rows.filter((row) => row.kind === "gas").map((row) => row.tx_hash))
+  return txs.filter((tx) => normalizeAddress(tx.from) === me && !tx.deposit && !paid.has(tx.txHash)).map((tx) => ({ tx_hash: tx.txHash, block_num: tx.blockNum }))
 }
 
 /**

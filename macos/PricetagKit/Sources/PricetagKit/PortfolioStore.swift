@@ -52,6 +52,8 @@ public enum FeedState: Equatable, Sendable {
     case ampUnavailable(String)
     case noAmpConfigured(String)
     case rejected(String)
+    /// The server refused this wallet as having more history than it can hold, so there are no numbers for it.
+    case tooBig(String)
     /// The server is holding this client back for now, which clears by itself.
     case rateLimited(String)
 
@@ -62,7 +64,7 @@ public enum FeedState: Equatable, Sendable {
     public var isStale: Bool {
         switch self {
         case .noWallet, .reading, .live, .catchingUp: false
-        case .behind, .serverUnreachable, .tooSlow, .ampUnavailable, .noAmpConfigured, .rejected, .rateLimited: true
+        case .behind, .serverUnreachable, .tooSlow, .ampUnavailable, .noAmpConfigured, .rejected, .tooBig, .rateLimited: true
         }
     }
 }
@@ -865,12 +867,10 @@ public final class PortfolioStore {
         return try await source.exportCSV(address: address, method: method, currency: currency, rule: selectedRule, linked: linked(for: address), book: bookToSend(book, for: address))
     }
 
-    /// Reads an exchange's history, and keeps what it found on this device. Says how many withdrawals had no usable cost.
+    /// Reads an exchange's history, and adds what it found to what's on this device. Says how many withdrawals had no usable cost.
     public func importCoinbase(csv: String) async throws -> ExchangeImport {
         let imported = try await source.importCoinbase(csv: csv)
-        var next = book
-        next.withdrawals = imported.withdrawals
-        setBook(next, action: "Import")
+        setBook(book.importing(imported.withdrawals), action: "Import")
         return imported
     }
 
@@ -1051,6 +1051,7 @@ public final class PortfolioStore {
         case .ampUnavailable(let message): .ampUnavailable(message)
         case .noAmpConfigured(let message): .noAmpConfigured(message)
         case .rejected(let message), .needsInvite(let message), .priceChanged(let message): .rejected(message)
+        case .tooBig(let message): .tooBig(message)
         case .rateLimited(let message, _): .rateLimited(message)
         case .unreachable, .timedOut, nil: .serverUnreachable
         }

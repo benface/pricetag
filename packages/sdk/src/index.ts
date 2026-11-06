@@ -3,9 +3,10 @@
 
 export { createPricetag } from "./client.ts"
 export { describeError } from "./amp.ts"
+export { WalletTooBigError } from "./memory.ts"
 export { MAIN_CURRENCY_CODES } from "./currency.ts"
 export { formatAmount, formatMoney, formatPrice, formatSignedAmount, formatSignedMoney, shortHash } from "./format.ts"
-export { buildPortfolio, pnlOverTime, pnlStatus, referenceMarks } from "./portfolio.ts"
+export { OldestFirstTooBigError, buildPortfolio, pnlOverTime, pnlStatus, referenceMarks } from "./portfolio.ts"
 export { ASSETS, TOKENS, isAddress } from "./tokens.ts"
 
 export type { Logger } from "./amp.ts"

@@ -3,7 +3,8 @@
 
 import { describeError, type Logger } from "./amp.ts"
 import { LAST_2S_BLOCK, blockBefore, msBetweenBlocks, priceSampleBlocks, timestampOfBlock } from "./chain.ts"
-import { answerToMicros, buildPricedLegs, creditUnseenEth, derivePricedRows, isUnwrapClaim, oneWaySendBalanceBlocks, payerOf, settleUnwraps, unseenEthSearchBlocks, unwrapBalanceBlocks, type EthPayer, type GasUnknownTx, type LegRow, type PayoutTx, type PricedRow, type Reference } from "./legs.ts"
+import { answerToMicros, buildPricedLegs, creditUnseenEth, derivePricedRows, isUnwrapClaim, oneWaySendBalanceBlocks, payerOf, sentWithNoFee, settleUnwraps, unseenEthSearchBlocks, unwrapBalanceBlocks, type EthPayer, type GasUnknownTx, type LegRow, type PayoutTx, type PricedRow, type Reference } from "./legs.ts"
+import { WalletTooBigError, createRowBudget, rowsThatFit, type RowBudget } from "./memory.ts"
 import { MARKET_MAX_AGE_MS, markNeeds, marketPrice, type FeedMarks, type MarketMarks, type MarketPrice, type MarketTrade } from "./market.ts"
 import { TOKEN_MARKET_RULES, tokenMarketPrice, type TokenActivity } from "./token-market.ts"
 import type { CostNote } from "./notes.ts"
@@ -67,6 +68,8 @@ const REORG_MS = 60_000
 /** The newest block past any reorg, seen from `tip`. */
 export const settledThrough = (tip: number) => blockBefore(tip, REORG_MS)
 const MAX_WALLETS = 20
+/** Wallets refused as too big, remembered so asking again costs no reads. */
+const MAX_REFUSED = 1_000
 /** A busy wallet catches up over a few refreshes, and until then the swaps left say they aren't confirmed. */
 const MAX_ETH_BALANCES_PER_READ = 400
 /** Each block costs a scan of its transactions' calldata, so a wallet with many of these learns who to ask about them over a few refreshes. */
@@ -341,10 +344,20 @@ const countTransfers = (rows: readonly LegRow[]) => rows.filter((row) => row.kin
  * `maxWallets`: how many reads to keep, the oldest going first. A server that many people share wants more than one Mac does.
  * `priceSamples`: also read prices between a wallet's transactions, for an app's chart, which costs a query for each wallet.
  * `otherTokens`: for sharing what's read about other tokens between pricing rules, since no rule changes it.
+ * `budget`: the rows of history that fit in memory, which pricing rules reading the same wallets share.
  */
-export function createWallets(source: Source, currentHead: () => Promise<Head>, readL1Fees: ReadL1Fees, logger: Logger = console, { maxWallets = MAX_WALLETS, priceSamples = false, otherTokens = source.readTokenFacts && createOtherTokens(source.readTokenFacts, logger) }: { maxWallets?: number | undefined; priceSamples?: boolean | undefined; otherTokens?: OtherTokensReader | undefined } = {}) {
+export function createWallets(source: Source, currentHead: () => Promise<Head>, readL1Fees: ReadL1Fees, logger: Logger = console, { maxWallets = MAX_WALLETS, priceSamples = false, otherTokens = source.readTokenFacts && createOtherTokens(source.readTokenFacts, logger), budget = createRowBudget(rowsThatFit()) }: { maxWallets?: number | undefined; priceSamples?: boolean | undefined; otherTokens?: OtherTokensReader | undefined; budget?: RowBudget | undefined } = {}) {
   const wallets = new Map<string, Cached>()
   const inflight = new Map<string, Promise<Cached>>()
+  /** Its history only grows, so a wallet that's too big stays too big, short of a reorg. */
+  const refused = new Set<string>()
+  budget.join({
+    heldRows: () => [...wallets].reduce((sum, [key, wallet]) => sum + (inflight.has(key) ? 0 : wallet.rows.length), 0),
+    evictOldest() {
+      for (const key of wallets.keys()) if (!inflight.has(key)) return wallets.delete(key)
+      return false
+    },
+  })
   /** First reads in progress, for showing how far along they are. Later reads are quick, and have numbers to show meanwhile. */
   const firstReads = new Map<string, ReadProgress>()
   const reorgs: Reorg[] = []
@@ -717,6 +730,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       if (unread.length > 0 && source.readPayoutTxs) {
         const txs = await source.readPayoutTxs(address, unread.map((row) => row.block_num))
         for (const { block_num, amount } of unread) wallet.ethPayers.set(block_num, payerOf(txs.filter((tx) => tx.blockNum === block_num), address, amount))
+        for (const { tx_hash, block_num } of sentWithNoFee(txs, wallet.rows, address)) wallet.gasUnknown.set(tx_hash, block_num)
       }
     } catch (error) {
       logger.warn(`Couldn't read what's behind ETH that arrived unseen: ${describeError(error)}`)
@@ -768,7 +782,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     !hasMarketReadsLeft(address, wallet, chain.blockNum) &&
     !(chain.blockNum > wallet.readAtHead && unreadTokenPrices(address, wallet.rows).length > 0)
 
-  async function refresh(address: string, key: string, range: WalletRange): Promise<Cached> {
+  async function refresh(address: string, key: string, range: WalletRange, reservation: { release?: () => void }): Promise<Cached> {
     const isFirst = !wallets.has(key)
     const reached = (stage: ReadProgress["stage"], transfers: number | null = null) => {
       if (isFirst) firstReads.set(key, { stage, transfers })
@@ -801,12 +815,20 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const ethBalances = new Map(cached?.ethBalances ?? [])
     const ethPayers = new Map(cached?.ethPayers ?? [])
     let replacedFrom = Number.POSITIVE_INFINITY
+    let abandoned = false
     const readNewRows = async () => {
       if (coveredTo >= fromBlock && (!cached || coveredTo > cached.coveredTo || reorgable)) {
         const readFrom = cached ? Math.max(fromBlock, Math.min(settledThrough(cached.coveredTo) + 1, unsettled ?? Infinity)) : fromBlock
         replacedFrom = readFrom
+        // Only a first read can bring in a whole history, and it can't say how much until it has.
+        if (!cached) reservation.release = await budget.loading()
+        if (abandoned) return
         const window = await source.readWindow(address, readFrom, coveredTo)
+        if (abandoned) return
         rows = [...rows.filter((r) => r.block_num < readFrom), ...window.rows]
+        if (rows.length > budget.maxRows) throw new WalletTooBigError(budget.maxRows)
+        reservation.release?.()
+        reservation.release = budget.reserve(rows.length)
         reached("prices", countTransfers(rows))
         for (const block of known.keys()) if (block >= readFrom) known.delete(block)
         for (const block of knownSamples.keys()) if (block >= readFrom) knownSamples.delete(block)
@@ -823,12 +845,18 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const openingIsOld = readsBalances && (!isComplete(cached?.opening ?? null) || openingMayChange(cached, chain))
     const closingIsOld = readsBalances && (cached?.closing?.blockNum !== coveredTo || !isComplete(cached.closing) || reorgable)
     // None of these needs what another finds, and they're most of a read with nothing new, so they don't wait for each other.
+    const rowsRead = readNewRows()
     const [, openingRead, closing, latestReference] = await Promise.all([
-      readNewRows(),
+      rowsRead,
       openingIsOld ? readBalances(address, fromBlock - 1) : null,
       closingIsOld ? readBalances(address, coveredTo) : (cached?.closing ?? null),
       source.readLatestReference(head.blockNum),
-    ])
+    ]).catch(async (error: unknown) => {
+      // The read's reservation is given back when this refresh ends, so it can't end with the rows still taking one.
+      abandoned = true
+      await rowsRead.catch(() => {})
+      throw error
+    })
 
     const l1Fees = new Map([...(cached?.l1Fees ?? [])].filter(([, fee]) => unsettled === null || fee.blockNum < unsettled))
     const claimBlocks = new Set(unwrapBalanceBlocks(rows))
@@ -914,7 +942,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
    * busy wallet each one takes seconds. Only the last one is kept, because it's about as big as the wallet.
    */
   function currentOf(address: string, wallet: Cached) {
-    const stamp = `${wallet.ethBalances.size}:${wallet.ethPayers.size}:${wallet.references.size}:${priceRevision}`
+    const stamp = `${wallet.ethBalances.size}:${wallet.ethPayers.size}:${wallet.gasUnknown.size}:${wallet.references.size}:${priceRevision}`
     if (last?.wallet !== wallet || last.stamp !== stamp) last = { wallet, stamp, response: responseOf(address, wallet) }
     return last
   }
@@ -976,13 +1004,25 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     async get(address: string, range: WalletRange = {}): Promise<WalletData> {
       const account = address.toLowerCase()
       const key = keyOf(account, range)
+      if (refused.has(key)) throw new WalletTooBigError(budget.maxRows)
       let pending = inflight.get(key)
       if (!pending) {
-        pending = refresh(account, key, range).finally(() => {
-          inflight.delete(key)
-          firstReads.delete(key)
-          otherTokens?.resume()
-        })
+        const reservation: { release?: () => void } = {}
+        pending = refresh(account, key, range, reservation)
+          .catch((error: unknown) => {
+            if (error instanceof WalletTooBigError) {
+              wallets.delete(key)
+              refused.add(key)
+              if (refused.size > MAX_REFUSED) refused.delete(refused.keys().next().value as string)
+            }
+            throw error
+          })
+          .finally(() => {
+            inflight.delete(key)
+            firstReads.delete(key)
+            otherTokens?.resume()
+            reservation.release?.()
+          })
         inflight.set(key, pending)
       }
       const wallet = await pending
@@ -1085,6 +1125,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
      */
     async rewind(block: number, tip: number): Promise<void> {
       rewinds += 1
+      refused.clear()
       reorgs.push({ from: block, oldTip: Math.max(tip, ...[...wallets.values()].flatMap((wallet) => [wallet.latest.blockNum, wallet.tablesReached]), tokensReached) })
       while (inflight.size > 0) await Promise.allSettled(inflight.values())
       forgetPricesFrom(block)

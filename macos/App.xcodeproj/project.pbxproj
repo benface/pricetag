@@ -114,6 +114,7 @@
 				A1B2C3D4E5F600000000000A /* Sources */,
 				A1B2C3D4E5F600000000000B /* Frameworks */,
 				A1B2C3D4E5F600000000000C /* Resources */,
+				A1B2C3D4E5F6000000000030 /* Copy Device Pages */,
 				A1B2C3D4E5F600000000002B /* Copy Bridge Host */,
 			);
 			buildRules = (
@@ -196,6 +197,27 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A1B2C3D4E5F6000000000030 /* Copy Device Pages */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/copy-device-pages.sh",
+				"$(SRCROOT)/build/device-pages",
+			);
+			name = "Copy Device Pages";
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/DevicePages",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "exec \"$SRCROOT/copy-device-pages.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		A1B2C3D4E5F600000000000A /* Sources */ = {

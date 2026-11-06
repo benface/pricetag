@@ -166,7 +166,13 @@ public enum Wording {
     public static func allBalancesMatch(_ portfolio: Portfolio) -> String? {
         let listed = portfolio.listedPositions
         // A balance that couldn't be read has no row, and hasn't been shown to match anything.
-        return !listed.isEmpty && portfolio.unreadAssets.isEmpty && listed.allSatisfy(\.isReconciled) ? "Every balance matches the chain." : nil
+        guard !listed.isEmpty, portfolio.unreadAssets.isEmpty, listed.allSatisfy(\.isReconciled) else { return nil }
+        return (["Every balance matches the chain."] + listed.compactMap(unrecorded)).joined(separator: " ")
+    }
+
+    /// Said wherever a match is, because this part of it can't fail.
+    static func unrecorded(_ position: Position) -> String? {
+        position.reconciliation?.unrecordedQty.map { "\(Format.amount($0, decimals: position.decimals)) \(position.asset) arrived with no transaction to show for it, so that part comes from the balance, and the match doesn't confirm it." }
     }
 
     /// What there is instead of a chart, so what's short isn't mistaken for nothing.
@@ -195,7 +201,7 @@ public enum Wording {
         guard let check = position.reconciliation else { return nil }
         switch check.status {
         case .reconciled:
-            return "Matches the actual balance exactly."
+            return (["Matches the actual balance exactly."] + [unrecorded(position)].compactMap(\.self)).joined(separator: " ")
         case .unchecked:
             return "Not checked. \(check.reason ?? "") PnL is unavailable until this balance is confirmed."
         case .incomplete:
@@ -379,6 +385,13 @@ public enum Wording {
     /// What an update says while some of All Yours' wallets are still being read.
     public static func updatingWallets(_ count: Int) -> String {
         "Updating. \(count == 1 ? "1 wallet is" : "\(count) wallets are") still being read, and \(count == 1 ? "isn't" : "aren't") in these numbers yet."
+    }
+
+    /// What a Coinbase history had in it. Nothing changes when it had nothing usable, and that's worth saying.
+    public static func imported(found: Int, skipped: Int) -> String {
+        func withdrawals(_ count: Int) -> String { count == 1 ? "1 withdrawal" : "\(count) withdrawals" }
+        if found == 0 { return skipped == 0 ? "That file has no withdrawals, so nothing changed." : "Found \(withdrawals(skipped)) with no usable cost, so nothing changed." }
+        return skipped == 0 ? "Found \(withdrawals(found))." : "Found \(withdrawals(found)). \(skipped) more had no usable cost."
     }
 
     public static func linkedFailed(_ count: Int) -> String {

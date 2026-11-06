@@ -92,6 +92,8 @@ public struct Reconciliation: Codable, Sendable, Equatable {
     /// Actual minus computed.
     public let differenceQty: String?
     public let reason: String?
+    /// How much of what the legs add up to has no transaction behind it, only a balance that rose. A match doesn't confirm this amount.
+    public let unrecordedQty: String?
     /// On ETH that doesn't match: the transactions most likely behind it.
     public let unseenEth: [UnseenEth]?
     /// On a balance that couldn't be checked: whether what's shown is still what the chain last said it holds. Without this, its value is only a best estimate.
@@ -402,6 +404,12 @@ public struct HoldComparison: Codable, Sendable, Equatable {
     public let estimated: Bool
 }
 
+/// Something about each of the lists in a reply that can be too long to send every time.
+struct LongLists<Value: Codable & Sendable & Equatable>: Codable, Sendable, Equatable {
+    var points: Value? = nil
+    var outgoingTxs: Value? = nil
+}
+
 public struct Portfolio: Codable, Sendable, Equatable {
     public let address: String
     public let mode: Mode
@@ -417,7 +425,7 @@ public struct Portfolio: Codable, Sendable, Equatable {
     public let latest: Head
     public let progress: ReadProgress
     public let gasUnknownTxs: [String]
-    public let outgoingTxs: [String]
+    public internal(set) var outgoingTxs: [String]
     public let unlisted: [UnlistedToken]
     /// nil in a portfolio saved before these existed.
     public let otherTokens: [OtherToken]?
@@ -430,7 +438,7 @@ public struct Portfolio: Codable, Sendable, Equatable {
     public let positions: [Position]
     public let totals: Totals
     public let pnlStatus: PnlStatus
-    public let points: [PnlPoint]
+    public internal(set) var points: [PnlPoint]
     public let holdComparison: HoldComparison
     /// What's left to ask, most useful first.
     public let questions: [Question]
@@ -446,6 +454,10 @@ public struct Portfolio: Codable, Sendable, Equatable {
     public let marketChecked: Bool
     /// Every wallet in it and how far each one's read has got, when it's all of the user's wallets as one.
     public var wallets: [CombinedWallet]? = nil
+    /// What to tell the server this already has, so a busy wallet's next reply leaves it out.
+    var marks: LongLists<String>? = nil
+    /// How much of each list the server left out, which `PricetagClient` puts back before anything else sees it.
+    var kept: LongLists<Int>? = nil
 
     /// All of the user's wallets as one, rather than one wallet.
     public var isAllYours: Bool { WalletAddress.isAllYours(address) }
@@ -749,6 +761,9 @@ public struct ExchangeImport: Codable, Sendable, Equatable {
     public let withdrawals: [ExchangeWithdrawal]
     /// Withdrawals with no usable cost: bought in a currency this app doesn't have, in several at once, or with a history it can't follow.
     public let skipped: Int
+
+    /// Something in it didn't come through, or nothing did.
+    public var needsALook: Bool { withdrawals.isEmpty || skipped > 0 }
 }
 
 /// An amount someone entered or imported, in the currency it was in, because that's what it stays true in.
@@ -860,6 +875,16 @@ public struct Book: Codable, Sendable, Equatable, Hashable {
         costs = try container.decode([String: Money].self, forKey: .costs)
         withdrawals = try container.decode([ExchangeWithdrawal].self, forKey: .withdrawals)
         purchases = try container.decodeIfPresent([Purchase].self, forKey: .purchases) ?? []
+    }
+
+    /// What an import adds to what earlier ones found. A file that has the same withdrawal again takes over for it, since it's the
+    /// latest word on what it cost. Two alike in one file are two withdrawals, so both stay.
+    public func importing(_ found: [ExchangeWithdrawal]) -> Book {
+        func key(_ withdrawal: ExchangeWithdrawal) -> [String?] { [withdrawal.exchange, withdrawal.asset, withdrawal.units, withdrawal.at, withdrawal.toAddress] }
+        let again = Set(found.map(key))
+        var next = self
+        next.withdrawals = withdrawals.filter { !again.contains(key($0)) } + found
+        return next
     }
 
     /// An order can say more as it goes, like the block its delivery landed in, so a newer read of one takes over.

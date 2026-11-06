@@ -53,6 +53,14 @@ public struct ResolveFlow: View {
                 }
             }
             .frame(maxWidth: .infinity, minHeight: 330, alignment: .top)
+            if let imported = model.lastImport {
+                let sentence = Wording.imported(found: imported.withdrawals.count, skipped: imported.skipped)
+                if imported.needsALook {
+                    WarningText(sentence).font(.callout).fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text(sentence).font(.callout).secondaryText()
+                }
+            }
             footer
         }
         // One question to the next, and the last to the finish, fade rather than swap.

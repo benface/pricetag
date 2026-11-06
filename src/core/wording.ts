@@ -68,6 +68,9 @@ export const ABOUT_THIS_DATA = "What this covers"
 export const MARKET_ESTIMATES = "Some prices are estimates, from the market."
 export const PNL_INCOMPLETE = "PnL isn't complete"
 export const ALL_BALANCES_MATCH = "Every balance matches the chain."
+
+/** Said wherever a match is, because this part of it can't fail. */
+export const unrecordedSentence = (qty: string, decimals: number, asset: string) => `${formatAmount(qty, decimals)} ${asset} arrived with no transaction to show for it, so that part comes from the balance, and the match doesn't confirm it.`
 export const NOTHING_TO_CHART = "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't zero."
 export const UNPRICED_FEES = "Some network fees had no price at the time, and aren't in this total."
 export const READING = "Reading this wallet. The first read can take a minute."
@@ -290,6 +293,13 @@ export function networkFeeUnknownSentence(count: number): string {
   return `Couldn't read the network fee of ${count} ${count === 1 ? "transaction" : "transactions"} yet, so fees paid are too low, and ETH's PnL is unavailable until they're read.`
 }
 
+/** What a Coinbase history had in it. Nothing changes when it had nothing usable, and that's worth saying. */
+export function importedSentence(found: number, skipped: number): string {
+  const withdrawals = (count: number) => (count === 1 ? "1 withdrawal" : `${count} withdrawals`)
+  if (found === 0) return skipped === 0 ? "That file has no withdrawals, so nothing changed." : `Found ${withdrawals(skipped)} with no usable cost, so nothing changed.`
+  return skipped === 0 ? `Found ${withdrawals(found)}.` : `Found ${withdrawals(found)}. ${skipped} more had no usable cost.`
+}
+
 export function linkedFailedSentence(count: number): string {
   return count === 1 ? "Couldn't read your other wallet, so what came from it may show an unknown cost." : `Couldn't read ${count} of your other wallets, so what came from them may show an unknown cost.`
 }
@@ -338,18 +348,22 @@ export type Problem = { message: string; detail: string | null }
 
 const SAID = (said: string) => `The price service said: ${said}`
 
+/** Where saying "restart it" is true. */
+const isOnThisMachine = (serverUrl: string) => URL.canParse(serverUrl) && ["127.0.0.1", "localhost", "[::1]"].includes(new URL(serverUrl).hostname)
+
 /** A wallet's read that failed, in `FeedState.problem`'s words on the Mac. `stale` says how old any numbers still on screen are. */
 export function feedProblem(failure: ReadFailure, serverUrl: string, stale: string | null = null): Problem {
   const say = (what: string, next: string, detail: string) => ({ message: [what, stale, MONEY_UNAFFECTED, next].filter((part) => part !== null).join(" "), detail })
+  const onThisMachine = isOnThisMachine(serverUrl)
   switch (failure.kind) {
     case "unreachable":
       return say("The price service isn't answering.", "Check your internet connection, then try again.", `Nothing answered at ${serverUrl}.`)
     case "unavailable":
       return say("The price service can't get its data right now.", "It usually clears up by itself, and updates start again when it does.", SAID(failure.said))
     case "noSource":
-      return say("The price service has no data source, so only the demo wallet works.", "Set one up, then restart the price service.", `${SAID(failure.said)} Its data source goes in .env.local.`)
+      return say("The price service has no data source, so only the demo wallet works.", onThisMachine ? "Set one up, then restart the price service." : "Whoever runs it needs to set one up.", onThisMachine ? `${SAID(failure.said)} Its data source goes in .env.local.` : SAID(failure.said))
     case "refused":
-      return say("The price service turned this request down.", "Try again. If it keeps happening, restart the price service.", SAID(failure.said))
+      return say("The price service turned this request down.", onThisMachine ? "Try again. If it keeps happening, restart the price service." : "Try again. If it keeps happening, let whoever runs the price service know.", SAID(failure.said))
     case "slowedDown":
       return say("The price service asked this app to slow down.", "Updates start again by themselves.", SAID(failure.said))
   }
