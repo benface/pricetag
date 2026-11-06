@@ -1,5 +1,6 @@
 // Everything pure: the fold, the pricing, the conversion between currencies, the allowlist and the formatters. Safe in a browser, because it never reaches the Amp client.
 
+export * from "./approvals.ts"
 export * from "./chain.ts"
 export * from "./currency.ts"
 export * from "./fold.ts"

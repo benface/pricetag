@@ -168,6 +168,13 @@ public struct LegRow: View {
             }
         }
         .padding(.vertical, 3)
+        .contextMenu {
+            if leg.hasTransaction {
+                Button(showsProof ? "Hide Proof" : "Show Proof") { showsProof.toggle() }
+                Divider()
+                TransactionActions(hash: leg.txHash)
+            }
+        }
     }
 
     private var tags: some View {

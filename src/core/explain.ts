@@ -1,10 +1,10 @@
 // What a click on a number explains: a sentence for how it's worked out, and the legs behind it.
 
-import { CURRENCIES, TOKENS, TOKEN_FEEDS, foldPositions, formatAmount, formatMoney, formatPrice, formatRate, orderMatters, formatSignedMoney, holdEffects, pnlOverTime, shortHash, sumTotals, tokenByAddress, unconfirmedAssets, unreadAssets, usdView, type CostLabel, type CurrencyCode, type HoldComparison, type LegEffect, type Method, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { CURRENCIES, TOKENS, TOKEN_FEEDS, foldPositions, formatAmount, formatMoney, formatPrice, formatRate, formatReturn, returnBps, orderMatters, formatSignedMoney, holdEffects, pnlOverTime, shortHash, sumTotals, tokenByAddress, unconfirmedAssets, unreadAssets, usdView, type CostLabel, type CurrencyCode, type HoldComparison, type LegEffect, type Method, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import type { WalletResponse } from "./api.ts"
 import { COST_WORDS, AVERAGE_PRICE_PAID, BALANCE_CHECK, CHECK_LABELS, HOLD_ETH, HOLD_PAST, METHOD_LABELS, NETWORK_FEES, currentPriceSource, holdCaveatSentence, holdDifferenceSentence, tokenLabel, unseenEthCause } from "./wording.ts"
 
-export type Metric = "amount" | "average" | "value" | "realized" | "unrealized" | "onchain"
+export type Metric = "amount" | "average" | "price" | "value" | "return" | "realized" | "unrealized" | "onchain"
 
 export type Explanation = {
   /** What `value` and the effects' amounts are in. */
@@ -20,7 +20,9 @@ export type Explanation = {
 const METRIC_TITLES: Record<Metric, string> = {
   amount: "Amount",
   average: AVERAGE_PRICE_PAID,
+  price: "Price",
   value: "Value",
+  return: "Return",
   realized: "Realized PnL",
   unrealized: "Unrealized PnL",
   onchain: BALANCE_CHECK,
@@ -214,7 +216,7 @@ export function explainMetric(position: Position, metric: Metric, context: Expla
 
   const incomplete = reconciliation?.status === "incomplete"
   const unconfirmed = reconciliation !== null && reconciliation.status !== "reconciled"
-  if (unconfirmed && (metric === "average" || metric === "realized" || metric === "unrealized")) {
+  if (unconfirmed && (metric === "average" || metric === "return" || metric === "realized" || metric === "unrealized")) {
     return { currency, title: `${asset}: ${METRIC_TITLES[metric]}`, value: null, sourceValue: null, lines: onchainLines(position), effects: [...effects].reverse() }
   }
 
@@ -236,6 +238,10 @@ export function explainMetric(position: Position, metric: Metric, context: Expla
       else if (values.costMicros) lines.push(`${money(values.costMicros)} of cost ÷ ${qty}, using the ${METHOD_LABELS[state.method]} method.`)
       if (costSources) lines.push(costSources)
       break
+    case "price":
+      value = price && formatPrice(price.micros, currency)
+      lines.push(priceLine)
+      break
     case "value":
       value = values.valueMicros && money(values.valueMicros)
       lines.push(priceLine)
@@ -250,6 +256,16 @@ export function explainMetric(position: Position, metric: Metric, context: Expla
         lines.push(`${unknowns.join(", and ")}, so its gain can't be known.${known}`)
       } else lines.push("What you received minus what it cost, on what was sold or spent on network fees. The fees themselves are a separate cost in the total.")
       break
+    case "return": {
+      const bps = returnBps(values)
+      value = bps && formatReturn(bps)
+      lines.push(priceLine)
+      if (unknown) lines.push(`${unknownQty} of ${qty} has an unknown cost, so there's no return. It's never counted as zero.`)
+      else if (values.costMicros && values.unrealizedMicros && bps === null) lines.push("It cost nothing, so there's no return as a share of what it cost.")
+      else if (values.costMicros && values.unrealizedMicros) lines.push(`${signed(values.unrealizedMicros)} unrealized ÷ ${money(values.costMicros)} cost.`)
+      if (costSources) lines.push(costSources)
+      break
+    }
     case "unrealized":
       value = values.unrealizedMicros && signed(values.unrealizedMicros)
       lines.push(priceLine)
@@ -258,8 +274,9 @@ export function explainMetric(position: Position, metric: Metric, context: Expla
       if (costSources) lines.push(costSources)
       break
   }
-  const isMoney = metric !== "amount" && metric !== "onchain"
-  if (isMoney) lines.push(...exchangeLines(view, metric === "value" ? "current" : metric === "unrealized" ? "both" : "past"))
+  // A return is a share, not an amount, so it has no USD to show beside it. It still depends on the rates.
+  const isMoney = metric !== "amount" && metric !== "onchain" && metric !== "return"
+  if (isMoney || metric === "return") lines.push(...exchangeLines(view, metric === "value" || metric === "price" ? "current" : metric === "unrealized" || metric === "return" ? "both" : "past"))
   const usd = source?.positions.find((p) => p.asset === asset)
   return {
     currency,

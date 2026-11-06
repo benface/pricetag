@@ -7,7 +7,7 @@
 // holding ETH, has to leave moves out by name.
 
 import { CHECK_LABELS } from "../src/core/wording.ts"
-import { compareWithHoldingEth, formatAmount, formatMoney, formatPrice, formatSignedMoney, hasStarted, pnlOverTime, pnlStatus as statusOf, sumTotals, unconfirmedAssets, type CurrencyCode, type Exclusion, type HoldComparison, type LatestPrices, type LegEffect, type MarkPrice, type Method, type PnlPoint, type Position, type PricedLeg, type Reconciliation, type Totals } from "@pricetag/sdk/core"
+import { compareWithHoldingEth, formatAmount, formatMoney, formatPrice, formatReturn, formatSignedMoney, hasStarted, pnlOverTime, pnlStatus as statusOf, returnBps, sumTotals, unconfirmedAssets, type CurrencyCode, type Exclusion, type HoldComparison, type LatestPrices, type LegEffect, type MarkPrice, type Method, type PnlPoint, type Position, type PricedLeg, type Reconciliation, type Totals } from "@pricetag/sdk/core"
 import type { BookPoint, BookPreview, ExplanationLeg, ExplanationResponse, PortfolioPosition, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import type { Book } from "../src/core/book.ts"
 import { explainHold, explainPoint, explainTarget, explainTotal, type ExplainTarget, type Metric } from "../src/core/explain.ts"
@@ -104,6 +104,7 @@ function combinedPositions(parts: readonly { wallet: string; position: Portfolio
     const cost = sumKnown(values.map((v) => v.costMicros))
     const heldWithoutValue = values.some((v) => isPositive(v.qty) && v.valueMicros === null)
     const priced = values.map((v) => v.valueMicros).filter((v) => v !== null)
+    const unrealized = sumKnown(values.map((v) => v.unrealizedMicros))
     return {
       asset: first.asset,
       decimals: first.decimals,
@@ -116,11 +117,12 @@ function combinedPositions(parts: readonly { wallet: string; position: Portfolio
         averageCostMicros: cost !== null && qty > 0n ? ((BigInt(cost) * 10n ** BigInt(first.decimals)) / qty).toString() : null,
         valueMicros: heldWithoutValue || priced.length === 0 ? null : sum(priced),
         realizedMicros: sumKnown(values.map((v) => v.realizedMicros)),
-        unrealizedMicros: sumKnown(values.map((v) => v.unrealizedMicros)),
+        unrealizedMicros: unrealized,
         estimatedCostMicros: sum(values.map((v) => v.estimatedCostMicros)),
         estimatedRealizedMicros: sum(values.map((v) => v.estimatedRealizedMicros)),
       },
       pnlMicros: sumKnown(positions.map((p) => p.pnlMicros)),
+      returnBps: returnBps({ costMicros: cost, unrealizedMicros: unrealized }),
       shortfallQty: sum(positions.map((p) => p.shortfallQty)),
       legCount: positions.reduce((total, p) => total + p.legCount, 0),
       reconciliation: combinedCheck(positions.map((p) => p.reconciliation)),
@@ -278,16 +280,20 @@ export type ExplanationPart = { wallet: string; value: string | null; lines: str
 export type CombinedExplanationResponse = Omit<ExplanationResponse, "legs"> & { parts: ExplanationPart[]; legs: (ExplanationLeg & { wallet: string })[] }
 
 /** A holding's number across the wallets, the same way a wallet's own explanation shows it. */
-function assetValue({ asset, decimals, values, reconciliation }: CombinedPosition, metric: Metric, currency: CurrencyCode): string | null {
+function assetValue({ asset, decimals, price, values, returnBps: bps, reconciliation }: CombinedPosition, metric: Metric, currency: CurrencyCode): string | null {
   const unconfirmed = reconciliation !== null && reconciliation.status !== "reconciled"
-  if (unconfirmed && (metric === "average" || metric === "realized" || metric === "unrealized")) return null
+  if (unconfirmed && (metric === "average" || metric === "return" || metric === "realized" || metric === "unrealized")) return null
   switch (metric) {
     case "amount":
       return `${formatAmount(values.qty, decimals)} ${asset}`
     case "average":
       return values.averageCostMicros && formatPrice(values.averageCostMicros, currency)
+    case "price":
+      return price && formatPrice(price.micros, currency)
     case "value":
       return values.valueMicros && formatMoney(values.valueMicros, currency)
+    case "return":
+      return bps && formatReturn(bps)
     case "realized":
       return values.realizedMicros && formatSignedMoney(values.realizedMicros, currency)
     case "unrealized":

@@ -9,7 +9,7 @@ let left = Number(updates)
 
 for await (const { blocks, legs, totals, pnlStatus, missing, via, reorgFrom } of pricetag.watchWallet(address!)) {
   // Each update is the whole wallet, so a reorg needs nothing undone. It's only printed to say it happened.
-  if (reorgFrom !== null) console.log(`A reorg replaced the blocks from ${reorgFrom} on.`)
+  if (reorgFrom !== null) console.log(`Read the blocks from ${reorgFrom} on again, since a reorg may have replaced them.`)
   console.log(`To block ${blocks.toBlock}${via ? `, by ${via}` : ""}: ${legs.length} legs, value ${formatMoney(totals.valueMicros)}, PnL ${formatSignedMoney(totals.pnlMicros)} (${pnlStatus}), leaving out: ${missing.length} ${missing.length === 1 ? "thing" : "things"}`)
   if (--left <= 0) break
 }

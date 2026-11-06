@@ -6,7 +6,7 @@ import { readCheckedAccounts } from "../core/device-accounts.ts"
 import { noteLinkFor, type DeviceLink } from "../core/device-link.ts"
 import { parseCoinbaseCsv } from "../core/exchange-import.ts"
 import { foldBook, isBalanced, microsOf, previewBook, type Question } from "../core/resolve.ts"
-import { linkedFailedSentence } from "../core/wording.ts"
+import { ALL_ANSWERED, ANSWER_QUESTIONS, COST_QUESTION, COST_WHY, EXCHANGE_COST_WHY, NOTHING_LEFT, SENDER_QUESTION, SENDER_WHY, linkedFailedSentence } from "../core/wording.ts"
 
 type Ownership = "mine" | "my-exchange" | "someone-else"
 
@@ -53,7 +53,7 @@ type Props = {
   onClose: () => void
 }
 
-/** "Who's this?": one card at a time, with swipes, keys or taps. Each answer shows what it does before you pick it. */
+/** Answering questions: one card at a time, with swipes, keys or taps. Each answer shows what it does before you pick it. */
 export function ResolvePanel({ wallet, others, failed, onRetry, method, book, firstAsset, onChange, onUndo, canUndo, onPublish, onCurrentSender, onClose }: Props) {
   const dialog = useRef<HTMLDialogElement>(null)
   const [skipped, setSkipped] = useState<ReadonlySet<string>>(new Set())
@@ -137,7 +137,7 @@ export function ResolvePanel({ wallet, others, failed, onRetry, method, book, fi
   /** The book a typed cost leads to, or null until every amount reads as one. */
   const costBook = useMemo(() => {
     if (!current) return null
-    const entered = Object.fromEntries(current.arrivals.map((a) => [a.asset, microsOf(costs[a.asset] ?? "")]))
+    const entered = Object.fromEntries(current.arrivals.map((a) => [a.asset, microsOf(costs[a.asset] ?? "", currency)]))
     if (Object.values(entered).includes(null)) return null
     const money = (micros: string | null): Money => ({ micros: micros as string, currency })
     if (current.sender) return enterExchangeCosts(book, wallet.address, current.sender, current.receipts, Object.fromEntries(Object.entries(entered).map(([asset, micros]) => [asset, money(micros)])))
@@ -170,11 +170,12 @@ export function ResolvePanel({ wallet, others, failed, onRetry, method, book, fi
   }
 
   return (
-    <dialog ref={dialog} className="resolve" aria-label="Who's this?" onCancel={(e) => (e.preventDefault(), onClose())}>
+    <dialog ref={dialog} className="resolve" aria-label={ANSWER_QUESTIONS} onCancel={(e) => (e.preventDefault(), onClose())}>
       <header className="panel-head">
-        <h2>{current ? (takingCost ? "What did this cost?" : "Who's this?") : balanced ? "All answered" : "That's all for now"}</h2>
+        <h2>{current ? (takingCost ? COST_QUESTION : SENDER_QUESTION) : balanced ? ALL_ANSWERED : NOTHING_LEFT}</h2>
         {fold.meter.open > 0 ? <span className="muted small">{fold.meter.open} left</span> : null}
       </header>
+      {current ? <p className="small muted">{!takingCost ? SENDER_WHY : current.sender ? EXCHANGE_COST_WHY : COST_WHY}</p> : null}
       <div className="meter" role="progressbar" aria-label="Questions left" aria-valuenow={Math.round(progress * 100)}>
         <div className={balanced ? "meter-fill done" : "meter-fill"} style={{ width: `${progress * 100}%` }} />
       </div>
@@ -202,10 +203,14 @@ export function ResolvePanel({ wallet, others, failed, onRetry, method, book, fi
               {formatAmount(arrival.units, arrival.decimals)} {arrival.asset}
             </strong>
           ))}
-          <p className="small muted">
-            {current.sender ? `From ${shortHash(current.sender)} · ${current.transfers === 1 ? "1 transfer" : `${current.transfers} transfers`}` : "We can't tell what you paid for this"}
-            {current.wallet !== wallet.address.toLowerCase() ? ` · arrived in your other wallet ${shortHash(current.wallet)}` : ""}
-          </p>
+          {current.sender ? (
+            <p className="small muted">
+              From {shortHash(current.sender)} · {current.transfers === 1 ? "1 transfer" : `${current.transfers} transfers`}
+              {current.wallet !== wallet.address.toLowerCase() ? ` · arrived in your other wallet ${shortHash(current.wallet)}` : ""}
+            </p>
+          ) : current.wallet !== wallet.address.toLowerCase() ? (
+            <p className="small muted">Arrived in your other wallet {shortHash(current.wallet)}</p>
+          ) : null}
           {current.evidence.map((fact) => (
             <p key={fact} className="small muted">
               💡 {fact}
@@ -216,11 +221,11 @@ export function ResolvePanel({ wallet, others, failed, onRetry, method, book, fi
               {current.arrivals.map((arrival) => (
                 <label key={arrival.asset} className="small">
                   Paid for {formatAmount(arrival.units, arrival.decimals)} {arrival.asset}
-                  <input autoFocus inputMode="decimal" placeholder="$0.00" value={costs[arrival.asset] ?? ""} onChange={(e) => setCosts({ ...costs, [arrival.asset]: e.target.value })} />
+                  <input autoFocus inputMode="decimal" placeholder={formatMoney("0", currency)} value={costs[arrival.asset] ?? ""} onChange={(e) => setCosts({ ...costs, [arrival.asset]: e.target.value })} />
                 </label>
               ))}
               {costBook ? <p className="small">That would make it {consequence(previewBook(wallet, others as WalletResponse[], method, costBook, failed), currency)}</p> : null}
-              {current.arrivals.length === 1 && looksOff(microsOf(costs[(current.arrivals[0] as { asset: string }).asset] ?? ""), current.valueMicros) ? <p className="small warn-text">⚠ That's far from what it was worth when it arrived, about {formatMoney(current.valueMicros as string, currency)}. Double-check it.</p> : null}
+              {current.arrivals.length === 1 && looksOff(microsOf(costs[(current.arrivals[0] as { asset: string }).asset] ?? "", currency), current.valueMicros) ? <p className="small warn-text">⚠ That's far from what it was worth when it arrived, about {formatMoney(current.valueMicros as string, currency)}. Double-check it.</p> : null}
               <div className="cost-actions">
                 <button type="button" onClick={saveCost}>
                   Save

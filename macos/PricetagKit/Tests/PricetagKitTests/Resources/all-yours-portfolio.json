@@ -55,6 +55,7 @@
         "estimatedRealizedMicros": "0"
       },
       "pnlMicros": null,
+      "returnBps": null,
       "shortfallQty": "0",
       "legCount": 8,
       "reconciliation": {

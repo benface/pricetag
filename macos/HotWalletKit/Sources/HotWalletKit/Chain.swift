@@ -419,7 +419,7 @@ public enum Calldata {
         Array(keccak256(Array(signature.utf8)).prefix(4))
     }
 
-    private static func word(_ value: UInt128) -> [UInt8] {
+    static func word(_ value: UInt128) -> [UInt8] {
         var bytes = [UInt8](repeating: 0, count: 32)
         for index in 0..<16 {
             bytes[31 - index] = UInt8(truncatingIfNeeded: value >> UInt128(index * 8))
@@ -427,7 +427,7 @@ public enum Calldata {
         return bytes
     }
 
-    private static func word(_ address: EthereumAddress) -> [UInt8] {
+    static func word(_ address: EthereumAddress) -> [UInt8] {
         [UInt8](repeating: 0, count: 12) + address.bytes
     }
 

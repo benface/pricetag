@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { describe, it } from "node:test"
-import { applyLeg, emptyPosition, valuePosition, type FoldLeg, type Method } from "@pricetag/sdk/core"
+import { applyLeg, emptyPosition, returnBps, valuePosition, type FoldLeg, type Method } from "@pricetag/sdk/core"
 
 const USD = 1_000_000n
 const ETH = 10n ** 18n
@@ -224,5 +224,33 @@ describe("the fold can move into a stateful table", () => {
     const source = readFileSync(new URL("../packages/sdk/src/fold.ts", import.meta.url), "utf8")
     assert.doesNotMatch(source, /^\s*import\s/m)
     assert.doesNotMatch(source, /\b(Date|Math\.random|performance|process|require)\b/)
+  })
+})
+
+describe("a position's return", () => {
+  const of = (costMicros: string | null, unrealizedMicros: string | null) => returnBps({ costMicros, unrealizedMicros })
+
+  it("is the gain on what's held over what it cost, in basis points, rounded half away from zero", () => {
+    assert.equal(of("100000000", "12345678"), "1235")
+    assert.equal(of("100000000", "-12345678"), "-1235")
+    assert.equal(of("3000000", "150"), "1")
+    assert.equal(of("3000000", "-150"), "-1")
+    assert.equal(of("3000000", "149"), "0")
+    assert.equal(of("1000000", "0"), "0")
+  })
+
+  it("is unknown when the cost or value is, and never 0", () => {
+    assert.equal(of(null, "5"), null)
+    assert.equal(of("5", null), null)
+  })
+
+  it("has no share of something that cost nothing", () => {
+    assert.equal(of("0", "5000000"), null)
+  })
+
+  it("comes from the same fold as the rest", () => {
+    const s = run("average", [buy(ETH, 2000n)])
+    assert.equal(returnBps(valuePosition(s, (2500n * USD).toString())), "2500")
+    assert.equal(returnBps(valuePosition(s, null)), null)
   })
 })

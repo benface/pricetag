@@ -1,7 +1,7 @@
 // The portfolio a wallet's legs fold into, for clients that don't run the fold themselves.
 // One source of PnL logic: this calls what the browser calls, and adds nothing to the math.
 
-import { TOKENS, answerToMicros, worth, type CurrencyCode, type WalletView, type LegEffect, type Method, type Position, type PricedLeg, type Reference } from "@pricetag/sdk/core"
+import { TOKENS, answerToMicros, returnBps, worth, type CurrencyCode, type WalletView, type LegEffect, type Method, type Position, type PricedLeg, type Reference } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type ExplanationLeg, type ExplanationResponse, type PortfolioExchange, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "../src/core/api.ts"
 import { emptyBook, walletsBehind, type Book } from "../src/core/book.ts"
 import { describeConversion, describeEffect, describeNetting, explainTarget, missingRatesLine, rateSource, type ExplainContext, type ExplainTarget, type Metric, type TotalMetric } from "../src/core/explain.ts"
@@ -12,7 +12,7 @@ import { ETH_NOTE, UNPRICED_FEES, estimatedSentence, excludedSentence, feesUnkno
 /** Matches the web panel: a busy wallet has thousands of legs, and the newest are the ones anyone reads. */
 export const MAX_LEGS = 200
 
-const ASSET_METRICS: readonly string[] = ["amount", "average", "value", "realized", "unrealized", "onchain"] satisfies Metric[]
+const ASSET_METRICS: readonly string[] = ["amount", "average", "price", "value", "return", "realized", "unrealized", "onchain"] satisfies Metric[]
 const TOTAL_METRICS: readonly string[] = ["pnl", "value", "realized", "unrealized", "gas"] satisfies TotalMetric[]
 
 export function parseExplainTarget(params: URLSearchParams): ExplainTarget | null {
@@ -34,7 +34,7 @@ export function positionOf({ asset, decimals, price, values, state, effects, rec
     if (!held) return realized
     return unrealized === null ? null : (BigInt(realized) + BigInt(unrealized)).toString()
   })()
-  return { asset, decimals, note: asset === "ETH" ? ETH_NOTE : null, price, values, pnlMicros: pnl, shortfallQty: state.shortfallQty, legCount: effects.length, reconciliation, noMarket, estimates, resolvable: BigInt(values.unknownCostQty) > 0n && questions.some((q) => q.arrivals.some((a) => a.asset === asset)) }
+  return { asset, decimals, note: asset === "ETH" ? ETH_NOTE : null, price, values, pnlMicros: pnl, returnBps: returnBps(values), shortfallQty: state.shortfallQty, legCount: effects.length, reconciliation, noMarket, estimates, resolvable: BigInt(values.unknownCostQty) > 0n && questions.some((q) => q.arrivals.some((a) => a.asset === asset)) }
 }
 
 function exchangeOf(view: WalletView): PortfolioExchange | null {

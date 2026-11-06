@@ -30,6 +30,14 @@ public enum TaxCountry: String, Codable, Sendable, CaseIterable, Identifiable {
         }
     }
 
+    /// Whose rules, in a sentence.
+    public var rules: String {
+        switch self {
+        case .CA: "Canada's rules"
+        case .US: "US rules"
+        }
+    }
+
     /// Until one is chosen, the main currency is the best guess.
     static func guess(from currency: CurrencyCode) -> TaxCountry {
         currency == .CAD ? .CA : .US
@@ -50,6 +58,36 @@ public enum TaxScope: String, Codable, Sendable, CaseIterable, Identifiable {
     }
 }
 
+/// Which year a report lists. Costs always come from all the history there is.
+public enum TaxYear: Hashable, Sendable, Encodable {
+    /// The newest year with some history.
+    case latest
+    case all
+    case year(Int)
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .latest: try container.encode("latest")
+        case .all: try container.encode("all")
+        case .year(let year): try container.encode(year)
+        }
+    }
+}
+
+/// One of the file's first rows: see `TaxPreviewRow` in `src/core/tax.ts`.
+public struct TaxPreviewRow: Codable, Sendable, Equatable {
+    public let timestamp: String
+    /// "Sold", "Network fee" or "Sent".
+    public let type: String
+    public let asset: String
+    public let amount: String
+    public let decimals: Int
+    /// nil is unknown, which is never 0.
+    public let gainMicros: String?
+    public let status: String
+}
+
 /// What the server sends: see `TaxReportResponse` in `src/core/api.ts`.
 public struct TaxReport: Codable, Sendable, Equatable {
     public struct Defaults: Codable, Sendable, Equatable {
@@ -63,7 +101,21 @@ public struct TaxReport: Codable, Sendable, Equatable {
     public let scope: TaxScope
     public let currency: CurrencyCode
     public let defaults: Defaults
+    /// nil when it lists every year.
+    public let year: Int?
+    /// Newest first.
+    public let years: [Int]
+    /// Why the year's history isn't all here, when it isn't.
+    public let partialYear: String?
     public let rowCount: Int
+    /// Each sale, fee and send once, where `rowCount` counts one split into a known and an unknown part twice.
+    public let soldCount: Int
+    public let feeCount: Int
+    public let sentCount: Int
+    /// Of those, how many have an unknown gain, in whole or in part.
+    public let unknownCount: Int
+    /// The wallets with something unknown, in the order of `wallets`.
+    public let unknownWallets: [String]
     public let unresolvedCount: Int
     public let estimatedCount: Int
     public let selfReportedCount: Int
@@ -72,8 +124,12 @@ public struct TaxReport: Codable, Sendable, Equatable {
     public let disclaimer: String
     public let warnings: [String]
     public let notes: [String]
+    public let preview: [TaxPreviewRow]
     public let filename: String
     public let csv: String
+
+    /// Sales, fees and sends, each counted once.
+    public var eventCount: Int { soldCount + feeCount + sentCount }
 }
 
 /// One report, in full context, because the same choices mean something else on another wallet or currency.
@@ -82,6 +138,7 @@ public struct TaxReportRequest: Hashable, Sendable {
     public let country: TaxCountry
     public let method: CostMethod
     public let scope: TaxScope
+    public let year: TaxYear
     public let currency: CurrencyCode
     public let otherWallets: [String]
     /// The wallets this app already knows are the user's, like its hot and cold ones.
@@ -92,13 +149,14 @@ public struct TaxReportRequest: Hashable, Sendable {
     /// What goes with the request. A post, because answers don't belong in a URL, where they'd end up in logs.
     var body: Body {
         var seen = Set<String>()
-        return Body(country: country, method: method, scope: scope, currency: currency, also: (otherWallets + linked).filter { seen.insert($0).inserted }, book: book)
+        return Body(country: country, method: method, scope: scope, year: year, currency: currency, also: (otherWallets + linked).filter { seen.insert($0).inserted }, book: book)
     }
 
     struct Body: Encodable, Equatable {
         let country: TaxCountry
         let method: CostMethod
         let scope: TaxScope
+        let year: TaxYear
         let currency: CurrencyCode
         let also: [String]
         let book: Book
@@ -120,6 +178,10 @@ public final class TaxReportModel {
     private var chosenMethod: CostMethod?
     private var chosenScope: TaxScope?
     public private(set) var otherWalletsText: String
+    /// Not remembered: opening the report again starts on the newest year.
+    public private(set) var year: TaxYear = .latest
+    /// Every year with some history, newest first, from the last report.
+    public private(set) var years: [Int] = []
     public private(set) var state: State = .loading
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -171,6 +233,18 @@ public final class TaxReportModel {
         defaults.set(country.rawValue, forKey: Keys.country)
     }
 
+    /// The year on screen, which for the newest one is the year itself once a report has said which that is.
+    public var shownYear: TaxYear {
+        if year == .latest, let newest = years.first { return .year(newest) }
+        return year
+    }
+
+    public func setYear(_ next: TaxYear) {
+        // Picking the year already showing changes nothing, so it doesn't ask again.
+        guard next != shownYear else { return }
+        year = next
+    }
+
     public func setOtherWalletsText(_ next: String) {
         otherWalletsText = next
         defaults.set(next, forKey: Keys.otherWallets)
@@ -194,7 +268,7 @@ public final class TaxReportModel {
     public func request(address: String?, currency: CurrencyCode, serverURL: URL, book: Book = Book(), linked: [String] = []) -> TaxReportRequest? {
         guard let address, badWallet(for: address) == nil else { return nil }
         let isDemo = address == WalletAddress.demo
-        return TaxReportRequest(address: address, country: country, method: method, scope: scope, currency: currency, otherWallets: isDemo ? [] : otherWallets, linked: isDemo ? [] : linked, serverURL: serverURL, book: book)
+        return TaxReportRequest(address: address, country: country, method: method, scope: scope, year: year, currency: currency, otherWallets: isDemo ? [] : otherWallets, linked: isDemo ? [] : linked, serverURL: serverURL, book: book)
     }
 
     /// What's on screen goes as soon as the choices change, because it's about the old ones.
@@ -203,6 +277,7 @@ public final class TaxReportModel {
         do {
             let report = try await fetch(request)
             guard !Task.isCancelled else { return }
+            years = report.years
             state = .ready(report)
         } catch {
             guard !Task.isCancelled, !(error is CancellationError) else { return }
@@ -214,7 +289,7 @@ public final class TaxReportModel {
         switch error as? FetchError {
         case .ampUnavailable(let message), .noAmpConfigured(let message), .rejected(let message): message
         case .timedOut: Wording.serverTooSlow
-        case .unreachable, nil: "Can't reach the server."
+        case .unreachable, nil: Wording.cantReachServer
         }
     }
 
