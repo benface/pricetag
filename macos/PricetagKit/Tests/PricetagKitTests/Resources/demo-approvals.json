@@ -1,0 +1,87 @@
+{
+  "mode": "demo",
+  "address": "0x00000000000000000000000000000000000de300",
+  "checkedAt": {
+    "blockNum": 53505400,
+    "timestamp": "2026-11-04T11:00:00.000Z"
+  },
+  "history": {
+    "fromBlock": 53500000,
+    "throughBlock": 53505400,
+    "dataset": "the demo"
+  },
+  "source": [
+    "This is the demo wallet, so these approvals are made up."
+  ],
+  "approvals": [
+    {
+      "id": "collection:0x000000000000000000000000000000000000c011:0x000000000000000000000000000000000000be13",
+      "kind": "collection",
+      "token": "0x000000000000000000000000000000000000c011",
+      "symbol": null,
+      "decimals": null,
+      "spender": "0x000000000000000000000000000000000000be13",
+      "spenderName": null,
+      "amount": null,
+      "amountText": null,
+      "unlimited": true,
+      "expiresAt": null,
+      "grantedTx": "0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd4",
+      "grantedBlock": 53505100,
+      "grantedAt": "2026-11-04T10:50:00.000Z",
+      "found": "history"
+    },
+    {
+      "id": "token:0x4200000000000000000000000000000000000006:0x000000000000000000000000000000000000be13",
+      "kind": "token",
+      "token": "0x4200000000000000000000000000000000000006",
+      "symbol": "WETH",
+      "decimals": 18,
+      "spender": "0x000000000000000000000000000000000000be13",
+      "spenderName": null,
+      "amount": "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+      "amountText": null,
+      "unlimited": true,
+      "expiresAt": null,
+      "grantedTx": "0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd3",
+      "grantedBlock": 53504200,
+      "grantedAt": "2026-11-04T10:20:00.000Z",
+      "found": "history"
+    },
+    {
+      "id": "token:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913:0x000000000022d473030f116ddee9f6b43ac78ba3",
+      "kind": "token",
+      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "symbol": "USDC",
+      "decimals": 6,
+      "spender": "0x000000000022d473030f116ddee9f6b43ac78ba3",
+      "spenderName": "Permit2, by Uniswap",
+      "amount": "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+      "amountText": null,
+      "unlimited": true,
+      "expiresAt": null,
+      "grantedTx": "0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd1",
+      "grantedBlock": 53501400,
+      "grantedAt": "2026-11-04T08:46:40.000Z",
+      "found": "history"
+    },
+    {
+      "id": "permit2:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913:0x6ff5693b99212da76ad316178a184ab56d299b43",
+      "kind": "permit2",
+      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "symbol": "USDC",
+      "decimals": 6,
+      "spender": "0x6ff5693b99212da76ad316178a184ab56d299b43",
+      "spenderName": "Uniswap",
+      "amount": "250000000",
+      "amountText": "250 USDC",
+      "unlimited": false,
+      "expiresAt": "2026-11-24T11:00:00.000Z",
+      "grantedTx": "0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd2",
+      "grantedBlock": 53501400,
+      "grantedAt": "2026-11-04T08:46:40.000Z",
+      "found": "history"
+    }
+  ],
+  "unreadable": 0
+}

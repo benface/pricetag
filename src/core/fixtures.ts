@@ -180,11 +180,15 @@ const CAD_USD: [blockOffset: number, usd: number][] = [
   [HEAD_OFFSET, 0.715],
 ]
 
-/** What the feed would have answered for the demo's blocks. A currency with no demo data has no rates, like any other missing rate. */
+/** About what one of each is worth in USD, to move each the way CAD does. */
+const DEMO_USD_PER: Record<Exclude<CurrencyCode, "USD">, number> = { CAD: 0.715, EUR: 1.12, GBP: 1.35, CHF: 1.23, AUD: 0.7, NZD: 0.56, SGD: 0.78, MXN: 0.053, BRL: 0.18, TRY: 0.02, ZAR: 0.06 }
+
+/** What the feed would have answered for the demo's blocks. USD has no feed, so it has no rates. */
 export function demoRates(currency: CurrencyCode): Rates {
-  const rounds = (currency === "CAD" ? CAD_USD : []).map(([offset, usd]) => ({
+  const scale = currency === "USD" ? 0 : DEMO_USD_PER[currency] / DEMO_USD_PER.CAD
+  const rounds = (currency === "USD" ? [] : CAD_USD).map(([offset, usd]) => ({
     blockNum: START_BLOCK + offset,
-    round: { answer: String(Math.round(usd * 1e8)), updatedAt: (START_TIME + offset * 2000) / 1000 },
+    round: { answer: String(Math.round(usd * scale * 1e8)), updatedAt: (START_TIME + offset * 2000) / 1000 },
   }))
   return { byBlock: Object.fromEntries(rounds.map((r) => [r.blockNum, r.round])), latest: rounds.at(-1) ?? null }
 }

@@ -65,6 +65,7 @@
         "estimatedRealizedMicros": "0"
       },
       "pnlMicros": null,
+      "returnBps": null,
       "shortfallQty": "0",
       "legCount": 1,
       "reconciliation": {
@@ -105,6 +106,7 @@
         "estimatedRealizedMicros": "0"
       },
       "pnlMicros": null,
+      "returnBps": null,
       "shortfallQty": "0",
       "legCount": 7,
       "reconciliation": {
@@ -145,6 +147,7 @@
         "estimatedRealizedMicros": "0"
       },
       "pnlMicros": null,
+      "returnBps": null,
       "shortfallQty": "0",
       "legCount": 12,
       "reconciliation": {
@@ -185,6 +188,7 @@
         "estimatedRealizedMicros": "0"
       },
       "pnlMicros": "234903401",
+      "returnBps": "1500",
       "shortfallQty": "0",
       "legCount": 2,
       "reconciliation": {
@@ -225,6 +229,7 @@
         "estimatedRealizedMicros": "0"
       },
       "pnlMicros": "6495600",
+      "returnBps": "238",
       "shortfallQty": "0",
       "legCount": 1,
       "reconciliation": {
@@ -265,6 +270,7 @@
         "estimatedRealizedMicros": "0"
       },
       "pnlMicros": null,
+      "returnBps": null,
       "shortfallQty": "0",
       "legCount": 1,
       "reconciliation": {
@@ -300,6 +306,7 @@
         "estimatedRealizedMicros": "0"
       },
       "pnlMicros": null,
+      "returnBps": null,
       "shortfallQty": "0",
       "legCount": 1,
       "reconciliation": {
@@ -340,6 +347,7 @@
         "estimatedRealizedMicros": "0"
       },
       "pnlMicros": null,
+      "returnBps": null,
       "shortfallQty": "0",
       "legCount": 1,
       "reconciliation": {

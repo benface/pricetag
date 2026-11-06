@@ -188,6 +188,20 @@
     }
   ],
   "withheld": "0x1234…5678's ETH history can't be confirmed, so what it sent has an unknown cost where it arrived.",
+  "answerQuestions": [
+    {
+      "count": 1,
+      "text": "Answer 1 Question"
+    },
+    {
+      "count": 5,
+      "text": "Answer 5 Questions"
+    },
+    {
+      "count": 1203,
+      "text": "Answer 1,203 Questions"
+    }
+  ],
   "sentences": {
     "methodName": "How cost is worked out",
     "methodHelp": "Average spreads what you paid across all you hold. Oldest first counts what you sell as what you got earliest.",
@@ -198,6 +212,7 @@
     "pnlHelp": "PnL is profit and loss: what you've gained or lost so far.",
     "realizedHelp": "Gain or loss on what you've sold or spent.",
     "unrealizedHelp": "Gain or loss on what you still hold, at the current price.",
+    "returnHelp": "Unrealized PnL as a share of what you paid for what you still hold.",
     "notStarted": "Numbers appear once the data reaches this wallet.",
     "unpricedFees": "Some network fees had no price at the time, and aren't in this total.",
     "demo": "Demo data, not a real wallet.",
@@ -210,7 +225,16 @@
     "holdTitle": "Compared with holding ETH",
     "holdWallet": "This wallet, after network fees",
     "holdEth": "If you'd held ETH instead",
-    "holdPast": "Past results don't predict future ones."
+    "holdPast": "Past results don't predict future ones.",
+    "answerQuestions": "Answer Questions",
+    "showMissing": "Show What's Missing",
+    "senderQuestion": "Who sent you this?",
+    "senderWhy": "What you paid for it is unknown until you say where it came from, so PnL leaves it out.",
+    "costQuestion": "What did you pay for this?",
+    "costWhy": "Nothing shows what this cost, so PnL leaves it out until you say.",
+    "exchangeCostWhy": "You said it came from your exchange account, which knows what you paid. Until you say, PnL leaves it out.",
+    "allAnswered": "All answered",
+    "nothingLeft": "That's all for now"
   },
   "unseenEth": [
     {

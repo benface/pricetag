@@ -207,6 +207,11 @@ public final class SendModel {
         amount.map { "\(Money.text(ofUnits: $0, decimals: token.decimals)) \(token.symbol)" }
     }
 
+    /// The amount as it's confirmed: exactly what it is, written the way it was typed, so 12.50 doesn't become 12.5 on the next step.
+    public var amountShown: String? {
+        amount.map { Money.text(ofUnits: $0, decimals: token.decimals, minimumFractionDigits: Money.fractionDigits(inText: amountText)) }
+    }
+
     /// What's wrong with the address, once it's an address.
     public var recipientProblem: SendProblem? { recipient.flatMap(wallet.problem(sendingTo:)) }
 

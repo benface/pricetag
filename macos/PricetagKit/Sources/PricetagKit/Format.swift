@@ -11,7 +11,8 @@ public enum Format {
     }
 
     private static func twoDecimals(_ value: Decimal, _ currency: CurrencyCode) -> String {
-        value.formatted(.currency(code: currency.rawValue).locale(currency.locale).rounded(rule: .toNearestOrAwayFromZero))
+        let style = Decimal.FormatStyle.Currency(code: currency.rawValue).locale(currency.locale).rounded(rule: .toNearestOrAwayFromZero)
+        return value.formatted(currency.isNarrow ? style.presentation(.narrow) : style)
     }
 
     private static func significant(_ value: Decimal, _ digits: Int, _ currency: CurrencyCode) -> String {
@@ -90,6 +91,24 @@ public enum Format {
     }
 
     /// An estimate has to look different from an exact value, wherever it's shown.
+    /// A return in basis points as a signed percentage, to a tenth, or whole once it's 1,000% or more. A return that rounds to nothing has no sign.
+    public static func percent(bps: String) -> String {
+        let value = Decimal(string: bps) ?? 0
+        let size = abs(value)
+        let big = size >= 100_000
+        var steps = size / (big ? 100 : 10)
+        var rounded = Decimal()
+        NSDecimalRound(&rounded, &steps, 0, .plain)
+        if rounded == 0 { return big ? "0%" : "0.0%" }
+        let sign = value < 0 ? "-" : "+"
+        let grouped = { (whole: Decimal) in whole.formatted(.number.locale(locale).grouping(.automatic).precision(.fractionLength(0))) }
+        if big { return "\(sign)\(grouped(rounded))%" }
+        var tens = rounded / 10
+        var whole = Decimal()
+        NSDecimalRound(&whole, &tens, 0, .down)
+        return "\(sign)\(grouped(whole)).\(NSDecimalNumber(decimal: rounded - whole * 10).intValue)%"
+    }
+
     public static func estimate(_ text: String, _ isEstimate: Bool) -> String {
         isEstimate ? "≈\(text)" : text
     }
@@ -103,9 +122,20 @@ public enum Format {
         return clean.replacing(",", with: "")
     }
 
-    /// Micro-USD from what someone typed, like "$1,234.50" or "46,20". nil when it isn't an amount. Cents past six places are cut.
-    public static func micros(fromDollars text: String) -> String? {
-        guard let clean = plainAmount(text.filter { $0 != "$" }), clean.wholeMatch(of: /\d+(\.\d*)?|\.\d+/) != nil else { return nil }
+    /// A cost as someone typed it, without the main currency's own symbol or code, before or after. Any other symbol stays, so it isn't read as an amount in this currency.
+    static func withoutCurrency(_ text: String, _ currency: CurrencyCode) -> String {
+        let clean = text.trimmingCharacters(in: .whitespaces)
+        // Longest first, so "46 ZAR" isn't read as "46 ZA" and an R.
+        for mark in [currency.label, currency.symbol, currency.rawValue].map({ $0.trimmingCharacters(in: .whitespaces) }).sorted(by: { $0.count > $1.count }) {
+            if clean.hasPrefix(mark) { return String(clean.dropFirst(mark.count)) }
+            if clean.hasSuffix(mark) { return String(clean.dropLast(mark.count)) }
+        }
+        return clean
+    }
+
+    /// Millionths of `currency` from what someone typed, like "$1,234.50" or "46,20". nil when it isn't an amount, which includes one in another currency's symbol: "€46" isn't 46 dollars. Cents past six places are cut.
+    public static func micros(fromDollars text: String, in currency: CurrencyCode = .USD) -> String? {
+        guard let clean = plainAmount(withoutCurrency(text, currency)), clean.wholeMatch(of: /\d+(\.\d*)?|\.\d+/) != nil else { return nil }
         let parts = clean.split(separator: ".", omittingEmptySubsequences: false)
         let whole = parts.first.map(String.init) ?? ""
         let fraction = parts.count > 1 ? String(parts[1].prefix(6)) : ""
@@ -156,6 +186,21 @@ public enum Format {
 
     public static func time(_ date: Date) -> String {
         date.formatted(.dateTime.month(.abbreviated).day().hour().minute().locale(locale))
+    }
+
+    /// In UTC and saying so, like a tax report's file, so a time near midnight is in the same year as there.
+    public static func utcDateTime(_ date: Date) -> String {
+        var style = Date.FormatStyle.dateTime.year().month(.abbreviated).day().hour().minute().locale(locale)
+        style.timeZone = .gmt
+        return "\(date.formatted(style)) UTC"
+    }
+
+    /// How long something's been going, to the second, for a count that ticks.
+    public static func elapsed(seconds: Int) -> String {
+        let seconds = max(0, seconds)
+        if seconds < 60 { return "\(seconds) s" }
+        if seconds < 3600 { return seconds % 60 == 0 ? "\(seconds / 60) min" : "\(seconds / 60) min \(seconds % 60) s" }
+        return "\(seconds / 3600) h \(seconds % 3600 / 60) min"
     }
 
     public static func duration(ms: Int) -> String {

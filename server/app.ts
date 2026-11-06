@@ -17,10 +17,11 @@ import { createCoinbase } from "./coinbase.ts"
 import { ONRAMP_ASSETS, OnrampError, type FiatAmount, type Onramp } from "./onramp.ts"
 import { createRates, readPaidRates } from "./rates.ts"
 import { createDepositReader } from "./block.ts"
-import { warnOfNewAggregators } from "./feeds.ts"
+import { warnOfNewAggregators, warnOfNewRateAggregators } from "./feeds.ts"
 import { createManifestReader, createProofs, feedBehind, isSeed, proofOf, verificationOf, type BlockRead, type CheckedUpdate, type PriceBehind, type Proofs } from "./proof.ts"
-import { feedRounds, rawSource, resolvingSource, settledL1Fees, sharedReads, type SharedReads } from "./source.ts"
-import { TAX_COUNTRIES, isTaxCountryCode, taxReportOf, type TaxScope } from "../src/core/tax.ts"
+import { feedRounds, rawSource, resolvingSource, settledL1Fees, sharedReads, updateRounds, type SharedReads } from "./source.ts"
+import { createApprovals, demoApprovals, type Approvals } from "./approvals.ts"
+import { TAX_COUNTRIES, isTaxCountryCode, parseTaxYear, taxReportOf, type TaxScope } from "../src/core/tax.ts"
 
 type Env = Record<string, string | undefined>
 
@@ -54,11 +55,13 @@ function pinned(dataset: string, hash: string | undefined): string {
   return `${dataset.split("@")[0]}@${hash}`
 }
 
-export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_URL ? createQuery(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined) : null): { source: Source; rules?: RuleSource[]; readRates: ReturnType<typeof createRates>; proofs: Proofs; follow: FollowConfig; shared?: SharedReads } | null {
+export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_URL ? createQuery(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined) : null): { source: Source; rules?: RuleSource[]; readRates: ReturnType<typeof createRates>; proofs: Proofs; follow: FollowConfig; shared?: SharedReads; approvals?: Approvals } | null {
   if (!query) return null
   const baseDataset = env.PRICETAG_BASE_DATASET || "edgeandnode/base_mainnet@0.0.2"
   const network = env.PRICETAG_RPC_NETWORK || "base_mainnet"
-  const readRates = createRates(feedRounds(query, { baseDataset, network }))
+  const calls = feedRounds(query, { baseDataset, network })
+  const readRates = createRates(env.PRICETAG_RATES_DATASET ? updateRounds(query, env.PRICETAG_RATES_DATASET, calls) : calls)
+  if (env.PRICETAG_RATES_DATASET) void warnOfNewRateAggregators(env.BASE_RPC_URL || DEFAULT_RPC_URL)
   // How the server hears about new blocks. Amp's block ranges name a network with a dash, and its RPC functions with an underscore.
   const followOf = (sql: string): FollowConfig => ({ stream: env.AMP_QUERY_URL ? createRangeStream(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined, network.replaceAll("_", "-")) : null, sql, readMark: (after) => readHeadMark(query, baseDataset, after) })
   // Only a fork pins the default. Without one, a hash left in the env can be a hosted Amp's, which a local Amp doesn't have.
@@ -85,14 +88,18 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
         ruleSource(MARKET_RULE_ID, env.PRICETAG_DATASET, env.PRICETAG_DATASET_HASH, pin),
         ruleSource(CAUTIOUS_RULE_ID, env.PRICETAG_FORK_DATASET!, env.PRICETAG_FORK_HASH, pinned(env.PRICETAG_FORK_DATASET!, env.PRICETAG_FORK_HASH)),
       ]
-      return { source: rules[0]!.source, rules, readRates, proofs, follow: followOf(followSql(pin)), shared }
+      const approvals = createApprovals(query.aliased({ pricetag: pin }), { baseDataset, dataset: { reference: "pricetag", name: env.PRICETAG_DATASET }, network, historyFrom: () => startBlock })
+      return { source: rules[0]!.source, rules, readRates, proofs, follow: followOf(followSql(pin)), shared, approvals }
     }
     const shared = sharedReads(query, { baseDataset, dataset: env.PRICETAG_DATASET, network })
-    return { source: resolvingSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock, network }, shared), readRates, proofs, follow: followOf(followSql(env.PRICETAG_DATASET)), shared }
+    const approvals = createApprovals(query, { baseDataset, dataset: { reference: env.PRICETAG_DATASET, name: env.PRICETAG_DATASET }, network, historyFrom: () => startBlock })
+    return { source: resolvingSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock, network }, shared), readRates, proofs, follow: followOf(followSql(env.PRICETAG_DATASET)), shared, approvals }
   }
   const historyBlocks = env.PRICETAG_HISTORY_BLOCKS ? Number(env.PRICETAG_HISTORY_BLOCKS) : null
   if (historyBlocks !== null && (!Number.isSafeInteger(historyBlocks) || historyBlocks <= 0)) throw new Error("PRICETAG_HISTORY_BLOCKS must be a positive number")
-  return { source: rawSource(query, { baseDataset, network, historyBlocks }), readRates, proofs, follow: followOf(followRawSql(baseDataset)) }
+  const source = rawSource(query, { baseDataset, network, historyBlocks })
+  const approvals = createApprovals(query, { baseDataset, dataset: null, network, historyFrom: (head) => source.historyFrom?.(head) ?? head })
+  return { source, readRates, proofs, follow: followOf(followRawSql(baseDataset)), approvals }
 }
 
 /** Each one is a wallet read, so this stays well under what the server keeps in memory. */
@@ -289,6 +296,19 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     }
   }
 
+  /** What a wallet lets others spend, checked at the head. Demo wallets have made-up ones, like the rest of their history. */
+  async function answerApprovals(address: string, res: ServerResponse) {
+    const demo = address === "demo" || address === DEMO_ADDRESS ? DEMO_WALLET : demoWallet(address)
+    if (demo) return sendJson(res, 200, demoApprovals(demo))
+    if (!isAddress(address)) return sendJson(res, 400, { error: "That isn't a Base address." })
+    if (!created?.approvals) return sendJson(res, 503, { error: "No data source is set up, so only the demo wallet is available." })
+    try {
+      sendJson(res, 200, await created.approvals.read(address.toLowerCase(), await pollHead()))
+    } catch (error) {
+      sendAmpError(res, error, "Couldn't read this wallet's approvals.")
+    }
+  }
+
   /** Linked wallets whose last read failed, so a client can say so rather than go on saying it's reading. Each request tries again. */
   const linkedFailures = new Set<string>()
 
@@ -369,7 +389,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       if (!book) return sendJson(res, 400, { error: "Those answers can't be read." })
       const also: unknown = body.also ?? []
       if (!Array.isArray(also) || !also.every((address) => typeof address === "string")) return sendJson(res, 400, { error: "Other wallets are a list of Base addresses." })
-      return taxReport(taxMatch[1] as string, { country: body.country, method: body.method, scope: body.scope }, also as string[], currency, book, res)
+      return taxReport(taxMatch[1] as string, { country: body.country, method: body.method, scope: body.scope, year: body.year }, also as string[], currency, book, res)
     }
 
     const match = /^\/api\/portfolio\/([^/]+)(?:\/(explain|preview|export|compare|last))?$/.exec(path)
@@ -431,7 +451,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
    * those are in what the apps show. A wallet nobody's said is theirs, like one being watched, takes no costs from them, so
    * they aren't read or listed. The demo's own wallets are read for its costs without being listed. Demo data and real data never mix.
    */
-  async function taxReport(address: string, choices: { country: unknown; method: unknown; scope: unknown }, also: readonly string[], currency: CurrencyCode, book: Book, res: ServerResponse): Promise<void> {
+  async function taxReport(address: string, choices: { country: unknown; method: unknown; scope: unknown; year: unknown }, also: readonly string[], currency: CurrencyCode, book: Book, res: ServerResponse): Promise<void> {
     const { country } = choices
     if (typeof country !== "string" || !isTaxCountryCode(country)) return sendJson(res, 400, { error: "That country isn't supported." })
     const defaults = TAX_COUNTRIES[country]
@@ -439,6 +459,8 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     if (!method) return sendJson(res, 400, { error: "The method is either average or fifo." })
     const scope = choices.scope === null || choices.scope === undefined ? defaults.scope : parseScope(typeof choices.scope === "string" ? choices.scope : "")
     if (!scope) return sendJson(res, 400, { error: "The calculation is either pooled or per-wallet." })
+    const year = parseTaxYear(choices.year)
+    if (year === null) return sendJson(res, 400, { error: "The year is a year, latest or all." })
 
     const focus = address.toLowerCase()
     const others = also.map((other) => other.trim().toLowerCase()).filter(Boolean)
@@ -470,7 +492,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     const wallets = await readAll(listed)
     const context = wallets && (await readAll(costsFrom))
     if (!wallets || !context) return
-    sendJson(res, 200, taxReportOf(wallets, { country, method, scope }, { book, costsFrom: context }))
+    sendJson(res, 200, taxReportOf(wallets, { country, method, scope, year }, { book, costsFrom: context }))
   }
 
   /**
@@ -606,6 +628,12 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       return true
     }
 
+    const approvalsMatch = /^\/api\/approvals\/([^/]+)$/.exec(path)
+    if (approvalsMatch) {
+      await answerApprovals(approvalsMatch[1] as string, res)
+      return true
+    }
+
     const walletMatch = /^\/api\/wallet\/([^/]+)$/.exec(path)
     if (walletMatch) {
       const read = await readWallet(walletMatch[1] as string, res, { fresh: true, rule })
@@ -708,7 +736,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     const taxMatch = /^\/api\/tax-report\/([^/]+)$/.exec(path)
     if (taxMatch) {
       const also = (params.get("also") ?? "").split(",")
-      await taxReport(taxMatch[1] as string, { country: params.get("country"), method: params.get("method"), scope: params.get("scope") }, also, currency, emptyBook(), res)
+      await taxReport(taxMatch[1] as string, { country: params.get("country"), method: params.get("method"), scope: params.get("scope"), year: params.get("year") }, also, currency, emptyBook(), res)
       return true
     }
 

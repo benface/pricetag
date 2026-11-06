@@ -604,6 +604,15 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
             #expect(Money.units(fromText: text, decimals: decimals) == units)
         }
     }
+
+    @Test func anAmountIsConfirmedTheWayItWasTyped() {
+        for (typed, decimals, shown) in [("12.50", 6, "12.50"), ("12,50", 6, "12.50"), ("12.5", 6, "12.5"), ("12", 6, "12"), ("12.", 6, "12"), ("0.10", 18, "0.10"), ("7", 0, "7"), ("1,000", 6, "1000")] {
+            let units = Money.units(fromText: typed, decimals: decimals)!
+            let text = Money.text(ofUnits: units, decimals: decimals, minimumFractionDigits: Money.fractionDigits(inText: typed))
+            #expect(text == shown, "\(typed)")
+            #expect(Money.units(fromText: text, decimals: decimals) == units, "it's still exactly the same amount")
+        }
+    }
 }
 
 @MainActor

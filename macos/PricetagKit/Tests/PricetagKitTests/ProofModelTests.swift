@@ -54,7 +54,7 @@ import Testing
             return try resource("proof", as: Proof.self)
         })
         await model.load()
-        #expect(model.failure == "Can't reach the server.")
+        #expect(model.failure == Wording.cantReachServer)
         await model.load()
         #expect(model.failure == nil)
         #expect(model.proof != nil)
