@@ -276,7 +276,7 @@ export function combinedPortfolioOf(read: readonly WalletResponse[], method: Met
     points,
     holdComparison,
     questions,
-    meter: { ...meterOf(questions, linking, (folded[0] as Folded).wallet, waiting), waiting },
+    meter: { ...meterOf(questions, linking, (folded[0] as Folded).wallet, read, waiting), waiting },
     linkedReading: [...unread.reading],
     linkedFailed: [...unread.failed],
     withheld: [...withheld.values()],

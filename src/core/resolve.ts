@@ -500,12 +500,17 @@ export function questionsOf(open: readonly OpenItem[], sides: readonly Side[], b
     })
 }
 
-export function meterOf(questions: readonly Question[], book: Book, focus: WalletResponse, waiting: number): Meter {
+/** `read` is every wallet in view. One book answers for all of a user's wallets and the demo's, and an answer only moves this meter if it's about one of them. */
+export function meterOf(questions: readonly Question[], book: Book, focus: WalletResponse, read: readonly WalletResponse[], waiting: number): Meter {
   const open = new Set(questions.map((q) => q.sender).filter((s) => s !== null))
+  const behind = walletsBehind(book, focus)
+  const wallets = new Set([...read.map((wallet) => normalizeAddress(wallet.address)), ...behind])
+  const sentHere = new Set(read.flatMap((wallet) => wallet.legs.flatMap((leg) => (sourcesOf(leg) ?? []).map((source) => source.address))))
   // Saying a wallet's yours has no bearing on one that isn't, so it can't make this one's books balance. This one being yours is what follows from an answer, not an answer.
-  const counts = (address: string, answer: SenderAnswer) => answer.kind !== "mine" || (isOwnWallet(book, focus) && address !== normalizeAddress(focus.address))
+  const counts = (address: string, answer: SenderAnswer) => (answer.kind === "mine" ? isOwnWallet(book, focus) && address !== normalizeAddress(focus.address) && (behind.includes(address) || sentHere.has(address)) : wallets.has(address) || sentHere.has(address))
   const senders = Object.entries(book.senders).filter(([address, answer]) => !open.has(address) && counts(address, answer)).length
-  return { open: questions.length, answered: senders + Object.keys(book.costs).length, waiting }
+  const costs = Object.keys(book.costs).filter((key) => wallets.has(key.split(":", 1)[0] as string)).length
+  return { open: questions.length, answered: senders + costs, waiting }
 }
 
 export type BookFold = {
@@ -552,7 +557,7 @@ export function foldBook(focus: WalletResponse, others: readonly WalletResponse[
     points: points.map((point) => ({ ...point, summary: point.txHash ? describeTransaction(legsByTx.get(point.txHash) ?? [], view.currency) : null, ...((point.txHash && facts.get(point.txHash)) || NO_FACTS) })),
     holdComparison,
     questions,
-    meter: meterOf(questions, book, focus, missingWallets(book, focus, others).length),
+    meter: meterOf(questions, book, focus, sides.map((side) => side.wallet), missingWallets(book, focus, others).length),
     withheld: withheldIn(legs).filter(({ wallet }) => wallet !== address),
     purchases,
   }
