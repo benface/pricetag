@@ -118,9 +118,10 @@ async function pump({ stream, sql, readMark, readHashes, logger = console, pollM
   }
 
   async function pollOnce() {
-    await findReorg()
     // A reorg the stream reported can leave a shorter chain, which reading from the last block wouldn't find.
     const mark = await readMark(reorgFrom === null ? (last?.blockNum ?? null) : reorgFrom - 1)
+    // After the head, or a reorg between the two reads would go unseen: this mark replaces the last one, and only the last one gets checked.
+    await findReorg()
     if (!mark) return
     const replaced = mark.blockNum === last?.blockNum && mark.hash !== last.hash
     const shorter = reorgFrom !== null && last !== null && mark.blockNum < last.blockNum

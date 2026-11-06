@@ -299,6 +299,53 @@ describe("following the chain", () => {
       await follow.stop()
     })
 
+    it("says a reorg that comes between a poll's two reads, and then the new head", async () => {
+      // Found in WORK-520's review: the check saw the old chain, the head the new one, and only that head got checked after.
+      const chain = polledChain(100)
+      let between: (() => void) | null = null
+      const afterRead = <T,>(result: T) => {
+        const run = between
+        between = null
+        run?.()
+        return result
+      }
+      const follow = following({
+        readMark: async (after) => afterRead(await chain.config.readMark(after)),
+        readHashes: async (wanted) => afterRead(await chain.config.readHashes(wanted)),
+      })
+      await follow.next()
+      chain.extend(200)
+      assert.deepEqual(await follow.next(), { kind: "block", blockNum: 200, reorgFrom: null, via: "polling" })
+      chain.extend(300)
+      between = () => chain.reorg(150, 500)
+      // The head it read first is from the old chain, so the reorg is said again once it's checked that one.
+      assert.deepEqual(await follow.next(), { kind: "block", blockNum: 300, reorgFrom: 101, via: "polling" })
+      assert.deepEqual(await follow.next(), { kind: "block", blockNum: 500, reorgFrom: 101, via: "polling" })
+      chain.extend(501, "b")
+      assert.deepEqual(await follow.next(), { kind: "block", blockNum: 501, reorgFrom: null, via: "polling" })
+      await follow.stop()
+    })
+
+    it("holds a reorg it found with no new head to say it on, until there is one", async () => {
+      const chain = polledChain(100)
+      let between: (() => void) | null = null
+      const follow = following({
+        readMark: async (after) => {
+          const mark = await chain.config.readMark(after)
+          between?.()
+          between = null
+          return mark
+        },
+        readHashes: chain.config.readHashes,
+      })
+      await follow.next()
+      chain.extend(200)
+      await follow.next()
+      between = () => chain.reorg(150, 500)
+      assert.deepEqual(await follow.next(), { kind: "block", blockNum: 500, reorgFrom: 101, via: "polling" })
+      await follow.stop()
+    })
+
     it("asks about one block on each poll, and remembers no more than any reorg could need", async () => {
       const chain = polledChain(100)
       const follow = following(chain.config)
@@ -588,6 +635,42 @@ describe("watchWallet", () => {
     assert.equal(update.reorgFrom, 101)
     assert.equal(update.via, "polling")
     assert.deepEqual(legsOf(update), ["120:0xee:9"])
+    await updates.return()
+  })
+
+  it("replaces a transfer when a reorg comes between a poll's two reads, with no stream at all", { timeout: 5_000 }, async () => {
+    // Found in WORK-520's review: the wallet kept 160:0xdd:1 for good, though the dataset no longer had it.
+    let between: (() => void) | null = null
+    let seen: string | null = null
+    const onQuery = (sql: string) => {
+      if (!between || !sql.includes("SELECT block_num, hash FROM")) return
+      const read = sql.includes(" IN (") ? "hashes" : "head"
+      if (seen === null || seen === read) {
+        seen = read
+        return
+      }
+      between()
+      between = null
+    }
+    const { chain, client } = chainAt(100, { legs: [], reference_prices: [{ ...REFERENCE, block_num: "100" }], balances: balancesThrough(600, "0") }, onQuery, { stream: null })
+    const updates = client.watchWallet(ADDRESS)
+    assert.deepEqual(legsOf((await updates.next()).value as WalletUpdate), [])
+
+    chain.block = 200
+    chain.tables = { ...chain.tables, legs: [creditAt(160, "dd", "1")], reference_prices: [{ ...REFERENCE, block_num: "160" }], balances: balancesThrough(600, "1") }
+    let update = (await updates.next()).value as WalletUpdate
+    while (update.blocks.toBlock < 200) update = (await updates.next()).value as WalletUpdate
+    assert.deepEqual(legsOf(update), ["160:0xdd:1"])
+
+    chain.block = 300
+    between = () => {
+      chain.forkedFrom = 150
+      chain.block = 500
+      chain.tables = { ...chain.tables, legs: [], reference_prices: [{ ...REFERENCE, block_num: "500" }], balances: balancesThrough(600, "0") }
+    }
+    update = (await updates.next()).value as WalletUpdate
+    while (update.blocks.toBlock < 500) update = (await updates.next()).value as WalletUpdate
+    assert.deepEqual(legsOf(update), [])
     await updates.return()
   })
 
