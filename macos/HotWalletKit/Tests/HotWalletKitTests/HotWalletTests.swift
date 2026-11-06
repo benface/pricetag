@@ -279,7 +279,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
 
     @Test func aMissingKeyIsFlaggedAndSignsNothing() async throws {
         let rig = await Rig(over)
-        await rig.signer.deleteKey(hotAddress)
+        try await rig.signer.deleteKey(hotAddress)
         await rig.wallet.tick()
         #expect(rig.wallet.isKeyMissing)
         #expect(await rig.signer.signed.isEmpty)
@@ -1186,6 +1186,141 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(await rig.signer.addresses().isEmpty)
     }
 
+    /// A wallet on hotAddress with `leftover` also in the vault, which is what a cut-short replacement leaves.
+    private func walletWithLeftover(_ chain: ChainSnapshot, leftover: EthereumAddress = nextAddress, retired: [EthereumAddress] = []) throws -> (wallet: HotWallet, signer: FakeSigner, store: MemoryStateStore) {
+        let signer = FakeSigner(keys: [hotAddress, leftover], next: [coldAddress])
+        let store = MemoryStateStore()
+        var state = DeviceWalletState()
+        state.active = hotAddress
+        state.retired = retired
+        try store.save(state)
+        let portfolios = ScriptedPortfolios(.success(portfolio()))
+        let fake = FakeChain(chain)
+        return (HotWallet(signer: signer, settingsStore: MemorySettingsStore(), stateStore: store, presence: FakePresence(allows: true), portfolioSource: { portfolios }, makeChain: { _ in fake }), signer, store)
+    }
+
+    @Test func aLeftoverKeyWithNothingOnItDoesntComeBackAfterDeleting() async throws {
+        let (wallet, signer, store) = try walletWithLeftover(snapshot(eth: 0))
+        await wallet.deleteWallet()
+        await wallet.tick()
+        #expect(wallet.address == nil)
+        #expect(store.saved.active == nil)
+        #expect(await signer.addresses() == [nextAddress], "it could still be someone's, so it isn't deleted")
+    }
+
+    @Test func aNewWalletAfterALeftoverKeyIsReallyNew() async throws {
+        let (wallet, signer, _) = try walletWithLeftover(snapshot(eth: 0))
+        await wallet.deleteWallet()
+        await wallet.tick()
+        await wallet.createWallet()
+        wallet.stop()
+        #expect(wallet.address == coldAddress)
+        #expect(await signer.addresses() == [nextAddress, coldAddress])
+    }
+
+    @Test(arguments: [snapshot(eth: oneEth / 100), snapshot(eth: 0, tokens: [usdc: usdcUnits(5)]), snapshot(eth: 0, nonce: 1)])
+    func aLeftoverKeyWithSomethingOnItComesBackAfterDeleting(_ chain: ChainSnapshot) async throws {
+        let (wallet, signer, store) = try walletWithLeftover(chain)
+        await wallet.deleteWallet()
+        #expect(wallet.address == nextAddress, "straight away, so nobody makes a new wallet over it")
+        #expect(store.saved.active == nextAddress)
+        #expect(wallet.notices.contains { $0.text == HotWalletWording.keyCameBack })
+        #expect(await signer.addresses() == [nextAddress])
+
+        await wallet.deleteWallet()
+        #expect(wallet.address == nil, "the user said so twice")
+        #expect(!wallet.notices.contains { $0.text == HotWalletWording.keyCameBack })
+        #expect(await signer.addresses().isEmpty)
+    }
+
+    @Test func aLeftoverKeyWaitsWhileTheChainCantBeRead() async throws {
+        let chain = FakeChain(snapshot())
+        await chain.setReadFailure(.unreachable)
+        let signer = FakeSigner(keys: [hotAddress, nextAddress])
+        let store = MemoryStateStore()
+        var state = DeviceWalletState()
+        state.active = hotAddress
+        try store.save(state)
+        let portfolios = ScriptedPortfolios(.success(portfolio()))
+        let wallet = HotWallet(signer: signer, settingsStore: MemorySettingsStore(), stateStore: store, presence: FakePresence(allows: true), portfolioSource: { portfolios }, makeChain: { _ in chain })
+        await wallet.deleteWallet()
+        await wallet.tick()
+        #expect(wallet.address == nil)
+        await chain.setReadFailure(nil)
+        await wallet.tick()
+        #expect(wallet.address == nextAddress)
+    }
+
+    @Test func aLeftoverKeyOnlyCountsOnBase() async throws {
+        let (wallet, _, _) = try walletWithLeftover(snapshot(chainID: 1))
+        await wallet.deleteWallet()
+        await wallet.tick()
+        #expect(wallet.address == nil)
+    }
+
+    @Test func lostRecordsStillFindTheKey() async throws {
+        let store = MemoryStateStore()
+        let portfolios = ScriptedPortfolios(.success(portfolio()))
+        let chain = FakeChain(snapshot(eth: 0))
+        let wallet = HotWallet(signer: FakeSigner(keys: [hotAddress]), settingsStore: MemorySettingsStore(), stateStore: store, presence: FakePresence(allows: true), portfolioSource: { portfolios }, makeChain: { _ in chain })
+        await wallet.tick()
+        #expect(wallet.address == hotAddress, "with no record of letting go of a wallet, nothing on it says it isn't this one")
+        #expect(!wallet.notices.contains { $0.text == HotWalletWording.keyCameBack })
+    }
+
+    @Test func aRetiredKeyLeftInTheVaultIsDeletedOnTheFirstLook() async throws {
+        let (wallet, signer, store) = try walletWithLeftover(snapshot(eth: 0), retired: [nextAddress])
+        await wallet.tick()
+        #expect(wallet.address == hotAddress)
+        #expect(await signer.addresses() == [hotAddress])
+        #expect(store.saved.retired == [nextAddress], "costs keep following it")
+    }
+
+    @Test func aRetiredKeyNeverComesBack() async throws {
+        let (wallet, signer, _) = try walletWithLeftover(snapshot(eth: oneEth), retired: [nextAddress])
+        await signer.setDeleteFailure(KeyVault.Failure.noSuchKey)
+        await wallet.tick()
+        await signer.setDeleteFailure(nil)
+        await wallet.deleteWallet()
+        #expect(wallet.address == nil)
+        await wallet.tick()
+        #expect(wallet.address == nil)
+        #expect(await signer.addresses().isEmpty)
+    }
+
+    @Test func anOldKeyThatWouldntDeleteIsTriedAgainAndDoesntStopTheRotation() async throws {
+        let rig = await Rig(snapshot(eth: 0))
+        await rig.wallet.replaceKey()
+        await rig.signer.setDeleteFailure(KeyVault.Failure.noSuchKey)
+        await rig.wallet.finishRotationLeavingFundsBehind()
+        #expect(rig.wallet.address == nextAddress)
+        #expect(rig.wallet.sweepProblem == nil, "it's handled, so there's nothing to tell anyone")
+        #expect(await rig.signer.addresses() == [hotAddress, nextAddress])
+        #expect(rig.wallet.linkedWallets.contains(hotAddress.lowercased))
+
+        await rig.wallet.tick()
+        #expect(await rig.signer.addresses() == [hotAddress, nextAddress])
+        await rig.signer.setDeleteFailure(nil)
+        await rig.wallet.tick()
+        #expect(await rig.signer.addresses() == [nextAddress])
+    }
+
+    @Test func aReplacementThatCouldntBeWrittenLeavesNothingBehind() async throws {
+        struct DiskFull: Error {}
+        let rig = await Rig(snapshot(eth: oneEth / 100, tokens: [usdc: usdcUnits(10)]))
+        rig.stateStore.failSaves(with: DiskFull())
+        await rig.wallet.replaceKey()
+        #expect(rig.wallet.rotation == nil)
+        #expect(rig.wallet.sweepProblem != nil)
+        #expect(await rig.signer.addresses() == [hotAddress])
+
+        rig.stateStore.failSaves(with: nil)
+        await rig.wallet.tick()
+        #expect(rig.wallet.rotation == nil)
+        #expect(rig.stateStore.saved.rotation == nil)
+        #expect(await rig.chain.sent.isEmpty, "nothing moves to a key that's gone")
+    }
+
     @Test func aRotationThatFinishesDuringTheLeaveBehindPromptOnlyFinishesOnce() async throws {
         let prompt = OpenPrompt()
         let rig = await Rig(snapshot(eth: 0), userPresence: prompt, portfolio: .success(portfolio(toBlock: 2000)))
@@ -1214,7 +1349,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         let rig = await Rig(snapshot(eth: oneEth / 100, tokens: [usdc: usdcUnits(10)]))
         await rig.wallet.replaceKey()
         #expect(!rig.wallet.canLeaveOldKeyBehind, "it's still moving things")
-        await rig.signer.deleteKey(hotAddress)
+        try await rig.signer.deleteKey(hotAddress)
         await rig.wallet.tick()
         #expect(rig.wallet.canLeaveOldKeyBehind)
         #expect(rig.wallet.rotationHold == nil)
