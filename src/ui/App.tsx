@@ -66,6 +66,7 @@ import type { TaxYear } from "../core/tax.ts"
 import { TaxPanel } from "./TaxPanel.tsx"
 import { useAllYours, useWallet } from "./useWallet.ts"
 import { ProblemNotice } from "./ProblemNotice.tsx"
+import type { Problem } from "../core/wording.ts"
 import { currenciesIn, walletsBehind, walletsToRead, yourWallets } from "../core/book.ts"
 import { readCheckedAccounts } from "../core/device-accounts.ts"
 import { parseDeviceLink, type DeviceLink } from "../core/device-link.ts"
@@ -518,6 +519,17 @@ export function App() {
     return explainTarget(target, fold, { view: fold.view, ruleNote: wallet.ruleNote ?? null, source: usd && { positions: usd.positions, totals: usd.totals, points: usd.points, holdComparison: usd.holdComparison } })
   }, [target, together, fold, wallet, others, method, book])
   const close = useCallback(() => setTarget(null), [])
+  const statusLines = showing ? [
+    ...(combined && combined.linkedReading.length > 0 ? [allYoursReadingSentence(combined.linkedReading)] : []),
+    ...(combined && combined.linkedFailed.length > 0 ? [allYoursFailedSentence(combined.linkedFailed)] : []),
+    ...(isBehind(showing) && started ? [behindSentence(msBetweenBlocks(showing.coverage.toBlock, showing.latest.blockNum))] : []),
+    ...(linkedFailed.length > 0 ? [linkedFailedSentence(linkedFailed.length)] : []),
+  ] : []
+  const retryEverything = () => {
+    if (error) retryRead()
+    if (combined && combined.linkedFailed.length > 0) allRead.retry()
+    if (linkedFailed.length > 0) retry()
+  }
   const tryRead = (
     <button type="button" className="link" onClick={retryRead}>
       Try again
@@ -575,8 +587,8 @@ export function App() {
         <button type="button" onClick={() => setBuying(true)}>
           Buy
         </button>
-        {showing ? <LiveBadge wallet={showing} stale={error !== null} updating={(combined?.linkedReading.length ?? 0) > 0} /> : null}
       </header>
+      {showing ? <LiveBadge wallet={showing} problem={error ? feedProblem(error, location.origin, started ? staleSentence(formatTime(showing.latest.timestamp)) : null) : null} lastUpdate={started ? formatTime(showing.latest.timestamp) : null} updating={(combined?.linkedReading.length ?? 0) > 0} lines={statusLines} failedWallets={linkedFailed.length + (combined?.linkedFailed.length ?? 0)} retry={retryEverything} /> : null}
       {inputError ? <p className="notice warn">⚠ {inputError}</p> : null}
       {notSaved ? <p className="notice warn" role="alert">⚠ {NOT_SAVED}</p> : null}
       {rules.length > 1 ? <RulesPanel rules={rules} chosen={chosenRule} choose={chooseRule} current={rule} address={isAll ? null : single} method={method} currency={currency} book={book} /> : null}
@@ -603,28 +615,8 @@ export function App() {
 
       {showing ? (
         <main>
-          {error ? <ProblemNotice problem={feedProblem(error, location.origin, started ? staleSentence(formatTime(showing.latest.timestamp)) : null)} action={tryRead} /> : null}
-          {combined && combined.linkedReading.length > 0 ? <p className="notice">{allYoursReadingSentence(combined.linkedReading)}</p> : null}
-          {combined && combined.linkedFailed.length > 0 ? (
-            <p className="notice warn">
-              ⚠ {allYoursFailedSentence(combined.linkedFailed)}{" "}
-              <button type="button" className="link" onClick={allRead.retry}>
-                Try again
-              </button>
-            </p>
-          ) : null}
-          {isBehind(showing) ? (
-            <p className="notice warn">⚠ {started ? behindSentence(msBetweenBlocks(showing.coverage.toBlock, showing.latest.blockNum)) : NOT_STARTED}</p>
-          ) : null}
+          {isBehind(showing) && !started ? <p className="notice warn">⚠ {NOT_STARTED}</p> : null}
           {showing.mode === "demo" ? <p className="notice">{DEMO_NOTICE}</p> : null}
-          {linkedFailed.length > 0 ? (
-            <p className="notice warn">
-              ⚠ {linkedFailedSentence(linkedFailed.length)}{" "}
-              <button type="button" className="link" onClick={retry}>
-                Try again
-              </button>
-            </p>
-          ) : null}
 
           {positions.length === 0 && !started ? attentionBox : positions.length === 0 && unread.length === 0 && (showing?.otherTokens.length ?? 0) + (showing?.otherTokensLeftOut ?? 0) > 0 ? (
             <>
@@ -673,11 +665,13 @@ export function App() {
                   <Stat label={NETWORK_FEES} partial={totals.unpricedGas} onClick={() => openTotal("gas")} value={totals.gasMicros && formatMoney(totals.gasMicros, currency)} />
                 </dl>
               </section>
-              {attentionBox}
+              {/* Its room stays when there's nothing to say, so it can come and go without moving the chart. */}
+              <div className="attention-slot">{attentionBox}</div>
               <PnlChart points={points} currency={currency} onSelect={(point) => setTarget({ kind: "tx", txHash: point.txHash as string })} />
               {listed.length > 0 ? <Holdings positions={listed} unread={unread} about={about} currency={currency} questions={questions} method={method} onMethod={setMethod} explain={setTarget} onResolve={(asset) => setResolving({ asset })} /> : aboutNotices}
-              <OtherTokens tokens={showing?.otherTokens ?? []} leftOut={showing?.otherTokensLeftOut ?? 0} />
               {holdComparison ? <HoldLine comparison={holdComparison} combined={isAll} currency={currency} onOpen={() => setTarget({ kind: "hold" })} /> : null}
+              {/* Last, because they're read after everything else, and can arrive without moving anything above them. */}
+              <OtherTokens tokens={showing?.otherTokens ?? []} leftOut={showing?.otherTokensLeftOut ?? 0} />
               <p className="exports">
                 <button type="button" className="link" onClick={download}>
                   Export as CSV
@@ -819,12 +813,45 @@ function Stat({ label, help, partial, onClick, value }: { label: string; help?: 
   )
 }
 
-function LiveBadge({ wallet, stale, updating }: { wallet: Pick<WalletResponse, "mode" | "coverage" | "latest">; stale: boolean; updating: boolean }) {
-  if (wallet.mode === "demo") return <span className="badge">Demo data</span>
+/** Whether something's gone on this long, so a blip doesn't say more than it has to. */
+function useHasLasted(isOn: boolean, ms: number) {
+  const [lasted, setLasted] = useState(false)
+  useEffect(() => {
+    setLasted(false)
+    if (!isOn) return
+    const timer = setTimeout(() => setLasted(true), ms)
+    return () => clearTimeout(timer)
+  }, [isOn, ms])
+  return lasted
+}
+
+const LONG_PROBLEM_MS = 60_000
+
+/** Whether the numbers are current, with what's wrong a click away. It sits in the corner, over the page, so nothing there moves when it changes, however long it gets. */
+function LiveBadge({ wallet, problem, lastUpdate, updating, lines, failedWallets, retry }: { wallet: Pick<WalletResponse, "mode" | "coverage" | "latest">; problem: Problem | null; lastUpdate: string | null; updating: boolean; lines: readonly string[]; failedWallets: number; retry: () => void }) {
+  const isLong = useHasLasted(problem !== null, LONG_PROBLEM_MS)
   const detail = feedDetail(wallet.mode, wallet.coverage.toBlock)
-  // The notice under it says what's wrong.
-  if (stale) return <span className="badge" title={detail}>Not updating</span>
-  if (updating) return <span className="badge updating" title={detail}>Updating</span>
-  if (isBehind(wallet)) return <span className="badge" title={detail}>Catching up</span>
-  return <span className="badge live" title={detail}>Live</span>
+  // Numbers missing a wallet aren't live, whatever else is going on.
+  const failedLabel = failedWallets > 0 ? `Couldn't read ${walletCount(failedWallets)}` : null
+  const [kind, label] = wallet.mode === "demo" ? ["", "Demo data"] : problem ? ["warn", ["Not updating", isLong && lastUpdate ? `last update ${lastUpdate}` : null, failedLabel?.toLowerCase()].filter(Boolean).join(" · ")] : failedLabel ? ["warn", failedLabel] : updating ? ["updating", "Updating"] : isBehind(wallet) ? ["", "Catching up"] : ["live", "Live"]
+  return (
+    <div className="status-corner">
+      {!problem && lines.length === 0 ? (
+        <span className={`badge ${kind}`} title={wallet.mode === "demo" ? undefined : detail}>{label}</span>
+      ) : (
+        <details className="status">
+          <summary className={`badge ${kind}`} title={detail}>{label}</summary>
+          <div className="status-details">
+            {problem ? <ProblemNotice problem={problem} className="" /> : null}
+            {lines.map((line) => <p key={line}>{line}</p>)}
+            {problem || failedWallets > 0 ? (
+              <button type="button" className="link" onClick={retry}>
+                Try again
+              </button>
+            ) : null}
+          </div>
+        </details>
+      )}
+    </div>
+  )
 }

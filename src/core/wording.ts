@@ -2,7 +2,7 @@
 // keep their own names, like `leg`, `oracle` and `fifo`: this is only what people read.
 // `Wording.swift` says the same on the Mac, and a test runs both on the same inputs.
 
-import { formatAmount, formatDuration, formatMoney, msBetweenBlocks, shortHash, worth, type OtherToken, type CostLabel, type CurrencyCode, type FoldLeg, type HoldComparison, type Method, type PricedLeg, type PriceSource, type UnseenEth } from "@pricetag/sdk/core"
+import { formatAmount, formatDuration, formatMoney, formatSignedMoney, msBetweenBlocks, shortHash, worth, type OtherToken, type CostLabel, type CurrencyCode, type FoldLeg, type HoldComparison, type Method, type PricedLeg, type PriceSource, type UnseenEth } from "@pricetag/sdk/core"
 import type { Mode } from "./api.ts"
 import type { ValueGaps } from "./attention.ts"
 import type { ReadFailure } from "./read-failure.ts"
@@ -266,8 +266,11 @@ export function holdDifferenceSentence(micros: string, currency: CurrencyCode, e
 }
 
 /** The comparison in a few words, for the line that opens the whole of it. */
-export function holdSummarySentence({ status, differenceMicros, walletEstimated, estimated }: Pick<HoldComparison, "status" | "differenceMicros" | "walletEstimated" | "estimated">, currency: CurrencyCode): string {
-  if (status === "partial") return "Not comparable yet"
+export function holdSummarySentence({ status, differenceMicros, holdMicros, unknownAmounts, walletEstimated, estimated }: Pick<HoldComparison, "status" | "differenceMicros" | "holdMicros" | "unknownAmounts" | "walletEstimated" | "estimated">, currency: CurrencyCode): string {
+  if (status === "partial" && holdMicros !== null) {
+    const leavesOut = unknownAmounts === 0 ? "and the total PnL leaves some things out" : unknownAmounts === 1 ? "leaving out 1 amount" : `leaving out ${unknownAmounts.toLocaleString("en-US")} amounts`
+    return `Partial: ${estimated ? "about " : ""}${formatSignedMoney(holdMicros, currency)} holding ETH, ${leavesOut}`
+  }
   return status === "complete" && differenceMicros !== null ? holdDifferenceSentence(differenceMicros, currency, walletEstimated || estimated) : "Not available yet"
 }
 
