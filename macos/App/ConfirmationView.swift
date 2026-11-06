@@ -18,6 +18,13 @@ extension EnvironmentValues {
     @Entry var confirmationHeightLimit: CGFloat?
     /// Under a title bar with nothing in it but the close button, which is space enough above what's being approved.
     @Entry var isBelowTitleBar = false
+    /// What's being approved, as VoiceOver says it, for the button that lets Touch ID ask. See `TouchIDFooter`.
+    @Entry var approvalSummary: Text?
+}
+
+extension ApprovalPrompt {
+    /// Whether an approval waits for the user to say they've heard it before Touch ID can ask, which only matters with VoiceOver on.
+    static var needsReview: Bool { NSWorkspace.shared.isVoiceOverEnabled }
 }
 
 enum ConfirmationHero {
@@ -96,6 +103,7 @@ struct ConfirmationView<Footer: View>: View {
                     }
                 }
                 footer
+                    .environment(\.approvalSummary, spokenSummary)
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 20)
@@ -130,7 +138,7 @@ struct ConfirmationView<Footer: View>: View {
         case .spendingMoney:
             Label(HotWalletWording.title, systemImage: "banknote")
                 .font(.headline)
-                .foregroundStyle(.secondary)
+                .secondaryText()
         }
     }
 
@@ -145,7 +153,7 @@ struct ConfirmationView<Footer: View>: View {
                     Text(symbol)
                         .font(.displaySmall)
                         .fontWeight(.medium)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                 }
                 .monospacedDigit()
                 .lineLimit(1)
@@ -162,11 +170,28 @@ struct ConfirmationView<Footer: View>: View {
             if let worth {
                 Text(worth)
                     .font(.title3)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .monospacedDigit()
             }
         }
         .frame(maxWidth: .infinity)
+        // The whole amount and what it's worth, in one go, so neither can be missed.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(heroSpoken)
+        .accessibilityAddTraits(.isHeader)
+    }
+
+    /// The amount and every row, with each address a character at a time. The button that lets Touch ID ask says all of it again.
+    private var spokenSummary: Text {
+        rows.reduce(Text(heroSpoken)) { $0 + Text(". ") + RowView.spoken($1) }
+    }
+
+    private var heroSpoken: String {
+        let what = switch hero {
+        case .amount(let amount, let symbol): "\(amount) \(symbol)"
+        case .words(let words): words
+        }
+        return [Spoken.text(what.trimmingCharacters(in: .whitespaces)), worth.map(Spoken.text)].compactMap { $0 }.joined(separator: ", ")
     }
 
     private var rowsBox: some View {
@@ -234,6 +259,8 @@ private struct RowView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .textSelection(.enabled)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Self.spoken(row))
         } else {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 label
@@ -244,12 +271,20 @@ private struct RowView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Self.spoken(row))
         }
+    }
+
+    /// What it's called, whose it is, then what it says. An address goes a character at a time, because that's what's being checked.
+    static func spoken(_ row: ConfirmationRow) -> Text {
+        guard row.isAddress else { return Text("\(row.label), \(Spoken.text(row.value))") }
+        return Text(([row.label, row.name].compactMap { $0 } + [""]).joined(separator: ", ")) + Text(Spoken.address(row.value)).speechSpellsOutCharacters()
     }
 
     private var label: some View {
         Text(row.label)
-            .foregroundStyle(.secondary)
+            .secondaryText()
             .fixedSize()
     }
 
@@ -308,6 +343,8 @@ private struct StrongWarning: View {
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(.red, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Warning: \(text)")
     }
 }
 
@@ -320,11 +357,14 @@ struct TouchIDFooter: View {
     let doing: String
     /// "Reject" or "Cancel". One click, and Escape does the same.
     let leaveTitle: String
+    /// The warning that "I Trust This Site" says yes to. It's part of the button's label, so it's heard by whoever goes straight to the button.
+    var acknowledges = ""
     /// What a cancelled Touch ID left undone, beside the way to ask again.
     var cancelled = "Touch ID was cancelled, so nothing happened."
     let leave: () -> Void
 
     @State private var isArmed = false
+    @Environment(\.approvalSummary) private var summary
 
     var body: some View {
         HStack(spacing: 14) {
@@ -345,18 +385,26 @@ struct TouchIDFooter: View {
             isArmed = true
         }
         .motion(Motion.state, value: gate.phase)
+        // What changes here changes without focus moving, so VoiceOver says it.
+        .onChange(of: gate.phase) { _, phase in
+            switch phase {
+            case .working: AccessibilityNotification.Announcement(doing).post()
+            case .stopped(let reason): AccessibilityNotification.Announcement(reason ?? "Nothing happened").post()
+            default: break
+            }
+        }
     }
 
     @ViewBuilder
     private var content: some View {
         switch gate.phase {
-        case .needsAcknowledgment:
+        case .needsAcknowledgment, .needsReview:
             Image(systemName: "touchid")
                 .font(.system(size: 28))
                 .foregroundStyle(.tertiary)
                 .accessibilityHidden(true)
             Text("Touch ID is next")
-                .foregroundStyle(.secondary)
+                .secondaryText()
         case .waiting, .asking:
             if gate.prompt.isSystemDialog {
                 Label("Confirm in the dialog", systemImage: "lock.fill")
@@ -391,6 +439,12 @@ struct TouchIDFooter: View {
         }
     }
 
+    /// A button that lets Touch ID ask, then the warning it says yes to, then everything being approved.
+    private func spokenLabel(_ title: String, warning: String) -> Text {
+        let lead = Text(warning.isEmpty ? "\(title): " : "\(title). Warning: \(warning) Approving: ")
+        return summary.map { lead + $0 } ?? Text(title)
+    }
+
     /// Calls off the prompt before anything else, so nothing the user's just left can still go through.
     private func backOut() {
         if gate.backOut() { leave() }
@@ -402,9 +456,19 @@ struct TouchIDFooter: View {
         case .needsAcknowledgment:
             Button("I Trust This Site", action: gate.acknowledge)
                 .disabled(!isArmed)
+                // In the label and not a hint, because hints can be off, and the label is read the moment it's reached.
+                .accessibilityLabel(spokenLabel("I Trust This Site", warning: acknowledges))
             Button(leaveTitle, action: backOut)
                 .keyboardShortcut(.cancelAction)
                 .buttonStyle(.borderedProminent)
+        case .needsReview:
+            // Only with VoiceOver on. Touch ID waits for this, however long hearing the amount and the whole address takes.
+            Button(leaveTitle, action: backOut)
+                .keyboardShortcut(.cancelAction)
+            Button("Ready for Touch ID", action: gate.reviewed)
+                .buttonStyle(.borderedProminent)
+                .disabled(!isArmed)
+                .accessibilityLabel(spokenLabel("Ready for Touch ID to \(verb)", warning: ""))
         case .waiting, .asking:
             Button(leaveTitle, action: backOut)
                 .keyboardShortcut(.cancelAction)
@@ -459,6 +523,7 @@ struct ProgressFooter: View {
         .padding(.vertical, 8)
         .softBox(cornerRadius: 18)
         .animation(Motion.state, value: stage)
+        .onChange(of: text) { AccessibilityNotification.Announcement(text).post() }
         .sensoryFeedback(.success, trigger: stage) { _, stage in
             if case .finished = stage { true } else { false }
         }

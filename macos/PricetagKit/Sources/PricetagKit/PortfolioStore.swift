@@ -80,7 +80,16 @@ public struct ExplanationRequest: Hashable, Sendable {
 @MainActor
 @Observable
 public final class PortfolioStore {
-    public static let defaultServerURL = URL(string: "http://127.0.0.1:8787")!
+    /// The server `pnpm mac` runs on this Mac.
+    nonisolated public static let localServerURL = URL(string: "http://127.0.0.1:8787")!
+    /// Patina's own server when the build names one, in `PATINA_SERVER_HOST`, and otherwise the one on this Mac.
+    nonisolated public static let defaultServerURL = hostedServerURL(host: Bundle.main.object(forInfoDictionaryKey: "PatinaServerHost") as? String) ?? localServerURL
+
+    /// Only ever over HTTPS, since it's someone else's machine. Nil for a build that doesn't name one.
+    nonisolated public static func hostedServerURL(host: String?) -> URL? {
+        guard let host = host?.trimmingCharacters(in: .whitespaces), !host.isEmpty, host.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" }) else { return nil }
+        return URL(string: "https://\(host)")
+    }
     /// Past this, the newest block is too old to call live.
     static let behindAfterSeconds = 120
     /// As long as a read of a wallet the server hasn't read yet can take.
@@ -89,7 +98,12 @@ public final class PortfolioStore {
     /// What the store holds, which may not be current: read `feed` before calling it live. While a new wallet's, method's, currency's
     /// or rule's numbers are on their way, the feed is `.reading` and this holds the last ones known, so the screen doesn't go blank.
     /// They're always this wallet's, though they can be by the last method, currency or rule it was read in.
-    public private(set) var portfolio: Portfolio?
+    public private(set) var portfolio: Portfolio? {
+        didSet { portfolioRevision &+= 1 }
+    }
+    /// Goes up each time `portfolio` is replaced, however that happens: a read, the last read on the server, or what's kept from
+    /// before. `updatedAt` only changes with a fresh read, so whatever's worked out from `portfolio` keys on this instead.
+    public private(set) var portfolioRevision = 0
     public private(set) var feed: FeedState
     /// When the read that's running now started, so a long one can say how long it's been, including a retry after a failure. nil between reads.
     /// A change starts a new read, so it starts this over. A read that waits longer on the same request keeps it.
@@ -108,6 +122,9 @@ public final class PortfolioStore {
     /// What one USD buys right now in `currency`, for what isn't part of a wallet's own read. Nil in USD, or with no current rate.
     private var currentRate: CurrentRate?
     public private(set) var serverURL: URL
+    /// What the server at `serverURL` knows this person by, or nil. Each invite belongs to the server it was given for, so it never
+    /// follows the user to another one, and it's only sent over HTTPS.
+    public private(set) var invite: String?
     /// What the user has said about where things came from. It stays on this device.
     private var answers: Book
     /// What each answer replaced, newest last, so Undo is always there. Accounts aren't in here, so it can't bring back one that's gone.
@@ -134,11 +151,12 @@ public final class PortfolioStore {
     /// Taken off the list, but still the user's, so costs keep following their money.
     public private(set) var hiddenWallets: [String]
 
-    @ObservationIgnored private var source: any PortfolioSource
+    @ObservationIgnored private(set) var source: any PortfolioSource
     @ObservationIgnored private var cache: PortfolioCache
     /// Something changed, so the server can answer from what it last read while the real read runs.
     @ObservationIgnored private var wantsLastRead = true
-    @ObservationIgnored private let makeSource: @Sendable (URL) -> any PortfolioSource
+    /// Nil reads the server with the invite.
+    @ObservationIgnored private let customSource: (@Sendable (URL) -> any PortfolioSource)?
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private let reachableDelay: Duration
@@ -163,7 +181,8 @@ public final class PortfolioStore {
         defaults: UserDefaults = .standard,
         /// Where each wallet's last numbers stay across launches, or nil to keep them only in memory.
         cacheDirectory: URL? = nil,
-        makeSource: @escaping @Sendable (URL) -> any PortfolioSource = { PricetagClient(serverURL: $0) },
+        /// Nil reads the server with its invite in `defaults`.
+        makeSource: (@Sendable (URL) -> any PortfolioSource)? = nil,
         now: @escaping @Sendable () -> Date = { Date() },
         reachableDelay: Duration = .seconds(2),
         unreachableDelay: Duration = .seconds(5),
@@ -174,7 +193,7 @@ public final class PortfolioStore {
     ) {
         self.rateRetryDelay = rateRetryDelay
         self.defaults = defaults
-        self.makeSource = makeSource
+        self.customSource = makeSource
         self.now = now
         self.reachableDelay = reachableDelay
         self.unreachableDelay = unreachableDelay
@@ -188,6 +207,8 @@ public final class PortfolioStore {
         self.holdingsSort = defaults.string(forKey: Keys.holdingsSort).flatMap(HoldingsSort.init(rawValue:)) ?? .largestFirst
         self.menuBarShows = defaults.string(forKey: Keys.menuBar).flatMap(MenuBarShows.init(rawValue:)) ?? .value
         self.serverURL = serverURL
+        let invite = Self.invites(in: defaults)[Self.origin(of: serverURL)]
+        self.invite = invite
         let answers = defaults.data(forKey: Keys.book).flatMap { try? JSONDecoder().decode(Book.self, from: $0) } ?? Book()
         self.answers = answers
         self.answerDetails = (defaults.data(forKey: Keys.answerDetails).flatMap { try? JSONDecoder().decode(AnswerDetails.self, from: $0) } ?? AnswerDetails()).keeping(answers)
@@ -203,7 +224,7 @@ public final class PortfolioStore {
         self.hiddenWallets = defaults.stringArray(forKey: Keys.hiddenWallets) ?? []
         self.feed = address == nil ? .noWallet : .reading
         if address != nil { readingSince = now() }
-        self.source = makeSource(serverURL)
+        self.source = makeSource?(serverURL) ?? PricetagClient(serverURL: serverURL, invite: invite)
         self.cache = PortfolioCache(directory: cacheDirectory, now: now())
         if address != nil { portfolio = lastKnown() }
     }
@@ -595,6 +616,19 @@ public final class PortfolioStore {
     }
 
     /// The numbers on screen aren't what they'd be now, so they can't be called live, and the next ones are on their way.
+    /// Who an invite is for: the scheme, host and port, which is what a browser would call the same site.
+    nonisolated public static func origin(of url: URL) -> String {
+        "\(url.scheme?.lowercased() ?? "")://\(url.host()?.lowercased() ?? "")\(url.port.map { ":\($0)" } ?? "")"
+    }
+
+    private static func invites(in defaults: UserDefaults) -> [String: String] {
+        defaults.dictionary(forKey: Keys.invites) as? [String: String] ?? [:]
+    }
+
+    private func makeSource(_ url: URL) -> any PortfolioSource {
+        customSource?(url) ?? PricetagClient(serverURL: url, invite: Self.invites(in: defaults)[Self.origin(of: url)])
+    }
+
     private func answersChanged() {
         if address != nil { feed = .reading }
         wantsLastRead = true
@@ -642,12 +676,27 @@ public final class PortfolioStore {
         guard url != serverURL else { return }
         serverURL = url
         defaults.set(url.absoluteString, forKey: Keys.server)
+        invite = Self.invites(in: defaults)[Self.origin(of: url)]
         source = makeSource(url)
         rules = []
         // Another server's numbers can be different facts, so these aren't kept even for a moment. What's known is this server's own.
         portfolio = lastKnown()
         currentRate = nil
         updatedAt = nil
+        answersChanged()
+    }
+
+    /// The same server's numbers, so what's on screen stays while it's asked again with the invite.
+    public func setInvite(_ value: String?) {
+        let value = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let next = value?.isEmpty == false ? value : nil
+        guard next != invite else { return }
+        invite = next
+        var invites = Self.invites(in: defaults)
+        invites[Self.origin(of: serverURL)] = next
+        defaults.set(invites, forKey: Keys.invites)
+        source = makeSource(serverURL)
+        rules = []
         answersChanged()
     }
 
@@ -930,6 +979,7 @@ public final class PortfolioStore {
         static let currency = "currency"
         static let menuBar = "menuBarShows"
         static let server = "serverURL"
+        static let invites = "serverInvites"
         static let book = "answers"
         static let answerDetails = "answerDetails"
         static let rule = "pricingRule"

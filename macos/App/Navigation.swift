@@ -54,6 +54,7 @@ final class Navigation {
         didSet { if section != oldValue { forgetDetails() } }
     }
     var chartRange: ChartRange = .all
+    var chartMetric: ChartMetric = .pnl
     /// The number being explained in the details.
     var target: ExplainTarget? {
         didSet { if target == nil, let oldValue { closedTarget = oldValue } }
@@ -95,6 +96,8 @@ final class Navigation {
     /// Where to go back to once those questions close.
     private(set) var returnWallet: String?
     var isExporting = false
+    /// ⌘F was pressed. The transactions' search field takes it from here.
+    var wantsSearch = false
     /// A notification was clicked. Spending Money scrolls to its row and lights it up, and the window opens if it's closed.
     var shownRow: String?
 
@@ -155,6 +158,12 @@ final class Navigation {
     func addSavings() {
         showSpendingMoney()
         wantsAddSavings = true
+    }
+
+    /// Goes to the transactions and puts the cursor in their search field.
+    func findTransactions() {
+        section = .transactions
+        wantsSearch = true
     }
 
     /// Goes to spending money and shows one of its rows, which it scrolls to once the page is on screen.

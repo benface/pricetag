@@ -38,11 +38,12 @@ struct ReceiveSheet: View {
                 }
                 .font(.title3.monospaced())
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel(address.checksummed)
+                // A character at a time, as it's checked against what the sender pasted.
+                .accessibilityLabel(Text("This wallet's address, ") + Text(Spoken.address(address.checksummed)).speechSpellsOutCharacters())
                 .contextMenu { AddressActions(address: address.checksummed) }
                 Text(HotWalletWording.receiveNote(cap: wallet.capText, hasDestination: wallet.settings.sweepDestination != nil))
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             }

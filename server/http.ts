@@ -45,11 +45,14 @@ function serveStatic(req: IncomingMessage, res: ServerResponse, dist: string) {
     .pipe(res)
 }
 
-export function createHandler(handleApi: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>, dist: string) {
+/** `dist` is null for a server that only answers the API, which a hosted one is by default. */
+export function createHandler(handleApi: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>, dist: string | null) {
   return (req: IncomingMessage, res: ServerResponse) => {
     handleApi(req, res)
       .then((handled) => {
-        if (!handled) serveStatic(req, res, dist)
+        if (handled) return
+        if (dist) serveStatic(req, res, dist)
+        else sendText(res, 404, "Not found")
       })
       .catch((error: unknown) => {
         console.error("Request failed:", error instanceof Error ? error.message : String(error))

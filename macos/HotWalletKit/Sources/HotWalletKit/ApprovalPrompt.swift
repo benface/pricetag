@@ -18,6 +18,8 @@ public enum ApprovalResult: Equatable, Sendable {
 public final class ApprovalPrompt {
     public enum Phase: Equatable, Sendable {
         case needsAcknowledgment
+        /// With VoiceOver on, nothing is asked until the user says they've heard what's being approved, however long reading it takes.
+        case needsReview
         /// It's coming: the window has to be in front, and it gives the user a moment.
         case waiting
         case asking
@@ -54,14 +56,16 @@ public final class ApprovalPrompt {
     private let sleep: @Sendable (Duration) async throws -> Void
     private let perform: (_ prompt: PresencePrompt, _ acknowledged: Bool) async -> ApprovalResult
 
+    /// `needsReview` is for VoiceOver: hearing an amount and a whole address takes longer than any moment this could wait.
     public init(
         needsAcknowledgment: Bool = false,
+        needsReview: Bool = false,
         notBefore: @escaping () -> Date? = { nil },
         now: @escaping () -> Date = { Date() },
         sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
         perform: @escaping (_ prompt: PresencePrompt, _ acknowledged: Bool) async -> ApprovalResult
     ) {
-        storedPhase = needsAcknowledgment ? .needsAcknowledgment : .waiting
+        storedPhase = needsAcknowledgment ? .needsAcknowledgment : needsReview ? .needsReview : .waiting
         self.notBefore = notBefore
         self.now = now
         self.sleep = sleep
@@ -88,6 +92,13 @@ public final class ApprovalPrompt {
     public func acknowledge() {
         guard phase == .needsAcknowledgment else { return }
         wasAcknowledged = true
+        storedPhase = .waiting
+        askAfterAMoment()
+    }
+
+    /// The user has heard what's being approved. A strong warning's acknowledgment counts as this too, since saying yes to it comes after hearing it.
+    public func reviewed() {
+        guard phase == .needsReview else { return }
         storedPhase = .waiting
         askAfterAMoment()
     }

@@ -15,7 +15,7 @@ struct SiteApprovalWindow: View {
             if let failure = bridge.failure {
                 SiteFailureView(failure: failure) { bridge.dismissFailure() }
             } else if let approval = bridge.current {
-                SiteApprovalView(approval: approval, waitingBehind: bridge.pending.count - 1, money: bridge.money, gate: ApprovalPrompt(needsAcknowledgment: approval.needsAcknowledgment, notBefore: { bridge.nextPromptAt }) { prompt, acknowledged in
+                SiteApprovalView(approval: approval, waitingBehind: bridge.pending.count - 1, money: bridge.money, gate: ApprovalPrompt(needsAcknowledgment: approval.needsAcknowledgment, needsReview: ApprovalPrompt.needsReview, notBefore: { bridge.nextPromptAt }) { prompt, acknowledged in
                     await bridge.approve(approval.id, acknowledged: acknowledged, in: prompt)
                 }) {
                     Task { await bridge.approve(approval.id) }
@@ -62,7 +62,7 @@ struct SiteApprovalView: View {
                 if case .connect = approval.action {
                     ConnectFooter(connect: connect, reject: reject)
                 } else {
-                    TouchIDFooter(gate: gate, verb: verb, doing: isMessage ? "Signing…" : "Sending…", leaveTitle: "Reject", cancelled: "Touch ID was cancelled, so nothing was \(isMessage ? "signed" : "sent").", leave: reject)
+                    TouchIDFooter(gate: gate, verb: verb, doing: isMessage ? "Signing…" : "Sending…", leaveTitle: "Reject", acknowledges: approval.warnings.filter(\.isStrong).map(\.text).joined(separator: " "), cancelled: "Touch ID was cancelled, so nothing was \(isMessage ? "signed" : "sent").", leave: reject)
                 }
                 if waitingBehind > 0 {
                     Text("\(waitingBehind) more waiting")
@@ -265,7 +265,7 @@ struct SiteFailureView: View {
                 .textSelection(.enabled)
             if failure.isTransaction {
                 Text("Nothing was sent, so no money moved.")
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
             }
             HStack {
                 Spacer()
