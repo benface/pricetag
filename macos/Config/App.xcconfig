@@ -23,6 +23,8 @@ MACOSX_DEPLOYMENT_TARGET = 27.0
 SWIFT_VERSION = 6.0
 SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor
 SWIFT_APPROACHABLE_CONCURRENCY = YES
+// The only thing copied is the bridge host, which is signed, so it can't be stripped here and Xcode warns each time it's asked to.
+COPY_PHASE_STRIP = NO
 // This target's only script is copy-device-pages.sh, which copies a folder whose files aren't known until it's built. The sandbox only allows named files.
 ENABLE_USER_SCRIPT_SANDBOXING = NO
 

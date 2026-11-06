@@ -174,12 +174,12 @@ import Testing
 
     @Test func aReportReplacesAnEarlierFailure() async throws {
         let report = try resource("demo-tax-report", as: TaxReport.self)
-        var answer: Result<TaxReport, FetchError> = .failure(.unreachable)
-        let model = model(fetch: { _ in try answer.get() })
+        let answer = Answer()
+        let model = model(fetch: { _ in try answer.result.get() })
         let request = model.request(address: "demo", currency: .CAD, serverURL: server)!
         await model.load(request)
         #expect(model.state == .failed(Wording.cantReachServer))
-        answer = .success(report)
+        answer.result = .success(report)
         await model.load(request)
         #expect(model.state == .ready(report))
     }
@@ -233,4 +233,9 @@ import Testing
         #expect(document.csv == report.csv)
         #expect(document.filename == report.filename)
     }
+}
+
+@MainActor
+private final class Answer {
+    var result: Result<TaxReport, FetchError> = .failure(.unreachable)
 }
