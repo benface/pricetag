@@ -7,7 +7,7 @@
 import { applyLegTaking, emptyPosition, foldWallet, unconfirmedAssets, formatAmount, formatPaid, historyGaps, lessPaidAt, normalizeAddress, orderMatters, plainAmount, sharePaidAt, shortHash, usableAnswer, usdView, viewWallet, withoutCurrency, worth, type CostPiece, type CurrencyCode, type HistoryGap, type HoldComparison, type MarkPrice, type Method, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import { NO_FACTS, legsByTransaction, transactionFacts } from "./activity.ts"
 import type { BookPoint, BookPreview, WalletResponse } from "./api.ts"
-import { costKey, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type Money, type Purchase, type Receipt, type SenderAnswer } from "./book.ts"
+import { costKey, isDemoWallet, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type Money, type Purchase, type Receipt, type SenderAnswer } from "./book.ts"
 import { matchWithdrawals, type ExchangeArrival } from "./exchange-import.ts"
 import { MINT_ADDRESS, knownSender, type KnownSender } from "./senders.ts"
 import { describeTransaction, purchaseSource } from "./wording.ts"
@@ -287,10 +287,11 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
 
     const pending: OpenItem[] = []
     const unvouched: { sender: string; settled: boolean }[] = []
+    const outsideDemo: string[] = []
     const pieces = (sources ?? []).flatMap(({ address: sender, units: part }): CostPiece[] => {
       const unknown: CostPiece = { qty: part.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0" }
       const answer = book.senders[sender]
-      if (sender === address || (linked.has(sender) && isOwnWallet(book, wallet))) {
+      if (sender === address || walletsBehind(book, wallet).includes(sender)) {
         if (!read.has(sender)) {
           unvouched.push({ sender, settled: false })
           return [unknown]
@@ -318,7 +319,9 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
         const cost = worth(part, BigInt(leg.priceMicros), leg.decimals).toString()
         return [{ qty: part.toString(), costMicros: cost, label: "received at market", estimatedCostMicros: cost, ...(given ? { givenCostMicros: cost } : {}) }]
       }
-      pending.push({ wallet: address, leg, sender, units: part })
+      // Answered already, and answering again wouldn't change anything, because the demo never reads this wallet.
+      if (answer?.kind === "mine" && isDemoWallet(address)) outsideDemo.push(sender)
+      else pending.push({ wallet: address, leg, sender, units: part })
       return [unknown]
     })
 
@@ -337,6 +340,7 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     // Only once it's settled, or a card could appear for an unread balance and vanish when it's read.
     const settled = unvouched.filter((w) => w.settled)
     if (settled.length > 0) open.push({ wallet: address, leg, sender: null, units, evidence: settled.map((w) => `${shortHash(w.sender)}, your wallet, sent ${sources.length === 1 ? "" : "some of "}this, and its ${leg.asset} history can't be confirmed`) })
+    if (outsideDemo.length > 0) open.push({ wallet: address, leg, sender: null, units, evidence: outsideDemo.map((sender) => `You've said ${shortHash(sender)} is your wallet, but the demo only reads its own wallets, so what it paid can't carry over`) })
     return withPieces(leg, pieces)
   }
 

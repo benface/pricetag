@@ -139,8 +139,9 @@ struct MacApp: App {
                     .keyboardShortcut("r", modifiers: .command)
             }
             CommandGroup(after: .textEditing) {
-                MainWindowCommand("Find Transactions…") { navigation.findTransactions() }
+                MainWindowCommand(navigation.findTitle) { navigation.find() }
                     .keyboardShortcut("f", modifiers: .command)
+                    .disabled(!navigation.canFind)
             }
             CommandMenu("Wallet") {
                 WalletCommands(store: store, hotWallet: hotWallet, navigation: navigation)

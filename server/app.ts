@@ -364,8 +364,6 @@ export function createApi(env: Env, created: Created | null = createSource(env),
         const read = from.peek(address)
         wallet = read && rule ? { ...read, rule: rule.rule.id, ruleNote: rule.note } : read
       }
-      // With no data source, only the demo's own wallets can ever be read, so this one isn't still reading.
-      if (!wallet && !wallets) linkedFailures.add(address)
       if (!wallet) continue
       const converted = await inCurrency(wallet, currency, res, books)
       if (!converted) return null

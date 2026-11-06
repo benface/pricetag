@@ -266,6 +266,11 @@ private nonisolated final class SceneDefaults: UserDefaults, @unchecked Sendable
 
 enum TestScene: String, CaseIterable {
     case main
+    /// ⌘F on the overview, with what was typed, below the chart in a small window.
+    case mainHoldingsSearch = "main-holdings-search"
+    case mainHoldingsSearchSmall = "main-holdings-search-small"
+    case mainHoldingsSearchNarrow = "main-holdings-search-narrow"
+    case mainHoldingsSearchNone = "main-holdings-search-none"
     case mainTransactions = "main-transactions"
     case mainAllYours = "main-all-yours"
     case mainAllYoursTransactions = "main-all-yours-transactions"
@@ -453,6 +458,7 @@ enum TestScene: String, CaseIterable {
     case hotWalletNoSavings = "hot-wallet-no-savings"
     case hotWalletNoSavingsCAD = "hot-wallet-no-savings-cad"
     case hotWalletNoPrice = "hot-wallet-no-price"
+    case hotWalletNothingToSweep = "hot-wallet-nothing-to-sweep"
     case hotWalletOverCap = "hot-wallet-over-cap"
     case hotWalletOverCapCAD = "hot-wallet-over-cap-cad"
     case hotWalletOverCapNoSavings = "hot-wallet-over-cap-no-savings"
@@ -615,6 +621,7 @@ enum TestScene: String, CaseIterable {
     case motionPurchase = "motion-purchase"
     case motionCostKnown = "motion-cost-known"
     case motionDetails = "motion-details"
+    case motionWalletUndo = "motion-wallet-undo"
 
     var isAboutMotion: Bool { rawValue.hasPrefix("motion") }
     /// Every wallet that's yours as one, from the demo's two wallets.
@@ -629,7 +636,7 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .motionChartDraw, .motionChartRange, .motionChartMetric, .motionChartScrub, .motionSend, .motionPurchase, .chartHover, .chartGapsHover:
             .none
-        case .walletSwitcherNote, .walletSwitcherNewKey, .walletSwitcherAllYours, .spendingMoneySetupSheet, .taxReport, .taxReportAddedWallet, .taxReportOtherWallets, .taxReportLeftOver, .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .popoverLongName, .popoverLongNameReading, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolvePublishFromDevice, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverUpdating, .popoverServerDown, .popoverPricesDown, .popoverRetrying, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance, .menuBarLabel,
+        case .motionWalletUndo, .walletSwitcherNote, .walletSwitcherNewKey, .walletSwitcherAllYours, .spendingMoneySetupSheet, .taxReport, .taxReportAddedWallet, .taxReportOtherWallets, .taxReportLeftOver, .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .popoverLongName, .popoverLongNameReading, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolvePublishFromDevice, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverUpdating, .popoverServerDown, .popoverPricesDown, .popoverRetrying, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance, .menuBarLabel,
              .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsKeystoneWalked, .addSavingsOtherPaste, .addSavingsPicked, .addSavingsPickedCheck, .addSavingsCheckStartsSweeps, .addSavingsCheckBalanceUnread, .addSavingsCheckFirstWallet, .addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere, .receive, .receiveNoSavings, .receiveCAD, .receiveNotSetUp, .receiveAlarm, .buy, .buyCAD, .buyCADAboveRoom, .buyCADTooLittle, .buyNoRate, .buyAboveRoom, .buyLarge, .buyAtCap, .buyUSDCNoGas, .buyNoWallet, .buyTooLittle, .buyNegative, .buyNoSavings, .buyNoSavingsAboveRoom, .buyNoSavingsAtCap, .buyNoSavingsCAD, .buyFirstRead, .buyReading, .buyNoSavingsFirstRead, .buyNoSavingsAtCapFirstRead, .buyNotSetUp, .buyCantReachProvider, .buyRefused, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpNoSavings, .hotWalletTopUpNoSavingsAtCap, .hotWalletTopUpCAD, .hotWalletTopUpSafari, .hotWalletTopUpNoChromium,
              .publishFromDevice, .publishFromDeviceSafari, .publishFromDeviceNoChromium, .send, .sendCAD, .sendKnown, .sendPicking, .sendSearching, .sendPicked, .sendTypo, .sendShortened, .sendTyping, .sendWaiting, .sendReviewing, .sendGoing, .sendSent, .sendStopped, .sendMoney, .sendMoneyCAD, .sendLookalike, .sendLookalikeChecked, .sendRefused, .sweep, .sweepCAD, .sweepStopped, .revoke, .revokeOne, .siteSend, .siteSendToken, .siteLongAmount, .siteCall, .siteApprove, .siteUnlimited, .siteUnlimitedAcknowledged, .siteMessage, .siteMessageUnreadable, .siteStopped, .siteNext, .siteBehind, .siteRefocused, .siteSending, .siteSent, .siteSigning, .siteSigned, .siteFailure, .siteFailureMessage, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
             .none
@@ -688,7 +695,7 @@ enum TestScene: String, CaseIterable {
 
     private var shownWallet: String? {
         switch self {
-        case .taxReportAddedWallet, .taxReportOtherWallets, .taxReportLeftOver, .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .mainWatchingNamed, .mainWatchingNamedSmallest, .popoverLongName, .popoverLongNameReading: TestScene.namedWallet
+        case .motionWalletUndo, .taxReportAddedWallet, .taxReportOtherWallets, .taxReportLeftOver, .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .mainWatchingNamed, .mainWatchingNamedSmallest, .popoverLongName, .popoverLongNameReading: TestScene.namedWallet
         case .walletSwitcherLong: TestScene.manyWallets.last?.address
         case .mainShowingSpendingMoney, .mainTransactionsSending, .mainSpendingMoney, .mainSpendingMoneySmall, .mainSpendingMoneyServerDown, .routeRemoveFromSavingsOpen, .mainEmptySpendingMoney, .mainEmptySpendingMoneySmallest: HotWalletFixture.spending.lowercased
         case .mainSavings, .mainEmptySavings, .securitySavings: HotWalletFixture.savings.lowercased
@@ -701,7 +708,7 @@ enum TestScene: String, CaseIterable {
 
     private var listsWallets: Bool {
         switch self {
-        case .mainAllYours, .mainAllYoursTransactions, .mainAllYoursDetails, .walletSwitcherAllYours, .walletSwitcherNewKey, .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .mainShowingSpendingMoney, .mainSavings, .mainWatching, .mainWatchingNamed, .mainWatchingNamedSmallest, .popoverLongName, .popoverLongNameReading, .sendPicking, .sendSearching, .sendPicked, .sendTypo, .sendShortened, .sendTyping, .sendLookalike, .sendLookalikeChecked, .addSavingsOtherPaste, .addSavingsLedgerPaste, .addSavingsKeystoneType, .addSavingsPicked, .addSavingsPickedCheck, .mainNoWalletSaved, .mainNoWalletSavedSmall, .taxReportOtherWallets, .taxReportLeftOver, .settingsAnswers, .mainSecurity, .security, .securitySavings: true
+        case .motionWalletUndo, .mainAllYours, .mainAllYoursTransactions, .mainAllYoursDetails, .walletSwitcherAllYours, .walletSwitcherNewKey, .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .mainShowingSpendingMoney, .mainSavings, .mainWatching, .mainWatchingNamed, .mainWatchingNamedSmallest, .popoverLongName, .popoverLongNameReading, .sendPicking, .sendSearching, .sendPicked, .sendTypo, .sendShortened, .sendTyping, .sendLookalike, .sendLookalikeChecked, .addSavingsOtherPaste, .addSavingsLedgerPaste, .addSavingsKeystoneType, .addSavingsPicked, .addSavingsPickedCheck, .mainNoWalletSaved, .mainNoWalletSavedSmall, .taxReportOtherWallets, .taxReportLeftOver, .settingsAnswers, .mainSecurity, .security, .securitySavings: true
         default: false
         }
     }
@@ -720,7 +727,7 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .hotWalletNotProvisioned, .popoverNotProvisioned, .mainNoWalletNotProvisioned: .notProvisioned
         case .hotWalletUnreadable: .unreadableRecords
-        case .mainAllYours, .mainAllYoursTransactions, .mainAllYoursDetails, .walletSwitcherAllYours, .routeRemoveFromSavingsOpen, .mainSpendingMoneyServerDown, .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .mainShowingSpendingMoney, .mainTransactionsSending, .mainSavings, .mainWatching, .mainWatchingNamed, .mainWatchingNamedSmallest, .routeBuy, .routeBuyOpen, .routeAddSavings, .routeSend, .routeSendOpen, .routeTopUp, .routeTopUpOpen, .mainSpendingMoney, .mainSpendingMoneySmall, .hotWallet, .hotWalletRecordShown, .hotWalletCAD, .mainNoWalletHasSpendingMoney, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletProblem, .settingsHotWalletCAD, .settingsHotWalletNoRate, .hotWalletNoRate, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsKeystoneWalked, .addSavingsOtherPaste, .addSavingsPicked, .addSavingsPickedCheck, .addSavingsFinishedElsewhere, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpCAD, .hotWalletTopUpSafari, .hotWalletTopUpNoChromium, .send, .sendCAD, .sendKnown, .sendPicking, .sendSearching, .sendPicked, .sendTypo, .sendShortened, .sendTyping, .sendWaiting, .sendReviewing, .sendGoing, .sendSent, .sendStopped, .sendMoney, .sendMoneyCAD, .sendLookalike, .sendLookalikeChecked, .sendRefused, .sweep, .sweepCAD, .sweepStopped, .mainSecurity, .security, .securitySavings, .securityDemo, .securityReading, .securityStale, .revoke, .revokeOne: .funded
+        case .motionWalletUndo, .mainAllYours, .mainAllYoursTransactions, .mainAllYoursDetails, .walletSwitcherAllYours, .routeRemoveFromSavingsOpen, .mainSpendingMoneyServerDown, .walletSwitcher, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .mainShowingSpendingMoney, .mainTransactionsSending, .mainSavings, .mainWatching, .mainWatchingNamed, .mainWatchingNamedSmallest, .routeBuy, .routeBuyOpen, .routeAddSavings, .routeSend, .routeSendOpen, .routeTopUp, .routeTopUpOpen, .mainSpendingMoney, .mainSpendingMoneySmall, .hotWallet, .hotWalletRecordShown, .hotWalletCAD, .mainNoWalletHasSpendingMoney, .popoverHotWallet, .popoverHotWalletCAD, .settingsHotWallet, .settingsHotWalletProblem, .settingsHotWalletCAD, .settingsHotWalletNoRate, .hotWalletNoRate, .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsKeystoneWalked, .addSavingsOtherPaste, .addSavingsPicked, .addSavingsPickedCheck, .addSavingsFinishedElsewhere, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpCAD, .hotWalletTopUpSafari, .hotWalletTopUpNoChromium, .send, .sendCAD, .sendKnown, .sendPicking, .sendSearching, .sendPicked, .sendTypo, .sendShortened, .sendTyping, .sendWaiting, .sendReviewing, .sendGoing, .sendSent, .sendStopped, .sendMoney, .sendMoneyCAD, .sendLookalike, .sendLookalikeChecked, .sendRefused, .sweep, .sweepCAD, .sweepStopped, .mainSecurity, .security, .securitySavings, .securityDemo, .securityReading, .securityStale, .revoke, .revokeOne: .funded
         case .siteConnect, .buy, .buyFirstRead, .buyReading, .buyCAD, .buyCADAboveRoom, .buyCADTooLittle, .buyNoRate, .hotWalletPurchasesCAD, .buyAboveRoom, .buyLarge, .buyTooLittle, .buyNegative, .buyNotSetUp, .buyCantReachProvider, .buyRefused, .hotWalletPurchases, .hotWalletPurchaseShown, .hotWalletPurchasesCantCheck: .funded
         case .buyUSDCNoGas: .noGas
         case .buyNoSavings, .buyNoSavingsAboveRoom, .buyNoSavingsCAD, .buyNoSavingsFirstRead, .receiveNoSavings, .mainEmptySpendingMoney, .mainEmptySpendingMoneySmallest: .noSavings
@@ -733,6 +740,7 @@ enum TestScene: String, CaseIterable {
         case .hotWalletTwoSavings: .twoSavings
         case .hotWalletTopUpReading: .funded
         case .hotWalletTopUpNoGas: .noGas
+        case .hotWalletNothingToSweep: .nothingToSweep
         case .hotWalletOverCap, .hotWalletOverCapCAD, .popoverHotWalletOverCap, .hotWalletTopUpAtCap, .buyAtCap: .overCap
         case .hotWalletOverCapNoSavings, .hotWalletTopUpNoSavingsAtCap, .buyNoSavingsAtCap, .buyNoSavingsAtCapFirstRead, .addSavingsCheckStartsSweeps, .addSavingsFinishedSweeping: .overCapNoSavings
         case .hotWalletKeyMissing, .popoverHotWalletKeyMissing: .keyMissing
@@ -904,6 +912,8 @@ enum TestScene: String, CaseIterable {
         if self == .walletSwitcherNewKey || self == .mainNoWalletAfterDeleting || isAllYours { store.setLinkedWallets(hotWallet.linkedWallets) }
         let navigation = Navigation(store: store, hotWallet: hotWallet)
         if self == .mainChartWeek { navigation.chartRange = .week }
+        if [.mainHoldingsSearch, .mainHoldingsSearchSmall, .mainHoldingsSearchNarrow].contains(self) { navigation.holdingsQuery = "e" }
+        if self == .mainHoldingsSearchNone { navigation.holdingsQuery = "nothing like this" }
         navigation.chartMetric = TestMode.chartMetric
         if [.mainTransactions, .mainTransactionsCAD, .mainTransactionsSmall, .mainTransactionsUpdating, .mainTransactionsSending, .mainTransactionsBusy, .mainAllYoursTransactions].contains(self) { navigation.section = .transactions }
         if self == .mainTaxReport || self == .mainTaxReportSmall { navigation.section = .taxReport }
@@ -987,6 +997,18 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 1120, height: 760), isReady: isReady, play: {
                 navigation.target = .asset("AERO", .realized)
             })
+        case .motionWalletUndo:
+            store.changeWallet(TestScene.namedWallet, name: "Move to Yours") { store.moveToYours(TestScene.namedWallet) }
+            let switcher = WalletSwitcher(store: store, hotWallet: hotWallet, pendingName: PendingWalletName(), onOpenSpendingMoney: {}, onRemoveFromSavings: { _ in }, onDeleteSpendingMoney: {}, onDone: {})
+            return TestScreen(view: AnyView(switcher.background(.background)), size: CGSize(width: 340, height: 480), isReady: isReady, play: {
+                // What the Edit menu's Undo and Redo call, with nothing around them.
+                Task {
+                    try? await Task.sleep(for: .seconds(0.4))
+                    store.undo()
+                    try? await Task.sleep(for: .seconds(0.8 * Motion.slowdown))
+                    store.redo()
+                }
+            })
         case .increasedContrast:
             return TestScreen(view: AnyView(ContrastScene(store: store)), isReady: isReady)
         case .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .resolveFinished:
@@ -1001,7 +1023,7 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: MainWindow.minimumSize, isReady: isReady)
         case .mainNoWalletHasSpendingMoney, .mainNoWalletNotProvisioned:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 1120, height: 760), isReady: isReady)
-        case .mainAllYours, .mainAllYoursTransactions, .mainAllYoursDetails, .mainNoWalletAfterDeleting, .mainChartWeek, .mainFirstRun, .mainFirstRunDetails, .main, .mainTransactions, .mainTransactionsSending, .mainTransactionsBusy, .mainDetails, .mainHoldDetails, .mainNoWallet, .mainNoWalletSaved, .mainReading, .mainReadingStart, .mainUpdating, .mainUpdatingCAD, .mainTransactionsUpdating, .mainServerDown, .mainPricesDown, .mainPricesStop, .mainTooSlow, .mainRetrying, .mainRetryingNumbers, .mainNotStartedFailing, .mainNotUpdating, .mainLinkedFailed, .mainEmpty, .mainEmptyNotice, .mainNotStarted, .mainCostWithheld, .mainSmallAmounts, .mainLongHistory, .mainChartGaps, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
+        case .mainAllYours, .mainAllYoursTransactions, .mainAllYoursDetails, .mainNoWalletAfterDeleting, .mainChartWeek, .mainFirstRun, .mainFirstRunDetails, .main, .mainHoldingsSearch, .mainHoldingsSearchNone, .mainTransactions, .mainTransactionsSending, .mainTransactionsBusy, .mainDetails, .mainHoldDetails, .mainNoWallet, .mainNoWalletSaved, .mainReading, .mainReadingStart, .mainUpdating, .mainUpdatingCAD, .mainTransactionsUpdating, .mainServerDown, .mainPricesDown, .mainPricesStop, .mainTooSlow, .mainRetrying, .mainRetryingNumbers, .mainNotStartedFailing, .mainNotUpdating, .mainLinkedFailed, .mainEmpty, .mainEmptyNotice, .mainNotStarted, .mainCostWithheld, .mainSmallAmounts, .mainLongHistory, .mainChartGaps, .mainCAD, .mainTransactionsCAD, .mainDetailsCAD:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 1120, height: 760), isReady: isReady)
         case .mainDetailsProof:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases).environment(\.opensFirstProof, true)), size: CGSize(width: 1120, height: 760), isReady: isReady)
@@ -1010,9 +1032,9 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases).defaultScrollAnchor(.bottom)), size: CGSize(width: 780, height: 560), isReady: isReady)
         case .mainEmptySmallest, .mainSmallest, .mainFirstRunSmallest, .mainEmptySpendingMoneySmallest:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 780, height: 560), isReady: isReady)
-        case .mainNarrow, .mainChartGapsNarrow, .mainSmallAmountsNarrow, .mainUpdatingNarrow:
+        case .mainNarrow, .mainHoldingsSearchNarrow, .mainChartGapsNarrow, .mainSmallAmountsNarrow, .mainUpdatingNarrow:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 780, height: 760), isReady: isReady)
-        case .mainSmall, .mainChartGapsSmall, .mainUpdatingSmall, .mainNotUpdatingSmall, .mainFirstRunSmall, .mainTransactionsSmall, .mainSpendingMoneySmall, .mainTaxReportSmall, .mainNoWalletSmall, .mainNoWalletSavedSmall:
+        case .mainSmall, .mainHoldingsSearchSmall, .mainChartGapsSmall, .mainUpdatingSmall, .mainNotUpdatingSmall, .mainFirstRunSmall, .mainTransactionsSmall, .mainSpendingMoneySmall, .mainTaxReportSmall, .mainNoWalletSmall, .mainNoWalletSavedSmall:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: MainWindow.minimumSize, isReady: isReady)
         case .mainMedium, .mainSpendingMoney, .mainSpendingMoneyServerDown, .mainTaxReport:
             return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases)), size: CGSize(width: 900, height: 640), isReady: isReady)
@@ -1048,7 +1070,8 @@ enum TestScene: String, CaseIterable {
                 press = { navigation.isExporting = true }
                 hasArrived = { !navigation.isExporting }
             case .routeFind, .routeFindOpen:
-                press = navigation.findTransactions
+                navigation.section = .taxReport
+                press = navigation.find
                 hasArrived = { !navigation.wantsSearch && navigation.section == .transactions }
             case .routeTopUpCancelled:
                 // There's no spending money, so it asks to make some, and that's cancelled the way the sheet's button does.
@@ -1137,7 +1160,7 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(view), isReady: isReady)
         case .hotWalletSetup, .hotWalletNotProvisioned, .hotWalletUnreadable:
             return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store, siteBridge: SiteBridge(wallet: hotWallet), navigation: navigation, purchases: purchases)), size: CGSize(width: 560, height: 720), isReady: isReady)
-        case .hotWallet, .hotWalletTwoSavings, .hotWalletRecordShown, .hotWalletCAD, .hotWalletNoRate, .hotWalletNoSavings, .hotWalletNoSavingsCAD, .hotWalletNoPrice, .hotWalletOverCap, .hotWalletOverCapCAD, .hotWalletOverCapNoSavings, .hotWalletKeyMissing, .hotWalletAlarm, .hotWalletReplacingKey, .hotWalletReplacingKeyStuck, .hotWalletReplacingKeyMissing, .hotWalletSites:
+        case .hotWallet, .hotWalletTwoSavings, .hotWalletRecordShown, .hotWalletCAD, .hotWalletNoRate, .hotWalletNoSavings, .hotWalletNoSavingsCAD, .hotWalletNoPrice, .hotWalletNothingToSweep, .hotWalletOverCap, .hotWalletOverCapCAD, .hotWalletOverCapNoSavings, .hotWalletKeyMissing, .hotWalletAlarm, .hotWalletReplacingKey, .hotWalletReplacingKeyStuck, .hotWalletReplacingKeyMissing, .hotWalletSites:
             // The manual sweep, which is a row in the middle of the activity.
             if self == .hotWalletRecordShown { navigation.show(row: MoneyNotice.recordRow("0xde4" + String(repeating: "0", count: 59) + "20")) }
             // Taller than it opens, because a screenshot can't scroll to the actions and the activity at the bottom.

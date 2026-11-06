@@ -20,7 +20,7 @@ Patina is a native menu bar app: live total PnL in the bar, holdings, cost and P
 ```sh
 pnpm mac         # builds the app, opens it, and runs the server until you press Ctrl-C
 pnpm mac:build   # only builds it, to macos/build/
-pnpm check:mac   # the Swift tests, the app's build, and the shared packages' builds for iOS
+pnpm check:mac   # the Swift tests, the app's build, and the shared packages' builds for iOS. It takes turns with other worktrees: see macos/TESTING.md
 pnpm check:keychain  # the real Secure Enclave and Keychain, with a throwaway key, from a signed debug build
 pnpm check:anvil     # real signing and sweeps against a local fork of Base, with no real funds. It needs Foundry
 pnpm check:extension # the browser extension on a real site, through to a local fork, with no real funds. It needs Foundry and a Chromium that can load extensions

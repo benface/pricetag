@@ -50,7 +50,7 @@ import { useRules } from "./useRules.ts"
 import type { TaxYear } from "../core/tax.ts"
 import { TaxPanel } from "./TaxPanel.tsx"
 import { useWallet } from "./useWallet.ts"
-import { currenciesIn, linkedWallets, walletsBehind } from "../core/book.ts"
+import { currenciesIn, walletsBehind, walletsToRead } from "../core/book.ts"
 import { parseDeviceLink, type DeviceLink } from "../core/device-link.ts"
 import { exportCsv } from "../core/export.ts"
 import { foldBook } from "../core/resolve.ts"
@@ -279,7 +279,7 @@ export function App() {
   const [pendingResolve, setPendingResolve] = useState<{ wallet: string; returnTo: string } | null>(null)
   const [returnTo, setReturnTo] = useState<string | null>(null)
   const [cardSender, setCardSender] = useState<string | null>(null)
-  const wanted = useMemo(() => [...new Set([...linkedWallets(book), ...(cardSender ? [cardSender] : [])])].filter((a) => a !== wallet?.address), [book, cardSender, wallet?.address])
+  const wanted = useMemo(() => walletsToRead(book, wallet?.address ?? null, cardSender), [book, cardSender, wallet?.address])
   const { others, failed, retry } = useOtherWallets(wanted, chosenCurrency, chosenRule, paidIn, wallet?.latest.blockNum ?? null, wallet)
   const linkedFailed = useMemo(() => (wallet ? failed.filter((address) => walletsBehind(book, wallet).includes(address)) : []), [failed, book, wallet])
 

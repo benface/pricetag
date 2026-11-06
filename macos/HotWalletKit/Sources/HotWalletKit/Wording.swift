@@ -125,6 +125,12 @@ public enum HotWalletWording {
         symbols.isEmpty ? "There's nothing on this wallet to sweep." : "There's nothing to sweep except \(tooCostlyToMove(symbols))."
     }
 
+    /// Why moving everything wouldn't move anything, if it wouldn't.
+    public static func whyNothingSweeps(_ plan: SweepPlan) -> String? {
+        guard plan.transfers.isEmpty else { return nil }
+        return plan.blockers.contains(.notEnoughGas) ? noGas : nothingToSweep(tooCostly: plan.notWorthTheGas.map(\.symbol))
+    }
+
     /// A sweep that stopped partway. The rest stays on this wallet, and sweeping again moves it once this has landed.
     public static func sweptOnlySome(onItsWay: [String], left: [String], because reason: String) -> String {
         let going = onItsWay.formatted(.list(type: .and))
