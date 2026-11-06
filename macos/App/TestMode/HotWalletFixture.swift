@@ -67,12 +67,12 @@ struct HotWalletFixture {
     static let replaced = HotWalletFixture(hasRecords: true, isReplaced: true)
     static let replacingKeyMissing = HotWalletFixture(keys: .isMissing, rotation: Rotation(from: spending, to: replacement, destination: replacement))
 
-    func make(source: any PortfolioSource, costMethod: @escaping @MainActor () -> CostMethod, moneyDisplay: @escaping @MainActor () -> MoneyDisplay) -> HotWallet {
+    func make(source: any PortfolioSource, costMethod: @escaping @MainActor () -> CostMethod, moneyDisplay: @escaping @MainActor () -> MoneyDisplay, confirmsAddingSavings: Bool = false) -> HotWallet {
         HotWallet(
             signer: NoKeys(answer: keys),
             settingsStore: FixedSettings(settings: settings),
             stateStore: FixedState(state: recordsAreUnreadable ? nil : state),
-            presence: NoOneThere(),
+            presence: confirmsAddingSavings ? SaysYes() : NoOneThere(),
             portfolioSource: { source },
             costMethod: costMethod,
             moneyDisplay: moneyDisplay,
@@ -224,6 +224,11 @@ private nonisolated struct FixedState: DeviceStateStore {
     }
 
     func save(_ state: DeviceWalletState) throws {}
+}
+
+/// For the scenes that show what comes after adding a savings wallet.
+private nonisolated struct SaysYes: UserPresence {
+    func confirm(reason: String) async throws {}
 }
 
 private nonisolated struct NoOneThere: UserPresence {

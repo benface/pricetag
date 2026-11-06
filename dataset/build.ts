@@ -12,6 +12,10 @@
 //
 //   AMP_ADMIN_URL=... node dataset/build.ts --rates [start block]
 //
+// Writes dataset/feeds.json with --feeds: the updates of the feeds in TOKEN_FEEDS, as their own small dataset, for the same reason.
+//
+//   AMP_ADMIN_URL=... node dataset/build.ts --feeds [start block]
+//
 // Writes dataset/tokens.json with --tokens: what any token traded for in a pool, as its own dataset, so adding it doesn't replace
 // the one the app's prices come from. FORK_OF names the Pricetag version it reads.
 //
@@ -22,11 +26,12 @@
 // and UDFs that never return null or throw, because one bad row stops the whole dataset.
 
 import { readFileSync, writeFileSync } from "node:fs"
-import { APPROVAL_LOGS, CURRENCIES, ERC20_ADDRESSES, ETH_ADDRESS, MAX_ROUND_AGE_SECONDS, PRICE_FEEDS, SEED_TX, TOKENS, USDC_ADDRESS, WETH_ADDRESS, blockBefore, type PriceFeed } from "@pricetag/sdk/core"
+import { APPROVAL_LOGS, CURRENCIES, ERC20_ADDRESSES, ETH_ADDRESS, MAX_ROUND_AGE_SECONDS, PRICE_FEEDS, SEED_TX, TOKENS, TOKEN_FEED_AGGREGATORS, TOKEN_FEED_WINDOW_SECONDS, USDC_ADDRESS, WETH_ADDRESS, blockBefore, type PriceFeed } from "@pricetag/sdk/core"
 
 const MANIFEST = new URL("./pricetag.json", import.meta.url)
 const CAUTIOUS_MANIFEST = new URL("./cautious-eth.json", import.meta.url)
 const RATES_MANIFEST = new URL("./rates.json", import.meta.url)
+const FEEDS_MANIFEST = new URL("./feeds.json", import.meta.url)
 const TOKENS_MANIFEST = new URL("./tokens.json", import.meta.url)
 
 const hex = (address: string) => address.replace(/^0x/, "")
@@ -99,12 +104,25 @@ ${[logs, ...rows].join("\nUNION ALL\n")}
  * Pricetag dataset's first block could have been set, so that block has one.
  */
 export function rateUpdatesSql(start: number) {
-  const feeds = Object.values(CURRENCIES).flatMap(({ code, feed }) => (feed ? feed.aggregators.map((address) => ({ code, address })) : []))
-  return `SELECT block_num, timestamp, tx_hash, log_index, CASE ${feeds.map(({ code, address }) => `WHEN address = X'${hex(address)}' THEN '${code}'`).join(" ")} END AS currency,
+  const feeds = Object.values(CURRENCIES).flatMap(({ code, feed }) => (feed ? feed.aggregators.map((address) => ({ name: code, address })) : []))
+  return updatesSql("currency", feeds, blockBefore(start, MAX_ROUND_AGE_SECONDS * 1000))
+}
+
+/**
+ * Every update of a token's feed in `TOKEN_FEEDS`, with its asset. Like `rateUpdatesSql`, nothing joins on it, so it has no table
+ * carrying each one forward: over 8 feeds that would add about 164 rows to every block, around 16 times what `carried` holds.
+ */
+export function feedUpdatesSql(start: number) {
+  const feeds = Object.entries(TOKEN_FEED_AGGREGATORS).flatMap(([name, aggregators]) => (aggregators ?? []).map((address) => ({ name, address })))
+  return updatesSql("asset", feeds, blockBefore(start, TOKEN_FEED_WINDOW_SECONDS * 1000))
+}
+
+function updatesSql(column: string, feeds: readonly { name: string; address: string }[], from: number) {
+  return `SELECT block_num, timestamp, tx_hash, log_index, CASE ${feeds.map(({ name, address }) => `WHEN address = X'${hex(address)}' THEN '${name}'`).join(" ")} END AS ${column},
   get_field(t, 'current') AS answer, get_field(t, 'roundId') AS round_id, get_field(t, 'updatedAt') AS updated_at
 FROM (SELECT block_num, timestamp, tx_hash, log_index, address, evm_decode_log(topic1, topic2, topic3, data, '${ANSWER_UPDATED}') AS t
   FROM base.logs WHERE topic0 = evm_topic('${ANSWER_UPDATED}') AND address IN (${addressList(feeds.map(({ address }) => address))}))
-WHERE block_num() >= ${blockBefore(start, MAX_ROUND_AGE_SECONDS * 1000)}`
+WHERE block_num() >= ${from}`
 }
 
 function unlistedSelect(account: string, side: string, amount: string, kind: string, from: string) {
@@ -588,6 +606,10 @@ async function build() {
   }
   if (args[0] === "--rates") {
     await write(admin, RATES_MANIFEST, { dependencies: DEPENDENCIES, tables: { rate_updates: rateUpdatesSql(Number(args[1] ?? startOf(MANIFEST))) }, functions: {} })
+    return
+  }
+  if (args[0] === "--feeds") {
+    await write(admin, FEEDS_MANIFEST, { dependencies: DEPENDENCIES, tables: { feed_updates: feedUpdatesSql(Number(args[1] ?? startOf(MANIFEST))) }, functions: {} })
     return
   }
   await write(admin, MANIFEST, { dependencies: DEPENDENCIES, tables: tablesSql(Number(args[0] ?? startOf(MANIFEST))), functions: functions() })

@@ -14,6 +14,8 @@ export const METHOD_HELP = "Average spreads what you paid across all you hold. O
 export const AVERAGE_PRICE_PAID = "Average price paid"
 export const AVERAGE_PAID = "Average paid"
 export const NETWORK_FEES = "Network fees"
+/** An answer, an undo or a device's accounts that didn't reach what's stored, so they're back as they were. */
+export const NOT_SAVED = "This browser couldn't save that, so it's back as it was. Try again."
 export const BALANCE_CHECK = "Balance check"
 export const CHECK_LABELS = { reconciled: "Matches", incomplete: "Doesn't match", unchecked: "Not checked" }
 export const STARTING_BALANCE = "Starting balance"
@@ -153,6 +155,12 @@ export function costTag(label: CostLabel, source: string | null = null): string 
 
 /** How a purchase's provider is named wherever its cost shows up. */
 export const purchaseSource = (provider: "coinbase", paid?: string) => `${{ coinbase: "Bought on Coinbase" }[provider]}${paid ? ` for ${paid}` : ""}`
+
+/** Where a bought cost comes from. That's on this device, so the server's proof can't say. */
+export const costProof = (source: string, label: CostLabel) =>
+  label === "inherited"
+    ? `${source}, by your other wallet. This transaction only moved it here, so the order isn't for this one. What's shown is this amount's share of what you paid, fees included.`
+    : `${source}. The order says what you paid, fees included, and matches this transaction exactly.`
 
 /** A cost's source, to finish "from …". */
 export const COST_WORDS: Record<CostLabel, string> = {

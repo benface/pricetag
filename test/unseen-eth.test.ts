@@ -250,7 +250,7 @@ describe("a deposit through the Base bridge", () => {
   it("is recognized as the bridge, so it's valued at its block's price with nothing to ask", async () => {
     const wallet = await chain({ readPayoutTxs: async () => [{ ...DEPOSIT, blockNum: PAYOUT_BLOCK }] }).wallets.get(ME)
     assert.equal(unseenLeg(wallet).parts[0]!.counterparty, MESSENGER)
-    assert.equal(knownSender(MESSENGER)?.name, "the Base bridge")
+    assert.equal(knownSender(MESSENGER)?.name, "Base bridge")
     const { positions, questions } = foldBook(wallet as WalletResponse, [], "average", emptyBook())
     assert.deepEqual(questions, [])
     const { leg } = positions.find((p) => p.asset === "ETH")!.effects.find((effect) => effect.leg.id === `unseen:${PAYOUT_BLOCK}:ETH`)!

@@ -201,10 +201,10 @@ button { font: inherit; cursor: pointer; color: inherit; }
 .tag-button { border: 0; color: inherit; font-family: inherit; line-height: inherit; cursor: pointer; }
 .tag-button:hover { text-decoration: underline; }
 .leg-links { display: flex; gap: 12px; flex-wrap: wrap; align-items: baseline; }
-.proof { margin-top: 6px; padding: 10px 12px; border: 1px solid var(--grid); border-radius: 8px; display: flex; flex-direction: column; gap: 8px; }
+.proof { margin-top: 6px; padding: 10px 12px; border: 1px solid var(--grid); border-radius: 8px; display: flex; flex-direction: column; gap: 8px; overflow-wrap: anywhere; }
 .proof h4 { margin: 0 0 2px; font-size: 12px; font-weight: 600; }
 .proof ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-.proof .hash { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; overflow-wrap: anywhere; user-select: all; }
+.proof .hash { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; user-select: all; }
 .proof .verify { align-self: flex-start; }
 .check { display: grid; grid-template-columns: 18px 1fr; column-gap: 4px; }
 .check-mark { font-weight: 700; }
@@ -254,6 +254,12 @@ button { font: inherit; cursor: pointer; color: inherit; }
 .code-light { padding: 12px; border-radius: 10px; background: #fff; align-self: center; }
 .code-progress { width: 100%; }
 .exchange { display: flex; flex-direction: column; gap: 10px; }
+.purchases { display: flex; flex-direction: column; gap: 8px; }
+.purchases h2 { margin: 0; }
+.purchases ul { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.purchase { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; }
+.purchase p { margin: 0; }
+.purchase-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .sort-button { all: unset; cursor: pointer; white-space: nowrap; }
 .sort-button:hover { color: var(--text-primary); }
 .sort-button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; border-radius: 3px; }

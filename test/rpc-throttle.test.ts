@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { createServer, type RequestListener, type Server } from "node:http"
 import { connect, type AddressInfo } from "node:net"
 import { describe, it } from "node:test"
+import { createL1FeeReader, relayRate } from "@pricetag/sdk/internal"
 import { createThrottle } from "../scripts/rpc-throttle.ts"
 
 const listen = (server: Server) =>
@@ -200,6 +201,55 @@ describe("the RPC throttle", () => {
     } finally {
       console.error = original
       throttle.closeAllConnections()
+      throttle.close()
+    }
+  })
+
+  it("and L1 fees stay within an RPC's limit together, with several wallets reading", async () => {
+    const limit = 100
+    const sent: number[] = []
+    let refused = 0
+    const rpc = createServer(async (req, res) => {
+      const chunks: Buffer[] = []
+      for await (const chunk of req) chunks.push(chunk as Buffer)
+      const body = JSON.parse(Buffer.concat(chunks).toString()) as { id: number }[] | { id: number }
+      const now = Date.now()
+      const calls = Array.isArray(body) ? body.length : 1
+      // A real limit: calls in the last second, counting each one in a batch.
+      if (sent.filter((at) => at > now - 1_000).length + calls > limit) {
+        refused++
+        res.writeHead(429).end()
+        return
+      }
+      for (let i = 0; i < calls; i++) sent.push(now)
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify(Array.isArray(body) ? body.map(({ id }) => ({ id, result: { blockNumber: "0x64", l1Fee: "0x10" } })) : { id: body.id, result: "0x1" }))
+    })
+    const url = await listen(rpc)
+    const throttle = createThrottle(url, relayRate(limit))
+    const relayed = await listen(throttle)
+    try {
+      const read = createL1FeeReader(url, fetch, 100, console, limit)
+      const wallet = (n: number, size: number) => read(Array.from({ length: size }, (_, i) => ({ txHash: `0x${n}${i}`, blockNum: 100 })))
+      // 20 at a time, like a busy Amp, since this many sockets at once is more than a listening port queues.
+      let left = 180
+      const amp = async () => {
+        while (left-- > 0) await call(relayed, JSON.stringify({ id: 1 }))
+      }
+      // Different sizes, so partial batches come between full ones.
+      const [first, second, third] = await Promise.all([wallet(1, 59), wallet(2, 20), wallet(3, 41), ...Array.from({ length: 20 }, amp)])
+      assert.equal(first.size, 59)
+      assert.equal(second.size, 20)
+      assert.equal(third.size, 41)
+      // The two add up to exactly the limit, so a timer running late can tip a call over. Both wait those out.
+      assert.ok(refused <= 10, `refused ${refused}`)
+      assert.equal(sent.length, 300)
+      // Both used their shares, rather than one starving the other: 300 calls at 100 a second.
+      assert.ok(sent.at(-1)! - sent[0]! >= 2_400, `took ${sent.at(-1)! - sent[0]!} ms`)
+    } finally {
+      rpc.closeAllConnections()
+      throttle.closeAllConnections()
+      rpc.close()
       throttle.close()
     }
   })

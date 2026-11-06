@@ -20,6 +20,11 @@
       "detail": "Worked out 0x962f8d…118405, but the block says 0x5c6ca7…7053fe."
     },
     {
+      "title": "Base's node",
+      "status": "unchecked",
+      "detail": "Base's node didn't report this block's fingerprint, so it isn't compared."
+    },
+    {
       "title": "This activity",
       "status": "failed",
       "detail": "This transaction isn't in the checked data."
