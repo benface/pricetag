@@ -33,12 +33,15 @@ export type ApprovalKind =
   | "collection"
 
 /**
- * Who a spender is, when it's one of the big ones on Base. A name only says whose contract it is, never that it's safe.
- * Each address was checked to hold code on Base.
+ * The big contracts on Base, by whose they are. A name only says whose contract it is, never that it's safe. Each address was
+ * checked to hold code on Base, and `tokens.json` holds the Swift package to the same list, so the Security list and a site's
+ * request agree.
  */
-export const KNOWN_SPENDERS: Readonly<Record<string, string>> = {
-  [PERMIT2]: "Permit2, by Uniswap",
+export const KNOWN_CONTRACTS: Readonly<Record<string, string>> = {
+  [PERMIT2]: "Uniswap Permit2",
   "0x6ff5693b99212da76ad316178a184ab56d299b43": "Uniswap",
+  "0xfdf682f51fe81aa4898f0ae2163d8a55c127fbc7": "Uniswap",
+  "0xd6145b2d3f379919e8cdeda7b97e37c4b2ca9c40": "Uniswap",
   "0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad": "Uniswap",
   "0x2626664c2603336e57b271c5c0b26f421741e481": "Uniswap",
   "0x03a520b32c04bf3beef7beb72e919cf822ed34f1": "Uniswap Positions",
@@ -46,13 +49,14 @@ export const KNOWN_SPENDERS: Readonly<Record<string, string>> = {
   "0xdef1c0ded9bec7f1a1670819833240f027b25eff": "0x",
   "0x111111125421ca6dc452d289314280a0f8842a65": "1inch",
   "0x19ceead7105607cd444f5ad10dd51356436095a1": "Odos",
+  "0x9008d19f58aabd9ed0d60971565aa8510560ab41": "CoW Swap",
   "0xc92e8bdf79f0507f65a392b0ab4667716bfe0110": "CoW Swap",
 }
 
 /** Uniswap's routers spend through Permit2, so their Permit2 allowances are worth checking whatever the history says. */
-const PERMIT2_SPENDERS = ["0x6ff5693b99212da76ad316178a184ab56d299b43", "0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad"]
+const PERMIT2_SPENDERS = ["0x6ff5693b99212da76ad316178a184ab56d299b43", "0xfdf682f51fe81aa4898f0ae2163d8a55c127fbc7", "0xd6145b2d3f379919e8cdeda7b97e37c4b2ca9c40", "0x3fc91a3afd70395cd496c647d5a6cc9d4b2b7fad"]
 
-export const spenderName = (address: string): string | null => KNOWN_SPENDERS[normalizeAddress(address)] ?? null
+export const spenderName = (address: string): string | null => KNOWN_CONTRACTS[normalizeAddress(address)] ?? null
 
 /** One approval this wallet may still have: who can spend what. `grant` is the newest event about it, when one was found. */
 export type Candidate = {
@@ -99,11 +103,11 @@ export function candidatesFromLogs(owner: string, logs: readonly ApprovalLog[]):
 }
 
 /**
- * The approvals worth checking whatever the history covers: every tracked token to each known spender, and to Uniswap's
+ * The approvals worth checking whatever the history covers: every tracked token to each known contract, and to Uniswap's
  * routers through Permit2. These are most of what people approve, so an approval older than the history still shows.
  */
 export function knownSpenderCandidates(): Candidate[] {
-  const tokens = ERC20_ADDRESSES.flatMap((token) => Object.keys(KNOWN_SPENDERS).map((spender): Candidate => ({ kind: "token", token, spender, grant: null })))
+  const tokens = ERC20_ADDRESSES.flatMap((token) => Object.keys(KNOWN_CONTRACTS).map((spender): Candidate => ({ kind: "token", token, spender, grant: null })))
   const permit2 = ERC20_ADDRESSES.flatMap((token) => PERMIT2_SPENDERS.map((spender): Candidate => ({ kind: "permit2", token, spender, grant: null })))
   return [...tokens, ...permit2]
 }

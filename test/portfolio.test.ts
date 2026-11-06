@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
-import { ASSETS, CURRENCIES, CURRENCY_CODES, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, applyLeg, blockBefore, buildPricedLegs, chartMoneyTicks, derivePricedRows, emptyPosition, formatChartSpan, msBetweenBlocks, encodeNote, foldPositions, pnlOverTime, referenceMarks, formatAmount, formatDuration, formatExactUsd, formatMoney, formatPaid, formatPrice, formatReturn, formatSignedAmount, formatSignedMoney, labelUsd, plainAmount, sumTotals, type LegRow, type Method, type PricedLeg } from "@pricetag/sdk/core"
+import { ASSETS, CURRENCIES, CURRENCY_CODES, ETH_ADDRESS, ETH_USD_FEED, KNOWN_CONTRACTS, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, applyLeg, blockBefore, buildPricedLegs, chartMoneyTicks, derivePricedRows, emptyPosition, formatChartSpan, msBetweenBlocks, encodeNote, foldPositions, pnlOverTime, referenceMarks, formatAmount, formatDuration, formatExactUsd, formatMoney, formatPaid, formatPrice, formatReturn, formatSignedAmount, formatSignedMoney, labelUsd, plainAmount, sumTotals, type LegRow, type Method, type PricedLeg } from "@pricetag/sdk/core"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { END_LABEL_GAP, TICK_GAP, chartLeftMargin, chartRightMargin, placeChartTimes } from "../src/core/chart-times.ts"
 import { describeEffect, describeNetting, summarizeEffect } from "../src/core/explain.ts"
@@ -21,8 +21,8 @@ import { assertMatchesFixture } from "./support/fixtures.ts"
 
 describe("the hot wallet's allowlist", () => {
   it("matches what the Swift package has compiled in", () => {
-    // When this one changes, Tokens.swift has to change to match.
-    assertMatchesFixture("tokens.json", { tokens: TOKENS.map(({ address, symbol, decimals, asset, sanity }) => ({ address, symbol, decimals, asset, sanity })), ethUsdFeed: ETH_USD_FEED.toLowerCase(), usdcUsdFeed: USDC_USD_FEED.toLowerCase(), feeds: TOKEN_FEEDS }, new URL("../macos/HotWalletKit/Tests/HotWalletKitTests/Resources/", import.meta.url))
+    // When this one changes, Tokens.swift or KnownContracts.swift has to change to match.
+    assertMatchesFixture("tokens.json", { tokens: TOKENS.map(({ address, symbol, decimals, asset, sanity }) => ({ address, symbol, decimals, asset, sanity })), ethUsdFeed: ETH_USD_FEED.toLowerCase(), usdcUsdFeed: USDC_USD_FEED.toLowerCase(), feeds: TOKEN_FEEDS, contracts: KNOWN_CONTRACTS }, new URL("../macos/HotWalletKit/Tests/HotWalletKitTests/Resources/", import.meta.url))
   })
 })
 
