@@ -85,6 +85,10 @@ public enum ChartMetric: String, CaseIterable, Identifiable, Sendable {
         case .pnl: point.excludedCount
         }
     }
+
+    func isEstimated(_ point: PnlPoint) -> Bool {
+        self == .value && point.valueEstimated
+    }
 }
 
 /// The part of the history in a range. PnL holds still between transactions, so what it was when the range starts comes along as its first point.
@@ -108,11 +112,11 @@ public struct ChartWindow: Equatable, Sendable {
             return
         }
         let value = Self.valueBetween(before, inside.first, at: start)
-        let carried = PnlPoint(blockNum: before.blockNum, timestamp: start.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true)), txHash: nil, pnlMicros: before.pnlMicros, excludedCount: before.excludedCount, valueMicros: value, valueBeforeMicros: value, valueExcludedCount: before.valueExcludedCount)
+        let carried = PnlPoint(blockNum: before.blockNum, timestamp: start.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true)), txHash: nil, pnlMicros: before.pnlMicros, excludedCount: before.excludedCount, valueMicros: value, valueBeforeMicros: value, valueExcludedCount: before.valueExcludedCount, valueEstimated: value != nil)
         points = [carried] + inside
     }
 
-    /// What's held doesn't change between two transactions, but prices weren't read there, so this is on the straight line between them, like the chart's dashed one.
+    /// What's held doesn't change between two points, but prices weren't read there, so this is on the straight line between them, like the chart's.
     /// nil without both ends to go between, or if more than prices moved between them, which leaves the range's start a gap.
     private static func valueBetween(_ before: PnlPoint, _ next: PnlPoint?, at date: Date) -> String? {
         guard let next, next.valueContinues == true, let from = before.valueMicros.flatMap({ Double($0) }), let to = next.valueBeforeMicros.flatMap({ Double($0) }),

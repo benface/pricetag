@@ -265,7 +265,9 @@ import Testing
         let rig = await Rig(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(100)]), withCold: false)
         await rig.chain.hold(snapshots: true)
         let firstRead = Task { await rig.wallet.tick() }
-        while await rig.chain.heldCalls == 0 { await Task.yield() }
+        let deadline = Date.now.addingTimeInterval(10)
+        while await rig.chain.heldCalls == 0, Date.now < deadline { try await Task.sleep(for: .milliseconds(1)) }
+        #expect(await rig.chain.heldCalls > 0)
         let flow = AddSavingsModel(wallet: rig.wallet)
         flow.address = address
         flow.matches = true
