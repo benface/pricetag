@@ -324,13 +324,20 @@ describe("the portfolio API", () => {
     assert.equal(after!.pending, false)
   })
 
-  it("says a wallet can't be read when there's no data source, rather than reading it forever", async () => {
-    const stranger = "0x000000000000000000000000000000000000be11"
-    const book = { senders: { [stranger]: { kind: "mine" } } }
+  it("doesn't wait on a wallet outside the demo, and asks what came from it cost instead", async () => {
+    const coinbase = "0x71660c4005ba85c37ccec55d0c4493e66fe775d3"
+    const book = { senders: { [coinbase]: { kind: "mine" } } }
     const { body } = await post("/api/portfolio/demo/preview", { method: "average", candidates: [book] })
-    assert.deepEqual((body.previews as { failed: boolean; pending: boolean }[]).map((p) => [p.failed, p.pending]), [[true, true]])
+    assert.deepEqual((body.previews as { failed: boolean; pending: boolean }[]).map((p) => [p.failed, p.pending]), [[false, false]])
     const portfolio = (await post("/api/portfolio/demo", { method: "average", book })).body as unknown as PortfolioResponse
-    assert.deepEqual([portfolio.linkedReading, portfolio.linkedFailed], [[], [stranger]])
+    assert.deepEqual([portfolio.linkedReading, portfolio.linkedFailed, portfolio.meter.waiting], [[], [], 0])
+    assert.ok(!portfolio.questions.some((q) => q.sender === coinbase), "answering it again wouldn't change anything")
+    const card = portfolio.questions.find((q) => q.kind === "cost" && q.arrivals.some((a) => a.asset === "cbBTC"))
+    assert.ok(card, "it's still unknown, so it asks")
+    assert.match(card.evidence.join(), /the demo only reads its own wallets/)
+    const paid = { ...book, costs: { [card.costKey as string]: { micros: "1000000", currency: "USD" } } }
+    const after = (await post("/api/portfolio/demo", { method: "average", book: paid })).body as unknown as PortfolioResponse
+    assert.ok(!after.questions.some((q) => q.id === card.id), "and what was paid settles it")
   })
 
   it("explains a number with the answers it's sent", async () => {
