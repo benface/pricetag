@@ -364,10 +364,12 @@ export function App() {
   }, [pendingResolve, wallet])
 
   const resolveFromTax = (next: string) => {
-    if (isAll || next === wallet?.address.toLowerCase()) {
+    if (!address) return
+    if (next === wallet?.address.toLowerCase()) {
+      setReturnTo(address)
       setTaxOpen(false)
       setResolving({ asset: null })
-    } else if (address) {
+    } else {
       setPendingResolve({ wallet: next, returnTo: address })
       go(next)
     }
@@ -376,7 +378,7 @@ export function App() {
     setResolving(null)
     if (returnTo === null) return
     setReturnTo(null)
-    go(returnTo)
+    if (returnTo !== address) go(returnTo)
     setTaxOpen(true)
   }
 
@@ -404,6 +406,14 @@ export function App() {
     for (const { wallet: where, arrivals } of questions) for (const { asset } of arrivals) byAsset.set(asset, [...new Set([...(byAsset.get(asset) ?? []), where])])
     return byAsset
   }, [questions])
+  /** How many questions each wallet on screen has. A wallet that isn't read yet isn't here, since that isn't known. */
+  const questionsIn = useMemo(() => {
+    const counts = new Map<string, number>()
+    if (!together) return single ? counts.set(single.toLowerCase(), questions.length) : counts
+    for (const { address: one } of together.read) counts.set(one.toLowerCase(), 0)
+    for (const { wallet: where } of questions) counts.set(where, (counts.get(where) ?? 0) + 1)
+    return counts
+  }, [together, single, questions])
   const listed = positions.filter((p) => !p.noMarket)
   const noMarketCount = totals.noMarket.length + (showing?.unlisted.length ?? 0)
   const caveat = [BigInt(totals.unresolvedMicros) > 0n ? `${formatMoney(totals.unresolvedMicros, currency)} cost unknown` : null, BigInt(totals.estimatedMicros) > 0n ? `${formatMoney(totals.estimatedMicros, currency)} estimated` : null].filter(Boolean).join(" · ")
@@ -638,7 +648,7 @@ export function App() {
           year={taxYear}
           onYear={setTaxYear}
           overviewMethod={method}
-          questionCount={questions.length}
+          questionsIn={questionsIn}
           onResolve={resolveFromTax}
           onClose={() => setTaxOpen(false)}
         /> : null}

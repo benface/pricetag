@@ -85,11 +85,12 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
   }, [wallet, others, all, method, book])
   const { currency } = fold
   const questions = useMemo(() => {
+    const firstOf = (list: Question[], has: (q: Question) => boolean) => [...list.filter(has), ...list.filter((q) => !has(q))]
     const open = fold.questions.filter((q) => !skipped.has(q.id))
-    if (!firstAsset) return open
-    const has = (q: Question) => q.arrivals.some((a) => a.asset === firstAsset)
-    return [...open.filter(has), ...open.filter((q) => !has(q))]
-  }, [fold, skipped, firstAsset])
+    // The wallet showing comes before the ones it's linked to, which can have questions of their own.
+    const ordered = all ? open : firstOf(open, (q) => q.wallet === wallet.address.toLowerCase())
+    return firstAsset ? firstOf(ordered, (q) => q.arrivals.some((a) => a.asset === firstAsset)) : ordered
+  }, [fold, skipped, firstAsset, all, wallet.address])
   const current = questions[0] ?? null
   const sender = current?.sender ?? null
   // What an answer's about: the wallet showing, or with all of them showing, the one it arrived in.
