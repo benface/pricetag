@@ -79,7 +79,7 @@ public struct FeedProblem: Equatable, Sendable {
 extension URL {
     /// Where saying "on this Mac" and "start it" is true.
     public var isOnThisMac: Bool {
-        ["127.0.0.1", "localhost", "::1"].contains(host() ?? "")
+        ["127.0.0.1", "localhost", "::1"].contains(host()?.lowercased() ?? "")
     }
 }
 

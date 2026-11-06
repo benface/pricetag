@@ -664,6 +664,15 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         }
     }
 
+    @Test func localhostInAnyCaseIsOnThisMac() throws {
+        let shouted = URL(string: "http://LOCALHOST:8787")!
+        for state in [FeedState.noAmpConfigured("None."), .rejected("Nope.")] {
+            #expect(state.problem(serverURL: shouted, portfolio: nil) == state.problem(serverURL: server, portfolio: nil))
+        }
+        let unreachable = try #require(FeedState.serverUnreachable.problem(serverURL: shouted, portfolio: nil))
+        #expect(unreachable.title == "The Price Service Isn't Running")
+    }
+
     @Test func theGlanceListsWhatsHeldLargestFirst() throws {
         let portfolio = try demoPortfolio()
         let top = portfolio.largestHoldings(3)
