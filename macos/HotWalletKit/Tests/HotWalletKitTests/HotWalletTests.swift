@@ -578,7 +578,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
     @Test func anOtherTokenNeverCountsTowardTheCapAndIsNeverSwept() async throws {
         // A fortune in something calling itself USDC, on a wallet well under its cap.
         let token = "0x00000000000000000000000000000000000000f1"
-        let copy = #"{ "token": "\#(token)", "kind": "token", "name": "USD Coin", "symbol": "USDC", "decimals": 6, "balance": "99999999999999", "state": "read", "note": null, "tucked": "It calls itself USDC, and it isn't the USDC we know." }"#
+        let copy = #"{ "token": "\#(token)", "kind": "token", "name": "USD Coin", "symbol": "USDC", "decimals": 6, "balance": "99999999999999", "state": "read", "note": null, "tucked": "It calls itself USDC, but it isn't the real USDC." }"#
         let rig = await Rig(snapshot(eth: oneEth / 10_000), portfolio: .success(portfolio(otherTokens: [copy])))
         await rig.wallet.readHistory()
         await rig.wallet.tick()
