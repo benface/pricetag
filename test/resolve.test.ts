@@ -1465,6 +1465,91 @@ Timestamp,Transaction Type,Asset,Quantity Transacted,Spot Price Currency,Spot Pr
       })
     })
 
+    describe("with sends and sells in the same second, which a file doesn't put in order", () => {
+      const WALLET_B = "0x00000000000000000000000000000000000000b2"
+      const moment = "2026-10-03T00:00:00Z"
+      const sendTo = (address: string, quantity = "1") => `${moment},Send,ETH,${quantity},USD,$0,$0,$0,$0,to ${address}`
+      const cheapThenDear = [row(day(1), "Buy", "1", "$1000"), row(day(2), "Buy", "1", "$3000")]
+      const oldest = (...rows: string[]) => costs(...rows).map(([, cost]) => cost)
+      const both = (first: string, second: string, later: string[] = []) => [oldest(...cheapThenDear, first, second, ...later), oldest(...cheapThenDear, second, first, ...later)]
+
+      it("won't say which send got the cheaper one, whichever way round the file has them", () => {
+        for (const sent of both(sendTo(A), sendTo(WALLET_B))) assert.deepEqual(sent, [null, null])
+        assert.deepEqual(parse(...cheapThenDear, sendTo(A), sendTo(WALLET_B)).withdrawals.map((w) => w.cost.micros), ["2000000000", "2000000000"], "an average doesn't depend on it")
+      })
+
+      it("won't say for a send beside a sell", () => {
+        const sell = row(moment, "Sell", "1")
+        for (const sent of both(sell, sendTo(A))) assert.deepEqual(sent, [null])
+      })
+
+      it("won't say for different quantities", () => {
+        const lots = [row(day(1), "Buy", "2", "$2000"), row(day(2), "Buy", "2", "$6000")]
+        assert.deepEqual(oldest(...lots, sendTo(A), sendTo(WALLET_B, "2")), [null, null])
+        assert.deepEqual(oldest(...lots, sendTo(WALLET_B, "2"), sendTo(A)), [null, null])
+      })
+
+      it("knows what comes after, since together they took the oldest", () => {
+        const lots = [row(day(1), "Buy", "2", "$2000"), row(day(2), "Buy", "2", "$6000")]
+        const later = row(day(4), "Send", "1")
+        assert.deepEqual(oldest(...lots, sendTo(A), sendTo(WALLET_B, "2"), later), [null, null, "3000000000"])
+        assert.deepEqual(oldest(...lots, sendTo(WALLET_B, "2"), sendTo(A), later), [null, null, "3000000000"])
+        assert.deepEqual(oldest(...lots, row(moment, "Sell", "2"), sendTo(A), later), [null, "3000000000"])
+      })
+
+      it("still knows when they all came out of one price", () => {
+        const onePurchase = [row(day(1), "Buy", "2", "$2000"), row(day(2), "Buy", "1", "$3000")]
+        assert.deepEqual(oldest(...onePurchase, sendTo(A, "0.5"), sendTo(WALLET_B)), ["500000000", "1000000000"])
+        assert.deepEqual(oldest(...onePurchase, sendTo(WALLET_B), sendTo(A, "0.5")), ["1000000000", "500000000"])
+        const samePrice = [row(day(1), "Buy", "1", "$1000"), row(day(2), "Buy", "1", "$1000")]
+        assert.deepEqual(oldest(...samePrice, sendTo(A), sendTo(WALLET_B)), ["1000000000", "1000000000"])
+      })
+
+      it("still knows when every order comes to the same cost", () => {
+        const dearOnBothSides = [row(day(1), "Buy", "1", "$3000"), row(day(2), "Buy", "1", "$1000"), row(day(3), "Buy", "1", "$3000")]
+        const moment4 = (type: string, quantity: string) => row("2026-10-04T00:00:00Z", type, quantity)
+        assert.deepEqual(oldest(...dearOnBothSides, moment4("Send", "2"), moment4("Send", "1")), ["4000000000", "3000000000"])
+      })
+
+      it("isn't thrown by rounding", () => {
+        assert.deepEqual(oldest(row(day(1), "Buy", "3", "$1"), sendTo(A), sendTo(WALLET_B)), ["333333", "333333"])
+        assert.deepEqual(oldest(row(day(1), "Buy", "3", "$1"), row(day(2), "Send", "1"), row(day(3), "Buy", "3", "$1"), row(day(4), "Send", "2"), row(day(4), "Send", "1")), ["333333", "666667", "333333"])
+      })
+
+      it("keeps a lone send's cost when something was bought in the same second, whichever way round", () => {
+        const bought = row(moment, "Buy", "1", "$5000")
+        const send = sendTo(A)
+        assert.deepEqual(oldest(...cheapThenDear, bought, send), ["1000000000"])
+        assert.deepEqual(oldest(...cheapThenDear, send, bought), ["1000000000"])
+      })
+
+      it("won't let a purchase's place in the file decide what a send took from that second's purchases", () => {
+        const send = row(day(1), "Send", "1")
+        assert.deepEqual(oldest(row(day(1), "Buy", "1", "$1000"), send, row(day(1), "Buy", "1", "$3000")), [null])
+        assert.deepEqual(oldest(row(day(1), "Buy", "1", "$3000"), send, row(day(1), "Buy", "1", "$1000")), [null])
+      })
+
+      it("has no cost for a send beside something that breaks the history", () => {
+        assert.deepEqual(oldest(row(day(1), "Buy", "1", "$1000"), sendTo(A), row(moment, "Receive", "1")), [null])
+      })
+
+      it("gives up rather than trying every order of a crowded second", () => {
+        const fills = Array.from({ length: 13 }, (_, i) => row(moment, "Sell", `0.0${String(1 + 2 ** i).padStart(5, "0")}`))
+        assert.deepEqual(oldest(row(day(1), "Buy", "2", "$2000"), row(day(2), "Buy", "1", "$3000"), ...fills, sendTo(A, "0.5")), [null])
+      })
+
+      it("follows through to a fold, whichever way round the arrivals' sends are", () => {
+        const arrivals = (address: string, block: number) => wallet(address, [{ ...move(block, `0x${block}`, address, "credit", E18, COINBASE, ETH_ADDRESS), timestamp: "2026-10-03T00:03:00.000Z" }])
+        for (const rows of [[sendTo(A), sendTo(WALLET_B)], [sendTo(WALLET_B), sendTo(A)]]) {
+          const { withdrawals } = parse(...cheapThenDear, ...rows)
+          const book = { ...emptyBook(), withdrawals }
+          const fold = (address: string, block: number, method: "average" | "fifo") => foldBook(arrivals(address, block), [], method, book).positions[0]?.values.costMicros
+          assert.deepEqual([fold(A, 60, "fifo"), fold(WALLET_B, 61, "fifo")], [null, null])
+          assert.deepEqual([fold(A, 60, "average"), fold(WALLET_B, 61, "average")], ["2000000000", "2000000000"])
+        }
+      })
+    })
+
     describe("saved before it had this figure", () => {
       const { fifoCostMicros: _, ...old } = parse(...CHEAP_THEN_DEAR).withdrawals[0]!
       const saved = parseBook({ withdrawals: [old] })!

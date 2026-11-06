@@ -54,32 +54,99 @@ const isReadable = (currency: string): currency is CurrencyCode => READABLE.has(
  */
 type Lot = { at: number; units: bigint; cost: bigint | null; tied: boolean }
 
-type Pool = { units: bigint; cost: bigint; lots: Lot[]; known: boolean; currency: CurrencyCode | null }
+/** A sale or a withdrawal waiting for the rest of its moment, since a file doesn't say which of those came first either. */
+type Disposal = { at: number; units: bigint; withdrawal: ExchangeWithdrawal | null }
+
+type Pool = { units: bigint; cost: bigint; lots: Lot[]; disposals: Disposal[]; known: boolean; currency: CurrencyCode | null }
 
 function addLot(lots: Lot[], at: number, units: bigint, cost: bigint) {
   const last = lots.at(-1)
-  if (last?.at !== at) lots.push({ at, units, cost, tied: false })
+  if (last?.at !== at || last.cost === null) lots.push({ at, units, cost, tied: false })
   else {
-    last.tied ||= last.cost === null || last.cost * units !== cost * last.units
+    last.tied ||= last.cost * units !== cost * last.units
     last.units += units
-    last.cost = last.cost === null ? null : last.cost + cost
+    last.cost += cost
   }
 }
 
-/** What the oldest of these units cost, which leaves the rest. Null when that can't be said. Rounding never loses any, because taking a whole lot takes all of its cost. */
-function takeOldest(lots: Lot[], units: bigint): bigint | null {
+/** What these units cost, this far along the lots. Null when that can't be said. */
+function costAlong(lots: readonly Lot[], from: bigint, units: bigint): bigint | null {
   let total: bigint | null = 0n
+  let skip = from
+  let left = units
+  for (const lot of lots) {
+    if (left === 0n) break
+    if (skip >= lot.units) {
+      skip -= lot.units
+      continue
+    }
+    const taken = left < lot.units - skip ? left : lot.units - skip
+    const cost = lot.cost === null || (lot.tied && taken < lot.units) ? null : (lot.cost * taken) / lot.units
+    total = total === null || cost === null ? null : total + cost
+    skip = 0n
+    left -= taken
+  }
+  return total
+}
+
+/** Takes the oldest of these units, which leaves the rest. Rounding never loses any, because taking a whole lot takes all of its cost. */
+function takeOldest(lots: Lot[], units: bigint) {
   for (let left = units; left > 0n; ) {
     const lot = lots[0] as Lot
     const taken = left < lot.units ? left : lot.units
     const cost = lot.cost === null || (lot.tied && taken < lot.units) ? null : (lot.cost * taken) / lot.units
-    total = total === null || cost === null ? null : total + cost
     lot.cost = lot.cost === null || cost === null ? null : lot.cost - cost
     lot.units -= taken
     left -= taken
     if (lot.units === 0n) lots.shift()
   }
-  return total
+}
+
+/** Past this many, a moment has too many possible orders to try, so what's in it has no oldest-first cost unless it's alone. */
+const MAX_POSITIONS = 4096
+
+/** How far along the lots something could start, depending on which of the others went before it. Null when that's too many to try. */
+function positionsAfter(others: readonly Disposal[]): bigint[] | null {
+  const positions = new Set([0n])
+  for (const { units } of others) {
+    for (const position of [...positions]) positions.add(position + units)
+    if (positions.size > MAX_POSITIONS) return null
+  }
+  return [...positions]
+}
+
+/**
+ * What a withdrawal cost oldest first, when that's the same whichever of its moment's other disposals went first. Otherwise null.
+ * Dividing a lot can round differently from one position to the next, by up to a millionth per lot, which isn't a different cost.
+ */
+function costInAnyOrder(lots: readonly Lot[], disposals: readonly Disposal[], disposal: Disposal): bigint | null {
+  const positions = positionsAfter(disposals.filter((other) => other !== disposal))
+  if (positions === null) return null
+  const first = costAlong(lots, 0n, disposal.units)
+  if (first === null) return null
+  const rounding = BigInt(lots.length)
+  for (const position of positions) {
+    const cost = costAlong(lots, position, disposal.units)
+    if (cost === null || cost - first > rounding || first - cost > rounding) return null
+  }
+  return first
+}
+
+/**
+ * Settles a moment once all of it is in, purchases included, which are the newest lot by then. Whatever order its disposals went
+ * in, together they took the oldest of what was there, so what's left is the same. An asset whose history stopped adding up has
+ * no costs from here on, so there's nothing left to work out, and its lots may not cover what went out.
+ */
+function settleDisposals(pool: Pool) {
+  const { disposals } = pool
+  pool.disposals = []
+  if (!pool.known) return
+  for (const disposal of disposals) {
+    if (!disposal.withdrawal) continue
+    const cost = costInAnyOrder(pool.lots, disposals, disposal)
+    disposal.withdrawal.fifoCostMicros = cost === null ? null : cost.toString()
+  }
+  takeOldest(pool.lots, disposals.reduce((sum, { units }) => sum + units, 0n))
 }
 
 export function parseCoinbaseCsv(text: string): ExchangeImport | null {
@@ -108,7 +175,7 @@ export function parseCoinbaseCsv(text: string): ExchangeImport | null {
   }
   const typeOf = (cells: string[]) => (cells[at.type] ?? "").trim().toLowerCase()
   const poolOf = (asset: string) => {
-    const pool = pools.get(asset) ?? { units: 0n, cost: 0n, lots: [], known: true, currency: null }
+    const pool = pools.get(asset) ?? { units: 0n, cost: 0n, lots: [], disposals: [], known: true, currency: null }
     pools.set(asset, pool)
     return pool
   }
@@ -126,6 +193,7 @@ export function parseCoinbaseCsv(text: string): ExchangeImport | null {
     const units = unitsOf(cells[at.qty] ?? "", decimals)
     const type = typeOf(cells)
     const pool = poolOf(asset)
+    if (pool.disposals[0]?.at !== time) settleDisposals(pool)
     const currency = at.currency < 0 ? "USD" : (cells[at.currency] ?? "").trim().toUpperCase()
     if (units === 0n) continue
     if (units === null) {
@@ -147,13 +215,15 @@ export function parseCoinbaseCsv(text: string): ExchangeImport | null {
     } else if (SELLS.has(type) || SENDS.has(type)) {
       const enough = pool.known && pool.currency !== null && units <= pool.units && pool.units > 0n
       const cost = enough ? (pool.cost * units) / pool.units : 0n
-      const oldest = enough ? takeOldest(pool.lots, units) : null
+      let withdrawal: ExchangeWithdrawal | null = null
       if (SENDS.has(type)) {
         if (enough) {
           const to = (cells[at.notes] ?? "").match(/0x[0-9a-fA-F]{40}/)?.[0]
-          withdrawals.push({ exchange: "Coinbase", asset, units: units.toString(), at: new Date(time).toISOString(), cost: { micros: cost.toString(), currency: pool.currency as CurrencyCode }, fifoCostMicros: oldest === null ? null : oldest.toString(), toAddress: to && isAddress(to) ? normalizeAddress(to) : null })
+          withdrawal = { exchange: "Coinbase", asset, units: units.toString(), at: new Date(time).toISOString(), cost: { micros: cost.toString(), currency: pool.currency as CurrencyCode }, fifoCostMicros: null, toAddress: to && isAddress(to) ? normalizeAddress(to) : null }
+          withdrawals.push(withdrawal)
         } else skipped++
       }
+      pool.disposals.push({ at: time, units, withdrawal })
       // More went out than this history shows coming in, so it's missing something, and no cost after this can be trusted.
       if (units > pool.units) pool.known = false
       pool.cost -= cost
@@ -164,6 +234,7 @@ export function parseCoinbaseCsv(text: string): ExchangeImport | null {
       pool.units += units
     }
   }
+  for (const pool of pools.values()) settleDisposals(pool)
   return { withdrawals, skipped, firstSeen }
 }
 
