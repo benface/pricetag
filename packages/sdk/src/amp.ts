@@ -18,6 +18,8 @@ export type QueryOptions = {
   timeoutMs?: number | undefined
   /** It defaults to `console`. */
   logger?: Logger | undefined
+  /** How many queries can run at once. It defaults to 1, because a hosted Amp is shared. */
+  maxConcurrent?: number | undefined
 }
 
 /** A query that can also read through dataset aliases. */
@@ -51,7 +53,7 @@ export function describeError(error: unknown): string {
 /** What Amp answers when a table's job hasn't written anything yet. It isn't an outage: that table just has no blocks. */
 export const isNotStarted = (error: unknown) => describeError(error).includes("no common canonical watermark")
 
-export function createQuery(url: string, token: string | undefined, { timeoutMs: maxTimeoutMs = DEFAULT_TIMEOUT_MS, logger = console }: QueryOptions = {}): AmpQuery {
+export function createQuery(url: string, token: string | undefined, { timeoutMs: maxTimeoutMs = DEFAULT_TIMEOUT_MS, logger = console, maxConcurrent = 1 }: QueryOptions = {}): AmpQuery {
   const clientWith = (aliases?: Record<string, string>) => {
     const auth: Interceptor[] = token ? [createAuthInterceptor(token)] : []
     const alias: Interceptor[] = aliases
@@ -64,8 +66,21 @@ export function createQuery(url: string, token: string | undefined, { timeoutMs:
       : []
     return createClient(createGrpcTransport({ baseUrl: url, interceptors: [...auth, ...alias] }))
   }
-  // Staging is shared, so run one query at a time, whatever it reads through.
-  let queue: Promise<unknown> = Promise.resolve()
+  // Staging is shared, so only this many queries run at once, whatever they read through. The rest wait in order.
+  let running = 0
+  const waiting: (() => void)[] = []
+  const startTurn = () =>
+    new Promise<void>((start) => {
+      if (running < maxConcurrent) {
+        running += 1
+        start()
+      } else waiting.push(start)
+    })
+  const endTurn = () => {
+    const next = waiting.shift()
+    if (next) next()
+    else running -= 1
+  }
 
   const run = async <T>(client: ReturnType<typeof clientWith>, sql: string, timeoutMs: number): Promise<T[]> => {
     const iterator = client.query(sql)[Symbol.asyncIterator]()
@@ -90,16 +105,17 @@ export function createQuery(url: string, token: string | undefined, { timeoutMs:
   }
 
   // A caller's limit is the most any query gets, including ones that normally ask for less.
-  const queryWith = (client: ReturnType<typeof clientWith>): Query => <T>(sql: string, timeoutMs = maxTimeoutMs) => {
-    const result = queue.then(async () => {
+  const queryWith = (client: ReturnType<typeof clientWith>): Query => async <T>(sql: string, timeoutMs = maxTimeoutMs) => {
+    await startTurn()
+    try {
       const started = Date.now()
       const rows = await run<T>(client, sql, Math.min(timeoutMs, maxTimeoutMs))
       const took = Date.now() - started
       if (took > 5000) logger.warn(`Slow Amp query: ${took} ms, ${rows.length} rows: ${sql.replace(/\s+/g, " ").slice(0, 100)}…`)
       return rows
-    })
-    queue = result.catch(() => {})
-    return result
+    } finally {
+      endTurn()
+    }
   }
   return Object.assign(queryWith(clientWith()), { aliased: (aliases: Record<string, string>) => queryWith(clientWith(aliases)) })
 }

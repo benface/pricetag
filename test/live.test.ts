@@ -1085,6 +1085,91 @@ describe("the server's live events while the dataset catches up", FOLLOWING, () 
   })
 })
 
+describe("the head a wallet read starts from", () => {
+  async function serving() {
+    const hand = handStream()
+    const tables: Tables = { legs: [], reference_prices: [{ ...REFERENCE, block_num: "100" }], balances: balancesThrough(120, "0") }
+    const state = { heads: 0, hold: null as Promise<void> | null }
+    const query: Query = async <T,>(sql: string) => fakeAmp(tables, 100).query<T>(sql)
+    const source = {
+      ...datasetSource(query, { dataset: "benface/pricetag@0.0.1", baseDataset: "b", startBlock: 50, network: "base_mainnet" }),
+      head: async () => {
+        state.heads += 1
+        await state.hold
+        return { blockNum: 105, timestamp: new Date(1_800_000_000_000).toISOString() }
+      },
+    }
+    const api = createApi({}, {
+      source,
+      readRates: async () => ({ byBlock: {}, latest: null }),
+      proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null },
+      follow: { stream: hand.stream, sql: "SELECT 1", readMark: async () => MARK, logger: QUIET, tickMs: 0 },
+    })
+    const server = createServer((req, res) => void api(req, res))
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    const stop = new AbortController()
+    return {
+      hand,
+      state,
+      read: () => fetch(`${base}/api/wallet/${ADDRESS}`).then((res) => res.json()),
+      async follow() {
+        const reader = (await fetch(`${base}/api/events`, { signal: stop.signal })).body!.pipeThrough(new TextDecoderStream()).getReader()
+        await reader.read()
+        while (hand.resumes.length === 0) await new Promise((resolve) => setTimeout(resolve, 2))
+        return reader
+      },
+      close() {
+        stop.abort()
+        server.closeAllConnections()
+        server.close()
+      },
+    }
+  }
+
+  it("is read each time while nothing's following the chain", async () => {
+    const { state, read, close } = await serving()
+    await read()
+    await read()
+    assert.equal(state.heads, 2)
+    close()
+  })
+
+  it("is the one a tick just read while the chain's followed, until it's seconds old", async (t) => {
+    const { hand, state, read, follow, close } = await serving()
+    const reader = await follow()
+    hand.send(blockOf(101))
+    assert.match((await reader.read()).value!, /^event: head/)
+    assert.equal(state.heads, 1)
+    await read()
+    await read()
+    assert.equal(state.heads, 1)
+    const now = Date.now()
+    t.mock.method(Date, "now", () => now + 6000)
+    await read()
+    assert.equal(state.heads, 2)
+    close()
+  })
+
+  it("isn't the old one once a reorg was told about", async () => {
+    const { hand, state, read, follow, close } = await serving()
+    const reader = await follow()
+    hand.send(blockOf(101))
+    await reader.read()
+    assert.equal(state.heads, 1)
+    let release = () => {}
+    state.hold = new Promise((resolve) => (release = resolve))
+    hand.send(blockOf(101, 101, "0xreplaced"))
+    while (state.heads === 1) await new Promise((resolve) => setTimeout(resolve, 2))
+    assert.equal(state.heads, 2, "the tick is reading the new chain's")
+    const reading = read()
+    while (state.heads === 2) await new Promise((resolve) => setTimeout(resolve, 2))
+    release()
+    await reading
+    close()
+  })
+})
+
 describe("exchange rates after a reorg", () => {
   it("reads a settled block's rate again once a reorg replaced it, and only then", async () => {
     const asked: number[][] = []
