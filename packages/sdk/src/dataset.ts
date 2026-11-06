@@ -143,14 +143,13 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
   /** What moved in a wallet, which no pricing rule changes. */
   async function readLegs(address: string, from: number, to: number) {
     const me = hexOf(address)
-    const range = `block_num BETWEEN ${from} AND ${to}`
-    const legRows = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.legs WHERE ${range} AND account = X'${me}'`)
-    const unlistedRows = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.unlisted_legs WHERE ${range} AND account = X'${me}'`)
-    const rows = legRows.map(toLegRow)
+    const where = `WHERE block_num BETWEEN ${from} AND ${to} AND account = X'${me}'`
+    const rows = (await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.legs ${where} UNION ALL SELECT ${LEG_COLUMNS} FROM ${ds}.unlisted_legs ${where}`)).map(toLegRow)
+    const isUnlisted = (r: LegRow) => r.kind === "unlisted" || r.kind === "unlisted_nft"
     return {
       // pt_gas leaves the amount empty when the gas can't be worked out, and BigInt can't read that.
       // An unlisted row stays either way, because it's evidence that something moved.
-      rows: [...rows.filter((r) => r.amount !== "" && r.amount !== "0"), ...unlistedRows.map(toLegRow)],
+      rows: [...rows.filter((r) => !isUnlisted(r) && r.amount !== "" && r.amount !== "0"), ...rows.filter(isUnlisted)],
       gasUnknown: rows.filter((r) => r.kind === "gas" && r.amount === "").map(({ tx_hash, block_num }) => ({ tx_hash, block_num })),
     }
   }
@@ -161,6 +160,9 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
     return pricedRows.map(toPricedRow)
   }
 
+  /** A priced row only counts through a leg of its transaction, so a range with none, as most re-reads are, has nothing to ask. */
+  const readPricedOf = async (rows: readonly LegRow[], address: string, from: number, to: number) => (rows.length > 0 ? readPriced(address, from, to) : [])
+
   return {
     head: (after: number | null) => readHead(query, config.baseDataset, after),
 
@@ -169,22 +171,24 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
      * Reads never go past this. A derived table can lag the chain, and a block read before it's processed looks empty.
      */
     async processedThrough(after: number, head: number, tables: readonly string[] = WALLET_TABLES): Promise<number | null> {
-      // Together, because this is on every wallet read, and a slow minute on staging makes each one take seconds.
-      const newest = await Promise.all(tables.map((table) => readOrEmpty(`SELECT block_num FROM ${PRICE_TABLES.includes(table) ? prices : ds}.${table} WHERE block_num >= ${after} ORDER BY block_num DESC LIMIT 1`)))
-      let through = head
-      for (const rows of newest) {
-        if (!rows[0]) return null
-        through = Math.min(through, asNumber(rows[0].block_num))
-      }
-      return through
+      const newestIn = (table: string) => `SELECT block_num FROM ${PRICE_TABLES.includes(table) ? prices : ds}.${table} WHERE block_num >= ${after} ORDER BY block_num DESC LIMIT 1`
+      // One query, because this is on every wallet read and queries run one at a time. On staging it took about a third as long.
+      const merged = await query<Row>(tables.map((table) => `SELECT block_num FROM (${newestIn(table)})`).join(" UNION ALL ")).catch(async (error: unknown) => {
+        if (!isNotStarted(error)) throw error
+        // This error is about what tables have in common, so only asking each on its own says one really hasn't started.
+        return (await Promise.all(tables.map((table) => readOrEmpty(newestIn(table))))).flat()
+      })
+      if (merged.length < tables.length) return null
+      return Math.min(head, ...merged.map((row) => asNumber(row.block_num)))
     },
 
     readLegs,
 
-    readPriced,
+    readPricedOf,
 
     async readWindow(address: string, from: number, to: number) {
-      return { ...(await readLegs(address, from, to)), priced: await readPriced(address, from, to) }
+      const legs = await readLegs(address, from, to)
+      return { ...legs, priced: await readPricedOf(legs.rows, address, from, to) }
     },
 
     async readReferences(blocks: readonly number[]): Promise<Reference[]> {

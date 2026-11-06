@@ -844,12 +844,12 @@ describe("reading through aliases", () => {
   })
 
   it("reads prices from the price dataset, and what happened on the chain from the other", async () => {
-    const { query, queries } = fakeAmp({ legs: [], unlisted_legs: [], priced_legs: [], reference_prices: [] })
+    const { query, queries } = fakeAmp({ legs: [leg("aa", USDC, ME, "credit", "7", "erc20")], unlisted_legs: [], priced_legs: [], reference_prices: [] })
     const reader = datasetReader(query, { baseDataset: "base", dataset: "pricetag", priceDataset: "pricing" })
-    await reader.readWindow("0x" + ME, 1, 2)
+    await reader.readWindow("0x" + ME, 1, 200)
     await reader.readReferences([1])
     await reader.processedThrough(1, 200)
-    const from = (table: string) => [...new Set(queries.filter((sql) => sql.includes(`.${table} `)).map((sql) => /FROM "(\w+)"/.exec(sql)![1]))]
+    const from = (table: string) => [...new Set(queries.flatMap((sql) => [...sql.matchAll(/FROM "(\w+)"\.(\w+)/g)]).filter((match) => match[2] === table).map((match) => match[1]))]
     assert.deepEqual(from("legs"), ["pricetag"])
     assert.deepEqual(from("unlisted_legs"), ["pricetag"])
     assert.deepEqual(from("priced_legs"), ["pricing"])
