@@ -297,7 +297,7 @@ struct PopoverView: View {
                 Button { openOverview() } label: {
                     Text("\(more) more")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                 }
                 .buttonStyle(NumberButtonStyle())
                 .accessibilityHint("Shows every token in the window")

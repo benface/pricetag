@@ -283,7 +283,7 @@ struct WalletSwitcher: View {
                 if let title {
                     Text(title)
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                         .padding(.horizontal, 10)
                 }
             }

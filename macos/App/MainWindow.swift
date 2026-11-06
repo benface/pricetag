@@ -464,7 +464,7 @@ struct CostMethodMenu: View {
         .menuStyle(.borderlessButton)
         .controlSize(.small)
         .fixedSize()
-        .foregroundStyle(.secondary)
+        .secondaryText()
         .help(Wording.methodHelp)
     }
 }
@@ -536,7 +536,7 @@ private struct HoldingsSection: View {
                 if let rule = store.activeRuleName {
                     Text("\(Wording.rulesTitle): \(rule)")
                         .font(.callout)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                         .lineLimit(1)
                 }
                 CostMethodMenu(store: store)
@@ -1053,7 +1053,7 @@ private struct Welcome: View {
             }
             HStack {
                 VStack { Divider() }
-                Text("or").font(.callout).foregroundStyle(.secondary)
+                Text("or").font(.callout).secondaryText()
                 VStack { Divider() }
             }
         }

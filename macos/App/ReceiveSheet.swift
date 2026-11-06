@@ -26,7 +26,7 @@ struct ReceiveSheet: View {
                 Spacer()
                 Label(HotWalletWording.label, systemImage: "flask")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
             }
             if let problem {
                 Notice(wallet.address == nil ? .info : .warning, problem)

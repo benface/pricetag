@@ -144,7 +144,7 @@ private struct PickDevice: View {
                                 .font(.headline)
                             Text(AddSavingsWording.deviceSubtitle(device))
                                 .font(.callout)
-                                .foregroundStyle(.secondary)
+                                .secondaryText()
                         }
                         Spacer(minLength: 0)
                         Image(systemName: "chevron.right")
@@ -158,7 +158,7 @@ private struct PickDevice: View {
             }
             Label(AddSavingsWording.neverAsked, systemImage: "lock.shield")
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -259,7 +259,7 @@ private struct TroubleList: View {
                     ForEach(troubles, id: \.when) { trouble in
                         VStack(alignment: .leading, spacing: 1) {
                             Text(trouble.when).fontWeight(.medium)
-                            Text(trouble.then).foregroundStyle(.secondary)
+                            Text(trouble.then).secondaryText()
                         }
                         .fixedSize(horizontal: false, vertical: true)
                     }
@@ -285,7 +285,7 @@ private struct LedgerQuitStep: View {
             } else {
                 Label("It's closed.", systemImage: "checkmark.circle.fill")
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
             }
         }
         .onAppear { isStillOpen = isOpen() }
@@ -362,7 +362,7 @@ private struct LedgerBrowserStep: View {
             }
             Text("This page moves on by itself when the address arrives.")
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .secondaryText()
             Button("Open \(browser.name) Again") { open(browser) }
             TroubleList(troubles: AddSavingsWording.browserTroubles, isExpanded: showsTrouble)
         }
@@ -396,7 +396,7 @@ private struct KeystoneScanStep: View {
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     Text(AddSavingsWording.camera)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                     if let problem = model.scanProblem {
                         WarningText(problem).font(.callout)
                     }
@@ -480,7 +480,7 @@ private struct CheckStep: View {
             }
             Text(AddSavingsWording.checkWarning)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .fixedSize(horizontal: false, vertical: true)
             if !model.suggestedAccounts.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
@@ -497,7 +497,7 @@ private struct CheckStep: View {
                     }
                     Text("Costs will follow what moves to and from the ones you tick, and no money is sent there. Leave out any you don't recognize.")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }

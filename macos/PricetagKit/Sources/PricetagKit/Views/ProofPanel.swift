@@ -49,7 +49,7 @@ struct ProofPanel: View {
         VStack(alignment: .leading, spacing: 10) {
             section("Where this price comes from") {
                 lines(proof.source)
-                lines(proof.movements, style: .secondary)
+                lines(proof.movements).secondaryText()
                 ForEach(proof.links) { link in
                     if let destination = link.destination {
                         Link(destination: destination) {
@@ -87,7 +87,7 @@ struct ProofPanel: View {
             verifySection(proof)
             if !proof.scope.isEmpty {
                 DisclosureGroup("What this does and doesn't show") {
-                    lines(proof.scope, style: .secondary)
+                    lines(proof.scope).secondaryText()
                 }
             }
         }
@@ -155,9 +155,9 @@ struct ProofPanel: View {
         }
     }
 
-    private func lines(_ lines: [String], style: HierarchicalShapeStyle = .primary) -> some View {
+    private func lines(_ lines: [String]) -> some View {
         ForEach(lines, id: \.self) { line in
-            Text(line).foregroundStyle(style).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            Text(line).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
         }
     }
 }

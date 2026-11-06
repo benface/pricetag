@@ -88,7 +88,7 @@ private struct HotWalletSetup: View {
                 HStack {
                     Label(HotWalletWording.label, systemImage: "flask")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                     Button("How It Works", systemImage: "info.circle") { showsHowItWorks.toggle() }
                         .labelStyle(.iconOnly)
                         .buttonStyle(.borderless)
@@ -288,7 +288,7 @@ struct HotWalletDetails<Overview: View>: View {
                     Spacer()
                     Label(HotWalletWording.label, systemImage: "flask")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                 }
                 // Only a picture of the numbers above, which are what's real.
                 Gauge(value: gaugeValue, in: 0...1) {}
@@ -621,7 +621,7 @@ struct HotWalletDetails<Overview: View>: View {
                             .monospacedDigit()
                         Text("\(reasonText(record)) · \(Format.time(record.createdAt))")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .secondaryText()
                     }
                     Spacer()
                     RecordStatus(status: record.status, text: statusText(record))
