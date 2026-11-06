@@ -47,6 +47,9 @@ const MAX_OTHER_WALLETS = 20
 /** How long a read of all the user's wallets waits on the slowest before answering with the rest. A wallet catching up takes far less. */
 const ALL_YOURS_WAIT_MS = 2_500
 
+/** How many sets of wallets keep their last answer. Their rows count against the same budget as any wallet's. */
+const LAST_ANSWERS_KEPT = 50
+
 /**
  * Waits for every job, or `waitMs`, whichever's first. If `enough` still says no by then, it keeps waiting, a job at
  * a time, until it does or they're all done. Jobs that aren't done keep running, and never reject.
@@ -284,6 +287,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     headRewinds += 1
     const oldTip = Math.max(head?.blockNum ?? 0, tip)
     readL1Fees.rewind(block, oldTip)
+    lastAnswers.clear()
     await Promise.all([created?.shared?.rewind(block, oldTip), ...[...new Set([wallets, ...rules.map((r) => r.wallets)])].map((w) => w?.rewind(block, oldTip))])
     created?.readRates.rewind?.(block)
     // The new chain can be shorter, and the head is only read from the last one on.
@@ -322,6 +326,12 @@ export function createApi(env: Env, created: Created | null = createSource(env),
   // Shared by the rules, since no rule changes what a token says about itself or what a wallet holds of it.
   const otherTokens = source?.readTokenFacts && createOtherTokens(source.readTokenFacts)
   const budget = createRowBudget(maxWalletRowsOf(env))
+  /** Each set of wallets' last answer, all at one block, for while one of them can't be read. It's the first to go when memory's short, because reading doesn't need it, and a client keeps the one on its screen in case it does. */
+  const lastAnswers = new Map<string, WalletResponse[]>()
+  budget.join({
+    heldRows: () => [...lastAnswers.values()].flat().reduce((sum, wallet) => sum + wallet.legs.length, 0),
+    evictOldest: () => lastAnswers.delete(lastAnswers.keys().next().value as string),
+  })
   const wallets = source ? createWallets(source, walletHead, readL1Fees, console, { maxWallets, priceSamples: true, otherTokens, budget }) : null
   // Each rule keeps its own, so a rule nobody's looking at costs nothing, and what no rule changes is only read once. The first rule is the same as having none.
   const rules = (created?.rules ?? []).map(({ rule, source }, i) => ({ rule, source, note: i === 0 ? null : ruleNote(rule), wallets: i === 0 ? wallets! : createWallets(source, walletHead, readL1Fees, console, { maxWallets, priceSamples: true, otherTokens, budget }) }))
@@ -437,12 +447,13 @@ export function createApi(env: Env, created: Created | null = createSource(env),
   /**
    * Every one of the user's wallets that this request could read, in `currency`, and the ones it couldn't yet. Each wallet is
    * one job, its read and its rates together, so one slow or failing wallet doesn't hold up or fail the rest: after a moment
-   * whatever's done is the answer, and the rest are still reading or failed. With nothing done at all, it waits for the first.
-   * A wallet whose read this time failed or hasn't finished is left out, whatever was read of it before, because its balance
-   * then can be from before a move another wallet has already seen. `fresh: false` takes what's already been read, and
-   * leaves out a wallet whose last read failed.
+   * whatever's done is the answer, and the rest are still reading or failed. With nothing to answer with, it waits for the first.
+   * A wallet that's been in an answer never drops out of the next one. Its old balance can be from before a move another wallet
+   * has already seen, so it can't join a newer read of the others: the whole last answer stands instead, at its one block, until
+   * that wallet is back. `fresh: false` takes what's already been read, and treats a wallet whose last read failed as failed.
+   * `remember` is false for what isn't the user's own answers, like a preview's, whose rates aren't the ones to keep.
    */
-  async function readAllYours(addresses: readonly string[], currency: CurrencyCode, rule: (typeof rules)[number] | null, books: readonly Book[], fresh: boolean, res: ServerResponse, paidIn: readonly CurrencyCode[] = []): Promise<{ read: WalletResponse[]; unread: Unread } | null> {
+  async function readAllYours(addresses: readonly string[], currency: CurrencyCode, rule: (typeof rules)[number] | null, books: readonly Book[], fresh: boolean, remember: boolean, res: ServerResponse, paidIn: readonly CurrencyCode[] = []): Promise<{ read: WalletResponse[]; unread: Unread } | null> {
     const from = rule?.wallets ?? wallets
     const chain = rule?.source ?? source
     if (!from || !chain) {
@@ -450,6 +461,8 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       return null
     }
     const ruled = (wallet: WalletResponse): WalletResponse => (rule ? { ...wallet, rule: rule.rule.id, ruleNote: rule.note } : wallet)
+    const lastKey = JSON.stringify([rule?.rule.id ?? null, currency, [...paidIn].sort(), [...addresses].sort()])
+    const startedAt = headRewinds
     const failed = new Set<string>()
     const done = new Map<string, WalletResponse>()
     /** Why a wallet was refused, which says more than that it failed. */
@@ -478,7 +491,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
         failed.add(address)
       }
     }
-    await settleSome(addresses.map(job), () => done.size > 0, allYoursWaitMs)
+    await settleSome(addresses.map(job), () => done.size > 0 || lastAnswers.has(lastKey), allYoursWaitMs)
 
     // What's done by now is the answer. A job that finishes later comes too late to be taken back to the block below, so it stays out, as still reading.
     const answer = new Map(done)
@@ -510,12 +523,34 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       )
     }
 
+    const last = lastAnswers.get(lastKey)
+    const kept = new Set(last?.map((wallet) => wallet.address.toLowerCase()))
+    const missing = [...kept].filter((address) => !answer.has(address))
+    if (last && missing.length > 0) {
+      const isNew = (address: string) => !kept.has(address)
+      return {
+        read: last,
+        unread: {
+          reading: addresses.filter((address) => isNew(address) && !failed.has(address)),
+          failed: addresses.filter((address) => isNew(address) && failed.has(address)),
+          updating: missing.filter((address) => !failed.has(address)),
+          outdated: missing.filter((address) => failed.has(address)),
+        },
+      }
+    }
+
     const read = addresses.flatMap((address) => answer.get(address) ?? [])
     const unread = { reading: addresses.filter((address) => !answer.has(address) && !failed.has(address)), failed: addresses.filter((address) => !answer.has(address) && failed.has(address)) }
     if (read.length === 0 && fresh && unread.reading.length === 0) {
       if (refusal) sendAmpError(res, refusal)
       else sendJson(res, 502, { error: "None of your wallets could be read." })
       return null
+    }
+    // A reorg during this read can have replaced what it found.
+    if (remember && read.length > 0 && startedAt === headRewinds) {
+      lastAnswers.delete(lastKey)
+      lastAnswers.set(lastKey, read)
+      if (lastAnswers.size > LAST_ANSWERS_KEPT) lastAnswers.delete(lastAnswers.keys().next().value as string)
     }
     return { read, unread }
   }
@@ -535,11 +570,18 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     const books = action === "preview" ? (candidates as Book[]) : [book]
     const paidIn = parsePaidIn(typeof body.paid === "string" ? body.paid : null)
     if (!paidIn) return sendJson(res, 400, { error: "That currency isn't supported." })
-    const found = await readAllYours(addresses, currency, rule, books, action === undefined || action === "wallets", res, paidIn)
+    const shown: unknown = body.shown ?? []
+    if (!Array.isArray(shown) || !shown.every((address) => typeof address === "string" && isAddress(address))) return sendJson(res, 400, { error: "The wallets shown are a list of Base addresses." })
+    const found = await readAllYours(addresses, currency, rule, books, action === undefined || action === "wallets", action !== "preview", res, paidIn)
     if (!found) return
     const { read, unread } = found
     // The wallets themselves, because the browser runs the fold, with answers that stay with it.
     if (action === "wallets") return sendJson(res, 200, { wallets: read, unread } satisfies AllYoursRead)
+    // A client that doesn't fold its own can be showing a wallet this server no longer has. Leaving it out here would contradict the total, and a file can't say so.
+    if (action === "explain" || action === "export") {
+      const answered = new Set(read.map((wallet) => wallet.address.toLowerCase()))
+      if (!(shown as string[]).every((address) => answered.has(address.toLowerCase()))) return sendJson(res, 409, { error: "One of your wallets isn't back yet, and this would leave it out. Try again once it's updated." })
+    }
     if (read.length === 0) {
       res.writeHead(204, { "cache-control": "no-store" })
       res.end()

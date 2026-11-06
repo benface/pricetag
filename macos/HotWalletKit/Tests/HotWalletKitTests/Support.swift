@@ -273,7 +273,7 @@ actor ScriptedPortfolios: PortfolioSource {
         throw FetchError.unreachable
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) throws -> Explanation {
         throw FetchError.unreachable
     }
 

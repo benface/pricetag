@@ -39,7 +39,8 @@ private struct WalletStep {
 
 public enum FeedState: Equatable, Sendable {
     case noWallet
-    /// Waiting on an answer, which the first time for a wallet can take a minute. Numbers on screen are the last answer, and may be old.
+    /// Waiting on an answer, which the first time for a wallet can take a minute, or on one of All Yours' wallets being read again.
+    /// Numbers on screen are the last answer, and may be old.
     case reading
     case live
     /// The server and Amp both answer, but Amp's newest block is old.
@@ -56,6 +57,8 @@ public enum FeedState: Equatable, Sendable {
     case tooBig(String)
     /// The server is holding this client back for now, which clears by itself.
     case rateLimited(String)
+    /// The server answers, but it couldn't update some of All Yours' wallets, so the numbers stay as they were last read. Those wallets' notices say which.
+    case walletsOutdated
 
     /// Only this state may show a number as current.
     public var isLive: Bool { self == .live }
@@ -64,7 +67,15 @@ public enum FeedState: Equatable, Sendable {
     public var isStale: Bool {
         switch self {
         case .noWallet, .reading, .live, .catchingUp: false
-        case .behind, .serverUnreachable, .tooSlow, .ampUnavailable, .noAmpConfigured, .rejected, .tooBig, .rateLimited: true
+        case .behind, .serverUnreachable, .tooSlow, .ampUnavailable, .noAmpConfigured, .rejected, .tooBig, .rateLimited, .walletsOutdated: true
+        }
+    }
+
+    /// A blip, usually, so the status alone says so until it's gone on a while. The others say the numbers are old from the start.
+    public var canBeBrief: Bool {
+        switch self {
+        case .serverUnreachable, .tooSlow, .ampUnavailable, .rateLimited: true
+        default: false
         }
     }
 }
@@ -77,6 +88,8 @@ public struct ExplanationRequest: Hashable, Sendable {
     public let currency: CurrencyCode
     public let rule: String?
     public let linked: [String]
+    /// All Yours' wallets in the numbers on screen, which the explanation can't leave out.
+    public let shown: [String]?
     public let serverURL: URL
     public let book: Book
 }
@@ -113,10 +126,22 @@ public final class PortfolioStore {
     /// Goes up each time `portfolio` is replaced, however that happens: a read, the last read on the server, or what's kept from
     /// before. `updatedAt` only changes with a fresh read, so whatever's worked out from `portfolio` keys on this instead.
     public private(set) var portfolioRevision = 0
-    public private(set) var feed: FeedState
+    public private(set) var feed: FeedState {
+        didSet { noteProblem() }
+    }
+    /// Whether what's wrong has been worth saying beyond the status: it can't clear by itself in a moment, or it's had `longProblem` to. A read that's trying again keeps it.
+    public private(set) var isProblemLong = false
+    @ObservationIgnored private var longProblemTask: Task<Void, Never>?
+    /// What was wrong when someone asked to try again. It stands until that read answers.
+    public private(set) var retriedProblem: FeedState?
     /// When the read that's running now started, so a long one can say how long it's been, including a retry after a failure. nil between reads.
     /// A change starts a new read, so it starts this over. A read that waits longer on the same request keeps it.
-    public private(set) var readingSince: Date?
+    public private(set) var readingSince: Date? {
+        didSet { noteRead() }
+    }
+    /// Whether the read that's running has gone on for `longReadSeconds`, so it's worth saying more than that it's running.
+    public private(set) var isReadLong = false
+    @ObservationIgnored private var longReadTask: Task<Void, Never>?
     /// Which read `readingSince` belongs to, so one a change left behind can't clear it when it finally ends.
     @ObservationIgnored private var readCount = 0
     public private(set) var updatedAt: Date?
@@ -195,6 +220,7 @@ public final class PortfolioStore {
     @ObservationIgnored private let pushedDelay: Duration
     /// When the server said it'd have room again, after holding this client back.
     @ObservationIgnored private var heldUntil: Date?
+    private let longProblem: Duration
     @ObservationIgnored private let liveFor: Duration
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var eventsTask: Task<Void, Never>?
@@ -226,8 +252,10 @@ public final class PortfolioStore {
         pushedDelay: Duration = .seconds(15),
         // The longest wait for a block, plus as long as a read gets before it's marked as on its way anyway.
         liveFor: Duration = .seconds(30),
-        rateRetryDelay: Duration = .seconds(30)
+        rateRetryDelay: Duration = .seconds(30),
+        longProblem: Duration = .seconds(60)
     ) {
+        self.longProblem = longProblem
         self.rateRetryDelay = rateRetryDelay
         self.defaults = defaults
         self.customSource = makeSource
@@ -268,6 +296,7 @@ public final class PortfolioStore {
 
     /// Reads now, with the numbers on screen marked as on their way, because someone asked and should see it happen.
     public func refresh() {
+        if feed.isStale { retriedProblem = feed }
         if address != nil { feed = .reading }
         start()
     }
@@ -344,7 +373,7 @@ public final class PortfolioStore {
             return
         }
         // While All Yours still has wallets on their way, they could be done by the next read, block or not.
-        let isWaitingOnWallets = portfolio?.isAllYours == true && portfolio?.linkedReading.isEmpty == false
+        let isWaitingOnWallets = portfolio?.isAllYours == true && (portfolio?.linkedReading.isEmpty == false || portfolio?.linkedUpdating?.isEmpty == false)
         let duration = isPushed && delay == reachableDelay && !feed.isStale && !isWaitingOnWallets ? pushedDelay : delay
         let sleeping = Task { _ = try? await Task.sleep(for: duration) }
         sleeper = sleeping
@@ -365,6 +394,7 @@ public final class PortfolioStore {
         // In the same moment as the address, so one wallet's numbers are never on screen under another.
         portfolio = lastKnown()
         updatedAt = nil
+        retriedProblem = nil
         feed = next == nil ? .noWallet : .reading
         wantsLastRead = true
         start()
@@ -937,7 +967,7 @@ public final class PortfolioStore {
     /// Every movement as a spreadsheet, marked so an estimate or an unknown can't pass for an exact number.
     public func exportCSV() async throws -> String {
         guard let address else { throw FetchError.unreachable }
-        return try await source.exportCSV(address: address, method: method, currency: currency, rule: selectedRule, linked: linked(for: address), book: bookToSend(book, for: address))
+        return try await source.exportCSV(address: address, method: method, currency: currency, rule: selectedRule, linked: linked(for: address), shown: walletsShown, book: bookToSend(book, for: address))
     }
 
     /// Reads an exchange's history, and adds what it found to what's on this device. Says how many withdrawals had no usable cost.
@@ -949,13 +979,18 @@ public final class PortfolioStore {
 
     /// nil with no wallet, when there's nothing to explain.
     public func explanationRequest(for target: ExplainTarget) -> ExplanationRequest? {
-        address.map { ExplanationRequest(target: target, address: $0, method: method, currency: currency, rule: selectedRule, linked: linked(for: $0), serverURL: serverURL, book: bookToSend(book, for: $0)) }
+        address.map { ExplanationRequest(target: target, address: $0, method: method, currency: currency, rule: selectedRule, linked: linked(for: $0), shown: walletsShown, serverURL: serverURL, book: bookToSend(book, for: $0)) }
     }
 
     public func explanation(for request: ExplanationRequest) async throws -> Explanation {
         // A request from before a change has nothing to say about what's on screen now.
         guard request == explanationRequest(for: request.target) else { throw CancellationError() }
-        return try await source.explanation(of: request.target, address: request.address, method: request.method, currency: request.currency, rule: request.rule, linked: request.linked, book: request.book)
+        return try await source.explanation(of: request.target, address: request.address, method: request.method, currency: request.currency, rule: request.rule, linked: request.linked, shown: request.shown, book: request.book)
+    }
+
+    /// What can't be left out of an answer about what's on screen. Nil for what's about one wallet, or with nothing on screen.
+    private var walletsShown: [String]? {
+        portfolio.flatMap { $0.address == address ? $0.walletsInNumbers : nil }
     }
 
     /// Whether a leg in this wallet belongs to what's on screen.
@@ -1030,8 +1065,9 @@ public final class PortfolioStore {
             let last = try? await source.lastRead(address: address, method: method, currency: currency, rule: rule, linked: linked, book: bookToSend(book, for: address))
             guard isCurrent() else { return .zero }
             if let last, shouldShow(last) {
-                portfolio = last
-                cache.remember(last, of: address, on: serverURL, at: now())
+                let shown = holdingWhatsShown(last)
+                portfolio = shown
+                cache.remember(shown, of: address, on: serverURL, at: now())
             }
         }
         let isOtherRule = rule != nil && portfolio?.rule != rule
@@ -1042,8 +1078,9 @@ public final class PortfolioStore {
             try await source.portfolio(address: address, method: method, currency: currency, rule: rule, linked: linked, book: bookToSend(book, for: address), timeout: timeout)
         }
         do {
-            let next = try await patiently(read, timeout: timeout, isCurrent: isCurrent)
+            let answer = try await patiently(read, timeout: timeout, isCurrent: isCurrent)
             guard isCurrent() else { return .zero }
+            let next = holdingWhatsShown(answer)
             portfolio = next
             updatedAt = now()
             needsInvite = false
@@ -1067,10 +1104,58 @@ public final class PortfolioStore {
         }
     }
 
+    private func holdingWhatsShown(_ answer: Portfolio) -> Portfolio {
+        portfolio.map(answer.holding) ?? answer
+    }
+
     /// Not when it's behind numbers on screen that answer the same question, as it can be after a reorg or if the app has seen further.
     private func shouldShow(_ last: Portfolio) -> Bool {
         guard let portfolio, isForCurrentSettings(portfolio) else { return true }
         return last.latest.blockNum >= portfolio.latest.blockNum
+    }
+
+    /// By the same clock as `ReadingClock`, so this agrees with the seconds on screen.
+    private func noteRead() {
+        longReadTask?.cancel()
+        longReadTask = nil
+        isReadLong = false
+        guard let readingSince else { return }
+        let remaining = Double(FeedState.longReadSeconds) - Date.now.timeIntervalSince(readingSince)
+        guard remaining > 0 else {
+            isReadLong = true
+            return
+        }
+        longReadTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(remaining))
+            guard let self, !Task.isCancelled else { return }
+            isReadLong = true
+        }
+    }
+
+    private func noteProblem() {
+        if feed != .reading { retriedProblem = nil }
+        guard feed.isStale else {
+            // A read says nothing yet, so whatever was wrong stands until it answers.
+            if feed != .reading {
+                longProblemTask?.cancel()
+                longProblemTask = nil
+                isProblemLong = false
+            }
+            return
+        }
+        guard !isProblemLong else { return }
+        guard feed.canBeBrief, longProblem > .zero else {
+            longProblemTask?.cancel()
+            longProblemTask = nil
+            isProblemLong = true
+            return
+        }
+        guard longProblemTask == nil else { return }
+        longProblemTask = Task { [weak self, longProblem] in
+            try? await Task.sleep(for: longProblem)
+            guard let self, !Task.isCancelled else { return }
+            isProblemLong = true
+        }
     }
 
     /// Stops calling these numbers live once they're older than a read should leave them, say after a Mac sleeps. Checking when a read starts
@@ -1112,7 +1197,11 @@ public final class PortfolioStore {
     }
 
     private func state(of portfolio: Portfolio) -> FeedState {
-        guard portfolio.mode != .demo, let newest = portfolio.latest.date else { return .live }
+        guard portfolio.mode != .demo else { return .live }
+        // First, because they're why these numbers have stopped moving, however old that's made them.
+        if portfolio.linkedOutdated?.isEmpty == false { return .walletsOutdated }
+        if portfolio.linkedUpdating?.isEmpty == false { return .reading }
+        guard let newest = portfolio.latest.date else { return .live }
         let age = Int(now().timeIntervalSince(newest))
         if age > Self.behindAfterSeconds { return .behind(seconds: age) }
         return portfolio.progress.started && portfolio.progress.behindBlocks == 0 ? .live : .catchingUp
@@ -1123,7 +1212,7 @@ public final class PortfolioStore {
         return switch error as? FetchError {
         case .ampUnavailable(let message): .ampUnavailable(message)
         case .noAmpConfigured(let message): .noAmpConfigured(message)
-        case .rejected(let message), .needsInvite(let message), .priceChanged(let message): .rejected(message)
+        case .rejected(let message), .needsInvite(let message), .priceChanged(let message), .notCaughtUp(let message): .rejected(message)
         case .tooBig(let message): .tooBig(message)
         case .rateLimited(let message, _): .rateLimited(message)
         case .unreachable, .timedOut, nil: .serverUnreachable
