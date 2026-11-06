@@ -65,9 +65,15 @@ struct MoneyDisplayTests {
 
 private actor Rates: PortfolioSource {
     var answer: Result<String?, FetchError>
+    /// What it says from its second answer on.
+    let then: Result<String?, FetchError>?
     var asked: [CurrencyCode] = []
+    var askedAt: [ContinuousClock.Instant] = []
 
-    init(_ answer: Result<String?, FetchError>) { self.answer = answer }
+    init(_ answer: Result<String?, FetchError>, then: Result<String?, FetchError>? = nil) {
+        self.answer = answer
+        self.then = then
+    }
 
     func say(_ answer: Result<String?, FetchError>) { self.answer = answer }
 
@@ -75,6 +81,8 @@ private actor Rates: PortfolioSource {
     func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation { throw FetchError.unreachable }
     func currentRate(currency: CurrencyCode) async throws -> String? {
         asked.append(currency)
+        askedAt.append(.now)
+        defer { if let then { answer = then } }
         return try answer.get()
     }
 }
@@ -142,6 +150,48 @@ struct CurrentRateTests {
         await source.say(.success("1400000"))
         for _ in 0..<400 where !store.moneyDisplay.isConverted { try await Task.sleep(for: .milliseconds(5)) }
         #expect(store.moneyDisplay == MoneyDisplay(main: .CAD, rateMicros: "1400000"))
+    }
+
+    @Test func aServerThatSaysToWaitIsLeftAloneUntilThen() async throws {
+        let source = Rates(.failure(.rateLimited("Too many requests.", retryAfter: 1)), then: .success("1400000"))
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        defaults.set("CAD", forKey: "currency")
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, rateRetryDelay: .milliseconds(10))
+        store.start()
+        defer { store.stop() }
+        for _ in 0..<2000 where !store.moneyDisplay.isConverted { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(store.moneyDisplay == MoneyDisplay(main: .CAD, rateMicros: "1400000"))
+        let askedAt = await source.askedAt
+        #expect(askedAt.count == 2)
+        #expect(askedAt[1] - askedAt[0] >= .seconds(1))
+    }
+
+    @Test func aRateGoesWhenItsTimeRunsOutDuringAWait() async throws {
+        let source = Rates(.success("1400000"))
+        let clock = Clock()
+        let store = store(source, clock: clock)
+        await store.readRate()
+        await source.say(.failure(.rateLimited("Too many requests.", retryAfter: 600)))
+        clock.now += 60 * 60 - 0.1
+        await store.readRate()
+        #expect(store.moneyDisplay.isConverted)
+        for _ in 0..<400 where store.moneyDisplay.isConverted { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(!store.moneyDisplay.isConverted)
+        #expect(await source.asked.count == 2)
+        store.stop()
+    }
+
+    @Test func stoppingEndsARatesCountdown() async throws {
+        let source = Rates(.success("1400000"))
+        let clock = Clock()
+        let store = store(source, clock: clock)
+        await store.readRate()
+        await source.say(.failure(.rateLimited("Too many requests.", retryAfter: 600)))
+        clock.now += 60 * 60 - 0.05
+        await store.readRate()
+        store.stop()
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(store.moneyDisplay.isConverted)
     }
 
     @Test func aRateIsOnlyForItsOwnCurrency() async {
