@@ -596,15 +596,21 @@ public final class HotWallet {
     /// What sweeping everything would move right now, for showing. It's worked out again from a fresh read before anything's signed.
     public var sweepPreview: SweepPreview? {
         guard let snapshot, let destination = settings.sweepDestination else { return nil }
-        let transfers = SweepPlanner.everything(holdings: holdings, fees: snapshot.fees, destination: destination).transfers
+        let plan = SweepPlanner.everything(holdings: holdings, fees: snapshot.fees, destination: destination)
+        let transfers = plan.transfers
         let feeWei = transfers.reduce(UInt128(0)) { $0 + snapshot.fees.costWei(of: $1.token) }
-        return SweepPreview(transfers: transfers, feeWei: feeWei, feeUsdMicros: snapshot.ethUsdMicros.map { Money.usdMicros(of: feeWei, priceMicros: $0, decimals: 18) })
+        return SweepPreview(transfers: transfers, feeWei: feeWei, feeUsdMicros: snapshot.ethUsdMicros.map { Money.usdMicros(of: feeWei, priceMicros: $0, decimals: 18) }, whyNothing: HotWalletWording.whyNothingSweeps(plan))
     }
 
     /// True once all of it's on its way. Otherwise `sweepProblem` says what stopped it, and what went anyway.
     @discardableResult
     public func sweepEverything(in prompt: PresencePrompt? = nil) async -> Bool {
         guard let address, let destination = settings.sweepDestination else { return false }
+        // Touch ID is for approving something, and as of the last read there's nothing to approve. A read that does find something still asks, and then reads again.
+        if let whyNothing = sweepPreview?.whyNothing {
+            sweepProblem = whyNothing
+            return false
+        }
         var isOnItsWay = false
         let name = settings.coldWallets.first { $0.address == destination }?.name ?? "your savings"
         lastSubmitted = []
@@ -621,8 +627,7 @@ public final class HotWallet {
             guard snapshot.blockNumber >= state.settledThroughBlock ?? 0 else { throw ChainError.rejected("The last sweep is still showing up. Try again in a moment.") }
             guard !(state.records[address] ?? []).contains(where: { $0.status == .pending }) else { throw ChainError.rejected("A sweep is still on its way. Try again in a moment.") }
             let everything = SweepPlanner.everything(holdings: holdings, fees: snapshot.fees, destination: destination)
-            if everything.blockers.contains(.notEnoughGas), everything.transfers.isEmpty { throw ChainError.rejected(HotWalletWording.noGas) }
-            guard !everything.transfers.isEmpty else { throw ChainError.rejected(HotWalletWording.nothingToSweep(tooCostly: everything.notWorthTheGas.map(\.symbol))) }
+            if let whyNothing = HotWalletWording.whyNothingSweeps(everything) { throw ChainError.rejected(whyNothing) }
             pausedUntil = nil
             var stoppedBy: ChainError?
             do {

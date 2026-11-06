@@ -166,7 +166,7 @@ struct SettingsView: View {
                     Button("Delete This Mac's Spending Money…", role: .destructive) { isConfirmingDelete = true }
                         .disabled(!hotWallet.canDelete)
                         .confirmationDialog("Delete this wallet's key?", isPresented: $isConfirmingDelete) {
-                            if hotWallet.settings.sweepDestination != nil {
+                            if hotWallet.settings.sweepDestination != nil, hotWallet.sweepPreview?.whyNothing == nil {
                                 Button("Sweep Everything to Savings First") { Task { await hotWallet.sweepEverything() } }
                             }
                             Button("Delete Forever", role: .destructive) { Task { await hotWallet.deleteWallet() } }

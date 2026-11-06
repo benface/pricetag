@@ -427,6 +427,7 @@ enum TestScene: String, CaseIterable {
     case hotWalletNoSavings = "hot-wallet-no-savings"
     case hotWalletNoSavingsCAD = "hot-wallet-no-savings-cad"
     case hotWalletNoPrice = "hot-wallet-no-price"
+    case hotWalletNothingToSweep = "hot-wallet-nothing-to-sweep"
     case hotWalletOverCap = "hot-wallet-over-cap"
     case hotWalletOverCapCAD = "hot-wallet-over-cap-cad"
     case hotWalletOverCapNoSavings = "hot-wallet-over-cap-no-savings"
@@ -696,6 +697,7 @@ enum TestScene: String, CaseIterable {
         case .hotWalletTopUpOneDollar: .nearCap
         case .hotWalletNoSavings, .hotWalletNoSavingsCAD, .popoverHotWalletNoSavings, .hotWalletTopUpNoSavings, .addSavingsFinished, .addSavingsCheckBalanceUnread, .addSavingsCheckFirstWallet: .noSavings
         case .hotWalletNoPrice: .noPrice
+        case .hotWalletNothingToSweep: .nothingToSweep
         case .hotWalletOverCap, .hotWalletOverCapCAD, .popoverHotWalletOverCap, .hotWalletTopUpAtCap, .buyAtCap: .overCap
         case .hotWalletOverCapNoSavings, .hotWalletTopUpNoSavingsAtCap, .buyNoSavingsAtCap, .buyNoSavingsAtCapFirstRead, .addSavingsCheckStartsSweeps, .addSavingsFinishedSweeping: .overCapNoSavings
         case .hotWalletKeyMissing, .popoverHotWalletKeyMissing: .keyMissing
@@ -1075,7 +1077,7 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(view), isReady: isReady)
         case .hotWalletSetup, .hotWalletNotProvisioned, .hotWalletUnreadable:
             return TestScreen(view: AnyView(HotWalletWindow(wallet: hotWallet, store: store, siteBridge: SiteBridge(wallet: hotWallet), navigation: navigation, purchases: purchases)), size: CGSize(width: 560, height: 720), isReady: isReady)
-        case .hotWallet, .hotWalletRecordShown, .hotWalletCAD, .hotWalletNoRate, .hotWalletNoSavings, .hotWalletNoSavingsCAD, .hotWalletNoPrice, .hotWalletOverCap, .hotWalletOverCapCAD, .hotWalletOverCapNoSavings, .hotWalletKeyMissing, .hotWalletAlarm, .hotWalletReplacingKey, .hotWalletReplacingKeyStuck, .hotWalletReplacingKeyMissing, .hotWalletSites:
+        case .hotWallet, .hotWalletRecordShown, .hotWalletCAD, .hotWalletNoRate, .hotWalletNoSavings, .hotWalletNoSavingsCAD, .hotWalletNoPrice, .hotWalletNothingToSweep, .hotWalletOverCap, .hotWalletOverCapCAD, .hotWalletOverCapNoSavings, .hotWalletKeyMissing, .hotWalletAlarm, .hotWalletReplacingKey, .hotWalletReplacingKeyStuck, .hotWalletReplacingKeyMissing, .hotWalletSites:
             // The manual sweep, which is a row in the middle of the activity.
             if self == .hotWalletRecordShown { navigation.show(row: MoneyNotice.recordRow("0xde4" + String(repeating: "0", count: 59) + "20")) }
             // Taller than it opens, because a screenshot can't scroll to the actions and the activity at the bottom.

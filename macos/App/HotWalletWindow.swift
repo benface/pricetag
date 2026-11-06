@@ -463,7 +463,7 @@ struct HotWalletDetails<Overview: View>: View {
         }
         .confirmationDialog("Replace this wallet's key?", isPresented: $isConfirmingRotation) {
             Button("Replace Key") { Task { await wallet.replaceKey() } }
-            if wallet.settings.sweepDestination != nil {
+            if wallet.settings.sweepDestination != nil, wallet.sweepPreview?.whyNothing == nil {
                 Button("Sweep Everything to Savings Instead") { isSweeping = true }
             }
         } message: {
@@ -494,8 +494,8 @@ struct HotWalletDetails<Overview: View>: View {
 
     private var sweep: some View {
         Button("Sweep Everything…") { isSweeping = true }
-            .disabled(wallet.settings.sweepDestination == nil || wallet.isWorking || wallet.isKeyMissing)
-            .help(wallet.settings.sweepDestination == nil ? "Add a savings wallet first" : "Move everything on this wallet to your savings. \(HotWalletWording.newDevice)")
+            .disabled(wallet.settings.sweepDestination == nil || wallet.isWorking || wallet.isKeyMissing || wallet.sweepPreview?.whyNothing != nil)
+            .help(wallet.settings.sweepDestination == nil ? "Add a savings wallet first" : wallet.sweepPreview?.whyNothing ?? "Move everything on this wallet to your savings. \(HotWalletWording.newDevice)")
     }
 
     private var replaceKey: some View {
