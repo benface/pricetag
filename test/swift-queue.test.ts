@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { spawn, spawnSync } from "node:child_process"
+import { type ChildProcess, spawn, spawnSync } from "node:child_process"
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -11,7 +11,7 @@ const script = "macos/swift-queue.sh"
 // Its own queue for each test, so these never wait for a real build or leave one waiting.
 let dir: string
 let env: Record<string, string | undefined>
-let runs: ReturnType<typeof start>[]
+let runs: { child: ChildProcess; ended: Promise<number | null> }[]
 
 function start(command: string, extra: Record<string, string> = {}) {
   const child = spawn(script, ["bash", "-c", command], { env: { ...env, ...extra }, stdio: ["ignore", "pipe", "pipe"] })
