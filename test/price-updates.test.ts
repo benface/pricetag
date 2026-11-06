@@ -329,7 +329,7 @@ describe("the proof and verify routes", () => {
       blocksRead.push(n)
       return read
     }
-    const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind, readBlock } })
+    const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind, currentPriceBehind: async () => null, readBlock } })
     const server = createServer((req, res) => void api(req, res))
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`

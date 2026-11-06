@@ -59,7 +59,7 @@ function LegRow({ effect, currency, address, rule }: { effect: LegEffect; curren
           </button>
         </div>
       )}
-      {showsProof && !leg.opening && leg.txHash ? <ProofPanel key={`${address}:${currency}:${rule}`} address={address} legId={leg.id} currency={currency} rule={rule} /> : null}
+      {showsProof && !leg.opening && leg.txHash ? <ProofPanel key={`${address}:${currency}:${rule}`} address={address} target={{ leg: leg.id }} currency={currency} rule={rule} /> : null}
     </li>
   )
 }
@@ -67,6 +67,7 @@ function LegRow({ effect, currency, address, rule }: { effect: LegEffect; curren
 export function ExplainPanel({ explanation, address, rule, onClose }: { explanation: Explanation; address: string; rule: string | null; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const close = useRef<HTMLButtonElement>(null)
+  const [showsPriceProof, setShowsPriceProof] = useState(false)
 
   // A native modal keeps focus inside and makes the page behind it inert. Closing by unmounting doesn't restore focus.
   useLayoutEffect(() => {
@@ -109,6 +110,16 @@ export function ExplainPanel({ explanation, address, rule, onClose }: { explanat
             {line}
           </p>
         ))}
+        {explanation.priceAsset ? (
+          <>
+            <div className="leg-links small">
+              <button type="button" className="link small" aria-expanded={showsPriceProof} onClick={() => setShowsPriceProof((shown) => !shown)}>
+                Proof of this price {showsPriceProof ? "▾" : "▸"}
+              </button>
+            </div>
+            {showsPriceProof ? <ProofPanel key={`${address}:${explanation.currency}:${rule}:${explanation.priceAsset}`} address={address} target={{ asset: explanation.priceAsset }} currency={explanation.currency} rule={rule} /> : null}
+          </>
+        ) : null}
         <h3>{activityTitle(explanation.effects.length, Math.min(explanation.effects.length, MAX_LEGS_SHOWN))}</h3>
         <ul className="legs">
           {explanation.effects.slice(0, MAX_LEGS_SHOWN).map((effect) => (

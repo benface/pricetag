@@ -65,6 +65,14 @@ import Testing
         #expect(leg.date != nil)
     }
 
+    @Test func readsWhereAPriceIsProven() throws {
+        let body = #"{"currency":"USD","title":"AERO: Value","value":"$1.00","sourceValue":null,"lines":[],"priceProof":{"asset":"AERO","wallet":"0xabc"},"legCount":0,"legs":[]}"#
+        let explanation = try JSONDecoder().decode(Explanation.self, from: Data(body.utf8))
+        #expect(explanation.priceProof == ExplanationPriceProof(asset: "AERO", wallet: "0xabc"))
+        let none = #"{"currency":"USD","title":"AERO: Amount","value":"1","sourceValue":null,"lines":[],"priceProof":null,"legCount":0,"legs":[]}"#
+        #expect(try JSONDecoder().decode(Explanation.self, from: Data(none.utf8)).priceProof == nil)
+    }
+
     @Test func readsAPortfolioInAnotherCurrency() throws {
         let portfolio = try resource("demo-portfolio-cad", as: Portfolio.self)
         #expect(portfolio.currency == .CAD)

@@ -957,7 +957,7 @@ describe("POST /api/tax-report on real wallets", () => {
   let server: Server
   let base = ""
   before(async () => {
-    const handle = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } })
+    const handle = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } })
     server = createServer((req, res) => void handle(req, res))
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`

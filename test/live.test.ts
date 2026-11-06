@@ -853,7 +853,7 @@ describe("the server's live events while the dataset catches up", () => {
     const api = createApi({}, {
       source,
       readRates: async () => ({ byBlock: {}, latest: null }),
-      proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null },
+      proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null },
       follow: { stream: hand.stream, sql: "SELECT 1", readMark: async () => MARK, logger: QUIET, tickMs: 0 },
     })
     server = createServer((req, res) => void api(req, res))
@@ -994,7 +994,7 @@ describe("the server after a reorg the tables haven't rewritten yet", () => {
     const api = createApi({}, {
       source,
       readRates: async () => ({ byBlock: {}, latest: null }),
-      proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null },
+      proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null },
       follow: { stream: hand.stream, sql: "SELECT 1", readMark, logger: QUIET, pollMs: 1, retryMs: 60_000, tickMs: 0 },
     })
     server = createServer((req, res) => void api(req, res))
@@ -1043,7 +1043,7 @@ describe("the server's live events", () => {
     const api = createApi({}, {
       source: headAt100,
       readRates: async () => ({ byBlock: {}, latest: null }),
-      proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null },
+      proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null },
       follow: { stream: hand.stream, sql: "SELECT 1", readMark: async () => MARK, logger: QUIET, tickMs: 0 },
     })
     server = createServer((req, res) => void api(req, res))

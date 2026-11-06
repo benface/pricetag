@@ -213,6 +213,15 @@ describe("explaining a converted number", () => {
     assert.match(bought?.effect ?? "", /for \$2,500\.00$/)
   })
 
+  it("offers the proof of a current price from Chainlink, on what rests on it", () => {
+    const wallet = walletWith({})
+    const proof = (metric: "value" | "price" | "return" | "unrealized" | "amount" | "realized", from = wallet) => explainPortfolio(from, "average", { kind: "asset", asset: "ETH", metric })?.priceProof
+    for (const metric of ["value", "price", "return", "unrealized"] as const) assert.deepEqual(proof(metric), { asset: "ETH", wallet: wallet.address }, metric)
+    for (const metric of ["amount", "realized"] as const) assert.equal(proof(metric), null, metric)
+    const market = { ...wallet, prices: { ...wallet.prices, ETH: { ...wallet.prices.ETH!, source: "market" as const } } }
+    assert.equal(proof("value", market), null, "a price from recent trades has no update behind it")
+  })
+
   it("says the current rate where a current value uses it", () => {
     const explanation = explainPortfolio(walletWith({}), "average", { kind: "asset", asset: "ETH", metric: "value" })
     assert.equal(explanation?.value, "$3,000.00")

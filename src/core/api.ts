@@ -133,6 +133,8 @@ export type ExplanationResponse = {
   /** The same number in USD, when that isn't what `value` is in. */
   sourceValue: string | null
   lines: string[]
+  /** Where to read the proof of the current price this number rests on, when that price comes from Chainlink. */
+  priceProof?: { asset: string; wallet: string } | null
   /** All of them, which can be more than `legs` holds. */
   legCount: number
   legs: ExplanationLeg[]

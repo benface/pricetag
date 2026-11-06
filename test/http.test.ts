@@ -681,7 +681,7 @@ describe("reading a wallet by two pricing rules", () => {
       const api = createApi({ BASE_RPC_URL: `http://127.0.0.1:${(rpc.address() as { port: number }).port}` }, {
         source: resolvingSource(query, cfg, shared),
         readRates: async () => ({ byBlock: {}, latest: null }),
-        proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null },
+        proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null },
         follow: { stream, sql: "SELECT 1", readMark: async () => ({ blockNum: 200, hash: "0x200" }), logger: { warn() {} }, pollMs: 1, tickMs: 0 },
         shared,
       })

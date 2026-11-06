@@ -500,8 +500,15 @@ public struct Explanation: Codable, Sendable, Equatable {
     public let lines: [String]
     /// Each wallet's side of the number, when several are shown as one.
     public var parts: [ExplanationPart]? = nil
+    /// Where to read the proof of the current price this number rests on, when that price comes from Chainlink.
+    public var priceProof: ExplanationPriceProof? = nil
     public let legCount: Int
     public let legs: [ExplanationLeg]
+}
+
+public struct ExplanationPriceProof: Codable, Sendable, Equatable {
+    public let asset: String
+    public let wallet: String
 }
 
 /// One wallet's side of a number shown across several.

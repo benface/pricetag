@@ -14,6 +14,15 @@ struct ProofPanel: View {
         ))
     }
 
+    /// What's behind a current price, which has no transaction of its own.
+    init(asset: String, address: String, store: PortfolioStore) {
+        costNote = nil
+        _model = State(initialValue: ProofModel(
+            fetch: { try await store.priceProof(asset: asset, address: address) },
+            verify: { try await store.priceVerification(asset: asset, address: address) }
+        ))
+    }
+
     init(model: ProofModel, costNote: String? = nil) {
         self.costNote = costNote
         _model = State(initialValue: model)

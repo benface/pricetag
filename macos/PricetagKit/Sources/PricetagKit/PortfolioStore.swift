@@ -836,6 +836,16 @@ public final class PortfolioStore {
         return try await source.verification(leg: leg, address: address, currency: currency, rule: selectedRule)
     }
 
+    public func priceProof(asset: String, address: String) async throws -> Proof {
+        guard isShowing(address) else { throw CancellationError() }
+        return try await source.priceProof(asset: asset, address: address, currency: currency, rule: selectedRule)
+    }
+
+    public func priceVerification(asset: String, address: String) async throws -> Verification {
+        guard isShowing(address) else { throw CancellationError() }
+        return try await source.priceVerification(asset: asset, address: address, currency: currency, rule: selectedRule)
+    }
+
     /// Any wallet's, not just the one showing, since the security page asks about each of them.
     public func approvals(address: String) async throws -> WalletApprovals {
         try await source.approvals(address: address)

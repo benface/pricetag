@@ -184,6 +184,14 @@ The dataset reads Chainlink's prices from the `AnswerUpdated` logs its contracts
 
 The raw mode and balances still use `eth_call`: there's no dataset table to read them from, or they aren't prices at all. Exchange rates to other currencies come from logs too when the server has a rates dataset (see [Main currency](#main-currency)), and from `eth_call` without one. Verify doesn't cover them either way yet.
 
+**The other 8 tokens' feeds** (`TOKEN_FEEDS`, like AERO/USD) have their own small dataset, `dataset/feeds.json`, set with `PRICETAG_FEEDS_DATASET`. Its one table, `feed_updates`, holds every `AnswerUpdated` from their aggregators, about 330 rows a day, and starts 26 hours before the Pricetag dataset, so a price at its first block had its update inside it. It isn't in `price_updates` because that's what `carried` copies forward to every block, and nothing joins on these: they'd add about 164 rows per block, 70.8M a day on 200 ms blocks, to the 4.6M `carried` writes today.
+
+- **A chart's older points** come from the table: an asset's latest update at or before the block, which is what its contract answers there. That was the same in 240 of 240 comparisons with `eth_call` (8 feeds at 30 blocks, including each side of real updates). It isn't faster, about 0.7 s a read against 0.6 s. What it saves is RPC calls.
+- **What's held now** still reads each contract with `eth_call`, because the table's newest row is the only sign of how far it's reached, and an update could still be on its way. An old answer would quietly be wrong, so a block past that row goes to the contract, and so does everything if the table fails.
+- **Each current price has a proof and a Verify,** whichever way it was read, from "Proof of this price" under the number. ETH's and USDC's come from `reference_prices`. The others take the latest update in `feed_updates` at the price's block, and it has to work out to the price shown. If it doesn't and the table hasn't reached that block, it says to try again. If it has, the check fails. wstETH's price is in ETH, so it has two updates to check. Without `PRICETAG_FEEDS_DATASET`, those 8 prices say plainly that no log backs them.
+
+To change it, add the aggregator to `TOKEN_FEED_AGGREGATORS` in `packages/sdk/src/tokens.ts`, then build, register and deploy a new tag with `node dataset/build.ts --feeds <the Pricetag dataset's start block>`. The server warns when it starts if a proxy reads from an aggregator it doesn't list. Replacing `benface/pricetag` doesn't touch this dataset.
+
 ## Main currency
 
 Both apps show every value in the chosen currency, and remember the choice: the Mac app in Settings, and the web app in its header. The dataset's base stays USD. `packages/sdk/src/currency.ts` is the one place that converts, and both apps go through it.

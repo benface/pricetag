@@ -31,6 +31,8 @@ public protocol PortfolioSource: Sendable {
     func taxReport(_ request: TaxReportRequest) async throws -> TaxReport
     func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof
     func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification
+    func priceProof(asset: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof
+    func priceVerification(asset: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification
     /// What a wallet lets others spend, checked onchain just now.
     func approvals(address: String) async throws -> WalletApprovals
     /// One element each time the server says there's a new block, until the connection goes. Nil when this source can't say.
@@ -52,6 +54,8 @@ extension PortfolioSource {
     public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport { throw FetchError.unreachable }
     public func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof { throw FetchError.unreachable }
     public func verification(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification { throw FetchError.unreachable }
+    public func priceProof(asset: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof { throw FetchError.unreachable }
+    public func priceVerification(asset: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification { throw FetchError.unreachable }
     public func approvals(address: String) async throws -> WalletApprovals { throw FetchError.unreachable }
     public func rules() async throws -> [PricingRule] { [] }
     public func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> RuleComparison { throw FetchError.rejected("There's only one pricing rule here.") }
@@ -123,8 +127,20 @@ public struct PricetagClient: PortfolioSource {
         try await get("/api/portfolio/\(address)/verify", query: legQuery(leg, currency, rule), timeout: .seconds(120))
     }
 
+    public func priceProof(asset: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof {
+        try await get("/api/portfolio/\(address)/proof", query: proofQuery("asset", asset, currency, rule), timeout: .seconds(30))
+    }
+
+    public func priceVerification(asset: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification {
+        try await get("/api/portfolio/\(address)/verify", query: proofQuery("asset", asset, currency, rule), timeout: .seconds(120))
+    }
+
     private func legQuery(_ leg: String, _ currency: CurrencyCode, _ rule: String?) -> [URLQueryItem] {
-        var items = [URLQueryItem(name: "leg", value: leg), URLQueryItem(name: "currency", value: currency.rawValue)]
+        proofQuery("leg", leg, currency, rule)
+    }
+
+    private func proofQuery(_ name: String, _ value: String, _ currency: CurrencyCode, _ rule: String?) -> [URLQueryItem] {
+        var items = [URLQueryItem(name: name, value: value), URLQueryItem(name: "currency", value: currency.rawValue)]
         if let rule { items.append(URLQueryItem(name: "rule", value: rule)) }
         return items
     }

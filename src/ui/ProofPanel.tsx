@@ -12,9 +12,10 @@ async function read<T>(url: string, signal?: AbortSignal): Promise<T> {
   throw new Error(body?.error ?? "Couldn't reach the server.")
 }
 
-/** Where a row's price comes from, the datasets behind it, and a check of its block that says plainly what it doesn't cover. */
-export function ProofPanel({ address, legId, currency, rule }: { address: string; legId: string; currency: CurrencyCode; rule: string | null }) {
-  const query = `leg=${encodeURIComponent(legId)}&currency=${currency}${rule ? `&rule=${encodeURIComponent(rule)}` : ""}`
+/** Where a row's or a current price comes from, the datasets behind it, and a check of its block that says plainly what it doesn't cover. */
+export function ProofPanel({ address, target, currency, rule }: { address: string; target: { leg: string } | { asset: string }; currency: CurrencyCode; rule: string | null }) {
+  const subject = "leg" in target ? `leg=${encodeURIComponent(target.leg)}` : `asset=${encodeURIComponent(target.asset)}`
+  const query = `${subject}&currency=${currency}${rule ? `&rule=${encodeURIComponent(rule)}` : ""}`
   const [proof, setProof] = useState<ProofResponse | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
   const [verification, setVerification] = useState<VerificationResponse | null>(null)

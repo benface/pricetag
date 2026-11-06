@@ -353,7 +353,10 @@ export function explainCombined(read: readonly WalletResponse[], method: Method,
     if (!position || parts.length === 0) return null
     const { title } = (parts[0] as (typeof parts)[number]).explanation
     const lines = parts.length > 1 ? [`Across ${parts.length} of your wallets.`] : []
-    return { currency, title, value: assetValue(position, target.metric, currency), sourceValue: null, lines, parts: partsOut, ...legsOf(effects) }
+    // The same price in every wallet that holds it, so any of them can show where it comes from.
+    const priced = parts.find(({ explanation }) => explanation.priceAsset)
+    const priceProof = priced?.explanation.priceAsset ? { asset: priced.explanation.priceAsset, wallet: priced.wallet } : null
+    return { currency, title, value: assetValue(position, target.metric, currency), sourceValue: null, lines, priceProof, parts: partsOut, ...legsOf(effects) }
   }
   const point = points.find((p) => p.txHash === target.txHash)
   if (!point) return null

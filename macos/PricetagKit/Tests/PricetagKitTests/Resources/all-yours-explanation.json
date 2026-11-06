@@ -6,6 +6,10 @@
   "lines": [
     "Across 3 of your wallets."
   ],
+  "priceProof": {
+    "asset": "ETH",
+    "wallet": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
   "parts": [
     {
       "wallet": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
