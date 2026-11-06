@@ -13,6 +13,8 @@ import type { Source } from "./wallets.ts"
 export type Row = Record<string, unknown>
 
 const BLOCKS_PER_QUERY = 200
+/** `reference_prices` has one small row per block. 20,000 of them took 1 s on staging, against 0.3 s for 200 named blocks. */
+const REFERENCE_SPAN = 20_000
 
 /**
  * WHERE clauses for a list of blocks, split so no query names too many.
@@ -24,6 +26,27 @@ export function blockFilters(blocks: readonly number[]): { filter: string; count
   for (let i = 0; i < sorted.length; i += BLOCKS_PER_QUERY) {
     const part = sorted.slice(i, i + BLOCKS_PER_QUERY)
     result.push({ filter: `block_num BETWEEN ${part[0]} AND ${part[part.length - 1]} AND block_num IN (${part.join(", ")})`, count: part.length })
+  }
+  return result
+}
+
+/** How far apart blocks can be, on average, for a range to be the cheaper way to read them. */
+const MAX_AVERAGE_GAP = 20
+
+/**
+ * WHERE clauses for a list of blocks, for reads that can ignore whatever else is in the range. Naming blocks takes a query
+ * per 200, however close together they are, so a busy wallet's blocks are read as ranges of up to `span` blocks instead.
+ */
+export function blockRanges(blocks: readonly number[], span: number): string[] {
+  const sorted = [...new Set(blocks)].sort((a, b) => a - b)
+  const [first, last] = [sorted[0] ?? 0, sorted.at(-1) ?? 0]
+  if (sorted.length <= BLOCKS_PER_QUERY || last - first > sorted.length * MAX_AVERAGE_GAP) return blockFilters(sorted).map(({ filter }) => filter)
+  const result: string[] = []
+  for (let i = 0; i < sorted.length; ) {
+    const from = sorted[i] as number
+    let to = from
+    for (; i < sorted.length && (sorted[i] as number) < from + span; i++) to = sorted[i] as number
+    result.push(`block_num BETWEEN ${from} AND ${to}`)
   }
   return result
 }
@@ -40,6 +63,10 @@ export function txFilters(txs: readonly { block_num: number; tx_hash: string }[]
   return result
 }
 
+/**
+ * The newest block from `after` on. With no newer block to go from, pass the dataset's start block if there is one:
+ * Amp only skips files on a range, and on staging this query took 8 s with no bound and 0.4 s with one.
+ */
 export async function readHead(query: Query, dataset: string, after: number | null): Promise<Head | null> {
   const where = after === null ? "" : `WHERE block_num >= ${after}`
   const rows = await query<Row>(`SELECT block_num, timestamp FROM "${dataset}".blocks ${where} ORDER BY block_num DESC LIMIT 1`, 15_000)
@@ -130,7 +157,7 @@ export const SWAP_TABLES = ["legs", "unlisted_legs", "priced_legs"]
 /** The tables a pricing rule decides. Everything else is what happened on the chain, whichever rule prices it. */
 const PRICE_TABLES = ["priced_legs", "reference_prices"]
 
-export function datasetReader(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined }) {
+export function datasetReader(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined; startBlock?: number | null | undefined }) {
   const ds = `"${config.dataset}"`
   // A fork of the pricing rule only needs the tables the rule reaches, so these can come from somewhere else.
   const prices = `"${config.priceDataset ?? config.dataset}"`
@@ -162,7 +189,7 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
   }
 
   return {
-    head: (after: number | null) => readHead(query, config.baseDataset, after),
+    head: (after: number | null) => readHead(query, config.baseDataset, after ?? config.startBlock ?? null),
 
     /**
      * The newest block, in `after`..`head`, that all these tables have processed, or null if one has none.
@@ -188,10 +215,11 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
     },
 
     async readReferences(blocks: readonly number[]): Promise<Reference[]> {
+      const wanted = new Set(blocks)
       const result: Reference[] = []
-      for (const { filter } of blockFilters(blocks)) {
+      for (const filter of blockRanges(blocks, REFERENCE_SPAN)) {
         const rows = await query<Row>(`SELECT ${REFERENCE_COLUMNS} FROM ${prices}.reference_prices WHERE ${filter}`)
-        result.push(...rows.map(toReference))
+        for (const row of rows) if (wanted.has(asNumber(row.block_num))) result.push(toReference(row))
       }
       return result
     },

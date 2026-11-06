@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import type { CurrencyCode } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../core/api.ts"
-import { emptyBook, linkDeviceAccounts, parseBook, type Book } from "../core/book.ts"
+import { changeBook, emptyBook, linkAccountsInBook, parseBook, undoBook, type Book, type BookChange, type BookState } from "../core/book.ts"
 import { readKey, readsMatching } from "../core/resolve.ts"
 import { walletUrl } from "./useWallet.ts"
 
@@ -17,30 +17,13 @@ function readBook(): Book {
 
 /** The user's answers, kept in this browser and nowhere else. Undo goes back one answer at a time. */
 export function useBook() {
-  const [book, setBook] = useState(readBook)
-  const [history, setHistory] = useState<Book[]>([])
+  const [{ book, history }, setState] = useState<BookState>(() => ({ book: readBook(), history: [] }))
 
   useEffect(() => localStorage.setItem(KEY, JSON.stringify(book)), [book])
 
-  const change = useCallback(
-    (next: Book) => {
-      setHistory((h) => [...h, book])
-      setBook(next)
-    },
-    [book],
-  )
-  const undo = useCallback(() => {
-    const previous = history.at(-1)
-    if (!previous) return
-    setHistory(history.slice(0, -1))
-    setBook(previous)
-  }, [history])
-
-  // Not an answer, so undo doesn't take it back, whichever answers came before it.
-  const linkAccounts = useCallback((addresses: readonly string[]) => {
-    setBook((current) => linkDeviceAccounts(current, addresses))
-    setHistory((earlier) => earlier.map((one) => linkDeviceAccounts(one, addresses)))
-  }, [])
+  const change = useCallback((next: BookChange) => setState((state) => changeBook(state, next)), [])
+  const undo = useCallback(() => setState(undoBook), [])
+  const linkAccounts = useCallback((addresses: readonly string[]) => setState((state) => linkAccountsInBook(state, addresses)), [])
 
   return { book, change, undo, canUndo: history.length > 0, linkAccounts }
 }

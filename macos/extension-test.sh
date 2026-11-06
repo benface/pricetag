@@ -25,14 +25,28 @@ chromium_pid=
 app_pid=
 binary="$work/$name.app/Contents/MacOS/$name"
 
+# The tests' result is already decided by now, so nothing in here can change the exit status.
 cleanup() {
-  [ -n "$chromium_pid" ] && kill "$chromium_pid" 2>/dev/null || true
-  [ -n "$app_pid" ] && kill "$app_pid" 2>/dev/null || true
-  [ -n "$anvil_pid" ] && kill "$anvil_pid" 2>/dev/null || true
-  [ -x "$binary" ] && "$binary" --isolated "$isolated" --reset-isolated-wallet >/dev/null 2>&1 || true
-  rm -rf "$work"
+  set +e
+  [ -n "$app_pid" ] && kill "$app_pid" 2>/dev/null
+  [ -n "$anvil_pid" ] && kill "$anvil_pid" 2>/dev/null
+  # Chromium keeps writing to its profile as it shuts down, so its folder can't be removed until it's gone.
+  if [ -n "$chromium_pid" ]; then
+    kill "$chromium_pid" 2>/dev/null
+    tries=0
+    while kill -0 "$chromium_pid" 2>/dev/null && [ "$tries" -lt 50 ]; do
+      tries=$((tries + 1))
+      sleep 0.1
+    done
+    [ "$tries" -lt 50 ] || kill -9 "$chromium_pid" 2>/dev/null
+    wait "$chromium_pid" 2>/dev/null
+  fi
+  [ -x "$binary" ] && "$binary" --isolated "$isolated" --reset-isolated-wallet >/dev/null 2>&1
+  # Chromium's helpers can outlive it by a moment.
+  rm -rf "$work" 2>/dev/null || { sleep 1; rm -rf "$work"; } || echo "Couldn't remove $work" >&2
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT TERM
 
 ditto "$here/build/Build/Products/Debug/$name.app" "$work/$name.app"
 

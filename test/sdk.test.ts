@@ -6,7 +6,7 @@ import { describe, it } from "node:test"
 import { createPricetag } from "@pricetag/sdk"
 import { USDC_ADDRESS, buildPortfolio, buildPricedLegs, foldPositions, formatPrice, formatSignedMoney, formatMoney, pnlStatus, sumTotals } from "@pricetag/sdk/core"
 import { createQuery, createWallets, datasetReader, datasetSource, pricetagClient, type Query, type ReadL1Fees } from "@pricetag/sdk/internal"
-import { portfolioOf } from "../server/portfolio.ts"
+import { portfolioOf } from "../src/core/portfolio.ts"
 import { DEMO_REFERENCES, DEMO_ROWS, DEMO_WALLET } from "../src/core/fixtures.ts"
 import { fakeAmp, type Tables } from "./support/fake-amp.ts"
 
@@ -453,6 +453,25 @@ describe("getPortfolio", () => {
     assert.equal(l1Fees, "read")
     assert.notEqual(status, "complete")
     assert.ok(missing.length > 0)
+  })
+
+  it("bounds the first head lookup by the start block, and later ones by the last head", async () => {
+    const heads = (queries: string[]) => queries.filter((q) => q.includes(".blocks") && q.includes("ORDER BY"))
+    const { client, queries } = fakeAmp(TABLES, 200, { startBlock: 50 })
+    await client.getLatestPrices()
+    assert.match(heads(queries)[0]!, /WHERE block_num >= 50 ORDER BY/)
+    queries.length = 0
+    await client.getPortfolio(`0x${ME}`)
+    assert.match(heads(queries)[0]!, /WHERE block_num >= 50 ORDER BY/)
+    queries.length = 0
+    await client.getPortfolio(`0x${ME}`)
+    assert.match(heads(queries)[0]!, /WHERE block_num >= 200 ORDER BY/)
+  })
+
+  it("has no bound for the head without a start block", async () => {
+    const { client, queries } = fakeAmp(TABLES)
+    await client.getLatestPrices()
+    assert.ok(queries.some((q) => q.includes(".blocks  ORDER BY")))
   })
 
   it("gives no totals before anything's been processed, rather than $0", async () => {

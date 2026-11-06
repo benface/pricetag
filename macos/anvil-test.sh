@@ -21,4 +21,4 @@ until curl -fs -o /dev/null -X POST -H 'content-type: application/json' --data '
   sleep 0.3
 done
 
-ANVIL_RPC_URL="http://127.0.0.1:$port" BASE_READ_RPC_URL="$fork_url" "$here/swift-queue.sh" swift test --package-path "$here/HotWalletKit" --filter 'AnvilTests|LiveBaseTests'
+ANVIL_RPC_URL="http://127.0.0.1:$port" BASE_READ_RPC_URL="$fork_url" "$here/swift-queue.sh" swift test --package-path "$here/HotWalletKit" --scratch-path "$here/.build" --filter 'AnvilTests|LiveBaseTests'
