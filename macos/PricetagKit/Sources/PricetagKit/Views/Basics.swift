@@ -124,22 +124,36 @@ extension PortfolioStore {
     /// nil unless numbers on screen have stopped updating for long enough to say so beside them.
     public var staleNote: String? {
         guard feed.isStale, isProblemLong, let portfolio, portfolio.progress.started else { return nil }
-        return Wording.stale(lastUpdate: portfolio.latest.date.map(Format.time) ?? portfolio.latest.timestamp)
+        return Wording.stale(lastUpdate: lastUpdate(portfolio))
     }
 
-    /// A line under the status, for what's worth saying once it isn't a blip. Nothing while it might be.
-    public var statusLine: String? {
-        guard let portfolio else { return nil }
-        if staleNote != nil { return "Last update \(portfolio.latest.date.map(Format.time) ?? portfolio.latest.timestamp)" }
-        if feed == .catchingUp { return Wording.shortCatchingUp(portfolio) }
-        if !portfolio.linkedFailed.isEmpty { return "Couldn't read \(portfolio.linkedFailed.count) \(portfolio.linkedFailed.count == 1 ? "wallet" : "wallets")" }
-        if !portfolio.linkedReading.isEmpty { return "Reading \(portfolio.linkedReading.count) \(portfolio.linkedReading.count == 1 ? "wallet" : "wallets")" }
-        return nil
+    /// What the status goes by: what's wrong stands while a retry waits for its answer.
+    public var statusFeed: FeedState { retriedProblem ?? feed }
+
+    /// A read with numbers on screen that's gone on long enough to say how old they are.
+    public var isUpdatingLong: Bool { feed == .reading && portfolio != nil && isReadLong }
+
+    /// Wallets missing from these numbers, which the status says whatever else is going on. nil when none are.
+    public var statusWarning: String? {
+        guard let count = portfolio?.linkedFailed.count, count > 0 else { return nil }
+        return "Couldn't read \(count) \(count == 1 ? "wallet" : "wallets")"
+    }
+
+    /// Lines under the status, for what's worth saying once it isn't a blip. Nothing while it might be.
+    public var statusLines: [String] {
+        guard let portfolio else { return [] }
+        var lines: [String] = []
+        if staleNote != nil || isUpdatingLong || (retriedProblem != nil && isProblemLong) { lines.append("Last update \(lastUpdate(portfolio))") }
+        if feed == .catchingUp, let line = Wording.shortCatchingUp(portfolio) { lines.append(line) }
+        // Otherwise it's the status itself.
+        if statusFeed.isStale, let statusWarning { lines.append(statusWarning) }
+        if !portfolio.linkedReading.isEmpty { lines.append("Reading \(portfolio.linkedReading.count) \(portfolio.linkedReading.count == 1 ? "wallet" : "wallets")") }
+        return lines
     }
 
     /// The whole of what's wrong, in the words the page used to show it in. Empty when nothing is.
     public func statusMessages(names: [String: String]) -> [String] {
-        var messages = [feed.staleNotice(serverURL: serverURL, portfolio: portfolio)].compactMap(\.self)
+        var messages = [statusFeed.staleNotice(serverURL: serverURL, portfolio: portfolio)].compactMap(\.self)
         guard let portfolio else { return messages }
         if !portfolio.linkedFailed.isEmpty {
             messages.append(portfolio.isAllYours ? Wording.allYoursFailed(portfolio.linkedFailed.map(names.walletName)) : Wording.linkedFailed(portfolio.linkedFailed.count))
@@ -150,9 +164,18 @@ extension PortfolioStore {
         return messages
     }
 
+    /// Whether a click on the status has more to say.
+    public var hasStatusDetails: Bool {
+        isUpdatingLong || !statusMessages(names: [:]).isEmpty
+    }
+
     /// Whether trying again could change what `statusMessages` says. Catching up and still reading are on their way already.
     public var canRetryStatus: Bool {
-        feed.problem(serverURL: serverURL, portfolio: portfolio) != nil || portfolio?.linkedFailed.isEmpty == false
+        statusFeed.problem(serverURL: serverURL, portfolio: portfolio) != nil || portfolio?.linkedFailed.isEmpty == false
+    }
+
+    fileprivate func lastUpdate(_ portfolio: Portfolio) -> String {
+        portfolio.latest.date.map(Format.time) ?? portfolio.latest.timestamp
     }
 }
 
@@ -458,20 +481,21 @@ public struct FeedBadge: View {
     let feed: FeedState
     let portfolio: Portfolio?
     let readingSince: Date?
-    /// Something short of the feed needs a look, like a wallet that couldn't be read.
-    let warns: Bool
+    /// Something short of the feed needs a look, like a wallet that couldn't be read. When the feed itself is fine, it's what this says.
+    let warning: String?
     /// In place of the technical side.
     let help: String?
 
-    public init(feed: FeedState, portfolio: Portfolio?, readingSince: Date? = nil, warns: Bool = false, help: String? = nil) {
+    public init(feed: FeedState, portfolio: Portfolio?, readingSince: Date? = nil, warning: String? = nil, help: String? = nil) {
         self.feed = feed
         self.portfolio = portfolio
         self.readingSince = readingSince
-        self.warns = warns
+        self.warning = warning
         self.help = help
     }
 
     private func text(seconds: Int?) -> String {
+        if let warning, !feed.isStale { return warning }
         switch feed {
         case .noWallet: return "No wallet"
         // With numbers on screen, they're the previous answer until the new one arrives.
@@ -492,7 +516,7 @@ public struct FeedBadge: View {
     }
 
     private var color: Color {
-        if warns { return .orange }
+        if warning != nil { return .orange }
         return switch feed {
         case .noWallet, .reading: .secondary
         case .live: portfolio?.mode == .demo ? .secondary : .green
@@ -524,24 +548,21 @@ public struct FeedBadge: View {
 /// Where the window says what state its numbers are in, with what's wrong a click away. It takes the place of notices on the page, so nothing there moves when the connection comes and goes.
 public struct FeedStatus: View {
     let store: PortfolioStore
-    /// With no room for a second line, as in the toolbar. What it would say is in the details, and by the total.
-    let isCompact: Bool
     @Environment(\.walletNames) private var walletNames
     @State private var showsDetails = false
 
-    public init(store: PortfolioStore, isCompact: Bool = false) {
+    public init(store: PortfolioStore) {
         self.store = store
-        self.isCompact = isCompact
     }
 
     public var body: some View {
         let messages = store.statusMessages(names: walletNames)
-        if messages.isEmpty {
+        if !store.hasStatusDetails {
             status(help: nil)
         } else {
             Button { showsDetails.toggle() } label: {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
-                    status(help: messages.joined(separator: " "))
+                    status(help: messages.isEmpty ? nil : messages.joined(separator: " "))
                     Image(systemName: "info.circle")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -550,15 +571,15 @@ public struct FeedStatus: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityHint("Shows what's wrong")
+            .accessibilityHint("Shows the details")
             .popover(isPresented: $showsDetails) { details(messages) }
         }
     }
 
     private func status(help: String?) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            FeedBadge(feed: store.feed, portfolio: store.portfolio, readingSince: store.readingSince, warns: store.portfolio?.linkedFailed.isEmpty == false, help: help)
-            if !isCompact, let line = store.statusLine {
+            FeedBadge(feed: store.statusFeed, portfolio: store.portfolio, readingSince: store.readingSince, warning: store.statusWarning, help: help)
+            ForEach(store.statusLines, id: \.self) { line in
                 Text(line)
                     .font(.caption)
                     .secondaryText()
@@ -573,7 +594,10 @@ public struct FeedStatus: View {
     private func details(_ messages: [String]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(messages, id: \.self) { Text($0).fixedSize(horizontal: false, vertical: true) }
-            if let detail = store.feed.problem(serverURL: store.serverURL, portfolio: store.portfolio)?.detail {
+            if store.isUpdatingLong, let since = store.readingSince, let portfolio = store.portfolio {
+                ReadingClock(since: since) { Text(Wording.stillUpdating(seconds: $0, lastUpdate: store.lastUpdate(portfolio))).monospacedDigit() }
+            }
+            if let detail = store.statusFeed.problem(serverURL: store.serverURL, portfolio: store.portfolio)?.detail {
                 Text(detail)
                     .font(.caption)
                     .secondaryText()

@@ -132,12 +132,13 @@ actor TimedOutThenGatedSource: PortfolioSource {
 }
 
 /// `demoPortfolio()`, but from a real source, and with its newest block at a given time.
-func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod = .average, currency: CurrencyCode = .USD, progress: ReadProgress? = nil) throws -> Portfolio {
+func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod = .average, currency: CurrencyCode = .USD, progress: ReadProgress? = nil, linkedFailed: [String] = []) throws -> Portfolio {
     var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(demoPortfolio())) as! [String: Any]
     object["mode"] = "raw"
     object["method"] = method.rawValue
     object["currency"] = currency.rawValue
     object["latest"] = ["blockNum": 53_505_400, "timestamp": date.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true))]
+    if !linkedFailed.isEmpty { object["linkedFailed"] = linkedFailed }
     if let status { object["pnlStatus"] = status.rawValue }
     if let progress { object["progress"] = ["started": progress.started, "behindBlocks": progress.behindBlocks] }
     return try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
@@ -186,16 +187,74 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         await _ = store.poll()
         #expect(store.feed == .serverUnreachable)
         #expect(store.staleNote == nil)
-        #expect(store.statusLine == nil)
+        #expect(store.statusLines.isEmpty)
         #expect(!store.statusMessages(names: [:]).isEmpty, "A click still says what's wrong.")
         #expect(store.canRetryStatus)
         try await Task.sleep(for: .milliseconds(200))
         #expect(store.staleNote?.contains("aren't updating") == true)
-        #expect(store.statusLine?.hasPrefix("Last update") == true)
+        #expect(store.statusLines.first?.hasPrefix("Last update") == true)
         await _ = store.poll()
         #expect(store.feed.isLive)
         #expect(!store.isProblemLong)
         #expect(store.statusMessages(names: [:]).isEmpty)
+    }
+
+    @Test func aRetryKeepsWhatsWrongUntilItAnswers() async throws {
+        let defaults = UserDefaults(suiteName: "feed-tests-\(UUID().uuidString)")!
+        defaults.set("0xabc", forKey: "wallet")
+        let now = now
+        let source = ScriptedSource([.success(try realPortfolio(at: now)), .failure(.unreachable), .success(try realPortfolio(at: now))])
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, now: { now }, longProblem: .zero)
+        await _ = store.poll()
+        await _ = store.poll()
+        let said = store.statusMessages(names: [:])
+        store.refresh()
+        store.stop()
+        #expect(store.feed == .reading)
+        #expect(store.statusFeed == .serverUnreachable)
+        #expect(store.statusMessages(names: [:]) == said)
+        #expect(store.hasStatusDetails)
+        #expect(store.canRetryStatus)
+        #expect(store.statusLines.first?.hasPrefix("Last update") == true)
+        await _ = store.poll()
+        #expect(store.retriedProblem == nil)
+        #expect(!store.hasStatusDetails)
+        #expect(store.statusLines.isEmpty)
+    }
+
+    @Test func aLongReadSaysHowOldTheNumbersAre() async throws {
+        let defaults = UserDefaults(suiteName: "feed-tests-\(UUID().uuidString)")!
+        defaults.set("0xabc", forKey: "wallet")
+        let gate = TimedOutThenGatedSource(first: try realPortfolio(at: now))
+        // As long ago as it takes, so this doesn't wait out the real seconds.
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in gate }, now: { Date().addingTimeInterval(-72) })
+        await _ = store.poll()
+        #expect(!store.isUpdatingLong)
+        let read = Task { await store.poll() }
+        await gate.waitUntilAsked()
+        #expect(store.feed == .reading)
+        #expect(store.isUpdatingLong)
+        #expect(store.hasStatusDetails)
+        #expect(store.statusLines.first?.hasPrefix("Last update") == true)
+        await gate.answer(.success(try realPortfolio(at: now)))
+        await _ = read.value
+        #expect(!store.isReadLong)
+        #expect(!store.hasStatusDetails)
+        #expect(store.statusLines.isEmpty)
+    }
+
+    @Test func aWalletThatCouldntBeReadIsWhatTheStatusSays() async throws {
+        let defaults = UserDefaults(suiteName: "feed-tests-\(UUID().uuidString)")!
+        defaults.set("0xabc", forKey: "wallet")
+        let now = now
+        let source = ScriptedSource([.success(try realPortfolio(at: now, linkedFailed: ["0xdef"])), .failure(.unreachable)])
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, now: { now }, longProblem: .zero)
+        await _ = store.poll()
+        #expect(store.feed == .live)
+        #expect(store.statusWarning == "Couldn't read 1 wallet")
+        #expect(store.statusLines.isEmpty, "The status itself says so.")
+        await _ = store.poll()
+        #expect(store.statusLines.contains("Couldn't read 1 wallet"), "It's still missing while the status says something else.")
     }
 
     @Test func aProblemThatWontClearByItselfSaysSoAtOnce() {

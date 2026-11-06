@@ -587,8 +587,8 @@ export function App() {
         <button type="button" onClick={() => setBuying(true)}>
           Buy
         </button>
-        {showing ? <LiveBadge wallet={showing} problem={error ? feedProblem(error, location.origin, started ? staleSentence(formatTime(showing.latest.timestamp)) : null) : null} lastUpdate={started ? formatTime(showing.latest.timestamp) : null} updating={(combined?.linkedReading.length ?? 0) > 0} lines={statusLines} canRetry={error !== null || linkedFailed.length > 0 || (combined?.linkedFailed.length ?? 0) > 0} retry={retryEverything} /> : null}
       </header>
+      {showing ? <LiveBadge wallet={showing} problem={error ? feedProblem(error, location.origin, started ? staleSentence(formatTime(showing.latest.timestamp)) : null) : null} lastUpdate={started ? formatTime(showing.latest.timestamp) : null} updating={(combined?.linkedReading.length ?? 0) > 0} lines={statusLines} failedWallets={linkedFailed.length + (combined?.linkedFailed.length ?? 0)} retry={retryEverything} /> : null}
       {inputError ? <p className="notice warn">⚠ {inputError}</p> : null}
       {notSaved ? <p className="notice warn" role="alert">⚠ {NOT_SAVED}</p> : null}
       {rules.length > 1 ? <RulesPanel rules={rules} chosen={chosenRule} choose={chooseRule} current={rule} address={isAll ? null : single} method={method} currency={currency} book={book} /> : null}
@@ -827,24 +827,31 @@ function useHasLasted(isOn: boolean, ms: number) {
 
 const LONG_PROBLEM_MS = 60_000
 
-/** Whether the numbers are current, with what's wrong a click away. Its details open over the page, so nothing there moves when the connection comes and goes. */
-function LiveBadge({ wallet, problem, lastUpdate, updating, lines, canRetry, retry }: { wallet: Pick<WalletResponse, "mode" | "coverage" | "latest">; problem: Problem | null; lastUpdate: string | null; updating: boolean; lines: readonly string[]; canRetry: boolean; retry: () => void }) {
+/** Whether the numbers are current, with what's wrong a click away. It sits in the corner, over the page, so nothing there moves when it changes, however long it gets. */
+function LiveBadge({ wallet, problem, lastUpdate, updating, lines, failedWallets, retry }: { wallet: Pick<WalletResponse, "mode" | "coverage" | "latest">; problem: Problem | null; lastUpdate: string | null; updating: boolean; lines: readonly string[]; failedWallets: number; retry: () => void }) {
   const isLong = useHasLasted(problem !== null, LONG_PROBLEM_MS)
   const detail = feedDetail(wallet.mode, wallet.coverage.toBlock)
-  const [kind, label] = wallet.mode === "demo" ? ["", "Demo data"] : problem ? ["warn", isLong && lastUpdate ? `Not updating · last update ${lastUpdate}` : "Not updating"] : updating ? ["updating", "Updating"] : isBehind(wallet) ? ["", "Catching up"] : ["live", "Live"]
-  if (!problem && lines.length === 0) return <span className={`badge ${kind}`} title={wallet.mode === "demo" ? undefined : detail}>{label}</span>
+  // Numbers missing a wallet aren't live, whatever else is going on.
+  const failedLabel = failedWallets > 0 ? `Couldn't read ${walletCount(failedWallets)}` : null
+  const [kind, label] = wallet.mode === "demo" ? ["", "Demo data"] : problem ? ["warn", ["Not updating", isLong && lastUpdate ? `last update ${lastUpdate}` : null, failedLabel?.toLowerCase()].filter(Boolean).join(" · ")] : failedLabel ? ["warn", failedLabel] : updating ? ["updating", "Updating"] : isBehind(wallet) ? ["", "Catching up"] : ["live", "Live"]
   return (
-    <details className="status">
-      <summary className={`badge ${kind}`} title={detail}>{label}</summary>
-      <div className="status-details">
-        {problem ? <ProblemNotice problem={problem} className="" /> : null}
-        {lines.map((line) => <p key={line}>{line}</p>)}
-        {canRetry ? (
-          <button type="button" className="link" onClick={retry}>
-            Try again
-          </button>
-        ) : null}
-      </div>
-    </details>
+    <div className="status-corner">
+      {!problem && lines.length === 0 ? (
+        <span className={`badge ${kind}`} title={wallet.mode === "demo" ? undefined : detail}>{label}</span>
+      ) : (
+        <details className="status">
+          <summary className={`badge ${kind}`} title={detail}>{label}</summary>
+          <div className="status-details">
+            {problem ? <ProblemNotice problem={problem} className="" /> : null}
+            {lines.map((line) => <p key={line}>{line}</p>)}
+            {problem || failedWallets > 0 ? (
+              <button type="button" className="link" onClick={retry}>
+                Try again
+              </button>
+            ) : null}
+          </div>
+        </details>
+      )}
+    </div>
   )
 }

@@ -61,6 +61,18 @@ struct MainWindow: View {
                 .environment(\.updatingNote, store.updatingNote)
                 .environment(\.staleNote, store.staleNote)
                 .frame(minWidth: 320, minHeight: 320)
+                // With the sidebar closed, the status has nowhere else to be, and it only has to be seen when there's something to say. Over the page, so nothing moves, and a toolbar short of room can't fold it away.
+                .overlay(alignment: .bottomLeading) {
+                    if columns == .detailOnly, !isOnWayToWallet, store.feed != .noWallet, store.hasStatusDetails {
+                        FeedStatus(store: store)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .padding(12)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(Motion.state, value: store.hasStatusDetails)
                 .navigationTitle(navigation.section.title)
                 // The wallet comes first when there's only room for one of them.
                 .toolbar(removing: width < Self.titleWidth || isOnWayToWallet ? .title : nil)
@@ -237,12 +249,6 @@ struct MainWindow: View {
         }
         // With no title in a small window, nothing else would hold the rest at the far end.
         ToolbarSpacer(.flexible)
-        // With the sidebar closed, the status has nowhere else to be, and it only has to be seen when there's something to say.
-        if columns == .detailOnly, !isOnWayToWallet, store.feed != .noWallet, !store.statusMessages(names: [:]).isEmpty {
-            ToolbarItem(placement: .automatic) {
-                FeedStatus(store: store, isCompact: true)
-            }
-        }
         if firstRun.isWelcoming, store.feed == .noWallet {
             ToolbarItem(placement: .primaryAction) {
                 Button("Skip") {

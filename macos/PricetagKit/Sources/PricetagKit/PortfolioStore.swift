@@ -127,9 +127,16 @@ public final class PortfolioStore {
     /// Whether what's wrong has been worth saying beyond the status: it can't clear by itself in a moment, or it's had `longProblem` to. A read that's trying again keeps it.
     public private(set) var isProblemLong = false
     @ObservationIgnored private var longProblemTask: Task<Void, Never>?
+    /// What was wrong when someone asked to try again. It stands until that read answers.
+    public private(set) var retriedProblem: FeedState?
     /// When the read that's running now started, so a long one can say how long it's been, including a retry after a failure. nil between reads.
     /// A change starts a new read, so it starts this over. A read that waits longer on the same request keeps it.
-    public private(set) var readingSince: Date?
+    public private(set) var readingSince: Date? {
+        didSet { noteRead() }
+    }
+    /// Whether the read that's running has gone on for `longReadSeconds`, so it's worth saying more than that it's running.
+    public private(set) var isReadLong = false
+    @ObservationIgnored private var longReadTask: Task<Void, Never>?
     /// Which read `readingSince` belongs to, so one a change left behind can't clear it when it finally ends.
     @ObservationIgnored private var readCount = 0
     public private(set) var updatedAt: Date?
@@ -266,6 +273,7 @@ public final class PortfolioStore {
 
     /// Reads now, with the numbers on screen marked as on their way, because someone asked and should see it happen.
     public func refresh() {
+        if feed.isStale { retriedProblem = feed }
         if address != nil { feed = .reading }
         start()
     }
@@ -361,6 +369,7 @@ public final class PortfolioStore {
         // In the same moment as the address, so one wallet's numbers are never on screen under another.
         portfolio = lastKnown()
         updatedAt = nil
+        retriedProblem = nil
         feed = next == nil ? .noWallet : .reading
         wantsLastRead = true
         start()
@@ -1016,7 +1025,26 @@ public final class PortfolioStore {
         return last.latest.blockNum >= portfolio.latest.blockNum
     }
 
+    /// By the same clock as `ReadingClock`, so this agrees with the seconds on screen.
+    private func noteRead() {
+        longReadTask?.cancel()
+        longReadTask = nil
+        isReadLong = false
+        guard let readingSince else { return }
+        let remaining = Double(FeedState.longReadSeconds) - Date.now.timeIntervalSince(readingSince)
+        guard remaining > 0 else {
+            isReadLong = true
+            return
+        }
+        longReadTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(remaining))
+            guard let self, !Task.isCancelled else { return }
+            isReadLong = true
+        }
+    }
+
     private func noteProblem() {
+        if feed != .reading { retriedProblem = nil }
         guard feed.isStale else {
             // A read says nothing yet, so whatever was wrong stands until it answers.
             if feed != .reading {
