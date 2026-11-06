@@ -9,6 +9,8 @@ public enum Wording {
     public static let methodHelp = "Average spreads what you paid across all you hold. Oldest first counts what you sell as what you got earliest."
     public static let averagePricePaid = "Average price paid"
     public static let networkFees = "Network fees"
+    /// Saved answers, wallets or purchases this version can't read, which are kept rather than replaced.
+    public static let unreadableSaved = "Some of what you saved can't be read by this version, so costs that rely on it may show as unknown. A copy is kept on this device."
     public static let balanceCheck = "Balance check"
     public static let startingBalance = "Starting balance"
     public static let pnlHelp = "PnL is profit and loss: what you've gained or lost so far."

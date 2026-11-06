@@ -9,7 +9,7 @@ import { unitsOfDecimal } from "./decimal.ts"
 import { jsonPost } from "./read-failure.ts"
 import { recordOf } from "./record.ts"
 import type { PurchaseState } from "./resolve.ts"
-import type { KeptIn, Shelf } from "./shelf.ts"
+import { changeKept, hasNoCopy, readKept, type KeptIn, type Shelf } from "./shelf.ts"
 
 /** The one thing the flow says about who the provider is, along with where its page is. */
 export const PROVIDER = "Coinbase"
@@ -213,13 +213,25 @@ function purchasesFrom(text: string | null): TrackedPurchase[] {
   }
 }
 
+/** Whether every row counts, because writing back what's left would lose any that doesn't. */
+function readable(text: string) {
+  try {
+    const value: unknown = JSON.parse(text)
+    return Array.isArray(value) && parseTrackedPurchases(value).length === value.length
+  } catch {
+    return false
+  }
+}
+
 /** The copy a page can show right away, until `readStoredPurchases` says what's true. */
 export const storedPurchases = (storage: KeptIn): TrackedPurchase[] => purchasesFrom(storage.getItem(PURCHASES_KEY))
 
-export const readStoredPurchases = async (shelf: Shelf): Promise<TrackedPurchase[]> => purchasesFrom(await shelf.read(PURCHASES_KEY))
+export const readStoredPurchases = async (shelf: Shelf): Promise<TrackedPurchase[]> => purchasesFrom(await readKept(shelf, PURCHASES_KEY, readable))
+
+export const storedPurchasesHaveNoCopy = (shelf: Shelf) => hasNoCopy(shelf, PURCHASES_KEY, readable)
 
 export async function changeStoredPurchases(shelf: Shelf, change: (latest: TrackedPurchase[]) => TrackedPurchase[]): Promise<TrackedPurchase[]> {
-  const text = await shelf.change(PURCHASES_KEY, (text) => {
+  const text = await changeKept(shelf, PURCHASES_KEY, readable, (text) => {
     const latest = purchasesFrom(text)
     const next = JSON.stringify(change(latest))
     return next === JSON.stringify(latest) ? text : next

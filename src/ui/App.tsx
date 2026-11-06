@@ -5,10 +5,10 @@ import { ALL_YOURS, combinedPortfolioOf, explainAcross, exportCombined } from ".
 import { ExplainPanel } from "./ExplainPanel.tsx"
 import { attentionOf, attentionTarget, pastCostsNote } from "../core/attention.ts"
 import { explainTarget, type ExplainTarget, type TotalMetric } from "../core/explain.ts"
-import { ALL_YOURS_TITLE, DEMO_NOTICE, NOT_AN_ADDRESS, NOT_STARTED, PNL_HELP, READING, READING_ALL, allYoursFailedSentence, allYoursOutdatedSentence, allYoursReadingSentence, allYoursUpdatingSentence, behindSentence, coverageSentence, exportLeavesOutSentence, feedProblem, linkedFailedSentence, NOT_SAVED, noMarketSentence, staleSentence, walletCount } from "../core/wording.ts"
+import { ALL_YOURS_TITLE, DEMO_NOTICE, NOT_AN_ADDRESS, NOT_STARTED, PNL_HELP, READING, READING_ALL, allYoursFailedSentence, allYoursOutdatedSentence, allYoursReadingSentence, allYoursUpdatingSentence, behindSentence, coverageSentence, exportLeavesOutSentence, feedProblem, linkedFailedSentence, NOT_SAVED, noMarketSentence, staleSentence, walletCount, UNREADABLE_NOT_COPIED, UNREADABLE_SAVED } from "../core/wording.ts"
 import { PnlChart } from "./PnlChart.tsx"
 import { ResolvePanel } from "./ResolvePanel.tsx"
-import { useBook, useOtherWallets } from "./useBook.ts"
+import { useBook, useOtherWallets, useUnreadableSaved } from "./useBook.ts"
 import { RulesPanel } from "./RulesPanel.tsx"
 import { useRules } from "./useRules.ts"
 import type { TaxYear } from "../core/tax.ts"
@@ -62,6 +62,7 @@ export function App() {
   const [chosenCurrency, setChosenCurrency] = useState<CurrencyCode>(readCurrency)
   const { rules, chosen: chosenRule, choose: chooseRule } = useRules()
   const { book, change, undo, canUndo, notSaved, linkAccounts, addPurchase } = useBook()
+  const unreadableSaved = useUnreadableSaved()
   const { purchases, problem: purchasesProblem, begin: beginPurchase, dismiss: dismissPurchase } = usePurchases(addPurchase)
   const [buying, setBuying] = useState(false)
   const paidIn = currenciesIn(book).join(",")
@@ -290,6 +291,16 @@ export function App() {
       <p className="visually-hidden" role="status">{readingStatus}</p>
       <p className="visually-hidden" role="alert">{statusAlert}</p>
       {notSaved ? <p className="notice warn" role="alert">⚠ {NOT_SAVED}</p> : null}
+      {unreadableSaved.copyFailed ? (
+        <p className="notice warn" role="alert">⚠ {UNREADABLE_NOT_COPIED}</p>
+      ) : unreadableSaved.unreadable ? (
+        <p className="notice warn" role="alert">
+          ⚠ {UNREADABLE_SAVED}{" "}
+          <button type="button" onClick={unreadableSaved.dismiss}>
+            OK
+          </button>
+        </p>
+      ) : null}
       {rules.length > 1 ? <RulesPanel rules={rules} chosen={chosenRule} choose={chooseRule} current={rule} address={isAll ? null : single} method={method} currency={currency} book={book} /> : null}
 
       <PurchaseList purchases={purchases} problem={purchasesProblem} matches={shown?.purchases ?? []} currency={chosenCurrency} showing={wallet?.address ?? null} onView={go} onDismiss={dismissPurchase} />

@@ -4,7 +4,7 @@ import type { OnrampOrder } from "../src/core/api.ts"
 import { currenciesIn, emptyBook, parseBook, recordPurchase, type Purchase } from "../src/core/book.ts"
 import { amountForUsd } from "../src/core/device-read.ts"
 import { plainShelf } from "../src/core/shelf.ts"
-import { changeStoredPurchases, checkoutNote, isFollowed, isResolved, microsOf, pageOf, parseTrackedPurchases, phaseOf, purchaseOf, purchaseStatus, purchaseTitle, readOrder, settleOrder, startCheckout, storedPurchases, trimmed, typedAmount, type TrackedPurchase } from "../src/core/purchases.ts"
+import { changeStoredPurchases, readStoredPurchases, checkoutNote, isFollowed, isResolved, microsOf, pageOf, parseTrackedPurchases, phaseOf, purchaseOf, purchaseStatus, purchaseTitle, readOrder, settleOrder, startCheckout, storedPurchases, trimmed, typedAmount, type TrackedPurchase } from "../src/core/purchases.ts"
 import { costProof, purchaseSource } from "../src/core/wording.ts"
 import { TOKENS } from "@pricetag/sdk/core"
 
@@ -173,5 +173,29 @@ describe("a bought cost's own note", () => {
   it("says where it came from, and when this transaction only moved it", () => {
     assert.match(costProof(purchaseSource("coinbase"), "paid"), /^Bought on Coinbase\. The order says what you paid, fees included, and matches this transaction exactly\.$/)
     assert.match(costProof(purchaseSource("coinbase"), "inherited"), /by your other wallet\. This transaction only moved it here/)
+  })
+})
+
+describe("a purchase this version can't read", () => {
+  const storage = (text: string) => {
+    const kept = new Map([["patina.purchases", text]])
+    return { getItem: (key: string) => kept.get(key) ?? null, setItem: (key: string, value: string) => void kept.set(key, value) }
+  }
+
+  it("leaves the rest showing, and is copied before a change writes the rest back", async () => {
+    const text = JSON.stringify([tracked(), { ...tracked({ ref: "new" }), wallet: "not an address" }])
+    const stored = storage(text)
+    assert.deepEqual((await readStoredPurchases(plainShelf(stored))).map(({ ref }) => ref), ["ref-1"])
+    assert.equal(stored.getItem("patina.purchases"), text)
+    await changeStoredPurchases(plainShelf(stored), (current) => [...current, tracked({ ref: "ref-2" })])
+    assert.deepEqual(JSON.parse(stored.getItem("patina.purchases") as string).map(({ ref }: TrackedPurchase) => ref), ["ref-1", "ref-2"])
+    assert.deepEqual(JSON.parse(stored.getItem("patina.unreadable") as string).entries, [{ key: "patina.purchases", text }])
+  })
+
+  it("sets nothing aside when every row can be read", async () => {
+    const stored = storage(JSON.stringify([tracked()]))
+    await readStoredPurchases(plainShelf(stored))
+    await changeStoredPurchases(plainShelf(stored), (current) => [...current, tracked({ ref: "ref-2" })])
+    assert.equal(stored.getItem("patina.unreadable"), null)
   })
 })

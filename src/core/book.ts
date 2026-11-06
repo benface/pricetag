@@ -3,7 +3,7 @@
 
 import { isAddress, isCurrencyCode, normalizeAddress, type CurrencyCode } from "@pricetag/sdk/core"
 import { recordOf } from "./record.ts"
-import type { KeptIn, Shelf } from "./shelf.ts"
+import { changeKept, hasNoCopy, readKept, type KeptIn, type Shelf } from "./shelf.ts"
 
 export const DEMO_ADDRESS = "0x00000000000000000000000000000000000de300"
 /** The demo's other wallet. Nothing links them until someone answers that it's theirs. */
@@ -257,22 +257,28 @@ const BOOK_KEY = "patina.book"
 
 export const isBookKey = (key: string | null) => key === null || key === BOOK_KEY
 
-function bookFrom(text: string | null): Book {
+function bookIn(text: string): Book | null {
   try {
-    return parseBook(JSON.parse(text ?? "null")) ?? emptyBook()
+    return parseBook(JSON.parse(text))
   } catch {
-    return emptyBook()
+    return null
   }
 }
+
+const bookFrom = (text: string | null): Book => (text === null ? null : bookIn(text)) ?? emptyBook()
+
+const readable = (text: string) => bookIn(text) !== null
 
 /** The copy a page can show right away, until `readStoredBook` says what's true. */
 export const storedBook = (storage: KeptIn): Book => bookFrom(storage.getItem(BOOK_KEY))
 
-export const readStoredBook = async (shelf: Shelf): Promise<Book> => bookFrom(await shelf.read(BOOK_KEY))
+export const readStoredBook = async (shelf: Shelf): Promise<Book> => bookFrom(await readKept(shelf, BOOK_KEY, readable))
 
-/** A change to what's stored, whatever this tab last heard about it. When it changes nothing, nothing's written and no other tab hears about it. */
+export const storedBookHasNoCopy = (shelf: Shelf) => hasNoCopy(shelf, BOOK_KEY, readable)
+
+/** A change to what's stored, whatever this tab last heard about it. When it changes nothing, nothing's written and no other tab hears about it. Answers this version can't read are copied somewhere safe first. */
 export async function changeStoredBook(shelf: Shelf, change: (latest: Book) => Book): Promise<Book> {
-  const text = await shelf.change(BOOK_KEY, (text) => {
+  const text = await changeKept(shelf, BOOK_KEY, readable, (text) => {
     const latest = bookFrom(text)
     const next = change(latest)
     return same(next, latest) ? text : JSON.stringify(next)

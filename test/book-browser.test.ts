@@ -29,11 +29,12 @@ import { answerSender, changeStoredBook, linkDeviceAccounts } from "/src/core/bo
 import { DEMO_WALLET } from "/src/core/fixtures.ts"
 import { ResolvePanel } from "/src/ui/ResolvePanel.tsx"
 import "/src/ui/styles.css"
-import { shelf, useBook } from "/src/ui/useBook.ts"
+import { shelf, useBook, useUnreadableSaved } from "/src/ui/useBook.ts"
 import { usePurchases } from "/src/ui/usePurchases.ts"
 function Harness() {
   const book = useBook()
   const tracker = usePurchases(book.addPurchase)
+  window.unreadableSaved = useUnreadableSaved()
   window.hook = book
   window.tracker = tracker
   window.answer = (address, kind) => flushSync(() => window.hook.change(answerSender(window.hook.book, null, address, { kind })))
@@ -64,6 +65,8 @@ window.count = async (times) => {
   for (let i = 0; i < times; i++) await shelf.change("count", (latest) => String(Number(latest ?? 0) + 1))
 }
 window.counted = () => shelf.read("count")
+window.shelf = shelf
+window.flushSync = flushSync
 window.linkUnheard = (addresses) => changeStoredBook(shelf, (latest) => linkDeviceAccounts(latest, addresses))
 createRoot(document.getElementById("root")).render(createElement(location.search === "?panel" ? Panel : Harness))
 `
@@ -722,6 +725,177 @@ describe("the book in two browser tabs", { skip: existsSync(CHROME) ? false : "C
     await reload(a)
     assert.ok((await bookIn(a)).purchases.some(({ order }: { order: string }) => order === "older"))
     assert.ok(await evaluate<boolean>(a, `JSON.parse(localStorage.getItem("patina.book")).purchases.length > 0`), "and the copy's put right")
+  })
+
+  it("doesn't touch answers it can't read until one changes, keeps a copy, and says so once", async () => {
+    const [a, b] = (await tabs(2)) as [string, string]
+    const unreadable = JSON.stringify({ senders: { [OTHER]: { kind: "mine" } }, costs: { [`${ME}:leg`]: { micros: "1", currency: "NEW" } }, withdrawals: [] })
+    const stored = () => evaluate<string | null>(a, `shelf.read("patina.book")`)
+    await evaluate(a, `localStorage.setItem("patina.book", ${JSON.stringify(unreadable)})`)
+    await reload(a)
+    await until(() => evaluate(a, "unreadableSaved.unreadable"), "the person to be told")
+    assert.equal(await evaluate(a, `localStorage.getItem("patina.book")`), unreadable, "opening the page wrote nothing over it")
+    assert.deepEqual((await bookIn(a)).senders, {})
+
+    await evaluate(a, `flushSync(() => unreadableSaved.dismiss())`)
+    await until(async () => !(await evaluate(a, "unreadableSaved.unreadable")), "the notice to go")
+    await reload(a)
+    assert.equal(await evaluate(a, "unreadableSaved.unreadable"), false, "it's only said once")
+
+    await evaluate(a, `answer(${JSON.stringify(address(7))}, "mine")`)
+    await until(async () => (await stored()) !== unreadable, "the answer to save")
+    assert.equal(JSON.parse((await stored()) as string).senders[address(7)].kind, "mine")
+    const kept = JSON.parse((await evaluate<string>(b, `shelf.read("patina.unreadable")`)))
+    assert.deepEqual(kept.entries, [{ key: "patina.book", text: unreadable }])
+  })
+
+  const failedCopies = {
+    "patina.book": JSON.stringify({ senders: { [OTHER]: { kind: "mine" } }, costs: { [`${ME}:leg`]: { micros: "1", currency: "NEW" } }, withdrawals: [] }),
+    "patina.purchases": JSON.stringify([{ ref: "new", wallet: "not an address" }]),
+  }
+  for (const [key, unreadable] of Object.entries(failedCopies)) {
+    it(`says what it couldn't do when ${key} can't be read or copied, and what it could once it can`, async () => {
+      const [a] = (await tabs(1)) as [string]
+      await send("Page.enable", {}, a)
+      await send("Page.addScriptToEvaluateOnNewDocument", { source: `
+        const put = IDBObjectStore.prototype.put
+        IDBObjectStore.prototype.put = function (value, key) {
+          const request = put.call(this, value, key)
+          if (key === "patina.unreadable" && sessionStorage.getItem("fail copies")) this.transaction.abort()
+          return request
+        }
+      ` }, a)
+      // The page that's open doesn't have that yet, and it would read what's about to be stored and keep its copy.
+      await reload(a)
+      await evaluate(a, `sessionStorage.setItem("fail copies", "1"); localStorage.setItem(${JSON.stringify(key)}, ${JSON.stringify(unreadable)})`)
+      await reload(a)
+      await until(() => evaluate(a, "unreadableSaved.copyFailed"), "the person to be told")
+      assert.equal(await evaluate(a, "unreadableSaved.unreadable"), true)
+      assert.equal(await evaluate(a, `shelf.read(${JSON.stringify(key)})`), unreadable)
+      assert.equal(await evaluate(a, `shelf.read("patina.unreadable")`), null)
+
+      await evaluate(a, `sessionStorage.removeItem("fail copies")`)
+      await until(async () => !(await evaluate(a, "unreadableSaved.copyFailed")), "the copy to be tried again")
+      assert.equal(await evaluate(a, "unreadableSaved.unreadable"), true, "and now it says a copy is kept")
+      assert.deepEqual(JSON.parse(await evaluate<string>(a, `shelf.read("patina.unreadable")`)).entries, [{ key, text: unreadable }])
+      assert.equal(await evaluate(a, `shelf.read(${JSON.stringify(key)})`), unreadable)
+    })
+  }
+
+  it("still says so when IndexedDB can't be used at all", async () => {
+    const [a] = (await tabs(1)) as [string]
+    await send("Page.enable", {}, a)
+    await send("Page.addScriptToEvaluateOnNewDocument", { source: `
+      IDBDatabase.prototype.transaction = () => { throw new Error("not now") }
+      const setItem = Storage.prototype.setItem
+      Storage.prototype.setItem = function (key, value) {
+        if (key === "patina.unreadable" && sessionStorage.getItem("fail copies")) throw new Error("full")
+        setItem.call(this, key, value)
+      }
+    ` }, a)
+    const unreadable = failedCopies["patina.book"]
+    await evaluate(a, `localStorage.setItem("patina.book", ${JSON.stringify(unreadable)})`)
+    await reload(a)
+    await until(async () => (await evaluate(a, "unreadableSaved.unreadable")) && !(await evaluate(a, "unreadableSaved.copyFailed")), "a copy in localStorage to be reported")
+    assert.deepEqual(JSON.parse(await evaluate<string>(a, `localStorage.getItem("patina.unreadable")`)).entries, [{ key: "patina.book", text: unreadable }])
+
+    await evaluate(a, "unreadableSaved.dismiss()")
+    await until(async () => !(await evaluate(a, "unreadableSaved.unreadable")), "the notice to close")
+    await until(async () => JSON.parse(await evaluate<string>(a, `localStorage.getItem("patina.unreadable")`)).seen === 1, "the dismissal to be kept where the notice came from")
+    await reload(a)
+    assert.equal(await evaluate(a, "unreadableSaved.unreadable"), false, "it's only said once")
+    assert.equal(await evaluate(a, `localStorage.getItem("patina.book")`), unreadable)
+
+    const newer = failedCopies["patina.purchases"]
+    await evaluate(a, `localStorage.setItem("patina.purchases", ${JSON.stringify(newer)})`)
+    await reload(a)
+    await until(() => evaluate(a, "unreadableSaved.unreadable"), "something new to be said")
+    assert.equal(await evaluate(a, "unreadableSaved.copyFailed"), false)
+    assert.deepEqual(JSON.parse(await evaluate<string>(a, `localStorage.getItem("patina.unreadable")`)).entries, [{ key: "patina.book", text: unreadable }, { key: "patina.purchases", text: newer }])
+    await evaluate(a, `localStorage.removeItem("patina.purchases")`)
+
+    await evaluate(a, `localStorage.removeItem("patina.unreadable"); sessionStorage.setItem("fail copies", "1")`)
+    await reload(a)
+    await until(() => evaluate(a, "unreadableSaved.copyFailed"), "the failed copy to be reported")
+    assert.equal(await evaluate(a, `localStorage.getItem("patina.book")`), unreadable)
+  })
+
+  const setAsideInIndexedDB = `new Promise((resolve) => {
+    indexedDB.open("patina", 1).onsuccess = ({ target }) => (target.result.transaction("kept").objectStore("kept").get("patina.unreadable").onsuccess = ({ target }) => resolve(target.result))
+  })`
+
+  it("remembers OK when IndexedDB can be read but not written, and tells IndexedDB once it can be", async () => {
+    const [a] = (await tabs(1)) as [string]
+    await send("Page.enable", {}, a)
+    await send("Page.addScriptToEvaluateOnNewDocument", { source: `
+      const put = IDBObjectStore.prototype.put
+      IDBObjectStore.prototype.put = function (value, key) {
+        const request = put.call(this, value, key)
+        if (key === "patina.unreadable" && sessionStorage.getItem("fail copies")) this.transaction.abort()
+        return request
+      }
+    ` }, a)
+    const unreadable = failedCopies["patina.book"]
+    await evaluate(a, `localStorage.setItem("patina.book", ${JSON.stringify(unreadable)})`)
+    await reload(a)
+    await until(() => evaluate(a, "unreadableSaved.unreadable"), "the person to be told")
+    assert.equal(JSON.parse(await evaluate<string>(a, setAsideInIndexedDB)).seen, 0)
+
+    await evaluate(a, `sessionStorage.setItem("fail copies", "1")`)
+    await reload(a)
+    await until(() => evaluate(a, "unreadableSaved.unreadable"), "the person to be told while writes fail")
+    assert.equal(await evaluate(a, "unreadableSaved.copyFailed"), false)
+    await evaluate(a, "unreadableSaved.dismiss()")
+    await until(() => evaluate(a, `JSON.parse(localStorage.getItem("patina.unreadable")).seen === 1`), "the dismissal to be kept")
+    assert.equal(JSON.parse(await evaluate<string>(a, setAsideInIndexedDB)).seen, 0, "this is the case: IndexedDB still says it wasn't")
+
+    await reload(a)
+    await delay(500)
+    assert.equal(await evaluate(a, "unreadableSaved.unreadable"), false, "it's only said once")
+    assert.equal(JSON.parse(await evaluate<string>(a, `localStorage.getItem("patina.unreadable")`)).seen, 1, "and reading didn't take that back")
+    assert.deepEqual(JSON.parse(await evaluate<string>(a, `shelf.read("patina.unreadable")`)).entries, [{ key: "patina.book", text: unreadable }])
+    assert.equal(await evaluate(a, `localStorage.getItem("patina.book")`), unreadable)
+
+    const newer = failedCopies["patina.purchases"]
+    await evaluate(a, `localStorage.setItem("patina.purchases", ${JSON.stringify(newer)})`)
+    await reload(a)
+    await until(() => evaluate(a, "unreadableSaved.copyFailed"), "something new to be said, with no copy of it yet")
+
+    await evaluate(a, `sessionStorage.removeItem("fail copies")`)
+    await until(async () => !(await evaluate(a, "unreadableSaved.copyFailed")), "the copy to be tried again")
+    assert.equal(await evaluate(a, "unreadableSaved.unreadable"), true, "the new one hasn't been seen")
+    const kept = JSON.parse(await evaluate<string>(a, setAsideInIndexedDB))
+    assert.deepEqual(kept, { entries: [{ key: "patina.book", text: unreadable }, { key: "patina.purchases", text: newer }], seen: 1 })
+  })
+
+  it("loses no copy that only reached localStorage while IndexedDB couldn't be used", async () => {
+    const [a] = (await tabs(1)) as [string]
+    await send("Page.enable", {}, a)
+    await send("Page.addScriptToEvaluateOnNewDocument", { source: `
+      const transaction = IDBDatabase.prototype.transaction
+      IDBDatabase.prototype.transaction = function (...args) {
+        if (sessionStorage.getItem("no IndexedDB")) throw new Error("not now")
+        return transaction.apply(this, args)
+      }
+    ` }, a)
+    const [book, purchases] = [failedCopies["patina.book"], failedCopies["patina.purchases"]]
+    await evaluate(a, `localStorage.setItem("patina.book", ${JSON.stringify(book)})`)
+    await reload(a)
+    await until(() => evaluate(a, "unreadableSaved.unreadable"), "the person to be told")
+
+    await evaluate(a, `sessionStorage.setItem("no IndexedDB", "1"); localStorage.setItem("patina.purchases", ${JSON.stringify(purchases)})`)
+    await reload(a)
+    await until(() => evaluate(a, `JSON.parse(localStorage.getItem("patina.unreadable")).entries.length === 2`), "a copy in localStorage")
+
+    // Replaced since, so this copy is the only one left.
+    await evaluate(a, `sessionStorage.removeItem("no IndexedDB"); localStorage.removeItem("patina.purchases")`)
+    await reload(a)
+    await delay(500)
+    const expected = [{ key: "patina.book", text: book }, { key: "patina.purchases", text: purchases }]
+    assert.deepEqual(JSON.parse(await evaluate<string>(a, `localStorage.getItem("patina.unreadable")`)).entries, expected)
+    assert.deepEqual(JSON.parse(await evaluate<string>(a, `shelf.read("patina.unreadable")`)).entries, expected)
+    assert.equal(await evaluate(a, "unreadableSaved.copyFailed"), false)
+    assert.equal(await evaluate(a, "unreadableSaved.unreadable"), true)
   })
 
   describe("the question on the card", () => {

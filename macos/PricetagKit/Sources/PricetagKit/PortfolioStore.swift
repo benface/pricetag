@@ -213,6 +213,7 @@ public final class PortfolioStore {
     @ObservationIgnored private var wantsLastRead = true
     /// Nil reads the server with the invite.
     @ObservationIgnored private let customSource: (@Sendable (URL) -> any PortfolioSource)?
+    public private(set) var hasUnreadableSaved: Bool
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private let reachableDelay: Duration
@@ -274,12 +275,15 @@ public final class PortfolioStore {
         self.serverURL = serverURL
         let invite = Self.invites(in: defaults)[Self.origin(of: serverURL)]
         self.invite = invite
-        let answers = defaults.data(forKey: Keys.book).flatMap { try? JSONDecoder().decode(Book.self, from: $0) } ?? Book()
+        let readAnswers = SetAside.decoded(Book.self, key: Keys.book, in: defaults)
+        let answers = readAnswers ?? Book()
         self.answers = answers
-        self.answerDetails = (defaults.data(forKey: Keys.answerDetails).flatMap { try? JSONDecoder().decode(AnswerDetails.self, from: $0) } ?? AnswerDetails()).keeping(answers)
+        // The next save only keeps details of answers it can see, so with none of them these need keeping too.
+        if readAnswers == nil { SetAside.keep(key: Keys.answerDetails, in: defaults) }
+        self.answerDetails = (SetAside.decoded(AnswerDetails.self, key: Keys.answerDetails, in: defaults) ?? AnswerDetails()).keeping(answers)
         self.selectedRule = defaults.string(forKey: Keys.rule)
         // All Yours isn't a wallet, so it's never one to remember, whatever an earlier version saved.
-        var saved = (defaults.data(forKey: Keys.savedWallets).flatMap { try? JSONDecoder().decode([SavedWallet].self, from: $0) } ?? []).filter { !WalletAddress.isAllYours($0.address) }
+        var saved = (SetAside.decoded([SavedWallet].self, key: Keys.savedWallets, in: defaults) ?? []).filter { !WalletAddress.isAllYours($0.address) }
         // From before there was a list, the wallet being shown is all there is to remember.
         if let address, address != WalletAddress.demo, !WalletAddress.isAllYours(address), !saved.contains(where: { $0.address == address }) {
             saved.append(SavedWallet(address: address, lastSeen: now()))
@@ -287,6 +291,7 @@ public final class PortfolioStore {
         self.savedWallets = saved
         self.walletOrder = defaults.stringArray(forKey: Keys.walletOrder) ?? []
         self.hiddenWallets = defaults.stringArray(forKey: Keys.hiddenWallets) ?? []
+        self.hasUnreadableSaved = SetAside.hasUnseen(in: defaults)
         self.feed = address == nil ? .noWallet : .reading
         if address != nil { readingSince = now() }
         self.source = makeSource?(serverURL) ?? PricetagClient(serverURL: serverURL, invite: invite)
@@ -543,6 +548,16 @@ public final class PortfolioStore {
         }
         saveHidden(hiddenWallets.filter { $0 != address } + (snapshot.wasHidden ? [address] : []))
         if snapshot.wasShowing { setWallet(address) }
+    }
+
+    /// Whether something saved here couldn't be read, and nobody's been told yet.
+    func refreshUnreadableSaved() {
+        hasUnreadableSaved = SetAside.hasUnseen(in: defaults)
+    }
+
+    public func dismissUnreadableSaved() {
+        SetAside.markSeen(in: defaults)
+        hasUnreadableSaved = false
     }
 
     private func saveDetails() {
