@@ -970,11 +970,14 @@ public final class PortfolioStore {
         return try await source.exportCSV(address: address, method: method, currency: currency, rule: selectedRule, linked: linked(for: address), shown: walletsShown, book: bookToSend(book, for: address))
     }
 
-    /// Reads an exchange's history, and adds what it found to what's on this device. Says how many withdrawals had no usable cost.
-    public func importCoinbase(csv: String) async throws -> ExchangeImport {
-        let imported = try await source.importCoinbase(csv: csv)
+    /// Reads an exchange's history, and says how many withdrawals had no usable cost. Nothing's kept until someone vouches for the file.
+    public func readCoinbase(csv: String) async throws -> ExchangeImport {
+        try await source.importCoinbase(csv: csv)
+    }
+
+    /// Adds what a file found to what's on this device.
+    public func keepImport(_ imported: ExchangeImport) {
         setBook(book.importing(imported.withdrawals), action: "Import")
-        return imported
     }
 
     /// nil with no wallet, when there's nothing to explain.

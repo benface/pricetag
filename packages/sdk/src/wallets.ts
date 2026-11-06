@@ -462,13 +462,29 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     }
   }
 
-  /** Whether this chart point's feed should be asked at this head. */
+  /** Whether this feed should be asked about this bucket at this head. */
   function isFeedDue(read: MarketRead, head: number): boolean {
     const key = marketKey(read)
     if (!source.readFeedRounds || !TOKEN_FEEDS[read.asset] || markRounds.has(key)) return false
     const last = noAnswers.get(key)
     return !last || (last.tries < NO_ANSWER_TRIES && msBetweenBlocks(last.atHead, head) >= NO_ANSWER_WAIT_MS * 2 ** (last.tries - 1))
   }
+
+  /**
+   * The answers at a fixed block's bucket, reading what's due. They're kept by bucket because a wallet at the head moves the latest
+   * answers along, and a feed that gives none is asked like a chart point's, since no new block will change the question.
+   */
+  async function loadFixedFeedRounds(assets: readonly string[], bucket: number, head: number): Promise<Record<string, FeedRound>> {
+    const due = assets.filter((asset) => isFeedDue({ asset, bucket }, head))
+    if (due.length > 0) await readMarkRounds(due, [bucket], head)
+    return fixedFeedRounds(assets, bucket)
+  }
+
+  const fixedFeedRounds = (assets: readonly string[], bucket: number): Record<string, FeedRound> =>
+    Object.fromEntries(assets.flatMap((asset) => {
+      const round = markRounds.get(marketKey({ asset, bucket }))
+      return round ? [[asset, round]] : []
+    }))
 
   /**
    * Reads what's missing, `wanted` first, and says whether all of `wanted` is now known. `chart` only gets the reads left
@@ -616,7 +632,14 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const usable = source.readMarketTrades !== undefined && source.marketReady !== undefined && marketReady !== false
     const unread = (read: MarketRead) => usable && !market.has(marketKey(read))
     const { wanted } = marketWanted(wallet, wallet.priced, Math.min(wallet.coveredTo, wallet.latest.blockNum), wallet.prices)
-    return wanted.some(unread) || chartReads(address, wallet.rows, wallet.opening).some((read) => isFeedDue(read, head) || (!feedMark(read, markRounds, wallet.references) && unread(read)))
+    const bucket = bucketOf(wallet.latest.blockNum, MARKET_HEAD_BUCKET_BLOCKS)
+    return wanted.some(unread) || assetsHeld(wallet).some((asset) => isFeedDue({ asset, bucket }, head)) || chartReads(address, wallet.rows, wallet.opening).some((read) => isFeedDue(read, head) || (!feedMark(read, markRounds, wallet.references) && unread(read)))
+  }
+
+  /** Whether a feed's kept answer says more than this wallet's current prices do: a chart point or another wallet can read one after this wallet worked out its prices. */
+  function hasNewerFeedPrices(wallet: Cached): boolean {
+    const rounds = fixedFeedRounds(assetsHeld(wallet), bucketOf(wallet.latest.blockNum, MARKET_HEAD_BUCKET_BLOCKS))
+    return Object.entries(feedPrices(rounds, wallet.prices)).some(([asset, price]) => wallet.prices[asset]?.micros !== price?.micros || wallet.prices[asset]?.source !== price?.source)
   }
 
   /** Prices from a reorg's blocks may be from what it replaced. The trades behind one all come before its bucket's end. */
@@ -780,6 +803,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     unreadUnseenBlocks(address, wallet).length === 0 &&
     unreadPayerBlocks(address, wallet).length === 0 &&
     !hasMarketReadsLeft(address, wallet, chain.blockNum) &&
+    !hasNewerFeedPrices(wallet) &&
     !(chain.blockNum > wallet.readAtHead && unreadTokenPrices(address, wallet.rows).length > 0)
 
   async function refresh(address: string, key: string, range: WalletRange, reservation: { release?: () => void }): Promise<Cached> {
@@ -913,7 +937,8 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const wallet = { rows, opening, closing, lastBalances }
     const heldAssets = assetsHeld(wallet)
     // At the head rather than at what's covered, like ETH's: a table that stops processing can't keep an old answer current.
-    Object.assign(prices, feedPrices(await loadFeedRounds(heldAssets, bucketOf(head.blockNum, MARKET_HEAD_BUCKET_BLOCKS)), prices))
+    const currentBucket = bucketOf(head.blockNum, MARKET_HEAD_BUCKET_BLOCKS)
+    Object.assign(prices, feedPrices(range.to === undefined ? await loadFeedRounds(heldAssets, currentBucket) : await loadFixedFeedRounds(heldAssets, currentBucket, chain.blockNum), prices))
     const { headBucket, unpriced, wanted } = marketWanted(wallet, priced, Math.min(coveredTo, head.blockNum), prices)
     const marketRead = await loadMarket(wanted, { reads: chartReads(address, rows, opening), references: known, head: chain.blockNum })
     await loadTokenActivity(address, rows, chain.blockNum)

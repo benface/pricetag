@@ -1374,7 +1374,7 @@ describe("marking the chart from the token feeds", () => {
         const wallets = createWallets(source, settled, noFees)
         const read = async () => [marked(await wallets.get(ME, RANGE)), feedReads.length]
         const [first, second, third] = [await read(), await read(), await read()]
-        assert.deepEqual([first[0], second[0], third[0]], [19, 39, 41], "the first refresh's limit also pays for the market read that prices the leg")
+        assert.deepEqual([first[0], second[0], third[0]], [20, 40, 41], "the first refresh's limit also pays for the market read that prices the leg, and the current price's read already answers the newest point")
         assert.deepEqual(await read(), third, "there's nothing left to read")
       })
 

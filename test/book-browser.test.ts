@@ -1,5 +1,6 @@
 // The book and the purchases it's told about, in tabs of a real browser, through the real hooks. A shared Map can't show what
 // this is for: each tab has its own process and its own copy of localStorage, so two of them can act at the same moment.
+// Importing a file is here too, in the real panel, since what's saved can change while the file waits for an answer.
 
 import assert from "node:assert/strict"
 import { spawn, type ChildProcess } from "node:child_process"
@@ -24,6 +25,9 @@ import { createElement, useEffect } from "react"
 import { flushSync } from "react-dom"
 import { createRoot } from "react-dom/client"
 import { answerSender, changeStoredBook, linkDeviceAccounts } from "/src/core/book.ts"
+import { DEMO_WALLET } from "/src/core/fixtures.ts"
+import { ResolvePanel } from "/src/ui/ResolvePanel.tsx"
+import "/src/ui/styles.css"
 import { shelf, useBook } from "/src/ui/useBook.ts"
 import { usePurchases } from "/src/ui/usePurchases.ts"
 function Harness() {
@@ -39,12 +43,28 @@ function Harness() {
   useEffect(() => void (window.ready = true), [])
   return null
 }
+function Panel() {
+  const book = useBook()
+  window.hook = book
+  useEffect(() => void (window.ready = true), [])
+  const nothing = () => {}
+  return createElement(ResolvePanel, { wallet: DEMO_WALLET, others: [], failed: [], onRetry: nothing, method: "average", book: book.book, firstAsset: null, onChange: book.change, onUndo: book.undo, canUndo: book.canUndo, notSaved: book.notSaved, onPublish: nothing, onCurrentSender: nothing, onClose: nothing })
+}
+window.pick = (name) => [...document.querySelectorAll("button")].find((button) => button.textContent.includes(name)).click()
+window.importFile = (text) => {
+  const input = document.querySelector("input[type=file]")
+  const files = new DataTransfer()
+  files.items.add(new File([text], "coinbase.csv", { type: "text/csv" }))
+  input.files = files.files
+  input.dispatchEvent(new Event("change", { bubbles: true }))
+}
+window.saveUnheard = (withdrawals) => changeStoredBook(shelf, (latest) => ({ ...latest, withdrawals }))
 window.count = async (times) => {
   for (let i = 0; i < times; i++) await shelf.change("count", (latest) => String(Number(latest ?? 0) + 1))
 }
 window.counted = () => shelf.read("count")
 window.linkUnheard = (addresses) => changeStoredBook(shelf, (latest) => linkDeviceAccounts(latest, addresses))
-createRoot(document.getElementById("root")).render(createElement(Harness))
+createRoot(document.getElementById("root")).render(createElement(location.search === "?panel" ? Panel : Harness))
 `
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -59,7 +79,7 @@ async function until<T>(read: () => Promise<T> | T, what: string, timeout = 20_0
   }
 }
 
-describe("the book in two browser tabs", { skip: existsSync(CHROME) ? false : "Chrome isn't installed here", timeout: 180_000 }, () => {
+describe("the book in two browser tabs", { skip: existsSync(CHROME) ? false : "Chrome isn't installed here", timeout: 240_000 }, () => {
   const orders = new Map<string, unknown>()
   let server: ViteDevServer
   let url: string
@@ -83,18 +103,45 @@ describe("the book in two browser tabs", { skip: existsSync(CHROME) ? false : "C
     return answer.result.value as T
   }
 
+  const openTab = async (at: string, browserContextId: string) => {
+    const { targetId } = await send("Target.createTarget", { url: at, browserContextId })
+    const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true })
+    return sessionId as string
+  }
+
   /** Tabs sharing one browser's storage, and nothing with any other test. */
-  async function tabs(count: number): Promise<string[]> {
+  async function tabs(count: number, page = url, first?: (browserContextId: string) => Promise<unknown>): Promise<string[]> {
     const { browserContextId } = await send("Target.createBrowserContext")
+    await first?.(browserContextId)
     return Promise.all(
       Array.from({ length: count }, async () => {
-        const { targetId } = await send("Target.createTarget", { url, browserContextId })
-        const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true })
+        const sessionId = await openTab(page, browserContextId)
         await until(() => evaluate(sessionId, "Boolean(window.ready)"), "a tab to start")
         return sessionId
       }),
     )
   }
+
+  // Keeps asking for something, so the transaction it's in never finishes, and everything waiting on it really is stuck.
+  const keepBusy = `(transaction) => {
+    const ask = () => {
+      if (!window.released) transaction.objectStore("kept").get("anything").onsuccess = ask
+    }
+    ask()
+  }`
+
+  /** Every change in every other tab waits on this tab's transaction until `release`. */
+  const holdTheShelf = (session: string) =>
+    evaluate(session, `new Promise((resolve) => {
+      window.released = false
+      indexedDB.open("patina", 1).onsuccess = ({ target }) => {
+        const transaction = target.result.transaction("kept", "readwrite")
+        transaction.oncomplete = () => target.result.close()
+        ;(${keepBusy})(transaction)
+        resolve(true)
+      }
+    })`)
+  const release = (session: string) => evaluate(session, "window.released = true")
 
   async function reload(session: string) {
     await evaluate(session, "window.ready = false")
@@ -146,7 +193,8 @@ describe("the book in two browser tabs", { skip: existsSync(CHROME) ? false : "C
                 res.setHeader("content-type", type)
                 res.end(body)
               }
-              if (req.url === "/__harness") return reply("text/html", `<!doctype html><div id="root"></div><script type="module" src="/__harness.js"></script>`)
+              if (req.url === "/__harness?blank") return reply("text/html", "<!doctype html>")
+              if (req.url?.split("?")[0] === "/__harness") return reply("text/html", `<!doctype html><div id="root"></div><script type="module" src="/__harness.js"></script>`)
               if (req.url === "/api/onramp/checkout") return reply("application/json", JSON.stringify({ url: "https://pay.coinbase.com/x", ref: `ref-${++nextRef}` }))
               if (req.url?.startsWith("/api/onramp/orders/")) return reply("application/json", JSON.stringify({ orders: [orders.get(req.url.split("/").at(-1)!)].filter(Boolean) }))
               next()
@@ -331,6 +379,194 @@ describe("the book in two browser tabs", { skip: existsSync(CHROME) ? false : "C
     assert.deepEqual((await bookIn(a)).senders[OTHER], { kind: "mine" })
   })
 
+  it("says so when a save gets stuck, and it doesn't land later", async () => {
+    const [a, b] = (await tabs(2)) as [string, string]
+    await holdTheShelf(b)
+    await evaluate(a, `answer(${JSON.stringify(OTHER)}, "mine")`)
+    assert.equal((await bookIn(a)).senders[OTHER]?.kind, "mine", "on screen right away")
+    await until(() => evaluate(a, "hook.notSaved"), "the warning to show")
+    assert.equal(await evaluate(a, "hook.canUndo"), false)
+    assert.equal((await bookIn(a)).senders[OTHER], undefined)
+
+    await release(b)
+    await delay(200)
+    await reload(a)
+    assert.deepEqual((await bookIn(a)).senders, {})
+    await evaluate(a, `answer(${JSON.stringify(ME)}, "mine")`)
+    await until(() => evaluate(a, "hook.canUndo"), "the next answer to save")
+    assert.equal(await evaluate(a, "hook.notSaved"), false)
+  })
+
+  it("keeps an undo that got stuck, says so, and it works once saving does", async () => {
+    const [a, b] = (await tabs(2)) as [string, string]
+    await evaluate(a, `answer(${JSON.stringify(OTHER)}, "mine")`)
+    await until(() => evaluate(a, "hook.canUndo"), "the answer to save")
+    await holdTheShelf(b)
+    await evaluate(a, "undo()")
+    await until(() => evaluate(a, "hook.notSaved"), "the warning to show")
+    assert.equal(await evaluate(a, "hook.canUndo"), true)
+    assert.equal((await bookIn(a)).senders[OTHER]?.kind, "mine")
+
+    await release(b)
+    await delay(200)
+    await evaluate(a, "undo()")
+    await until(() => evaluate(a, "!hook.canUndo"), "the undo to work")
+    assert.equal(await evaluate(a, "hook.notSaved"), false)
+    assert.equal((await bookIn(a)).senders[OTHER], undefined)
+  })
+
+  it("shows a stuck save that was too far along to stop, once it lands", async () => {
+    const [a, b] = (await tabs(2)) as [string, string]
+    await holdTheShelf(b)
+    await evaluate(a, `IDBTransaction.prototype.abort = () => { throw new DOMException("Already committing", "InvalidStateError") }`)
+    await evaluate(a, `answer(${JSON.stringify(OTHER)}, "mine")`)
+    await until(() => evaluate(a, "hook.notSaved"), "the warning to show")
+    assert.equal((await bookIn(a)).senders[OTHER], undefined)
+
+    await release(b)
+    await until(() => evaluate(a, `hook.book.senders[${JSON.stringify(OTHER)}]?.kind === "mine"`), "the late save to show")
+    await until(() => evaluate(a, `JSON.parse(localStorage.getItem("patina.book")).senders[${JSON.stringify(OTHER)}]?.kind === "mine"`), "the copy to catch up")
+  })
+
+  /** Saves an answer the shelf has and its copy doesn't, as with a full localStorage, and so no other tab hears of it. */
+  async function answerOnlyOnTheShelf(session: string) {
+    await evaluate(session, `window.setItem = Storage.prototype.setItem
+      Storage.prototype.setItem = function (key, value) {
+        if (key === "patina.book") throw new DOMException("Full", "QuotaExceededError")
+        return window.setItem.call(this, key, value)
+      }
+      answer(${JSON.stringify(OTHER)}, "mine")`)
+    await until(() => evaluate(session, "hook.canUndo"), "the answer to save")
+    await evaluate(session, "Storage.prototype.setItem = window.setItem")
+  }
+
+  it("shows what's saved once a stuck first read is free", async () => {
+    const [a, b] = (await tabs(2)) as [string, string]
+    await answerOnlyOnTheShelf(b)
+    await holdTheShelf(b)
+    await reload(a)
+    await delay(5_200)
+    assert.equal((await bookIn(a)).senders[OTHER], undefined)
+    assert.equal(await evaluate(a, "hook.notSaved"), false, "nothing the user did failed")
+
+    await release(b)
+    await until(() => evaluate(a, `hook.book.senders[${JSON.stringify(OTHER)}]?.kind === "mine"`), "the saved answer to show")
+    assert.equal(await evaluate(a, "hook.notSaved"), false)
+    assert.equal(await evaluate(a, `JSON.parse(localStorage.getItem("patina.book")).senders[${JSON.stringify(OTHER)}]?.kind`), "mine", "and the copy's put right")
+  })
+
+  it("shows what's saved once a database that wouldn't open does", async () => {
+    let holder = ""
+    const [a] = (await tabs(1, url, async (context) => {
+      holder = await openTab(`${url}?blank`, context)
+      await until(() => evaluate(holder, `document.readyState === "complete"`), "the other tab to load")
+      await evaluate(holder, `new Promise((resolve) => {
+        window.released = false
+        const request = indexedDB.open("patina", 1)
+        request.onupgradeneeded = () => {
+          request.result.createObjectStore("kept")
+          request.transaction.objectStore("kept").put(${JSON.stringify(JSON.stringify({ senders: { [OTHER]: { kind: "mine" } } }))}, "patina.book")
+          ;(${keepBusy})(request.transaction)
+          resolve(true)
+        }
+      })`)
+    })) as [string]
+    await delay(5_200)
+    assert.equal((await bookIn(a)).senders[OTHER], undefined)
+
+    await release(holder)
+    await until(() => evaluate(a, `hook.book.senders[${JSON.stringify(OTHER)}]?.kind === "mine"`), "the saved answer to show")
+    assert.equal(await evaluate(a, "hook.notSaved"), false)
+  })
+
+  it("shows what's saved once a stuck save is over, whatever its copy said", async () => {
+    const [a, b] = (await tabs(2)) as [string, string]
+    await answerOnlyOnTheShelf(b)
+    assert.equal((await bookIn(a)).senders[OTHER], undefined, "this tab hasn't heard")
+    await holdTheShelf(b)
+    await evaluate(a, `answer(${JSON.stringify(ME)}, "mine")`)
+    await until(() => evaluate(a, "hook.notSaved"), "the warning to show")
+
+    await release(b)
+    await until(() => evaluate(a, `hook.book.senders[${JSON.stringify(OTHER)}]?.kind === "mine"`), "the saved answer to show")
+    assert.equal((await bookIn(a)).senders[ME], undefined, "and the stuck one stays gone")
+  })
+
+  it("follows a purchase saved only on the shelf, once a stuck first read is free", async () => {
+    const [a, b] = (await tabs(2)) as [string, string]
+    // Stays full, since that tab's own polling would otherwise put the copy right and tell this one.
+    await evaluate(b, `const setItem = Storage.prototype.setItem
+      Storage.prototype.setItem = function (key, value) {
+        if (key === "patina.purchases") throw new DOMException("Full", "QuotaExceededError")
+        return setItem.call(this, key, value)
+      }
+      begin()`)
+    await until(() => evaluate(b, "tracker.purchases.length === 1"), "the purchase to save")
+    await holdTheShelf(b)
+    await reload(a)
+    await delay(5_200)
+    assert.equal(await evaluate(a, "tracker.purchases.length"), 0)
+
+    await release(b)
+    await until(() => evaluate(a, "tracker.purchases.length === 1"), "the purchase to show")
+  })
+
+  it("says so when the database won't open, and saves once it does", async () => {
+    let holder = ""
+    const [a] = (await tabs(1, url, async (context) => {
+      holder = await openTab(`${url}?blank`, context)
+      await until(() => evaluate(holder, `document.readyState === "complete"`), "the other tab to load")
+      // Creating the database, which is what any open has to wait for.
+      await evaluate(holder, `new Promise((resolve) => {
+        window.released = false
+        const request = indexedDB.open("patina", 1)
+        request.onupgradeneeded = () => {
+          request.result.createObjectStore("kept")
+          ;(${keepBusy})(request.transaction)
+          resolve(true)
+        }
+      })`)
+    })) as [string]
+    await evaluate(a, `answer(${JSON.stringify(OTHER)}, "mine")`)
+    await until(() => evaluate(a, "hook.notSaved"), "the warning to show")
+    assert.equal(await evaluate(a, "hook.canUndo"), false)
+    assert.equal((await bookIn(a)).senders[OTHER], undefined)
+
+    await release(holder)
+    await evaluate(a, `answer(${JSON.stringify(ME)}, "mine")`)
+    await until(() => evaluate(a, "hook.canUndo"), "the next answer to save")
+    assert.equal(await evaluate(a, "hook.notSaved"), false)
+    await delay(100)
+    await reload(a)
+    assert.deepEqual((await bookIn(a)).senders, { [ME]: { kind: "mine" } })
+  })
+
+  it("still saves after someone leaves the page while it's creating the database", async () => {
+    // A real profile, as the isolated ones in `tabs` don't show this, and a new site each time, so each is creating the database.
+    for (const [attempt, gap] of [0, 0, 10, 10, 40, 40].entries()) {
+      const { targetId } = await send("Target.createTarget", { url: "about:blank" })
+      const { sessionId: tab } = await send("Target.attachToTarget", { targetId, flatten: true })
+      const site = url.replace("127.0.0.1", `try${attempt}.localhost`)
+      // Leaves from the page, since from here it'd be too late to catch the moment.
+      await send("Page.addScriptToEvaluateOnNewDocument", {
+        source: `if (location.pathname === "/__harness" && !location.search) {
+          const open = IDBFactory.prototype.open
+          IDBFactory.prototype.open = function (...args) {
+            setTimeout(() => location.assign("/__harness?again"), ${gap})
+            return open.apply(this, args)
+          }
+        }`,
+      }, tab)
+      await send("Page.enable", {}, tab)
+      await send("Page.navigate", { url: site }, tab)
+      await until(() => evaluate(tab, `Boolean(window.ready) && location.search === "?again"`), "the next page to start")
+      await evaluate(tab, `answer(${JSON.stringify(OTHER)}, "mine")`)
+      await until(() => evaluate(tab, "hook.canUndo || hook.notSaved"), "the save to finish")
+      assert.equal(await evaluate(tab, "hook.notSaved"), false, `leaving after ${gap} ms`)
+      await send("Target.closeTarget", { targetId })
+    }
+  })
+
   const savedKind = (session: string, kind: string) => until(() => evaluate(session, `JSON.parse(localStorage.getItem("patina.book") ?? "{}").senders?.[${JSON.stringify(OTHER)}]?.kind === ${JSON.stringify(kind)}`), `${kind} to be saved`)
 
   it("doesn't go further back when an undo fails with another waiting on it", async () => {
@@ -485,5 +721,64 @@ describe("the book in two browser tabs", { skip: existsSync(CHROME) ? false : "C
     await reload(a)
     assert.ok((await bookIn(a)).purchases.some(({ order }: { order: string }) => order === "older"))
     assert.ok(await evaluate<boolean>(a, `JSON.parse(localStorage.getItem("patina.book")).purchases.length > 0`), "and the copy's put right")
+  })
+
+  describe("a file waiting for an answer", () => {
+    const FILE = `Timestamp,Transaction Type,Asset,Quantity Transacted,Spot Price Currency,Spot Price at Transaction,Subtotal,Total (inclusive of fees and/or spread),Fees and/or Spread,Notes
+2026-01-01T00:00:00Z,Buy,ETH,1,USD,$0,$0,$6000,$0,x
+2026-02-01T00:00:00Z,Send,ETH,1,USD,$0,$0,$0,$0,x`
+    const withdrawal = (at: string, micros: string) => ({ exchange: "Coinbase", asset: "ETH", units: (10n ** 18n).toString(), at, cost: { micros, currency: "USD" }, toAddress: null })
+    const SAME_DAY = "2026-02-01T00:00:00.000Z"
+    /** Whether all of it is inside what the panel shows, without scrolling. */
+    const inSight = (session: string, selector: string) =>
+      evaluate<boolean>(session, `(() => {
+        const box = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect()
+        const frame = document.querySelector("dialog.resolve").getBoundingClientRect()
+        return box.top >= frame.top && box.bottom <= frame.bottom
+      })()`)
+    const shortTab = async () => {
+      const [tab] = (await tabs(1, `${url}?panel`)) as [string]
+      await send("Emulation.setDeviceMetricsOverride", { width: 756, height: 413, deviceScaleFactor: 1, mobile: false }, tab)
+      await delay(100)
+      return tab
+    }
+    const asked = async (tab: string) => {
+      await evaluate(tab, `pick("My exchange account")`)
+      await until(() => evaluate(tab, `Boolean(document.querySelector("input[type=file]"))`), "the file button")
+      await evaluate(tab, `importFile(${JSON.stringify(FILE)})`)
+      await until(() => evaluate(tab, `document.body.textContent.includes("Yes, use it")`), "the question")
+    }
+
+    it("is refused if what's saved has come to prove it partial, and the saved cost stays", async () => {
+      const tab = await shortTab()
+      await asked(tab)
+      const saved = [withdrawal("2025-06-01T00:00:00.000Z", "1000000000"), withdrawal(SAME_DAY, "4500000000")]
+      await evaluate(tab, `saveUnheard(${JSON.stringify(saved)})`)
+      await evaluate(tab, `pick("Yes, use it")`)
+      await until(() => evaluate(tab, `document.body.textContent.includes("starts after a withdrawal you've already imported")`), "the refusal")
+      await delay(100)
+      assert.ok(await inSight(tab, "dialog.resolve p.warn-text[role=status]"), "the refusal is in sight")
+      assert.deepEqual((await bookIn(tab)).withdrawals, saved)
+      await reload(tab)
+      assert.deepEqual((await bookIn(tab)).withdrawals, saved)
+    })
+
+    it("is saved when nothing's come to prove it partial", async () => {
+      const tab = await shortTab()
+      await asked(tab)
+      await evaluate(tab, `pick("Yes, use it")`)
+      await until(() => evaluate(tab, `hook.book.withdrawals.length === 1 && !document.body.textContent.includes("Yes, use it")`), "the file to be saved")
+      assert.equal((await bookIn(tab)).withdrawals[0].cost.micros, "6000000000")
+      await until(() => evaluate(tab, `document.body.textContent.includes("Found 1 withdrawal.")`), "what it found")
+    })
+
+    it("doesn't scroll the panel until there's something to show, and then shows it", async () => {
+      const tab = await shortTab()
+      assert.equal(await evaluate(tab, `document.querySelector("dialog.resolve").scrollTop`), 0)
+      assert.ok(await inSight(tab, "dialog.resolve h2"), "the heading isn't cut off")
+      await asked(tab)
+      await delay(100)
+      assert.ok(await inSight(tab, "[aria-label='Importing a file']"), "the question is in sight")
+    })
   })
 })
