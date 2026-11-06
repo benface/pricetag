@@ -10,7 +10,7 @@ import { createApi } from "../server/app.ts"
 import { explainPortfolio, portfolioOf } from "../src/core/portfolio.ts"
 import { createRates } from "../server/rates.ts"
 import { feedRounds, updateRounds, type RoundReader } from "../server/source.ts"
-import { decodeRound } from "../server/raw.ts"
+import { decodeRound } from "@pricetag/sdk/internal"
 
 const E18 = 10n ** 18n
 const BUY_BLOCK = 100

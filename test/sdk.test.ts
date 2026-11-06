@@ -4,8 +4,9 @@ import { createServer } from "node:http2"
 import { createServer as createNetServer, type AddressInfo, type Socket } from "node:net"
 import { describe, it } from "node:test"
 import { createPricetag } from "@pricetag/sdk"
-import { USDC_ADDRESS, buildPortfolio, buildPricedLegs, foldPositions, formatPrice, formatSignedMoney, formatMoney, pnlStatus, sumTotals } from "@pricetag/sdk/core"
+import { TOKEN_FEEDS, USDC_ADDRESS, buildPortfolio, buildPricedLegs, foldPositions, formatPrice, formatSignedMoney, formatMoney, pnlStatus, sumTotals } from "@pricetag/sdk/core"
 import { createQuery, createWallets, datasetReader, datasetSource, pricetagClient, type Query, type ReadL1Fees } from "@pricetag/sdk/internal"
+import { resolvingSource } from "../server/source.ts"
 import { portfolioOf } from "../src/core/portfolio.ts"
 import { DEMO_REFERENCES, DEMO_ROWS, DEMO_WALLET } from "../src/core/fixtures.ts"
 import { fakeAmp, type Tables } from "./support/fake-amp.ts"
@@ -346,6 +347,77 @@ describe("getLatestPrices", () => {
 
   it("has nothing without a recent read", async () => {
     assert.deepEqual(await fakeAmp({ reference_prices: [] }).client.getLatestPrices(), {})
+  })
+
+  const NOW = 1_800_000_000
+  const eth = { block_num: "199", eth_usd: ETH_ANSWER, usdc_usd: USDC_ANSWER }
+
+  it("values every other token at its feed, in one query", async () => {
+    const { client, queries } = fakeAmp({ reference_prices: [eth], feeds: { AERO: { answer: 63_000_000n, updatedAt: NOW - 60 }, wstETH: { answer: 1_250_000_000_000_000_000n, updatedAt: NOW - 60 } } })
+    assert.deepEqual(await client.getLatestPrices(), {
+      ETH: { micros: "2400000000", source: "oracle", blockNum: 199 },
+      USDC: { micros: "1000000", source: "oracle", blockNum: 199 },
+      AERO: { micros: "630000", source: "oracle", blockNum: 200 },
+      wstETH: { micros: "3000000000", source: "oracle", blockNum: 200 },
+    })
+    const feedReads = queries.filter((sql) => sql.includes("latestRoundData()"))
+    assert.equal(feedReads.length, 1)
+    for (const feed of Object.values(TOKEN_FEEDS)) assert.ok(feedReads[0]!.includes(feed!.address))
+    assert.ok(feedReads[0]!.includes("block_num BETWEEN 200 AND 200"), "bounded to the head")
+  })
+
+  it("has no price from an answer that's too old or implausible", async () => {
+    const { client } = fakeAmp({ reference_prices: [eth], feeds: { AERO: { answer: 63_000_000n, updatedAt: NOW - 30 * 3600 }, DAI: { answer: 1n, updatedAt: NOW - 60 } } })
+    assert.deepEqual(Object.keys(await client.getLatestPrices()), ["ETH", "USDC"])
+  })
+
+  it("has no price for a token its feed answers in ETH without ETH's", async () => {
+    const { client } = fakeAmp({ reference_prices: [], feeds: { AERO: { answer: 63_000_000n, updatedAt: NOW - 60 }, wstETH: { answer: 1_250_000_000_000_000_000n, updatedAt: NOW - 60 } } })
+    assert.deepEqual(Object.keys(await client.getLatestPrices()), ["AERO"])
+  })
+
+  it("keeps the oracle's prices when the feeds can't be read, and says so", async () => {
+    const { query } = fakeAmp({ reference_prices: [eth] })
+    const warnings: string[] = []
+    const failing: Query = (sql, timeoutMs) => (sql.includes("latestRoundData()") ? Promise.reject(new Error("boom")) : query(sql, timeoutMs))
+    const client = pricetagClient(failing, { dataset: "benface/pricetag@0.0.1", logger: { warn: (message) => warnings.push(message) } })
+    assert.deepEqual(Object.keys(await client.getLatestPrices()), ["ETH", "USDC"])
+    assert.deepEqual(warnings, ["Feed read failed: boom"])
+  })
+})
+
+describe("getPortfolio's current prices", () => {
+  const NOW = 1_800_000_000
+  const HELD = String(500n * E18)
+  const tables = (feeds: Tables["feeds"]): Tables => ({
+    reference_prices: [{ block_num: "199", eth_usd: ETH_ANSWER, usdc_usd: USDC_ANSWER }],
+    balances: { 49: { AERO: HELD }, 200: { AERO: HELD } },
+    feeds,
+  })
+
+  it("values a token at its feed", async () => {
+    const { client } = fakeAmp(tables({ AERO: { answer: 63_000_000n, updatedAt: NOW - 60 } }))
+    const { positions, totals } = await client.getPortfolio(`0x${ME}`, { from: 50 })
+    const aero = positions.find((p) => p.asset === "AERO")!
+    assert.deepEqual([aero.price?.micros, aero.price?.source, aero.values.valueMicros], ["630000", "oracle", "315000000"])
+    assert.equal(totals.valueMicros, "315000000")
+  })
+
+  it("leaves its value unknown without an answer, never $0", async () => {
+    const { client } = fakeAmp(tables({}))
+    const { positions } = await client.getPortfolio(`0x${ME}`, { from: 50 })
+    const aero = positions.find((p) => p.asset === "AERO")!
+    assert.deepEqual([aero.price, aero.values.valueMicros], [null, null])
+  })
+
+  it("reads the same prices the app's server does", async () => {
+    const answers = tables({ AERO: { answer: 63_000_000n, updatedAt: NOW - 60 } })
+    const { query, client } = fakeAmp(answers)
+    const source = resolvingSource(query, { dataset: "benface/pricetag@0.0.1", baseDataset: "edgeandnode/base_mainnet@0.0.2", startBlock: 50, network: "base_mainnet" })
+    const app = await createWallets(source, async () => ({ blockNum: 200, timestamp: new Date(NOW * 1000).toISOString() }), async () => new Map()).get(`0x${ME}`)
+    const sdk = await client.getPortfolio(`0x${ME}`, { from: 50 })
+    assert.equal(sdk.positions.find((p) => p.asset === "AERO")!.price?.micros, app.prices.AERO?.micros)
+    assert.equal(app.prices.AERO?.micros, "630000")
   })
 })
 
