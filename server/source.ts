@@ -4,7 +4,7 @@
 // Every query is bounded by block, because staging is shared.
 
 import { ERC20_ADDRESSES, ETH_ADDRESS, ETH_USD_FEED, MIN_TRADE_USD_MICROS, TOKENS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, marketTrades, parseNote, type CostNote, type MarketTrade, type PricedRow } from "@pricetag/sdk/core"
-import { asIso, asNumber, blockFilters, datasetReader, datasetSource, decimalString, decodeRoundAnswer, describeError, hexOf, isNotStarted, prefixed, readBalancesAt, readEthBalancesAt, readFeedRoundsAt, readHead, readPayoutTxsAt, settledThrough, type Query, type ReadL1Fees, type Row, type Source, type WindowRows } from "@pricetag/sdk/internal"
+import { asIso, asNumber, blockFilters, datasetReader, datasetSource, decimalString, decodeRoundAnswer, describeError, hexOf, isNotStarted, prefixed, readBalancesAt, readEthBalancesAt, readFeedRoundsAt, readHead, readPayoutTxsAt, settledThrough, type Followed, type Query, type ReadL1Fees, type Row, type Source, type StreamedTable, type WindowRows } from "@pricetag/sdk/internal"
 import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, legRowsFromRaw, type RawLog, type RawTx } from "./raw.ts"
 
 async function readNotesAt(query: Query, dataset: string, address: string, blocks: readonly number[]): Promise<CostNote[]> {
@@ -174,7 +174,7 @@ type SharedWallet = Pick<WindowRows, "rows" | "gasUnknown"> & { from: number; to
  * other, so the second usually wants a few blocks more than the first. Blocks a reorg could still reach are always read
  * again, and everything older comes from what's held, until `rewind` says a reorg went further back than that.
  */
-export function sharedReads(query: Query, config: { baseDataset: string; dataset: string; network: string }) {
+export function sharedReads(query: Query, config: { baseDataset: string; dataset: string; network: string; followed?: Followed<StreamedTable> | undefined }) {
   const reader = datasetReader(query, { ...config, counterparties: true })
   const wallets = new Map<string, SharedWallet>()
   const turns = new Map<string, Promise<void>>()
@@ -242,6 +242,7 @@ export function sharedReads(query: Query, config: { baseDataset: string; dataset
      * so what it found goes too.
      */
     async rewind(block: number, tip: number): Promise<void> {
+      config.followed?.rewind()
       reorgs.push({ from: block, oldTip: Math.max(tip, ...[...wallets.values()].map((wallet) => wallet.to)) })
       const before = <T>(answers: Map<number, T>) => new Map([...answers].filter(([at]) => at < block))
       const kept = ({ block_num }: { block_num: number }) => block_num < block
@@ -304,7 +305,7 @@ export function settledL1Fees(read: ReadL1Fees, tip: () => number | null): ReadL
  * The SDK's `datasetSource`, plus what only working out a cost needs: who was on the other side, notes, and market prices.
  * Pricing rules of one wallet history pass the same `shared`, so only what a rule changes is read for each.
  */
-export function resolvingSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string; startBlock: number; network: string }, shared = sharedReads(query, config)): Source {
+export function resolvingSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string; startBlock: number; network: string; followed?: Followed<StreamedTable> | undefined }, shared = sharedReads(query, config)): Source {
   const { readPricedOf } = datasetReader(query, config)
   const ds = `"${config.dataset}"`
   // What a fork of the pricing rule changes, so its market prices come from its own trades.
