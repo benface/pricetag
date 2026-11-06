@@ -227,7 +227,7 @@ struct WalletSwitcher: View {
             VStack(alignment: .leading, spacing: 0) {
                 if offersSpendingMoney || cantOpenSpendingMoney { createSpendingMoney }
                 addRow
-                if let note { noteRow(note).arrives() }
+                if let note, note.change.map(store.isLatestChange) ?? true { noteRow(note).arrives() }
             }
             .padding(6)
         }
@@ -436,7 +436,7 @@ struct WalletSwitcher: View {
         let account = hotWallet?.settings.deviceAccounts.first { $0.lowercased == entry.address }
         let relink = { [hotWallet] in if let account { hotWallet?.linkDeviceAccounts([account.lowercased]) } }
         let before = store.changeWallet(entry.address, name: name, alsoUndo: relink, action)
-        note = WalletListNote(text: text) { [store] in
+        note = WalletListNote(text: text, change: before) { [store] in
             relink()
             store.restore(before)
         }
@@ -499,6 +499,8 @@ struct WalletSwitcher: View {
 /// What a change to the list did.
 struct WalletListNote {
     let text: String
+    /// Shows only while this is the latest change, so the Edit menu's Undo hides it and its Redo brings it back.
+    var change: WalletListSnapshot?
     var undo: (() -> Void)?
 }
 
