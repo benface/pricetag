@@ -128,10 +128,11 @@ def line(ok, what): print(("ok" if ok else "bad") + " " + what)
 line(have.get("keychain-access-groups") == [f"{team}.com.benface.pricetag.hosted.hotwallet"], "its only Keychain group is its own")
 line(have.get("com.apple.security.application-groups") == [f"{team}.com.benface.pricetag.bridge"], "its only app group is the extension's socket")
 line(have.get("com.apple.security.app-sandbox") is True, "sandboxed")
+line(have.get("com.apple.security.network.server") is True, "it can open the listener a hardware wallet page needs")
 line("com.apple.security.get-task-allow" not in have, "a debugger can't attach")
 line(have.get(exception) == want[exception], "outside its sandbox, it can only write what Hosted.entitlements names")
 line(all(p.endswith(("/NativeMessagingHosts", "/NativeMessagingHosts/com.benface.patina.json")) for p in have.get(exception, [])), "and that's only the browsers' host manifest for this app")
-known = {"com.apple.application-identifier", "com.apple.developer.team-identifier", "keychain-access-groups", "com.apple.security.app-sandbox", "com.apple.security.application-groups", "com.apple.security.device.camera", "com.apple.security.files.user-selected.read-write", "com.apple.security.network.client", exception}
+known = {"com.apple.application-identifier", "com.apple.developer.team-identifier", "keychain-access-groups", "com.apple.security.app-sandbox", "com.apple.security.application-groups", "com.apple.security.device.camera", "com.apple.security.files.user-selected.read-write", "com.apple.security.network.client", "com.apple.security.network.server", exception}
 line(set(have) <= known, "nothing else: " + " ".join(sorted(set(have) - known)))
 PYTHON
 )
@@ -146,6 +147,8 @@ else
   fail "no extension host"
 fi
 
+check "the hardware wallet pages, which a hosted server doesn't serve" test -f "$app/Contents/Resources/DevicePages/device.html"
+
 nm -u "$binary" >"$work/imports" 2>/dev/null
 if grep -qx _SecRandomCopyBytes "$work/imports"; then pass "its keys come from SecRandomCopyBytes"; else fail "doesn't import SecRandomCopyBytes"; fi
 # A release build's symbols are stripped, but the library's own checks stay in it as text.
@@ -154,7 +157,7 @@ if strings -a "$binary" | grep -qE -- '--hot-wallet-self-test|--create-wallet|--
 
 echo "Beside it in the .dmg:"
 check "the install note" test -f "$mount/Read Me First.md"
-check "the install note says what it is on its first lines" grep -q "unreviewed hackathon build" "$mount/Read Me First.md"
+check "the install note says what it is on its first lines" sh -c "head -n 3 '$mount/Read Me First.md' | grep -q 'unreviewed build'"
 check "the install note says macOS 27 first" sh -c "head -n 1 '$mount/Read Me First.md' | grep -q 'macOS 27'"
 check "the extension" test -f "$mount/Browser Extension/manifest.json"
 if [ "$(/usr/bin/python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["key"])' "$mount/Browser Extension/manifest.json")" = "$(/usr/bin/python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["key"])' "$repo/extension/manifest.json")" ]; then pass "the extension keeps the key its ID comes from"; else fail "the extension's key changed"; fi
@@ -322,6 +325,25 @@ case $address in
   *) fail "the app didn't make a wallet: $(cat "$log")" ;;
 esac
 pid=$(sed -n 's/^PID //p' "$log" | head -n 1)
+[ -z "$pid" ] || kill "$pid" 2>/dev/null || true
+
+# Signed like the release app, so this is what shows its sandbox lets the listener start. The page's flows are pnpm check:device-pages.
+"$debug_binary" --isolated hosted-test --reset-isolated-wallet >/dev/null
+pages_log="$work/pages.log"
+open -g -j -n --stderr "$pages_log" --stdout "$pages_log" "$debugged" --args --quiet --isolated hosted-test --print-device-page
+tries=0
+until grep -q '^DEVICE_PAGE ' "$pages_log" 2>/dev/null || [ "$tries" -ge 100 ]; do
+  sleep 0.2
+  tries=$((tries + 1))
+done
+page=$(sed -n 's/^DEVICE_PAGE //p' "$pages_log" | head -n 1)
+case $page in
+  http://127.0.0.1:*)
+    if curl -fs -o /dev/null --max-time 5 "$page"; then pass "serves a hardware wallet page from inside its sandbox, on 127.0.0.1"; else fail "its page at $page didn't answer"; fi
+    ;;
+  *) fail "no hardware wallet page: $(cat "$pages_log")" ;;
+esac
+pid=$(sed -n 's/^PID //p' "$pages_log" | head -n 1)
 [ -z "$pid" ] || kill "$pid" 2>/dev/null || true
 
 if PATINA_TEST_APP="$debugged" "$here/extension-test.sh" >"$work/extension" 2>&1; then pass "a real site's transaction through the extension, its host and the socket"; else cat "$work/extension" >&2; fail "the extension's test"; fi

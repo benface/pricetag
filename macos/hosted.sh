@@ -54,6 +54,9 @@ if [ -n "$build_only" ]; then
   exit 0
 fi
 
+# The hardware wallet pages, which a hosted server doesn't serve. REQUIRE_DEVICE_PAGES fails the build if they didn't make it in.
+"$here/device-pages.sh"
+
 configuration=$([ -n "$debug" ] && echo Debug || echo Release)
 archive="$products/$configuration.xcarchive"
 rm -rf "$archive"
@@ -64,7 +67,7 @@ rm -rf "$archive"
   -derivedDataPath "$products" -destination 'generic/platform=macOS' -archivePath "$archive" \
   -onlyUsePackageVersionsFromResolvedFile -allowProvisioningUpdates \
   APP_SIGN_STYLE=Automatic APP_TEAM="$team" APP_SIGN_IDENTITY="Apple Development" \
-  APP_ENTITLEMENTS=Config/Hosted.entitlements BRIDGE_ENTITLEMENTS=Config/BridgeHost.entitlements APP_INJECT_BASE_ENTITLEMENTS=NO \
+  APP_ENTITLEMENTS=Config/Hosted.entitlements BRIDGE_ENTITLEMENTS=Config/BridgeHost.entitlements APP_INJECT_BASE_ENTITLEMENTS=NO REQUIRE_DEVICE_PAGES=YES \
   archive
 
 export_options() { # destination

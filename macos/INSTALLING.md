@@ -1,6 +1,6 @@
 **Patina needs macOS 27.** It won't open on anything older.
 
-**This is an unreviewed hackathon build. Only put in what you could lose.** It holds real money in a wallet it created, and nobody outside the team has reviewed it. Keep it to small amounts, up to the cap you set, which can't go above $100.
+**This is an unreviewed build. Only put in what you could lose.** It holds real money in a wallet it created, and nobody outside the team has reviewed it. Keep it to small amounts, up to the cap you set, which can't go above $100.
 
 # Patina
 
