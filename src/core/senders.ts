@@ -24,7 +24,7 @@ const KNOWN: Readonly<Record<string, KnownSender>> = {
   // Name tag "NEAR Intents: Refill". 513 tiny ETH payouts over about 2 days, for gas.
   "0xbb2f33f73ccc2c74e3fb9bb8eb75241ac15337e0": { name: "NEAR Intents", kind: "bridge" },
   // Merkl's rewards, name tag "Angle Protocol: Distributor". Nobody deposits here, so a claim is never the user's own money
-  // coming back. 114 claims from 96 wallets over about 2 days.
+  // coming back. 114 payouts, from 105 claims by 96 wallets, over about 2 days.
   "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae": { name: "Merkl", kind: "reward" },
 }
 
