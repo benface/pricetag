@@ -36,6 +36,10 @@ struct PopoverView: View {
                 Divider()
                 spendingMoney
             }
+            if Build.isWatchOnly {
+                Divider()
+                WatchOnlyNotice()
+            }
             Divider()
             footer
         }

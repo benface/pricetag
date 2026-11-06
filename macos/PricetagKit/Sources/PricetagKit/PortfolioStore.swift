@@ -127,6 +127,12 @@ public final class PortfolioStore {
     /// What the server at `serverURL` knows this person by, or nil. Each invite belongs to the server it was given for, so it never
     /// follows the user to another one, and it's only sent over HTTPS.
     public private(set) var invite: String?
+    /// The server at `serverURL` answered that it needs an invite, and hasn't taken one since.
+    public private(set) var needsInvite = false
+    /// They said not now, so nothing asks again until they give an invite or move to another server.
+    private var isInviteDeclined = false
+    /// Whether to ask for an invite now. Giving one stops asking until the server answers, and if it's refused, this asks again.
+    public var asksForInvite: Bool { needsInvite && !isInviteDeclined }
     /// What the user has said about where things came from. It stays on this device.
     private var answers: Book
     /// What each answer replaced, newest last, so Undo is always there. Accounts aren't in here, so it can't bring back one that's gone.
@@ -672,7 +678,17 @@ public final class PortfolioStore {
     /// Asks the server what rules it has. A rule it doesn't have would fail every read, so that choice goes.
     public func refreshRules() async {
         let asked = serverURL
-        guard let next = try? await source.rules(), asked == serverURL else { return }
+        let askedInvite = invite
+        let next: [PricingRule]
+        do {
+            next = try await source.rules()
+        } catch {
+            // A refusal of what was sent before an invite arrived says nothing about that invite.
+            if asked == serverURL, askedInvite == invite, case .needsInvite = error as? FetchError { needsInvite = true }
+            return
+        }
+        guard asked == serverURL, askedInvite == invite else { return }
+        needsInvite = false
         rules = next
         if let chosen = selectedRule, !next.contains(where: { $0.id == chosen }) {
             selectedRule = nil
@@ -692,6 +708,8 @@ public final class PortfolioStore {
         serverURL = url
         defaults.set(url.absoluteString, forKey: Keys.server)
         invite = Self.invites(in: defaults)[Self.origin(of: url)]
+        needsInvite = false
+        isInviteDeclined = false
         source = makeSource(url)
         rules = []
         // Another server's numbers can be different facts, so these aren't kept even for a moment. What's known is this server's own.
@@ -705,14 +723,21 @@ public final class PortfolioStore {
     public func setInvite(_ value: String?) {
         let value = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         let next = value?.isEmpty == false ? value : nil
+        isInviteDeclined = false
         guard next != invite else { return }
         invite = next
+        needsInvite = false
         var invites = Self.invites(in: defaults)
         invites[Self.origin(of: serverURL)] = next
         defaults.set(invites, forKey: Keys.invites)
         source = makeSource(serverURL)
         rules = []
         answersChanged()
+    }
+
+    /// Not now. It only answers the question being asked, so it can't silence one the server hasn't raised yet.
+    public func declineInvite() {
+        if needsInvite { isInviteDeclined = true }
     }
 
     /// Takes effect right away, and the numbers follow as soon as the server has folded them. Undo goes back to what this replaced,
@@ -924,6 +949,7 @@ public final class PortfolioStore {
             guard isCurrent() else { return .zero }
             portfolio = next
             updatedAt = now()
+            needsInvite = false
             cache.remember(next, of: address, on: serverURL, at: now())
             feed = state(of: next)
             heldUntil = nil
@@ -934,6 +960,7 @@ public final class PortfolioStore {
             // Numbers by another method or rule, or in another currency, are wrong now, not just old, and there's no way to get the right ones.
             if let portfolio, !isForCurrentSettings(portfolio) { self.portfolio = nil }
             feed = state(of: error)
+            if case .needsInvite = error as? FetchError { needsInvite = true }
             if case FetchError.rateLimited(_, let retryAfter) = error {
                 heldUntil = now().addingTimeInterval(TimeInterval(retryAfter))
                 wakePending = false
@@ -999,7 +1026,7 @@ public final class PortfolioStore {
         return switch error as? FetchError {
         case .ampUnavailable(let message): .ampUnavailable(message)
         case .noAmpConfigured(let message): .noAmpConfigured(message)
-        case .rejected(let message), .priceChanged(let message): .rejected(message)
+        case .rejected(let message), .needsInvite(let message), .priceChanged(let message): .rejected(message)
         case .rateLimited(let message, _): .rateLimited(message)
         case .unreachable, .timedOut, nil: .serverUnreachable
         }

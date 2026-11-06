@@ -9,6 +9,11 @@ enum AppSection: String, CaseIterable, Identifiable {
 
     var id: Self { self }
 
+    /// Security is about what Spending Money can do, and what a site was allowed to, and a watch-only build can act on none of it.
+    static var shown: [AppSection] {
+        Build.isWatchOnly ? allCases.filter { $0 != .security } : allCases
+    }
+
     var title: String {
         switch self {
         case .overview: "Overview"

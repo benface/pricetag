@@ -15,6 +15,8 @@ public enum FetchError: Error, Equatable, Sendable {
     case rejected(String)
     /// The server is holding this client back, and says how many seconds until there's room. It clears by itself.
     case rateLimited(String, retryAfter: Int)
+    /// The server only answers people it invited, and this request had no invite it takes.
+    case needsInvite(String)
     /// The server's price or update isn't the one a proof is about.
     case priceChanged(String)
 }
@@ -257,6 +259,7 @@ public struct PricetagClient: PortfolioSource {
         case 502: throw FetchError.ampUnavailable(message)
         case 503: throw FetchError.noAmpConfigured(message)
         case 429: throw FetchError.rateLimited(message, retryAfter: Self.retryAfter(response as? HTTPURLResponse))
+        case 401: throw FetchError.needsInvite(message)
         case 412: throw FetchError.priceChanged(message)
         default: throw FetchError.rejected(message)
         }
