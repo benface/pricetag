@@ -5,6 +5,7 @@ import Foundation
 
 public enum Wording {
     public static let methodName = "Cost method"
+    public static let previewHeldBack = "Slowed down for a moment. What this would do shows up by itself."
     public static let methodHelp = "Average spreads what you paid across all you hold. Oldest first counts what you sell as what you got earliest."
     public static let averagePricePaid = "Average price paid"
     public static let networkFees = "Network fees"

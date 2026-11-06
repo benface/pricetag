@@ -192,6 +192,7 @@ public struct ResolveFlow: View {
                     answerButton(ownership, key: index + 1)
                 }
             }
+            if model.previewsAreHeldBack { WarningText(Wording.previewHeldBack).font(.callout).fixedSize(horizontal: false, vertical: true) }
             if let failure = model.failure { WarningText(failure).font(.callout) }
         }
         .padding(16)
@@ -283,6 +284,7 @@ public struct ResolveFlow: View {
                 }
                 .font(.callout)
             }
+            if model.costPreviewIsHeldBack { WarningText(Wording.previewHeldBack).font(.callout).fixedSize(horizontal: false, vertical: true) }
             if let warning = model.costWarning(costs, for: question) {
                 WarningText(warning).font(.callout).fixedSize(horizontal: false, vertical: true)
             }
