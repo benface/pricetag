@@ -36,6 +36,27 @@ private actor Orders: PortfolioSource {
     }
 }
 
+/// Holds the first read of "later" open, so a second check can start while the first is still going.
+private actor PausingOrders: PortfolioSource {
+    private(set) var laterReads = 0
+    private var pause: CheckedContinuation<Void, Never>?
+    var isPaused: Bool { pause != nil }
+
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio { throw FetchError.unreachable }
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation { throw FetchError.unreachable }
+    func onrampOrders(ref: String) async throws -> [OnrampOrder] {
+        if ref == "older" { return [delivered(id: ref)] }
+        laterReads += 1
+        if laterReads == 1 { await withCheckedContinuation { pause = $0 } }
+        return []
+    }
+
+    func release() {
+        pause?.resume()
+        pause = nil
+    }
+}
+
 @MainActor
 private func setup(match: PurchaseMatch.State? = nil, now: @escaping @Sendable () -> Date = { .now }) -> (PurchaseTracker, PortfolioStore, Orders, UserDefaults) {
     let defaults = UserDefaults(suiteName: "purchases-\(UUID())")!
@@ -353,6 +374,30 @@ struct PurchaseTrackerTests {
         let (tracker, _, _) = try await finishing(["older", "older2"], after: 5)
         await tracker.check()
         #expect(tracker.purchases.map(\.ref) == ["older", "older2", "done2", "done3", "done4"])
+    }
+
+    @Test func aCheckDuringAnotherLeavesWhatItJustFinishedAlone() async throws {
+        let defaults = UserDefaults(suiteName: "purchases-\(UUID())")!
+        let source = PausingOrders()
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source })
+        let going = ["older", "later"].map { TrackedPurchase(ref: $0, wallet: wallet, asset: "ETH", dollars: 25, startedAt: .now, order: OnrampOrder(id: $0, status: .pending)) }
+        let settled = (0..<5).map { TrackedPurchase(ref: "done\($0)", wallet: wallet, asset: "ETH", dollars: 25, startedAt: .now, order: delivered(id: "done\($0)")) }
+        defaults.set(try JSONEncoder().encode(going + settled), forKey: "purchases")
+        let tracker = PurchaseTracker(store: store, defaults: defaults, matchOf: { _ in .recorded })
+
+        let first = Task { await tracker.check() }
+        let deadline = Date.now.addingTimeInterval(5)
+        while await !source.isPaused, Date.now < deadline { await Task.yield() }
+        #expect(await source.isPaused, "The first check has finished older and is waiting on later")
+        await tracker.check()
+        #expect(tracker.purchases.map(\.ref) == ["older", "later", "done1", "done2", "done3", "done4"], "The second one knows what the first just saw finish")
+        await source.release()
+        await first.value
+
+        #expect(store.book.purchases.map(\.order) == ["older"])
+        #expect(tracker.purchases.map(\.ref) == ["older", "later", "done1", "done2", "done3", "done4"], "It stays once both are done, and the oldest of what's already been seen goes")
+        await tracker.check()
+        #expect(tracker.purchases.map(\.ref) == ["older", "later", "done1", "done2", "done3", "done4"], "And it's still there the next time")
     }
 
     @Test func aPurchaseSeenFinishedIsTrimmedInItsTurn() async throws {

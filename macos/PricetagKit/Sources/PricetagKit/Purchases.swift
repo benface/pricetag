@@ -187,6 +187,9 @@ public final class PurchaseTracker {
     @ObservationIgnored private let pollDelay: Duration
     @ObservationIgnored private let matchOf: @MainActor (String) -> PurchaseMatch.State?
     @ObservationIgnored private var polling: Task<Void, Never>?
+    @ObservationIgnored private var checksGoing = 0
+    /// What's finished during the checks going now. It's shared, because the poll and coming back to the app can overlap, and one trimming mustn't take what the other has just seen finish.
+    @ObservationIgnored private var justFinished: Set<String> = []
 
     /// How long something unresolved is polled for. After that it's read when the app starts or comes back, so it's never given up on.
     private static let followedFor: TimeInterval = 2 * 60 * 60
@@ -266,9 +269,13 @@ public final class PurchaseTracker {
     /// Reads every unresolved order. A failed read changes nothing, so a purchase can't get lost, and it's tried again.
     public func check() async {
         var failure: String?
-        var justFinished: Set<String> = []
+        checksGoing += 1
         // Also when a read's cancelled, or a row that finished before it would be up for trimming with nothing to say it's new.
-        defer { trim(keeping: justFinished) }
+        defer {
+            trim()
+            checksGoing -= 1
+            if checksGoing == 0 { justFinished = [] }
+        }
         for purchase in purchases where !isResolved(purchase) {
             do {
                 let orders = try await store.currentSource.onrampOrders(ref: purchase.ref)
@@ -310,7 +317,7 @@ public final class PurchaseTracker {
     }
 
     /// What's finished only matters for a while, and what's still going stays however long this gets. What just finished is the last to go, because an older order finishing last hasn't been seen yet.
-    private func trim(keeping justFinished: Set<String>) {
+    private func trim() {
         let finished = purchases.filter(isResolved)
         guard finished.count > Self.shownFinished else { return }
         let lastToGo = finished.filter { !justFinished.contains($0.ref) } + finished.filter { justFinished.contains($0.ref) }
