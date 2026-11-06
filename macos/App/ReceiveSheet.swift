@@ -22,7 +22,7 @@ struct ReceiveSheet: View {
         VStack(spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Receive")
-                    .font(.title2.bold())
+                    .font(.sheetTitle)
                 Spacer()
                 Label(HotWalletWording.label, systemImage: "flask")
                     .font(.caption)

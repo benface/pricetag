@@ -12,8 +12,8 @@ import { DEMO_ADDRESS, DEMO_WALLET, demoRates, demoWallet } from "../src/core/fi
 import { foldBook, previewBook } from "../src/core/resolve.ts"
 import { CAUTIOUS_RULE_ID, MARKET_RULE_ID, RULE_TEXT, ruleNote, type PricingRule } from "../src/core/rules.ts"
 import { verifyLink } from "./links.ts"
-import { ALL_YOURS, combinedPortfolioOf, explainCombined, exportCombined, previewCombined, type Unread } from "./combined.ts"
-import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "./portfolio.ts"
+import { ALL_YOURS, combinedPortfolioOf, explainCombined, exportCombined, previewCombined, type AllYoursRead, type Unread } from "../src/core/combined.ts"
+import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "../src/core/portfolio.ts"
 import { createCoinbase } from "./coinbase.ts"
 import { ONRAMP_ASSETS, OnrampError, type FiatAmount, type Onramp } from "./onramp.ts"
 import { createRates, readPaidRates } from "./rates.ts"
@@ -394,7 +394,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
    * then can be from before a move another wallet has already seen. `fresh: false` takes what's already been read, and
    * leaves out a wallet whose last read failed.
    */
-  async function readAllYours(addresses: readonly string[], currency: CurrencyCode, rule: (typeof rules)[number] | null, books: readonly Book[], fresh: boolean, res: ServerResponse): Promise<{ read: WalletResponse[]; unread: Unread } | null> {
+  async function readAllYours(addresses: readonly string[], currency: CurrencyCode, rule: (typeof rules)[number] | null, books: readonly Book[], fresh: boolean, res: ServerResponse, paidIn: readonly CurrencyCode[] = []): Promise<{ read: WalletResponse[]; unread: Unread } | null> {
     const from = rule?.wallets ?? wallets
     const chain = rule?.source ?? source
     if (!from || !chain) {
@@ -424,7 +424,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
         return
       }
       try {
-        done.set(address, await convert(ruled(wallet), currency, books))
+        done.set(address, await convert(ruled(wallet), currency, books, paidIn))
       } catch (error) {
         console.error("Wallet rates failed:", describeError(error))
         failed.add(address)
@@ -451,7 +451,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
             // A history that starts after this block can't say what the wallet held at it.
             const at = facts && facts.fromBlock <= blockNum ? from.pricedOn(account, facts, prices, await from.marketOn(account, facts, prices)) : null
             if (!at) throw new Error(`It can't be read at block ${blockNum}.`)
-            answer.set(account, await convert(ruled(at), currency, books))
+            answer.set(account, await convert(ruled(at), currency, books, paidIn))
           } catch (error) {
             console.error("Wallet read at an earlier block failed:", describeError(error))
             failed.add(account)
@@ -484,9 +484,13 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     const candidates = action === "preview" ? (Array.isArray(body.candidates) ? body.candidates.map(parseBook) : null) : []
     if (!candidates || candidates.includes(null) || candidates.length > 8) return sendJson(res, 400, { error: "Those answers can't be read." })
     const books = action === "preview" ? (candidates as Book[]) : [book]
-    const found = await readAllYours(addresses, currency, rule, books, action === undefined, res)
+    const paidIn = parsePaidIn(typeof body.paid === "string" ? body.paid : null)
+    if (!paidIn) return sendJson(res, 400, { error: "That currency isn't supported." })
+    const found = await readAllYours(addresses, currency, rule, books, action === undefined || action === "wallets", res, paidIn)
     if (!found) return
     const { read, unread } = found
+    // The wallets themselves, because the browser runs the fold, with answers that stay with it.
+    if (action === "wallets") return sendJson(res, 200, { wallets: read, unread } satisfies AllYoursRead)
     if (read.length === 0) {
       res.writeHead(204, { "cache-control": "no-store" })
       res.end()
@@ -552,7 +556,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       return taxReport(taxMatch[1] as string, { country: body.country, method: body.method, scope: body.scope, year: body.year }, also as string[], currency, book, res)
     }
 
-    const match = /^\/api\/portfolio\/([^/]+)(?:\/(explain|preview|export|compare|last))?$/.exec(path)
+    const match = /^\/api\/portfolio\/([^/]+)(?:\/(explain|preview|export|compare|last|wallets))?$/.exec(path)
     if (!match) return sendJson(res, 404, { error: "Not found" })
     const method = parseMethod(typeof body.method === "string" ? body.method : null)
     if (!method) return sendJson(res, 400, { error: "The method is either average or fifo." })
@@ -564,6 +568,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     if (body.rule !== undefined && body.rule !== null && !rule) return sendJson(res, 400, { error: "That pricing rule isn't available here." })
     const action = match[2]
     if (match[1] === ALL_YOURS) return allYours(action, body, req, res, { method, currency, book, rule })
+    if (action === "wallets") return sendJson(res, 404, { error: "Not found" })
 
     const target = action === "explain" ? parseExplainTarget(new URL(req.url ?? "/", "http://localhost").searchParams) : null
     if (action === "explain" && !target) return sendJson(res, 400, { error: "That isn't a number this can explain." })
@@ -869,7 +874,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
         return true
       }
       if (read) sendJson(res, 200, verificationOf(leg, wallet.legs, read.data, read.deposits, checkedUpdate))
-      else sendJson(res, 404, { error: "Amp doesn't have this block." })
+      else sendJson(res, 404, { error: "The price service doesn't have this block." })
       return true
     }
 

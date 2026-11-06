@@ -155,7 +155,7 @@ Each watch holds one streaming request open, apart from the one-at-a-time querie
 
 ## What the tables mean
 
-The dataset reference is `benface/pricetag@0.0.1`, and it reads `edgeandnode/base_mainnet@0.0.2`.
+The dataset reference is `benface/pricetag@0.0.1` on a local Amp, which is what `pnpm amp:start` deploys and what the examples here use, and `benface/pricetag@0.1.0` on staging. Either way, it reads `edgeandnode/base_mainnet@0.0.2`.
 
 | Table | One row is | Columns worth knowing |
 | --- | --- | --- |
