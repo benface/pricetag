@@ -122,7 +122,7 @@ public final class ApprovalsModel {
         switch error {
         case .unreachable: "Can't reach the server."
         case .timedOut: "The server took too long. Try again in a moment."
-        case .ampUnavailable(let message), .noAmpConfigured(let message), .rejected(let message), .needsInvite(let message), .priceChanged(let message): message
+        case .ampUnavailable(let message), .noAmpConfigured(let message), .rejected(let message), .needsInvite(let message), .priceChanged(let message), .rateLimited(let message, _): message
         }
     }
 }

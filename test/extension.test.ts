@@ -17,6 +17,29 @@ function extensionId(key: string): string {
   return [...hash].map((digit) => String.fromCharCode(97 + Number.parseInt(digit, 16))).join("")
 }
 
+describe("the popup", () => {
+  test("says so when what it's waiting on goes away", () => {
+    const { ports, status } = loadPopup()
+    assert.deepEqual(ports[0].messages.map((message: any) => message.method), ["status"])
+    ports[0].close()
+    assert.match(status.textContent, /Can't reach Patina/)
+  })
+
+  test("connects again for the next thing, after the browser stops the background page", () => {
+    const { ports, status, click } = loadPopup()
+    ports[0].receive({ id: 1, result: { canTopUp: true, sites: 2 } })
+    assert.equal(status.textContent, "2 sites connected")
+    ports[0].close()
+    assert.equal(status.textContent, "2 sites connected", "nothing was waiting, so nothing went wrong")
+
+    click("top-up")
+    assert.equal(ports.length, 2)
+    assert.equal(ports[1].messages[0].method, "topUp")
+    ports[1].close()
+    assert.match(status.textContent, /Can't reach Patina/)
+  })
+})
+
 describe("the extension's rules", () => {
   test("only our extension can start the host", () => {
     const id = extensionId(manifest.key)
@@ -270,6 +293,44 @@ function fakePort(name: string, sender?: object) {
     close: () => disconnects.forEach((handler) => handler()),
   }
   return port
+}
+
+/** Runs popup.js against a fake page. `ports` has each port it opened, and `click` presses a button. */
+function loadPopup() {
+  const elements = new Map<string, any>()
+  const element = (id: string) => {
+    if (!elements.has(id)) {
+      const listeners: Record<string, () => void> = {}
+      elements.set(id, {
+        id,
+        textContent: "",
+        style: {},
+        classList: { toggle() {} },
+        setAttribute() {},
+        addEventListener: (type: string, listener: () => void) => (listeners[type] = listener),
+        listeners,
+      })
+    }
+    return elements.get(id)
+  }
+  const ports: any[] = []
+  vm.runInNewContext(read("extension/popup.js"), {
+    document: { getElementById: element },
+    chrome: {
+      runtime: {
+        connect: (info: { name: string }) => {
+          const port = fakePort(info.name)
+          ports.push(port)
+          return port
+        },
+      },
+    },
+    navigator: {},
+    window: { close() {} },
+    setTimeout,
+    clearTimeout,
+  })
+  return { ports, status: element("status"), click: (id: string) => element(id).listeners.click() }
 }
 
 let backgroundImports = 0

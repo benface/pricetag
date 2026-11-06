@@ -153,7 +153,7 @@ public struct RuleComparisonSheet: View {
             failure = nil
         } catch is CancellationError {
             return
-        } catch FetchError.ampUnavailable(let message), FetchError.noAmpConfigured(let message), FetchError.rejected(let message) {
+        } catch FetchError.ampUnavailable(let message), FetchError.noAmpConfigured(let message), FetchError.rejected(let message), FetchError.rateLimited(let message, _) {
             // Numbers from another moment aren't kept next to a failure.
             comparison = nil
             failure = message

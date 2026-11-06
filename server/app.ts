@@ -3,7 +3,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http"
 import { currentRateMicros, hasStarted, isAddress, isCurrencyCode, isMainCurrency, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
-import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createRangeStream, createRates, createRowStream, createWallets, describeError, feedRounds, followChain, followRawSql, followSql, followedWallets, followedWindowSql, readBlockHashes, readHeadMark, sharedMarket, updateRounds, type AmpQuery, type FollowConfig, type ReadRates, type Source } from "@pricetag/sdk/internal"
+import { DEFAULT_RPC_URL, createL1FeeReader, createOtherTokens, createQuery, createRangeStream, createRates, createRowStream, createWallets, describeError, feedRounds, followChain, followRawSql, followSql, followedWallets, followedWindowSql, readBlockHashes, readHeadMark, sharedMarket, updateRounds, type AmpQuery, type FollowConfig, type ReadRates, type Source } from "@pricetag/sdk/internal"
 import type { Head, WalletResponse } from "../src/core/api.ts"
 import { emptyBook, linkedWallets, parseBook, walletsBehind, type Book } from "../src/core/book.ts"
 import { parseCoinbaseCsv } from "../src/core/exchange-import.ts"
@@ -11,6 +11,8 @@ import { exportCsv } from "../src/core/export.ts"
 import { DEMO_ADDRESS, DEMO_WALLET, demoRates, demoWallet } from "../src/core/fixtures.ts"
 import { foldBook, previewBook } from "../src/core/resolve.ts"
 import { CAUTIOUS_RULE_ID, MARKET_RULE_ID, RULE_TEXT, ruleNote, type PricingRule } from "../src/core/rules.ts"
+import { refuse, type CheckoutRefusal } from "./hosting.ts"
+import { forEveryone } from "./lanes.ts"
 import { verifyLink } from "./links.ts"
 import { ALL_YOURS, combinedPortfolioOf, explainCombined, exportCombined, previewCombined, type AllYoursRead, type Unread } from "../src/core/combined.ts"
 import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "../src/core/portfolio.ts"
@@ -223,9 +225,11 @@ export type ApiOptions = {
   clientIp?: (req: IncomingMessage) => string | null
   /** How many wallets each rule keeps read. A shared server has more people's wallets than one Mac, and one pushed out is read again in full. */
   maxWallets?: number
+  /** Counts a valid checkout just before it reaches the provider, or says why it can't go. */
+  limitCheckout?: (req: IncomingMessage) => CheckoutRefusal | null
 }
 
-export function createApi(env: Env, created: Created | null = createSource(env), onramp: Onramp | null = createCoinbase(env), { clientIp = () => null, maxWallets }: ApiOptions = {}) {
+export function createApi(env: Env, created: Created | null = createSource(env), onramp: Onramp | null = createCoinbase(env), { clientIp = () => null, maxWallets, limitCheckout = () => null }: ApiOptions = {}) {
   const source = created?.source ?? null
 
   let head: Head | null = null
@@ -238,7 +242,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
   async function pollHead(): Promise<Head> {
     if (!source) throw new Error("No Amp source")
     const startedAt = headRewinds
-    const next = await source.head(head?.blockNum ?? null)
+    const next = await forEveryone(() => source.head(head?.blockNum ?? null))
     // What it found can be the replaced chain's, and higher than the new one, so its height says nothing. Only `rewindTo` changes this, so it can't go on for long.
     if (startedAt !== headRewinds) return pollHead()
     // Reads overlap, so one that started first can finish last. A reorg lowers the head through `rewindTo`, not here.
@@ -296,9 +300,11 @@ export function createApi(env: Env, created: Created | null = createSource(env),
   }
 
   const readL1Fees = settledL1Fees(createL1FeeReader(env.BASE_RPC_URL || DEFAULT_RPC_URL, fetch, undefined, console, Number(env.BASE_RPC_RATE_LIMIT) || undefined), () => head?.blockNum ?? null)
-  const wallets = source ? createWallets(source, walletHead, readL1Fees, console, { maxWallets, priceSamples: true }) : null
+  // Shared by the rules, since no rule changes what a token says about itself or what a wallet holds of it.
+  const otherTokens = source?.readTokenFacts && createOtherTokens(source.readTokenFacts)
+  const wallets = source ? createWallets(source, walletHead, readL1Fees, console, { maxWallets, priceSamples: true, otherTokens }) : null
   // Each rule keeps its own, so a rule nobody's looking at costs nothing, and what no rule changes is only read once. The first rule is the same as having none.
-  const rules = (created?.rules ?? []).map(({ rule, source }, i) => ({ rule, source, note: i === 0 ? null : ruleNote(rule), wallets: i === 0 ? wallets! : createWallets(source, walletHead, readL1Fees, console, { maxWallets, priceSamples: true }) }))
+  const rules = (created?.rules ?? []).map(({ rule, source }, i) => ({ rule, source, note: i === 0 ? null : ruleNote(rule), wallets: i === 0 ? wallets! : createWallets(source, walletHead, readL1Fees, console, { maxWallets, priceSamples: true, otherTokens }) }))
 
   /**
    * Reads a wallet, or answers the request with why it can't.
@@ -560,6 +566,8 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       if (typeof cryptoAmount !== "string" || !/^\d{1,12}(\.\d{1,18})?$/.test(cryptoAmount) || !/[1-9]/.test(cryptoAmount)) return sendJson(res, 400, { error: "That isn't an amount." })
       const typed = fiat === undefined || fiat === null ? null : fiatOf(fiat)
       if (typed === undefined) return sendJson(res, 400, { error: "That isn't an amount." })
+      const refusal = limitCheckout(req)
+      if (refusal) return refuse(res, 429, refusal.error, refusal.retryAfter)
       return onrampAnswer(res, () => onramp.checkout({ address, asset, cryptoAmount, fiat: typed, clientIp: clientIp(req) }))
     }
 
@@ -780,7 +788,8 @@ export function createApi(env: Env, created: Created | null = createSource(env),
         subscribers.delete(res)
         if (subscribers.size === 0) following?.abort()
       })
-      void followLoop()
+      // It outlives this request, and reads for everyone watching.
+      forEveryone(() => void followLoop())
       return true
     }
 

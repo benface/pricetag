@@ -176,7 +176,8 @@ struct HotWalletDetails<Overview: View>: View {
             overview
             if showsHoldings { holdings }
             if !wallet.records.isEmpty { activity }
-            if !wallet.unlisted.isEmpty { untouched }
+            // Otherwise they're on the overview, with its holdings.
+            if showsHoldings, let portfolio = wallet.portfolio, portfolio.hasOtherTokens { OtherTokensSection(portfolio: portfolio) }
             if !wallet.connectedSites.isEmpty { sites }
             settings
         }
@@ -391,17 +392,6 @@ struct HotWalletDetails<Overview: View>: View {
                 // "ETH, 0.005, $13.20" doesn't say which number is which.
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("\(holding.token.symbol), \(Format.amount(String(holding.balance), decimals: holding.token.decimals)), \(holding.valueUsdMicros.map { "worth \(wallet.money($0))" } ?? "no price")")
-            }
-        }
-    }
-
-    private var untouched: some View {
-        DetailsSection("Other Tokens", footer: "Anyone can send a token to any address, so these may not be worth anything. This app doesn't track them or count them in your numbers, and it never moves them.") {
-            ForEach(wallet.unlisted) { token in
-                AddressLine(EthereumAddress(token.token)?.checksummed ?? token.token)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
             }
         }
     }

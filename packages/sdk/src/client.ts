@@ -7,6 +7,7 @@ import { ORACLE_TABLES, SWAP_TABLES, WALLET_TABLES, datasetReader, datasetSource
 import type { Method } from "./fold.ts"
 import { answerToMicros, buildPricedLegs, type LegRow, type PricedLeg, type PriceSource, type Reference } from "./legs.ts"
 import { followChain, type FollowConfig, type Via } from "./live.ts"
+import type { OtherToken } from "./other-tokens.ts"
 import { latestPrices, type Head, type LatestPrices } from "./portfolio.ts"
 import { createRates, feedRounds, updateRounds } from "./rates.ts"
 import { createL1FeeReader, type ReadL1Fees } from "./receipts.ts"
@@ -101,6 +102,13 @@ export type WalletPortfolio = Omit<FoldedWallet, "view"> & {
   started: boolean
   /** What these numbers leave out, in words. Show it next to any total. Empty when nothing is. */
   missing: string[]
+  /**
+   * Tokens off the allowlist this wallet holds, with what the chain says about them, and no price. They fill in over the next
+   * few reads, since a read doesn't wait for them, and a read with a `to` has none. What's in them is whatever the contract claims.
+   */
+  otherTokens: OtherToken[]
+  /** Past the limit, moved through this wallet and not read at all. */
+  otherTokensLeftOut: number
   /** In order for the fold, starting with what the wallet already held, as opening legs. */
   legs: PricedLeg[]
   gasUnknownTxs: string[]
@@ -234,7 +242,9 @@ export function pricetagClient(query: Query, config: ClientConfig) {
       missingRateTxs: view.missingRateTxs,
       blocks: coverage,
       started,
-      missing: started ? [...describeMissing({ totals: folded.totals, gasUnknownTxs, l1FeeUnknownTxs, missingRateTxs: view.missingRateTxs }), ...(currency !== "USD" && !view.latestRate ? ["a current exchange rate, so nothing held has a current value"] : [])] : [`everything, because the dataset hasn't processed block ${from}`],
+      otherTokens: wallet.otherTokens,
+      otherTokensLeftOut: wallet.otherTokensLeftOut,
+      missing: started ? [...describeMissing({ totals: folded.totals, gasUnknownTxs, l1FeeUnknownTxs, missingRateTxs: view.missingRateTxs, otherTokens: wallet.otherTokens.length + wallet.otherTokensLeftOut }), ...(currency !== "USD" && !view.latestRate ? ["a current exchange rate, so nothing held has a current value"] : [])] : [`everything, because the dataset hasn't processed block ${from}`],
       legs: view.legs,
       gasUnknownTxs,
       l1Fees: l1FeeStatus(l1FeeUnknownTxs),
@@ -406,6 +416,8 @@ function emptyWallet(address: string, from: number): WalletData {
     gasUnknownTxs: [],
     gasUnknownBlocks: [],
     unlisted: [],
+    otherTokens: [],
+    otherTokensLeftOut: 0,
     l1FeeUnknownTxs: [],
     balances: null,
     openingUnread: [...ASSETS],

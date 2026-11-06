@@ -186,7 +186,7 @@ final class Navigation {
     /// A wallet with nothing to show has neither, and no field to take it.
     var canFind: Bool {
         guard let portfolio = store.portfolio else { return false }
-        return portfolio.progress.started && !portfolio.isEmpty
+        return portfolio.progress.started && !portfolio.isEmpty && !portfolio.holdsOnlyOtherTokens
     }
 
     /// Puts the cursor in the holdings' search field on the overview. From anywhere else, goes to the transactions and puts it in theirs.
