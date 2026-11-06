@@ -92,9 +92,9 @@ pnpm amp:stop    # stops it and deletes its data
 
 It adds a marked block to the end of `.env.local` that points the app at the local Amp and sets `PRICETAG_START_BLOCK`. That block overrides your own values while Amp runs, and `amp:stop` removes it, so nothing else changes. To read from a hosted Amp instead, don't start the local one, and set `AMP_QUERY_URL`, `AMP_QUERY_TOKEN`, `PRICETAG_DATASET` and `PRICETAG_START_BLOCK` yourself.
 
-**Use a dedicated RPC for a demo.** `BASE_RPC_URL` in `.env.local` defaults to the public `https://mainnet.base.org`, which allows 25 requests a second per IP and is shared with anything else on your network. A failed call stops the raw dataset, and everything built on it, until its retry succeeds. To avoid that, `amp:start` runs a small relay (`scripts/rpc-throttle.ts`) that holds requests to `BASE_RPC_RATE_LIMIT` a second, 20 by default, and retries 429s. Raise it to whatever a dedicated RPC allows. Of Amp's processes, only the relay gets `BASE_RPC_URL`. The app's server also uses it, for L1 fees, at half of `BASE_RPC_RATE_LIMIT`: 10 a second by default, which a wallet sending that many transactions a second never catches up with, so its ETH stays not checked. Neither ever logs it. Never commit a key.
+**Use a dedicated RPC for a demo.** `BASE_RPC_URL` in `.env.local` defaults to the public `https://mainnet.base.org`, which allows 25 requests a second per IP and is shared with anything else on your network. A failed call stops the raw dataset, and everything built on it, until its retry succeeds. To avoid that, `amp:start` runs a small relay (`scripts/rpc-throttle.ts`) that holds requests to 60% of `BASE_RPC_RATE_LIMIT` a second, and retries 429s. That setting is what the RPC allows in total, 25 by default, so raise it to whatever a dedicated RPC allows. Of Amp's processes, only the relay gets `BASE_RPC_URL`. The app's server also uses it, for L1 fees, with the other 40%: 10 a second by default, shared by every wallet being read, which a wallet sending that many transactions a second never catches up with, so its ETH stays not checked. Neither ever logs it. Never commit a key.
 
-**On Base's 200 ms blocks, from November 5, 2026 at 18:00 UTC, following the head takes about 10 requests a second,** all for the raw dataset, because prices come from logs. Measured with this script on Base Sepolia, which already has those blocks, at the default 20 requests a second to `sepolia.base.org`:
+**On Base's 200 ms blocks, from November 5, 2026 at 18:00 UTC, following the head takes about 10 requests a second,** all for the raw dataset, because prices come from logs. Measured with this script on Base Sepolia, which already has those blocks, with the relay at 20 requests a second to `sepolia.base.org`:
 
 | Start | Time to chain head | After that |
 | --- | --- | --- |
@@ -102,6 +102,8 @@ It adds a marked block to the end of `.env.local` that points the app at the loc
 | `PRICETAG_HISTORY_BLOCKS=300` | About 2 minutes | 5 blocks behind |
 
 Mainnet's RPC and blocks may differ. The previous dataset, which read prices with `eth_call`, couldn't follow these blocks: its `reference_prices` kept falling behind, or held hundreds of blocks behind, at 20, 25 and 35 requests a second.
+
+The relay now gets 15 a second by default, so L1 fees fit under the public RPC's limit. That leaves about 5 for catching up instead of 10, so expect a default start to take up to about twice as long. That's from the arithmetic, and it hasn't been measured.
 
 **A local Amp's first prices come from `eth_call`.** It only has logs from its start block, and USDC/USD's last update can be up to a day older. So `amp:start` reads each feed's latest round from its contract at the start block (`dataset/local.ts`), and those stand in as updates, with an all-zero transaction, for as long as the real ones would have lasted. If that read fails, `amp:start` stops before the backfill. Proof says a price came from the contract, and Verify doesn't claim to cover it. It covers the price from the first real log onward.
 

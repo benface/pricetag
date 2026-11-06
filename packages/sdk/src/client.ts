@@ -28,7 +28,7 @@ export type PricetagConfig = {
    * anything, and `getLegs` can't confirm a swap paid out in unwrapped ETH. Both say so.
    */
   rpcUrl?: string | undefined
-  /** Calls a second `rpcUrl` allows, of which L1 fees use half. It defaults to 20, for the public RPC. Raise it for a dedicated one, so a very busy wallet can catch up. */
+  /** Calls a second `rpcUrl` allows, of which L1 fees use 40%. It defaults to 25, for the public RPC. Raise it for a dedicated one, so a very busy wallet can catch up. */
   rpcRateLimit?: number | undefined
   /** The network name Amp knows the chain by, as in `rpc.base_mainnet.eth_call`, which reads onchain balances. */
   network?: string | undefined

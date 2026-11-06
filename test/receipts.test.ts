@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { createL1FeeReader, l1FeeOf, l1FeePace } from "@pricetag/sdk/internal"
+import { createL1FeeReader, l1FeeOf, l1FeePace, relayRate } from "@pricetag/sdk/internal"
 
 const HASH = (n: number) => `0x${n.toString(16).padStart(64, "0")}`
 const request = (n: number) => ({ txHash: HASH(n), blockNum: 100 })
@@ -56,19 +56,63 @@ describe("the receipt reader", () => {
   it("stays at 5 receipts every 500 ms, at most 200 in a read, for the public RPC", () => {
     const pace = { batch: 5, pauseMs: 500, maxPerRead: 200 }
     assert.deepEqual(l1FeePace(), pace)
-    assert.deepEqual(l1FeePace(20), pace)
+    assert.deepEqual(l1FeePace(25), pace)
     assert.deepEqual(l1FeePace(0), pace)
     assert.deepEqual(l1FeePace(-1), pace)
     assert.deepEqual(l1FeePace(Number.NaN), pace)
   })
 
-  it("reads at half of a faster RPC's limit, in batches that any RPC takes", () => {
-    assert.deepEqual(l1FeePace(100), { batch: 25, pauseMs: 500, maxPerRead: 1_000 })
-    assert.deepEqual(l1FeePace(1_000), { batch: 25, pauseMs: 50, maxPerRead: 10_000 })
+  it("reads at 40% of a faster RPC's limit, in batches that any RPC takes", () => {
+    assert.deepEqual(l1FeePace(100), { batch: 20, pauseMs: 500, maxPerRead: 800 })
+    assert.deepEqual(l1FeePace(1_000), { batch: 25, pauseMs: 62.5, maxPerRead: 8_000 })
   })
 
-  it("reads at half of a slower RPC's limit, one receipt at a time if it has to", () => {
-    assert.deepEqual(l1FeePace(2), { batch: 1, pauseMs: 1_000, maxPerRead: 20 })
+  it("reads at 40% of a slower RPC's limit, one receipt at a time if it has to", () => {
+    assert.deepEqual(l1FeePace(5), { batch: 1, pauseMs: 500, maxPerRead: 40 })
+    assert.deepEqual(l1FeePace(2), { batch: 1, pauseMs: 1_250, maxPerRead: 16 })
+  })
+
+  it("never fits more than its share in a second, whatever the limit", () => {
+    for (const limit of [5, 25, 50, 100, 113, 150, 333, 1_000, 10_000]) {
+      const { batch, pauseMs } = l1FeePace(limit)
+      assert.ok(Math.ceil(1_000 / pauseMs) * batch <= limit * 0.4, `at ${limit}`)
+    }
+  })
+
+  it("leaves the relay the rest of the limit", () => {
+    assert.equal(relayRate(25), 15)
+    assert.equal(relayRate(100), 60)
+  })
+
+  it("keeps wallets read at the same time to one pace", async () => {
+    const sentAt: number[] = []
+    const { send } = answering((body) => {
+      sentAt.push(Date.now())
+      return allFound(body)
+    })
+    const read = createL1FeeReader("http://rpc", send, 0, console, 100)
+    const all = await Promise.all([1, 2, 3].map((wallet) => read(Array.from({ length: 20 }, (_, i) => request(wallet * 100 + i)))))
+    assert.deepEqual(all.map((fees) => fees.size), [20, 20, 20])
+    // 20 receipts every 500 ms, where each reading alone would have sent all three at once.
+    assert.ok(sentAt[2]! - sentAt[0]! >= 950, `took ${sentAt[2]! - sentAt[0]!} ms`)
+  })
+
+  it("doesn't charge a small read a whole pause", async () => {
+    const { send, calls } = answering(allFound)
+    const read = createL1FeeReader("http://rpc", send)
+    const started = Date.now()
+    for (let i = 0; i < 5; i++) await read([request(i + 1)])
+    assert.equal(calls.length, 5)
+    assert.ok(Date.now() - started < 450, `took ${Date.now() - started} ms`)
+  })
+
+  it("gives up on what doesn't fit in its time, so a shared pace can't hold a read up", async () => {
+    const { send, calls } = answering(allFound)
+    // A pace of one receipt every 25 s: the first is sent right away, and the second can't fit in a read's 20 s.
+    const read = createL1FeeReader("http://rpc", send, 0, console, 0.1)
+    const fees = await read([request(1), request(2)])
+    assert.equal(fees.size, 1)
+    assert.equal(calls.length, 1)
   })
 
   it("reads more in one go with a faster RPC", async () => {
