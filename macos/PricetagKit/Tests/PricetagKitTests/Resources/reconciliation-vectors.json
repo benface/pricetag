@@ -7,14 +7,6 @@
     "differenceQty": "0"
   },
   {
-    "status": "reconciled",
-    "blockNum": 200,
-    "computedQty": "100000000000000000",
-    "actualQty": "100000000000000000",
-    "differenceQty": "0",
-    "unrecordedQty": "100000000000000000"
-  },
-  {
     "status": "incomplete",
     "blockNum": 200,
     "computedQty": "100000000000000000",
@@ -53,5 +45,13 @@
     "reason": "The network fee of 1 transaction couldn't be read yet.",
     "heldQty": "100000000000000000",
     "heldIsCurrent": true
+  },
+  {
+    "status": "reconciled",
+    "blockNum": 200,
+    "computedQty": "100000000000000000",
+    "actualQty": "100000000000000000",
+    "differenceQty": "0",
+    "unrecordedQty": "100000000000000000"
   }
 ]

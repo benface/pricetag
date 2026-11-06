@@ -50,11 +50,12 @@ import Testing
     @Test func aReconciliationOfEveryKind() throws {
         // What's held is already in the position's amount.
         let vectors = try expectSame(json("reconciliation-vectors"), as: [Reconciliation].self, ignoring: ["heldQty"])
-        #expect(vectors.map(\.status) == [.reconciled, .incomplete, .unchecked, .unchecked, .unchecked, .unchecked])
+        #expect(vectors.map(\.status) == [.reconciled, .incomplete, .unchecked, .unchecked, .unchecked, .unchecked, .reconciled])
         #expect(vectors[1].unseenEth?.first?.txHashes == ["0xswap"])
         #expect(vectors[2].reason != nil)
         #expect(vectors[2].heldIsCurrent == false)
         #expect(vectors[4].heldIsCurrent == true)
+        #expect(vectors[6].unrecordedQty == "100000000000000000")
     }
 
     @Test func aPurchaseFromStartToFinish() throws {
