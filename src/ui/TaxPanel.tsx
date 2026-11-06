@@ -1,9 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { formatSignedMoney, shortHash, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import type { TaxReportResponse } from "../core/api.ts"
+import { failureOf, readResponse, type ReadFailure } from "../core/read-failure.ts"
 import type { Book } from "../core/book.ts"
 import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, readOtherWallets, savedOtherWallets, type TaxCountryCode, type TaxScope, type TaxYear } from "../core/tax.ts"
-import { METHOD_LABELS, METHOD_NAME } from "../core/wording.ts"
+import { METHOD_LABELS, METHOD_NAME, panelProblem } from "../core/wording.ts"
+import { ProblemNotice } from "./ProblemNotice.tsx"
 
 const COUNTRY_KEY = "pricetag.taxCountry"
 const METHOD_KEY = "pricetag.taxMethod"
@@ -41,10 +43,7 @@ function readOthers(): string {
 
 /** A post, because answers don't belong in a URL, where they'd end up in logs. */
 async function fetchReport(address: string, request: object, signal: AbortSignal): Promise<TaxReportResponse> {
-  const response = await fetch(`/api/tax-report/${address}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request), signal })
-  const body = (await response.json().catch(() => ({}))) as TaxReportResponse & { error?: string }
-  if (!response.ok) throw new Error(body.error ?? "Couldn't build the report.")
-  return body
+  return readResponse<TaxReportResponse>(await fetch(`/api/tax-report/${address}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request), signal }))
 }
 
 function download({ csv, filename }: TaxReportResponse) {
@@ -98,7 +97,8 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
   const [years, setYears] = useState<number[]>([])
   const [othersText, setOthersText] = useState(readOthers)
   const [report, setReport] = useState<TaxReportResponse | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [attempt, setAttempt] = useState(0)
+  const [error, setError] = useState<ReadFailure | null>(null)
   const [loading, setLoading] = useState(true)
 
   const rules = TAX_COUNTRIES[country]
@@ -135,11 +135,11 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
         if (controller.signal.aborted) return
         // What's on screen would be about other choices, so it can't stay.
         setReport(null)
-        setError(reason instanceof Error ? reason.message : "Couldn't build the report.")
+        setError(failureOf(reason))
         setLoading(false)
       })
     return () => controller.abort()
-  }, [address, alongside, country, method, scope, year, currency, others, badOther, book])
+  }, [address, alongside, country, method, scope, year, currency, others, badOther, book, attempt])
 
   const chooseMethod = (next: Method | null) => {
     remember(METHOD_KEY, next)
@@ -256,7 +256,16 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
           </label>
         )}
         {badOther ? <p className="notice warn">⚠ {badOther} isn't a Base address.</p> : null}
-        {error ? <p className="notice warn">⚠ {error}</p> : null}
+        {error ? (
+          <ProblemNotice
+            problem={panelProblem(error, location.origin)}
+            action={
+              <button type="button" className="link" onClick={() => setAttempt((n) => n + 1)}>
+                Try again
+              </button>
+            }
+          />
+        ) : null}
 
         {report && !badOther ? (
           <>
