@@ -28,6 +28,8 @@ export type QueryOptions = {
   logger?: Logger | undefined
   /** How many queries can run at once. It defaults to 1, because a hosted Amp is shared. */
   maxConcurrent?: number | undefined
+  /** How long to wait before reading again after a dropped connection, in ms, doubling each time. It defaults to 500 ms. */
+  retryPauseMs?: number | undefined
 }
 
 /** A query that can also read through dataset aliases. */
@@ -40,6 +42,8 @@ export type AmpQuery = Query & {
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000
+const QUERY_ATTEMPTS = 3
+const RETRY_PAUSE_MS = 500
 
 /** Amp's client returns Decimal128 values as Arrow big numbers, not strings. */
 export const decimalString = (value: unknown): string | null => (value == null ? null : String(value).replaceAll('"', ""))
@@ -61,7 +65,10 @@ export function describeError(error: unknown): string {
 /** What Amp answers when a table's job hasn't written anything yet. It isn't an outage: that table just has no blocks. */
 export const isNotStarted = (error: unknown) => describeError(error).includes("no common canonical watermark")
 
-export function createQuery(url: string, token: string | undefined, { timeoutMs: maxTimeoutMs = DEFAULT_TIMEOUT_MS, logger = console, maxConcurrent = 1 }: QueryOptions = {}): AmpQuery {
+/** A connection to Amp that was refused or dropped, by its gateway or the network, as opposed to Amp answering with an error or taking too long. */
+const isConnectionDrop = (error: unknown) => /upstream connect error|disconnect\/reset before headers|connection refused|ECONNREFUSED|ECONNRESET/i.test(describeError(error))
+
+export function createQuery(url: string, token: string | undefined, { timeoutMs: maxTimeoutMs = DEFAULT_TIMEOUT_MS, logger = console, maxConcurrent = 1, retryPauseMs = RETRY_PAUSE_MS }: QueryOptions = {}): AmpQuery {
   const transportWith = (aliases?: Record<string, string>) => {
     const auth: Interceptor[] = token ? [createAuthInterceptor(token)] : []
     const alias: Interceptor[] = aliases
@@ -113,7 +120,7 @@ export function createQuery(url: string, token: string | undefined, { timeoutMs:
   }
 
   /** Waits its turn, and logged if it's slow. */
-  const queued = async <R>(sql: string, read: () => Promise<R>, count: (result: R) => number) => {
+  const inTurn = async <R>(sql: string, read: () => Promise<R>, count: (result: R) => number) => {
     await startTurn()
     try {
       const started = Date.now()
@@ -123,6 +130,22 @@ export function createQuery(url: string, token: string | undefined, { timeoutMs:
       return value
     } finally {
       endTurn()
+    }
+  }
+
+  /**
+   * Staging's gateway drops the odd connection, and a wallet shouldn't fail because of one. These are all reads, and each attempt
+   * starts over and asks Amp again, so what comes back is as new as any other read. A pause gives up its turn.
+   */
+  const queued = async <R>(sql: string, read: () => Promise<R>, count: (result: R) => number) => {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await inTurn(sql, read, count)
+      } catch (error) {
+        if (attempt === QUERY_ATTEMPTS || !isConnectionDrop(error)) throw error
+        logger.warn(`Reading from Amp again after a dropped connection: ${describeError(error)}`)
+        await new Promise((resolve) => setTimeout(resolve, retryPauseMs * 2 ** (attempt - 1)))
+      }
     }
   }
 

@@ -1114,6 +1114,102 @@ describe("reading through aliases", () => {
   })
 })
 
+describe("a dropped connection to Amp", () => {
+  const GATEWAY_DROP = "upstream connect error or disconnect/reset before headers. reset reason: remote connection failure, transport failure reason: delayed connect error: Connection refused"
+  const grpcFrame = (message: Buffer) => Buffer.concat([Buffer.from([0, 0, 0, 0, message.length]), message])
+  const flightInfo = grpcFrame(Buffer.from([0x1a, 10, 0x0a, 8, 0x0a, 6, ...Buffer.from("ticket")]))
+  /** Fails its first `failures` requests with `said`, and answers the rest with no rows. */
+  async function flakyServer(failures: number, said: string) {
+    const seen = { requests: 0, gets: 0 }
+    const server = createServer((req, res) => {
+      req.resume()
+      seen.requests += 1
+      if (seen.requests <= failures) {
+        res.writeHead(200, { "content-type": "application/grpc", "grpc-status": "14", "grpc-message": encodeURIComponent(said) })
+        res.end()
+        return
+      }
+      res.writeHead(200, { "content-type": "application/grpc+proto" })
+      if (req.url.endsWith("/GetFlightInfo")) res.write(flightInfo)
+      else seen.gets += 1
+      res.addTrailers({ "grpc-status": "0" })
+      res.end()
+    })
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    return { seen, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, close: () => server.close() }
+  }
+  const quiet = (warnings: string[] = []) => ({ warn: (message: string) => warnings.push(message) })
+
+  it("reads again, and answers with what the new read found", async () => {
+    const { seen, url, close } = await flakyServer(2, GATEWAY_DROP)
+    const warnings: string[] = []
+    const query = createQuery(url, undefined, { logger: quiet(warnings), retryPauseMs: 0 })
+    assert.deepEqual(await query("SELECT 1"), [])
+    close()
+    assert.equal(seen.gets, 1, "the data came from the read that worked")
+    assert.equal(warnings.length, 2)
+  })
+
+  it("does the same when asking how far the tables have got", async () => {
+    const { seen, url, close } = await flakyServer(1, GATEWAY_DROP)
+    const query = createQuery(url, undefined, { logger: quiet(), retryPauseMs: 0 })
+    assert.equal(await query.snapshotEnd!("SELECT 1"), null)
+    close()
+    assert.equal(seen.gets, 1)
+  })
+
+  it("gives up after 3 tries, with the same error", async () => {
+    const { seen, url, close } = await flakyServer(Infinity, GATEWAY_DROP)
+    const query = createQuery(url, undefined, { logger: quiet(), retryPauseMs: 0 })
+    await assert.rejects(query("SELECT 1"), /Connection refused/)
+    close()
+    assert.equal(seen.requests, 3)
+  })
+
+  it("reads again when nothing is listening", async () => {
+    const warnings: string[] = []
+    const query = createQuery("http://127.0.0.1:1", undefined, { logger: quiet(warnings), retryPauseMs: 0 })
+    await assert.rejects(query("SELECT 1"))
+    assert.equal(warnings.length, 2)
+  })
+
+  for (const said of ["not a real Amp", "table not found", "no common canonical watermark"]) {
+    it(`takes "${said}" as Amp's answer, and doesn't ask again`, async () => {
+      const { seen, url, close } = await flakyServer(Infinity, said)
+      const query = createQuery(url, undefined, { logger: quiet(), retryPauseMs: 0 })
+      await assert.rejects(query("SELECT 1"))
+      close()
+      assert.equal(seen.requests, 1)
+    })
+  }
+
+  it("doesn't ask again after a timeout", async () => {
+    const seen = { requests: 0 }
+    const server = createServer((req) => {
+      req.resume()
+      seen.requests += 1
+    })
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const query = createQuery(`http://127.0.0.1:${(server.address() as AddressInfo).port}`, undefined, { timeoutMs: 20, logger: quiet(), retryPauseMs: 0 })
+    await assert.rejects(query("SELECT 1"), /timed out/)
+    server.close()
+    server.unref()
+    assert.equal(seen.requests, 1)
+  })
+
+  it("lets other queries run during the pause", async () => {
+    const { seen, url, close } = await flakyServer(1, GATEWAY_DROP)
+    const query = createQuery(url, undefined, { logger: quiet(), retryPauseMs: 200 })
+    const first = query("SELECT 1")
+    while (seen.requests === 0) await new Promise((resolve) => setTimeout(resolve, 5))
+    const started = Date.now()
+    await query("SELECT 2")
+    assert.ok(Date.now() - started < 150, "the second didn't wait for the first's pause")
+    await first
+    close()
+  })
+})
+
 describe("how many queries run at once", () => {
   /** A server that holds each query until it's let go, and says how many it's holding. */
   async function holdingServer() {
