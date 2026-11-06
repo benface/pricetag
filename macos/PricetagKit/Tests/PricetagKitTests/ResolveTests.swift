@@ -10,6 +10,9 @@ actor BookSource: PortfolioSource {
     private(set) var previewed: [[Book]] = []
     private(set) var previewRules: [String?] = []
     var previewAnswers: [BookPreview] = []
+    private var importAnswer = ExchangeImport(withdrawals: [ExchangeWithdrawal(exchange: "Coinbase", asset: "ETH", units: "1", at: "2026-11-04T00:00:00.000Z", cost: Money(micros: "5", currency: .USD), toAddress: nil)], skipped: 1)
+    /// How long each of the next previews says to wait, instead of answering.
+    var previewRefusals: [Int] = []
 
     init(_ portfolios: [Portfolio]) {
         self.portfolios = portfolios
@@ -17,6 +20,10 @@ actor BookSource: PortfolioSource {
 
     func answerPreviews(_ answers: [BookPreview]) {
         previewAnswers = answers
+    }
+
+    func refusePreviews(retryAfter: Int) {
+        previewRefusals.append(retryAfter)
     }
 
     func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
@@ -31,6 +38,7 @@ actor BookSource: PortfolioSource {
     func previews(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], candidates: [Book]) async throws -> [BookPreview] {
         previewed.append(candidates)
         previewRules.append(rule)
+        if !previewRefusals.isEmpty { throw FetchError.rateLimited("Too many requests.", retryAfter: previewRefusals.removeFirst()) }
         return previewAnswers
     }
 
@@ -45,7 +53,11 @@ actor BookSource: PortfolioSource {
     }
 
     func importCoinbase(csv: String) async throws -> ExchangeImport {
-        ExchangeImport(withdrawals: [ExchangeWithdrawal(exchange: "Coinbase", asset: "ETH", units: "1", at: "2026-11-04T00:00:00.000Z", cost: Money(micros: "5", currency: .USD), toAddress: nil)], skipped: 1)
+        importAnswer
+    }
+
+    func answerImports(_ answer: ExchangeImport) {
+        importAnswer = answer
     }
 
 }
@@ -87,7 +99,7 @@ actor BookSource: PortfolioSource {
     @Test func saysWhatHasNoMarket() throws {
         let text = try #require(Wording.noMarket(try demoPortfolio()))
         #expect(text.contains("DEGEN"))
-        #expect(text.contains("2 tokens"))
+        #expect(text.contains("3 tokens"))
     }
 
     @Test func answersAreSentAlongAndKeptOnThisDevice() async throws {
@@ -104,6 +116,74 @@ actor BookSource: PortfolioSource {
         store.setRule("cautious-eth")
         _ = try await store.previews(of: [Book()])
         #expect(await source.previewRules == ["cautious-eth"])
+    }
+
+    private func waitUntil(_ condition: () -> Bool) async throws {
+        for _ in 0..<200 where !condition() { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(condition())
+    }
+
+    @Test func previewsASlowedDownServerRefusedComeBackByThemselves() async throws {
+        let portfolio = try demoPortfolio()
+        let (store, source, _) = try makeStore([portfolio])
+        await _ = store.poll()
+        let model = ResolveModel(store: store)
+        let answer = BookPreview(pnlMicros: "12400000", pnlStatus: .complete, estimatedMicros: "0", unresolvedMicros: "0", open: 0, pending: false, failed: false)
+        await source.answerPreviews([answer, answer])
+        await source.refusePreviews(retryAfter: 5)
+        let load = Task { await model.loadPreviews() }
+        try await waitUntil { model.previewsAreHeldBack }
+        #expect(model.previews.isEmpty)
+        #expect(!model.costPreviewIsHeldBack, "the cost being typed isn't what's waiting")
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(await source.previewed.count == 1, "nothing asks again until it's time")
+        await load.value
+        #expect(await source.previewed.count == 2)
+        #expect(!model.previewsAreHeldBack)
+        #expect(model.previews[.mine] == answer)
+    }
+
+    @Test func aHeldBackPreviewStopsWhenTheQuestionMovesOn() async throws {
+        let (store, source, _) = try makeStore([try demoPortfolio()])
+        await _ = store.poll()
+        let model = ResolveModel(store: store)
+        await source.refusePreviews(retryAfter: 60)
+        let load = Task { await model.loadPreviews() }
+        try await waitUntil { model.previewsAreHeldBack }
+        model.skip()
+        load.cancel()
+        await load.value
+        #expect(!model.previewsAreHeldBack)
+        #expect(await source.previewed.count == 1)
+    }
+
+    @Test func aTypedCostWaitsOutARefusalAndGoesByTheLatestTyping() async throws {
+        let (store, source, _) = try makeStore([try demoPortfolio()])
+        await _ = store.poll()
+        let model = ResolveModel(store: store)
+        let question = try #require(model.current)
+        let typed = { (amount: String) in Dictionary(uniqueKeysWithValues: question.arrivals.map { ($0.asset, amount) }) }
+        let answer = BookPreview(pnlMicros: "12400000", pnlStatus: .complete, estimatedMicros: "0", unresolvedMicros: "0", open: 0, pending: false, failed: false)
+        await source.answerPreviews([answer])
+        // What's on screen is about the amount before this one.
+        await model.previewCost(typed("1"))
+        #expect(model.costPreview == answer)
+        await source.refusePreviews(retryAfter: 5)
+        let first = Task { await model.previewCost(typed("2")) }
+        try await waitUntil { model.costPreviewIsHeldBack }
+        #expect(model.costPreview == nil, "that was for a different amount")
+        #expect(!model.previewsAreHeldBack)
+        first.cancel()
+        await first.value
+        let second = Task { await model.previewCost(typed("3")) }
+        try await waitUntil { model.costPreviewIsHeldBack }
+        #expect(await source.previewed.count == 2, "typing more doesn't ask a server that's said to wait")
+        await second.value
+        #expect(!model.costPreviewIsHeldBack)
+        #expect(model.costPreview == answer)
+        let asked = await source.previewed
+        #expect(asked.count == 3)
+        #expect(asked[2] != asked[1], "it asked about what's typed now")
     }
 
     @Test func undoGoesBackOneAnswerAtATime() throws {
@@ -252,7 +332,82 @@ actor BookSource: PortfolioSource {
         let imported = await model.importCoinbase(csv: "anything")
         #expect(imported?.withdrawals.count == 1)
         #expect(store.book.withdrawals.count == 1)
-        #expect(model.failure?.contains("1 had no usable cost") == true)
+        #expect(model.lastImport?.skipped == 1)
+        #expect(model.lastImport?.needsALook == true)
+        #expect(model.failure == nil)
+    }
+
+    private func withdrawal(_ at: String, cost: String = "5", to: String? = nil) -> ExchangeWithdrawal {
+        ExchangeWithdrawal(exchange: "Coinbase", asset: "ETH", units: "1", at: at, cost: Money(micros: cost, currency: .USD), toAddress: to)
+    }
+
+    @Test func aLaterImportAddsToAnEarlierOne() {
+        let (earlier, later) = (withdrawal("2025-06-01T00:00:00.000Z"), withdrawal("2026-06-01T00:00:00.000Z"))
+        #expect(Book(withdrawals: [earlier]).importing([later]).withdrawals == [earlier, later])
+    }
+
+    @Test func importingTheSameFileTwiceChangesNothing() {
+        let (one, alike) = (withdrawal("2026-06-01T00:00:00.000Z"), withdrawal("2026-06-01T00:00:00.000Z"))
+        let book = Book().importing([one, alike])
+        #expect(book.withdrawals == [one, alike], "two alike in one file are two withdrawals")
+        #expect(book.importing([one, alike]) == book)
+    }
+
+    @Test func aFileWithTheSameWithdrawalAgainTakesOver() {
+        let (earlier, other) = (withdrawal("2026-06-01T00:00:00.000Z", cost: "5"), withdrawal("2026-07-01T00:00:00.000Z"))
+        let corrected = withdrawal("2026-06-01T00:00:00.000Z", cost: "6")
+        #expect(Book(withdrawals: [earlier, other]).importing([corrected]).withdrawals == [other, corrected])
+    }
+
+    @Test func aWithdrawalToAnotherAddressIsAnotherWithdrawal() {
+        let (one, other) = (withdrawal("2026-06-01T00:00:00.000Z", to: "0xaa"), withdrawal("2026-06-01T00:00:00.000Z", to: "0xbb"))
+        #expect(Book(withdrawals: [one]).importing([other]).withdrawals == [one, other])
+    }
+
+    @Test func aFileWithNothingInItKeepsWhatWasThereAndSaysSo() async throws {
+        let (store, source, _) = try makeStore()
+        await _ = store.poll()
+        let model = ResolveModel(store: store)
+        await _ = model.importCoinbase(csv: "anything")
+        let before = store.book
+        #expect(!before.withdrawals.isEmpty)
+        await source.answerImports(ExchangeImport(withdrawals: [], skipped: 0))
+        await _ = model.importCoinbase(csv: "anything")
+        #expect(store.book == before)
+        #expect(model.lastImport?.needsALook == true)
+        #expect(model.lastImport?.withdrawals.isEmpty == true)
+        store.undo()
+        #expect(store.book.withdrawals.isEmpty, "it changed nothing, so the only thing to undo is the first import")
+    }
+
+    @Test func whatAnImportFoundOutlastsTheQuestionItAnswered() async throws {
+        let (store, _, _) = try makeStore()
+        await _ = store.poll()
+        let model = ResolveModel(store: store)
+        await _ = model.importCoinbase(csv: "anything")
+        let first = try #require(model.current)
+        model.skip()
+        #expect(model.current?.id != first.id)
+        #expect(model.lastImport != nil)
+        model.undo()
+        #expect(model.lastImport == nil, "undoing it takes back what it said")
+    }
+
+    /// `test/resolve.test.ts` hands this to `parseBook`, so what this encoder leaves out can't make the server refuse every read.
+    /// Everything optional is nil, because that's what's left out. A new optional in a book belongs here too.
+    @Test func aBookWithNothingOptionalIsWhatTheServerReads() throws {
+        let book = Book(
+            senders: ["0x00000000000000000000000000000000000000aa": SenderAnswer(kind: .myExchange)],
+            costs: ["key": Money(micros: "5", currency: .USD)],
+            withdrawals: [withdrawal("2026-11-04T00:00:00.000Z")],
+            purchases: [Purchase(provider: "coinbase", order: "1", wallet: "0x00000000000000000000000000000000000000aa", asset: "ETH", units: "1", txHash: "0xabc", blockNum: nil, cost: Money(micros: "5", currency: .USD), costUsdMicros: nil)]
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        let text = String(decoding: try encoder.encode(book), as: UTF8.self) + "\n"
+        let url = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "Resources/mac-book.json")
+        if ProcessInfo.processInfo.environment["UPDATE_FIXTURES"] != nil { try text.write(to: url, atomically: true, encoding: .utf8) }
+        #expect(try String(contentsOf: url, encoding: .utf8) == text, "mac-book.json is out of date. Run with UPDATE_FIXTURES=1 if the change is on purpose.")
     }
 
     @Test func aWalletThatsNoLongerYoursStaysListed() throws {

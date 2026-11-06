@@ -799,6 +799,7 @@ describe("wording", () => {
     feedDetail: [wording.feedDetail("demo", 1000), wording.feedDetail("raw", 1000), wording.feedDetail("dataset", 1000)],
     pnlHelp: ["Total PnL", "AERO: Realized PnL", "Transaction 0x1234…abcd"].map((text) => ({ text, help: wording.pnlHelp(text) ?? null })),
     linkedFailed: [1, 2].map((count) => ({ count, text: wording.linkedFailedSentence(count) })),
+    imported: [[0, 0], [0, 1], [0, 2], [1, 0], [2, 0], [2, 1]].map(([found, skipped]) => ({ found: found!, skipped: skipped!, text: wording.importedSentence(found!, skipped!) })),
     withheld: wording.withheldSentence("0x1234567890abcdef1234567890abcdef12345678", "ETH"),
     answerQuestions: [1, 5, 1203].map((count) => ({ count, text: wording.answerQuestionsLabel(count) })),
     sentences: {
@@ -839,6 +840,7 @@ describe("wording", () => {
     finishNotes: FINISH_METERS.map((meter) => ({ ...meter, text: wording.finishNote(meter) })),
     problems: READ_FAILURES.map((failure) => ({ ...failure, ...wording.feedProblem(failure, "https://prices.example.com") })),
     unseenEth: UNSEEN_ETH_CASES.map((unseen) => ({ unseen, text: wording.unseenEthCause(unseen) })),
+    unrecorded: wording.unrecordedSentence("2061830000000000", 18, "ETH"),
     manifestHash: wording.shortManifestHash("bea12f7575e74575f2f0318213d61d421706eea0314e5d7116edebd4e77818a1"),
   }
 

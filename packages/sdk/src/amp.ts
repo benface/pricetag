@@ -26,7 +26,11 @@ export type QueryOptions = {
   timeoutMs?: number | undefined
   /** It defaults to `console`. */
   logger?: Logger | undefined
-  /** How many queries can run at once. It defaults to 1, because a hosted Amp is shared. */
+  /** How many lanes run a query at once, not counting having no lane. It defaults to 1. See `createTurns`. */
+  lanesAtOnce?: number | undefined
+  /** Whose query this is, for a server that shares Amp between people. It defaults to no lane. */
+  laneOf?: (() => string | undefined) | undefined
+  /** How many queries with no lane can run at once. It defaults to 1, because a hosted Amp is shared. */
   maxConcurrent?: number | undefined
 }
 
@@ -61,7 +65,49 @@ export function describeError(error: unknown): string {
 /** What Amp answers when a table's job hasn't written anything yet. It isn't an outage: that table just has no blocks. */
 export const isNotStarted = (error: unknown) => describeError(error).includes("no common canonical watermark")
 
-export function createQuery(url: string, token: string | undefined, { timeoutMs: maxTimeoutMs = DEFAULT_TIMEOUT_MS, logger = console, maxConcurrent = 1 }: QueryOptions = {}): AmpQuery {
+/**
+ * Runs reads in turns, so a slow one only holds up whoever's it is. Each lane runs one at a time, up to `lanesAtOnce` of them,
+ * and a lane that's just had a turn goes behind the others waiting. Having no lane is a lane of its own that never waits for
+ * those, for what a server reads for everyone, like the head. It runs `noLaneAtOnce` at a time.
+ */
+export function createTurns(lanesAtOnce = 1, laneOf: () => string | undefined = () => undefined, noLaneAtOnce = 1) {
+  const waiting = new Map<string | undefined, (() => void)[]>()
+  const running = new Set<string>()
+  let runningNoLane = 0
+  const canStart = (lane: string | undefined) => (lane === undefined ? runningNoLane < noLaneAtOnce : !running.has(lane) && running.size < lanesAtOnce)
+  const startWhatCan = () => {
+    for (const [lane, jobs] of waiting) {
+      if (!canStart(lane)) continue
+      if (lane === undefined) runningNoLane += 1
+      else running.add(lane)
+      waiting.delete(lane)
+      const job = jobs.shift() as () => void
+      if (jobs.length > 0) waiting.set(lane, jobs)
+      job()
+    }
+  }
+  return <R>(read: () => Promise<R>): Promise<R> =>
+    new Promise<R>((resolve, reject) => {
+      const lane = laneOf()
+      const jobs = waiting.get(lane) ?? []
+      jobs.push(() => {
+        void read()
+          .then(resolve, reject)
+          .finally(() => {
+            if (lane === undefined) runningNoLane -= 1
+            else running.delete(lane)
+            // Behind whoever's been waiting, even if this lane's next read arrived first.
+            const rest = waiting.get(lane)
+            if (rest && waiting.delete(lane)) waiting.set(lane, rest)
+            startWhatCan()
+          })
+      })
+      waiting.set(lane, jobs)
+      startWhatCan()
+    })
+}
+
+export function createQuery(url: string, token: string | undefined, { timeoutMs: maxTimeoutMs = DEFAULT_TIMEOUT_MS, logger = console, lanesAtOnce, laneOf, maxConcurrent }: QueryOptions = {}): AmpQuery {
   const transportWith = (aliases?: Record<string, string>) => {
     const auth: Interceptor[] = token ? [createAuthInterceptor(token)] : []
     const alias: Interceptor[] = aliases
@@ -74,21 +120,8 @@ export function createQuery(url: string, token: string | undefined, { timeoutMs:
       : []
     return createGrpcTransport({ baseUrl: url, interceptors: [...auth, ...alias] })
   }
-  // Staging is shared, so only this many queries run at once, whatever they read through. The rest wait in order.
-  let running = 0
-  const waiting: (() => void)[] = []
-  const startTurn = () =>
-    new Promise<void>((start) => {
-      if (running < maxConcurrent) {
-        running += 1
-        start()
-      } else waiting.push(start)
-    })
-  const endTurn = () => {
-    const next = waiting.shift()
-    if (next) next()
-    else running -= 1
-  }
+  // Staging is shared, so queries take turns, whatever they read through.
+  const inTurn = createTurns(lanesAtOnce, laneOf, maxConcurrent)
 
   const run = async <T>(client: ReturnType<typeof createClient>, sql: string, timeoutMs: number): Promise<T[]> => {
     const iterator = client.query(sql)[Symbol.asyncIterator]()
@@ -112,19 +145,15 @@ export function createQuery(url: string, token: string | undefined, { timeoutMs:
     }
   }
 
-  /** Waits its turn, and logged if it's slow. */
-  const queued = async <R>(sql: string, read: () => Promise<R>, count: (result: R) => number) => {
-    await startTurn()
-    try {
+  /** In its turn, and logged if it's slow. */
+  const queued = <R>(sql: string, read: () => Promise<R>, count: (result: R) => number) =>
+    inTurn(async () => {
       const started = Date.now()
       const value = await read()
       const took = Date.now() - started
       if (took > 5000) logger.warn(`Slow Amp query: ${took} ms, ${count(value)} rows: ${sql.replace(/\s+/g, " ").slice(0, 100)}…`)
       return value
-    } finally {
-      endTurn()
-    }
-  }
+    })
 
   const queryWith = (transport: ReturnType<typeof transportWith>): Query => {
     const client = createClient(transport)

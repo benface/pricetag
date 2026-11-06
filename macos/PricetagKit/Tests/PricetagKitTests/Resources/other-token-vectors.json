@@ -1,0 +1,241 @@
+{
+  "title": "Other Tokens",
+  "note": "These have no price, so they aren't in any total. Names are whatever the token's contract claims, so go by its address. This app never moves them.",
+  "spamTitle": "Possible Spam",
+  "spamRule": "Tucked away if nothing you sent moved it, its name points to a website, it copies a token we know, or its contract doesn't answer properly. This can be wrong: some of these are real, and none of it says what one is worth.",
+  "tokens": [
+    {
+      "token": {
+        "token": "0x00000000000000000000000000000000000000f1",
+        "kind": "token",
+        "name": "Jackfruit",
+        "symbol": "JACK",
+        "decimals": 18,
+        "balance": "1500000000000000000",
+        "state": "read",
+        "note": null,
+        "tucked": null
+      },
+      "name": "Jackfruit",
+      "amount": "1.5"
+    },
+    {
+      "token": {
+        "token": "0x00000000000000000000000000000000000000f1",
+        "kind": "token",
+        "name": null,
+        "symbol": "JACK",
+        "decimals": 18,
+        "balance": "1500000000000000000",
+        "state": "read",
+        "note": null,
+        "tucked": null
+      },
+      "name": "JACK",
+      "amount": "1.5"
+    },
+    {
+      "token": {
+        "token": "0x00000000000000000000000000000000000000f1",
+        "kind": "token",
+        "name": null,
+        "symbol": null,
+        "decimals": 18,
+        "balance": "1500000000000000000",
+        "state": "read",
+        "note": null,
+        "tucked": null
+      },
+      "name": "Unnamed token",
+      "amount": "1.5"
+    },
+    {
+      "token": {
+        "token": "0x00000000000000000000000000000000000000f1",
+        "kind": "token",
+        "name": null,
+        "symbol": null,
+        "decimals": 18,
+        "balance": null,
+        "state": "reading",
+        "note": null,
+        "tucked": null
+      },
+      "name": "Unnamed token",
+      "amount": "Reading…"
+    },
+    {
+      "token": {
+        "token": "0x00000000000000000000000000000000000000f1",
+        "kind": "token",
+        "name": null,
+        "symbol": null,
+        "decimals": 18,
+        "balance": null,
+        "state": "unreadable",
+        "note": null,
+        "tucked": null
+      },
+      "name": "Unnamed token",
+      "amount": "Unknown"
+    },
+    {
+      "token": {
+        "token": "0x00000000000000000000000000000000000000f1",
+        "kind": "token",
+        "name": null,
+        "symbol": null,
+        "decimals": null,
+        "balance": "1234567",
+        "state": "read",
+        "note": null,
+        "tucked": null
+      },
+      "name": "Unnamed token",
+      "amount": "1,234,567 units"
+    },
+    {
+      "token": {
+        "token": "0x00000000000000000000000000000000000000f1",
+        "kind": "token",
+        "name": null,
+        "symbol": null,
+        "decimals": 6,
+        "balance": "2500000",
+        "state": "read",
+        "note": null,
+        "tucked": null
+      },
+      "name": "Unnamed token",
+      "amount": "2.5"
+    },
+    {
+      "token": {
+        "token": "0x00000000000000000000000000000000000000f1",
+        "kind": "token",
+        "name": null,
+        "symbol": null,
+        "decimals": 0,
+        "balance": "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+        "state": "read",
+        "note": null,
+        "tucked": null
+      },
+      "name": "Unnamed token",
+      "amount": "115,792,089,237,316,195,423,570,985,008,687,907,853,269,984,665,640,564,039,457,584,007,913,129,639,935"
+    },
+    {
+      "token": {
+        "token": "0x00000000000000000000000000000000000000f1",
+        "kind": "token",
+        "name": null,
+        "symbol": null,
+        "decimals": 36,
+        "balance": "1",
+        "state": "read",
+        "note": null,
+        "tucked": null
+      },
+      "name": "Unnamed token",
+      "amount": "0.000000000000000000000000000000000001"
+    },
+    {
+      "token": {
+        "token": "0x00000000000000000000000000000000000000f1",
+        "kind": "collectible",
+        "name": null,
+        "symbol": null,
+        "decimals": 0,
+        "balance": "1",
+        "state": "read",
+        "note": null,
+        "tucked": null
+      },
+      "name": "Unnamed token",
+      "amount": "1 item"
+    },
+    {
+      "token": {
+        "token": "0x00000000000000000000000000000000000000f1",
+        "kind": "collectible",
+        "name": null,
+        "symbol": null,
+        "decimals": 0,
+        "balance": "12",
+        "state": "read",
+        "note": null,
+        "tucked": null
+      },
+      "name": "Unnamed token",
+      "amount": "12 items"
+    },
+    {
+      "token": {
+        "token": "0x00000000000000000000000000000000000000f1",
+        "kind": "collectible",
+        "name": null,
+        "symbol": null,
+        "decimals": 0,
+        "balance": null,
+        "state": "read",
+        "note": null,
+        "tucked": null
+      },
+      "name": "Unnamed token",
+      "amount": "Unknown"
+    }
+  ],
+  "leftOut": [
+    {
+      "count": 0,
+      "sentence": null
+    },
+    {
+      "count": 1,
+      "sentence": "1 more token moved through this wallet and weren't read. Only the most recent are."
+    },
+    {
+      "count": 40,
+      "sentence": "40 more tokens moved through this wallet and weren't read. Only the most recent are."
+    }
+  ],
+  "noMarket": [
+    {
+      "listed": [],
+      "others": 0,
+      "sentence": null
+    },
+    {
+      "listed": [
+        "DEGEN"
+      ],
+      "others": 0,
+      "sentence": "1 token with no price: DEGEN. Not counted in any total."
+    },
+    {
+      "listed": [],
+      "others": 1,
+      "sentence": "1 token with no price. Not counted in any total."
+    },
+    {
+      "listed": [],
+      "others": 3,
+      "sentence": "3 tokens with no price. Not counted in any total."
+    },
+    {
+      "listed": [
+        "DEGEN"
+      ],
+      "others": 1,
+      "sentence": "2 tokens with no price: DEGEN, plus 1 other. Not counted in any total."
+    },
+    {
+      "listed": [
+        "DEGEN",
+        "AERO"
+      ],
+      "others": 4,
+      "sentence": "6 tokens with no price: DEGEN, AERO, plus 4 others. Not counted in any total."
+    }
+  ]
+}

@@ -212,7 +212,7 @@ const unconfirmed = (...wallets: readonly (readonly string[] | undefined)[]): Pi
   return all.length > 0 ? { unconfirmedBy: all } : {}
 }
 
-function lotOf(piece: CostPiece, legId: string): Lot {
+function lotOf({ tracksPaidAt }: PositionState, piece: CostPiece, legId: string): Lot {
   const known = piece.label !== "unknown" && piece.costMicros !== null
   const estimated = known ? BigInt(piece.estimatedCostMicros) : 0n
   return {
@@ -225,7 +225,8 @@ function lotOf(piece: CostPiece, legId: string): Lot {
     ...(known && piece.purchaseSource ? { purchaseSource: piece.purchaseSource, ...(piece.purchasePartly ? { purchasePartly: true as const } : {}) } : {}),
     ...unconfirmed(known ? [] : piece.unconfirmedBy),
     ...(piece.acquiredBlock === undefined ? {} : { acquiredBlock: piece.acquiredBlock, acquiredAt: piece.acquiredAt as string }),
-    ...(known && piece.paidAt ? { paidAt: piece.paidAt } : {}),
+    // Otherwise every leg's state would keep a copy of it, and the leg already has it for whoever needs it.
+    ...(tracksPaidAt && known && piece.paidAt ? { paidAt: piece.paidAt } : {}),
   }
 }
 
@@ -265,11 +266,11 @@ export const orderMatters = ({ orderUnknown }: Pick<FoldLeg, "orderUnknown">, me
 
 function credit(state: PositionState, leg: FoldLeg, qty: bigint): Lot[] {
   const dated = leg.blockNum === undefined ? {} : { acquiredBlock: leg.blockNum, acquiredAt: leg.timestamp as string }
-  if (orderMatters(leg, state.method)) return addLot(state, state.lots, lotOf({ qty: qty.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0", ...dated }, leg.id))
+  if (orderMatters(leg, state.method)) return addLot(state, state.lots, lotOf(state, { qty: qty.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0", ...dated }, leg.id))
   const estimated = (leg.estimated || leg.costLabel === "received at market") && leg.costMicros !== null ? leg.costMicros : "0"
   // A piece with its own date got it from the wallet that first acquired it. Any other was acquired here and now.
   const pieces = leg.pieces?.map((piece) => ({ ...dated, ...piece })) ?? [{ qty: qty.toString(), costMicros: leg.costMicros, label: leg.costLabel, estimatedCostMicros: estimated, ...(leg.purchaseSource ? { purchaseSource: leg.purchaseSource } : {}), ...dated }]
-  return pieces.reduce<Lot[]>((lots, piece) => addLot(state, lots, lotOf(piece, leg.id)), state.lots)
+  return pieces.reduce<Lot[]>((lots, piece) => addLot(state, lots, lotOf(state, piece, leg.id)), state.lots)
 }
 
 type Taken = { lots: Lot[]; pieces: CostPiece[]; knownQty: bigint; knownCost: bigint; estimatedCost: bigint; unknownQty: bigint; shortfall: bigint }

@@ -1034,7 +1034,7 @@ describe("the formatters", () => {
 describe("the package boundary", () => {
   it("keeps the public API small", async () => {
     const sdk = await import("@pricetag/sdk")
-    assert.deepEqual(Object.keys(sdk).sort(), ["ASSETS", "MAIN_CURRENCY_CODES", "TOKENS", "buildPortfolio", "createPricetag", "describeError", "formatAmount", "formatMoney", "formatPrice", "formatSignedAmount", "formatSignedMoney", "isAddress", "pnlOverTime", "pnlStatus", "referenceMarks", "shortHash"])
+    assert.deepEqual(Object.keys(sdk).sort(), ["ASSETS", "MAIN_CURRENCY_CODES", "OldestFirstTooBigError", "TOKENS", "WalletTooBigError", "buildPortfolio", "createPricetag", "describeError", "formatAmount", "formatMoney", "formatPrice", "formatSignedAmount", "formatSignedMoney", "isAddress", "pnlOverTime", "pnlStatus", "referenceMarks", "shortHash"])
   })
 
   const sdkFile = (name: string) => readFileSync(new URL(`../packages/sdk/src/${name}`, import.meta.url), "utf8")
@@ -1050,7 +1050,7 @@ describe("the package boundary", () => {
       }
     }
     walk("core.ts")
-    assert.deepEqual([...seen].sort(), ["approvals.ts", "chain.ts", "core.ts", "currency.ts", "fold.ts", "format.ts", "hold.ts", "legs.ts", "market.ts", "notes.ts", "portfolio.ts", "reconcile.ts", "tokens.ts", "wallet.ts"])
+    assert.deepEqual([...seen].sort(), ["approvals.ts", "chain.ts", "core.ts", "currency.ts", "fold.ts", "format.ts", "hold.ts", "legs.ts", "market.ts", "notes.ts", "other-tokens.ts", "portfolio.ts", "reconcile.ts", "token-market.ts", "tokens.ts", "wallet.ts"])
   })
 
   it("has the app's browser code import only that part", () => {
