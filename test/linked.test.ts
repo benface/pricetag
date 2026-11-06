@@ -8,7 +8,8 @@ import { portfolioOf } from "../src/core/portfolio.ts"
 import type { Source } from "@pricetag/sdk/internal"
 import { unlistedTokens } from "@pricetag/sdk/internal"
 import type { PortfolioResponse, WalletResponse } from "../src/core/api.ts"
-import { DEMO_WALLET } from "../src/core/fixtures.ts"
+import { emptyBook, walletsToRead } from "../src/core/book.ts"
+import { DEMO_SAVINGS_ADDRESS, DEMO_WALLET } from "../src/core/fixtures.ts"
 
 const HOT = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 const COLD = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -281,6 +282,31 @@ describe("the portfolio endpoint with linked wallets", () => {
       assert.deepEqual([third.linkedReading, third.linkedFailed, third.meter.waiting], [[], [], 0])
       assert.equal(third.positions.find((p) => p.asset === "ETH")?.values.costMicros, "3000000000")
     })
+
+    it("isn't read for the demo, and the demo isn't read for it", async () => {
+      broken = true
+      const asked: string[] = []
+      const counting: Source = { ...flaky, readWindow: async (address, ...rest) => (asked.push(address), flaky.readWindow(address, ...rest)) }
+      const api = createApi({}, { source: counting, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } })
+      const server = createServer((req, res) => void api(req, res))
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+      const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+      const read = async (wallet: string, book: unknown) => (await fetch(`${base}/api/portfolio/${wallet}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ method: "average", book }) })).json() as Promise<PortfolioResponse>
+      try {
+        const book = { senders: { [HOT]: { kind: "mine" }, [COLD]: { kind: "mine" }, [DEMO_SAVINGS_ADDRESS]: { kind: "mine" } } }
+        for (let i = 0; i < 2; i++) {
+          const demo = await read("demo", book)
+          assert.deepEqual([demo.linkedReading, demo.linkedFailed, demo.meter.waiting], [[], [], 0])
+          await settle()
+        }
+        assert.deepEqual(asked, [], "a real wallet that's failing can't fail the demo")
+
+        const real = await read(COLD, book)
+        assert.deepEqual([real.linkedReading, real.linkedFailed], [[HOT], []], "only the real one goes with a real wallet")
+      } finally {
+        server.close()
+      }
+    })
   })
 
   it("ignores the wallet itself in the list", async () => {
@@ -298,5 +324,22 @@ describe("the portfolio endpoint with linked wallets", () => {
     const response = await fetch(`http://127.0.0.1:${(other.address() as AddressInfo).port}/api/portfolio/${COLD}?linked=${HOT}`)
     other.close()
     assert.equal(response.status, 502)
+  })
+})
+
+describe("the other wallets to read", () => {
+  const book = { ...emptyBook(), senders: { [HOT]: { kind: "mine" as const }, [DEMO_SAVINGS_ADDRESS]: { kind: "mine" as const } } }
+
+  it("waits for the wallet on screen, since opening the demo mustn't read a real one", () => {
+    assert.deepEqual(walletsToRead(book, null, COLD), [])
+  })
+
+  it("stays on that wallet's side, sender included", () => {
+    assert.deepEqual(walletsToRead(book, DEMO_WALLET.address, COLD), [DEMO_SAVINGS_ADDRESS])
+    assert.deepEqual(walletsToRead(book, NEXT, COLD), [HOT, COLD])
+  })
+
+  it("leaves out the wallet itself", () => {
+    assert.deepEqual(walletsToRead(book, HOT, HOT), [])
   })
 })

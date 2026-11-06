@@ -6,7 +6,7 @@ import { after, before, describe, it } from "node:test"
 import { ASSETS, ETH_ADDRESS, PRICE_FEEDS, USDC_ADDRESS, type LegRow, type PriceFeed } from "@pricetag/sdk/core"
 import type { BookPreview, PortfolioResponse, ProofResponse, VerificationResponse, WalletResponse } from "../src/core/api.ts"
 import { costKey, emptyBook } from "../src/core/book.ts"
-import { CAUTIOUS_RULE_ID, MARKET_RULE_ID, RULE_TEXT, ruleNote, type PricingRule, type RuleComparison } from "../src/core/rules.ts"
+import { CAUTIOUS_RULE_ID, MARKET_RULE_ID, RULE_TEXT, readRules, ruleNote, type PricingRule, type RuleComparison } from "../src/core/rules.ts"
 import { createApi } from "../server/app.ts"
 import type { BlockData } from "../server/block.ts"
 import { createProofs, type Proofs } from "../server/proof.ts"
@@ -552,5 +552,27 @@ describe("comparing only ever shows the rule", () => {
     const rates = await compareWith({}, {}, { query: "?currency=CAD", readRates: (async () => { throw new Error("no") }) as never })
     assert.equal(rates.status, 502)
     assert.equal(rates.body.rows, undefined)
+  })
+})
+
+describe("reading the list of rules", () => {
+  const answer = (status: number, body: string) => new Response(body, { status, headers: { "content-type": "application/json" } })
+  const rule = { id: MARKET_RULE_ID, name: "Market price", summary: "", dataset: "benface/pricetag", hash: "abc" }
+
+  it("gives the rules the server lists, including none", async () => {
+    assert.deepEqual(await readRules(answer(200, JSON.stringify({ rules: [rule] }))), [rule])
+    assert.deepEqual(await readRules(answer(200, JSON.stringify({ rules: [] }))), [])
+  })
+
+  // `useRules` keeps its empty list when this throws. A list that came back undefined blanked the whole app.
+  it("fails on a refusal, a page or an answer with no list, so the app keeps rendering", async () => {
+    await assert.rejects(readRules(answer(401, JSON.stringify({ error: "This server needs an invite." }))))
+    await assert.rejects(readRules(answer(429, JSON.stringify({ error: "Slow down." }))))
+    await assert.rejects(readRules(answer(502, "<html>Bad gateway</html>")))
+    await assert.rejects(readRules(answer(200, JSON.stringify({ error: "No rules." }))))
+  })
+
+  it("is how the app reads them", () => {
+    assert.match(readFileSync(new URL("../src/ui/useRules.ts", import.meta.url), "utf8"), /\.then\(readRules\)/)
   })
 })

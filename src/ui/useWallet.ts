@@ -10,16 +10,19 @@ export type WalletState = {
   error: string | null
 }
 
-async function fetchWallet(address: string, currency: CurrencyCode, rule: string | null, signal: AbortSignal): Promise<WalletResponse> {
-  const response = await fetch(`/api/wallet/${address}?currency=${currency}${rule ? `&rule=${encodeURIComponent(rule)}` : ""}`, { signal })
+/** Where a wallet's read. `paid` is the currencies the book holds amounts in, comma-separated, because this client folds its answers without sending them. */
+export const walletUrl = (address: string, currency: CurrencyCode, rule: string | null, paid: string) => `/api/wallet/${address}?currency=${currency}${rule ? `&rule=${encodeURIComponent(rule)}` : ""}${paid ? `&paid=${paid}` : ""}`
+
+async function fetchWallet(address: string, currency: CurrencyCode, rule: string | null, paid: string, signal: AbortSignal): Promise<WalletResponse> {
+  const response = await fetch(walletUrl(address, currency, rule, paid), { signal })
   const body = (await response.json().catch(() => ({ error: "Can't reach the server." }))) as WalletResponse | { error: string }
   if (!response.ok || "error" in body) throw new Error("error" in body ? body.error : "Couldn't read this wallet.")
   return body
 }
 
 /** A post, so that which wallets are someone's doesn't end up in a URL, and so in logs. No answers go with it: they stay here. */
-async function fetchAllYours(addresses: readonly string[], currency: CurrencyCode, rule: string | null, signal: AbortSignal): Promise<AllYoursRead> {
-  const response = await fetch(`/api/portfolio/${ALL_YOURS}/wallets`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ linked: addresses, currency, rule }), signal })
+async function fetchAllYours(addresses: readonly string[], currency: CurrencyCode, rule: string | null, paid: string, signal: AbortSignal): Promise<AllYoursRead> {
+  const response = await fetch(`/api/portfolio/${ALL_YOURS}/wallets`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ linked: addresses, currency, rule, paid }), signal })
   const body = (await response.json().catch(() => ({ error: "Can't reach the server." }))) as AllYoursRead | { error: string }
   if (!response.ok || "error" in body) throw new Error("error" in body ? body.error : "Couldn't read your wallets.")
   return body
@@ -126,8 +129,8 @@ function useLiveRead<T>(showing: string | null, request: string, read: (signal: 
 }
 
 /** Reads a wallet, and again on each new block. */
-export function useWallet(address: string | null, currency: CurrencyCode, rule: string | null): WalletState {
-  const { value, loading, error } = useLiveRead(address, `${currency}:${rule}`, (signal) => fetchWallet(address as string, currency, rule, signal), { live: address !== "demo" })
+export function useWallet(address: string | null, currency: CurrencyCode, rule: string | null, paid: string): WalletState {
+  const { value, loading, error } = useLiveRead(address, `${currency}:${rule}:${paid}`, (signal) => fetchWallet(address as string, currency, rule, paid, signal), { live: address !== "demo" })
   return { wallet: value, loading, error }
 }
 
@@ -136,8 +139,8 @@ export function useWallet(address: string | null, currency: CurrencyCode, rule: 
  * server, so a slow one doesn't hold up the rest: it's listed as still reading, and looked at again soon. Answering for another
  * wallet adds it without clearing what's on screen.
  */
-export function useAllYours(addresses: readonly string[] | null, currency: CurrencyCode, rule: string | null) {
+export function useAllYours(addresses: readonly string[] | null, currency: CurrencyCode, rule: string | null, paid: string) {
   const [attempt, setAttempt] = useState(0)
-  const { value, loading, error } = useLiveRead(addresses ? ALL_YOURS : null, `${addresses?.join(",")}:${currency}:${rule}`, (signal) => fetchAllYours(addresses as string[], currency, rule, signal), { live: true, unfinished: ({ unread }) => unread.reading.length > 0 }, attempt)
+  const { value, loading, error } = useLiveRead(addresses ? ALL_YOURS : null, `${addresses?.join(",")}:${currency}:${rule}:${paid}`, (signal) => fetchAllYours(addresses as string[], currency, rule, paid, signal), { live: true, unfinished: ({ unread }) => unread.reading.length > 0 }, attempt)
   return { read: value, loading, error, retry: () => setAttempt((n) => n + 1) }
 }

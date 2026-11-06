@@ -59,7 +59,7 @@ import { useRules } from "./useRules.ts"
 import type { TaxYear } from "../core/tax.ts"
 import { TaxPanel } from "./TaxPanel.tsx"
 import { useAllYours, useWallet } from "./useWallet.ts"
-import { linkedWallets, walletsBehind, yourWallets } from "../core/book.ts"
+import { currenciesIn, walletsBehind, walletsToRead, yourWallets } from "../core/book.ts"
 import { readCheckedAccounts } from "../core/device-accounts.ts"
 import { parseDeviceLink, type DeviceLink } from "../core/device-link.ts"
 import { exportCsv } from "../core/export.ts"
@@ -293,6 +293,7 @@ export function App() {
   const [chosenCurrency, setChosenCurrency] = useState<CurrencyCode>(readCurrency)
   const { rules, chosen: chosenRule, choose: chooseRule } = useRules()
   const { book, change, undo, canUndo, linkAccounts } = useBook()
+  const paidIn = currenciesIn(book).join(",")
   const [device, setDevice] = useState<{ link: DeviceLink | null } | null>(() => {
     const link = parseDeviceLink(window.location.search)
     return link ? { link } : null
@@ -302,8 +303,8 @@ export function App() {
   // Taking back an answer can leave one wallet, or none, and then there's nothing to add up. It comes back with the next one.
   const isAll = address === ALL_YOURS && yours.length >= 2
   const single = address === ALL_YOURS ? (isAll ? null : (yours[0] ?? null)) : address
-  const singleRead = useWallet(single, chosenCurrency, chosenRule)
-  const allRead = useAllYours(isAll ? yours : null, chosenCurrency, chosenRule)
+  const singleRead = useWallet(single, chosenCurrency, chosenRule, paidIn)
+  const allRead = useAllYours(isAll ? yours : null, chosenCurrency, chosenRule, paidIn)
   const { wallet } = singleRead
   const { error } = isAll ? allRead : singleRead
   // A read that came back with none of them yet has nothing to show, and it's still reading until one does.
@@ -315,8 +316,8 @@ export function App() {
   const [pendingResolve, setPendingResolve] = useState<{ wallet: string; returnTo: string } | null>(null)
   const [returnTo, setReturnTo] = useState<string | null>(null)
   const [cardSender, setCardSender] = useState<string | null>(null)
-  const wanted = useMemo(() => (isAll ? [] : [...new Set([...linkedWallets(book), ...(cardSender ? [cardSender] : [])])].filter((a) => a !== wallet?.address)), [isAll, book, cardSender, wallet?.address])
-  const { others, failed, retry } = useOtherWallets(wanted, chosenCurrency, chosenRule, wallet?.latest.blockNum ?? null, wallet)
+  const wanted = useMemo(() => (isAll ? [] : walletsToRead(book, wallet?.address ?? null, cardSender)), [isAll, book, cardSender, wallet?.address])
+  const { others, failed, retry } = useOtherWallets(wanted, chosenCurrency, chosenRule, paidIn, wallet?.latest.blockNum ?? null, wallet)
   const linkedFailed = useMemo(() => (wallet ? failed.filter((address) => walletsBehind(book, wallet).includes(address)) : []), [failed, book, wallet])
 
   useEffect(() => {

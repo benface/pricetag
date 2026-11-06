@@ -9,6 +9,7 @@ import { createApi } from "../server/app.ts"
 import { combinedPortfolioOf, explainAcross, explainCombined, previewCombined, type AllYoursRead, type CombinedPortfolioResponse } from "../src/core/combined.ts"
 import { portfolioOf } from "../src/core/portfolio.ts"
 import type { RatesReader } from "../server/rates.ts"
+import { NO_FACTS, combinedFacts, type TransactionGain } from "../src/core/activity.ts"
 import type { PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, answerSender, emptyBook, yourWallets, type Book } from "../src/core/book.ts"
 import { sortHoldings } from "../src/core/holdings.ts"
@@ -69,6 +70,7 @@ const cold = walletOf(COLD, [into, pay, fee(pay)])
 const gift = leg("0x4", ONE, { parts: [moved(THIRD, "credit", ONE, STRANGER)] })
 const third = walletOf(THIRD, [gift])
 
+const noFacts = (gain: TransactionGain | null) => ({ ...NO_FACTS, gain })
 const linking = (wallets: readonly WalletResponse[]): Book => ({ ...emptyBook(), linked: wallets.map((w) => w.address) })
 /** Each wallet as it shows on its own, with the others linked so costs carry between them. */
 const alone = (wallets: readonly WalletResponse[], method: Method) => wallets.map((wallet) => portfolioOf(wallet, method, wallets.filter((w) => w !== wallet), linking(wallets)))
@@ -125,6 +127,36 @@ describe("all your wallets as one", () => {
     assert.deepEqual(move?.wallets, [HOT, COLD])
     assert.deepEqual(all.points.find((p) => p.txHash === "0x3")?.wallets, [COLD])
     assert.equal(all.points.filter((p) => p.txHash !== null).length, 3)
+  })
+
+  it("says what each transaction moved, who with and what it made, across the wallets", () => {
+    const all = combinedPortfolioOf([hot, cold], "average", emptyBook())
+    const move = all.points.find((p) => p.txHash === "0x2")
+    assert.deepEqual(move?.assets, ["ETH"])
+    // Between their own wallets, so there's nobody else in it, and it's only counted once.
+    assert.equal(move?.counterparty, null)
+    assert.deepEqual(move?.amount, { direction: "trade", micros: "3000000000" })
+    assert.equal(move?.gain, null)
+    assert.deepEqual(move?.unknownCost, [])
+    const payment = all.points.find((p) => p.txHash === "0x3")
+    assert.equal(payment?.counterparty, SHOP)
+    assert.deepEqual(payment?.amount, { direction: "out", micros: "1500000000" })
+    const last = all.points.at(-1)
+    assert.deepEqual([last?.txHash, last?.assets, last?.amount], [null, [], null])
+  })
+
+  it("keeps a gift's unknown cost on its transaction, with who sent it", () => {
+    const all = combinedPortfolioOf([hot, cold, third], "average", emptyBook())
+    const received = all.points.find((p) => p.txHash === "0x4")
+    assert.deepEqual(received?.unknownCost, ["ETH"])
+    assert.equal(received?.counterparty, STRANGER)
+    assert.deepEqual(received?.amount, { direction: "in", micros: "3000000000" })
+  })
+
+  it("adds up what each wallet's sales made in one transaction, and doesn't guess when one isn't known", () => {
+    assert.deepEqual(combinedFacts([], [noFacts({ micros: "5", estimated: false }), noFacts({ micros: "-2", estimated: true }), noFacts(null)], new Set()).gain, { micros: "3", estimated: true })
+    assert.deepEqual(combinedFacts([], [noFacts({ micros: "5", estimated: false }), noFacts({ micros: null, estimated: false })], new Set()).gain, { micros: null, estimated: false })
+    assert.equal(combinedFacts([], [noFacts(null)], new Set()).gain, null)
   })
 
   it("keeps what's unknown visible, saying which wallet it's in", () => {
@@ -288,6 +320,12 @@ describe("all your wallets over the api", () => {
     const answered = (await (await post("", body)).json()) as CombinedPortfolioResponse
     const folded = combinedPortfolioOf(wallets, "average", emptyBook(), unread)
     assert.deepEqual(JSON.parse(JSON.stringify(folded)), answered)
+  })
+
+  it("reads the rates for what the browser's answers are in, without being sent them", async () => {
+    const { wallets } = (await (await post("/wallets", { method: "average", linked: [HOT, COLD], paid: "CAD" })).json()) as AllYoursRead
+    assert.ok(wallets.some((wallet) => wallet.paidRates?.CAD))
+    assert.equal((await post("/wallets", { method: "average", linked: [HOT, COLD], paid: "CAD,XXX" })).status, 400)
   })
 
   it("only reads wallets together for all of them", async () => {
