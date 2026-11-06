@@ -53,7 +53,7 @@ function sourceAt(ethAnswer: bigint, through = HEAD, reads: string[] = []): Sour
   }
 }
 
-const NO_PROOFS: Proofs = { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null }
+const NO_PROOFS: Proofs = { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null }
 
 const rule = (id: string): PricingRule => ({ id, ...RULE_TEXT[id]!, dataset: `a/${id}@0.0.1`, hash: "a".repeat(64) })
 
@@ -239,7 +239,7 @@ describe("the update behind a price, by a pricing rule", () => {
   const tx = data.txs.find((candidate) => candidate.tx_index === log.tx_index)!
   const feed: PriceFeed = { ...PRICE_FEEDS[0], aggregators: [`0x${log.address}`] }
   const update = { block_num: Number(data.block.block_num), tx_hash: `0x${tx.tx_hash}`, log_index: 2, answer: BigInt(`0x${log.topics[1]}`).toString() }
-  const proofs: Proofs = { datasets: async () => [], priceBehind: async () => ({ feed, update }), readBlock: async () => ({ data, deposits: new Map(Object.entries(deposits)), nodeHash: data.block.hash }) }
+  const proofs: Proofs = { datasets: async () => [], priceBehind: async () => ({ feed, update }), currentPriceBehind: async () => null, readBlock: async () => ({ data, deposits: new Map(Object.entries(deposits)), nodeHash: data.block.hash }) }
   const cautious = `&rule=${CAUTIOUS_RULE_ID}`
   let server: Server
   let base: string

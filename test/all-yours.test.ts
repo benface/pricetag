@@ -276,7 +276,7 @@ describe("all your wallets over the api", () => {
   let server: Server
   let base: string
   before(async () => {
-    const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } })
+    const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } })
     server = createServer((req, res) => void api(req, res))
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
@@ -386,7 +386,7 @@ describe("all your wallets, when one of them can't keep up", () => {
       if (state.troubled) await trouble.rates?.(wallet.legs.some((leg) => leg.txHash === "0x1") ? COLD : wallet.legs.some((leg) => leg.txHash === "0x2") ? HOT : THIRD, wallet.latest.blockNum)
       return { byBlock: {}, latest: null }
     }
-    const api = createApi({}, { source, readRates, proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } })
+    const api = createApi({}, { source, readRates, proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } })
     const server = createServer((req, res) => void api(req, res))
     const ready = new Promise<string>((resolve) => server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server.address() as AddressInfo).port}`)))
     const post = async (path: string, body: unknown) => (await fetch(`${await ready}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json() as Promise<CombinedPortfolioResponse>

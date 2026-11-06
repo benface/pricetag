@@ -891,6 +891,16 @@ public final class PortfolioStore {
         return try await source.verification(leg: leg, address: address, currency: currency, rule: selectedRule)
     }
 
+    public func priceProof(asset: String, price: String, address: String) async throws -> Proof {
+        guard isShowing(address) else { throw CancellationError() }
+        return try await source.priceProof(asset: asset, price: price, address: address, currency: currency, rule: selectedRule)
+    }
+
+    public func priceVerification(asset: String, revision: String?, address: String) async throws -> Verification {
+        guard isShowing(address) else { throw CancellationError() }
+        return try await source.priceVerification(asset: asset, revision: revision, address: address, currency: currency, rule: selectedRule)
+    }
+
     /// Any wallet's, not just the one showing, since the security page asks about each of them.
     public func approvals(address: String) async throws -> WalletApprovals {
         try await source.approvals(address: address)
@@ -1025,7 +1035,7 @@ public final class PortfolioStore {
         return switch error as? FetchError {
         case .ampUnavailable(let message): .ampUnavailable(message)
         case .noAmpConfigured(let message): .noAmpConfigured(message)
-        case .rejected(let message), .needsInvite(let message): .rejected(message)
+        case .rejected(let message), .needsInvite(let message), .priceChanged(let message): .rejected(message)
         case .unreachable, .timedOut, nil: .serverUnreachable
         }
     }

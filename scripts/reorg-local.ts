@@ -12,7 +12,7 @@
 // Amp's tables, its stream and two wallets, one following the stream and one polling, take to match the new chain.
 
 import { createPricetag, type WalletUpdate } from "@pricetag/sdk"
-import { createQuery, createRangeStream, followSql, pricetagClient, readHeadMark, settledThrough } from "@pricetag/sdk/internal"
+import { createQuery, createRangeStream, createRowStream, followSql, followedWallets, followedWindowSql, pricetagClient, readBlockHashes, readHeadMark, settledThrough } from "@pricetag/sdk/internal"
 
 const ANVIL = process.env.ANVIL_URL ?? "http://127.0.0.1:18597"
 const FLIGHT = process.env.FLIGHT_URL ?? "http://127.0.0.1:11602"
@@ -212,6 +212,39 @@ async function diagnose(first: number, newHead: number, probes: number[], oldHas
   log("diagnosis", { served, blockRows, expectedBlockRows: newHead - first + 1, orphanedTxs, newTxRows, walletLegs: legs, pricedLegsHead: pricedHead, chainHead: await head() })
 }
 
+/**
+ * A wallet's rows held from its streams, never told of a reorg, so this is only the streams saying so. It holds far more
+ * than the server's, since a deep reorg here goes back further than a read usually does.
+ */
+const followed = followedWallets({
+  stream: createRowStream(FLIGHT, undefined, NETWORK),
+  sql: (address) => followedWindowSql(address, DATASET),
+  readMark: (after) => readHeadMark(query, RAW, after),
+  readHashes: (blocks) => readBlockHashes(query, RAW, blocks),
+  logger: { warn: (message) => log("followed warn", { message: message.slice(0, 200) }) },
+  resumeMs: 5000,
+  retryMs: 2000,
+  idleMs: 3_600_000,
+  stallMs: 120_000,
+})
+
+/** What the streams hold for `from`..`to` is exactly what a query says, and has every one of `txs` and none of `gone`. */
+async function followedMatches(from: number, to: number, txs: readonly string[], gone: readonly string[]): Promise<boolean> {
+  const me = WALLET.slice(2)
+  const canonical = (rows: readonly Record<string, unknown>[]) => rows.map((row) => JSON.stringify(row)).sort()
+  for (const table of ["legs", "priced_legs"] as const) {
+    const held = await followed.read(WALLET, table, from, to)
+    if (!held) return false
+    const columns = held[0] ? Object.keys(held[0]).map((column) => `"${column}"`).join(", ") : "*"
+    const queried = await query<Record<string, unknown>>(`SELECT ${columns} FROM "${DATASET}".${table} WHERE block_num BETWEEN ${from} AND ${to} AND account = X'${me}'`)
+    if (JSON.stringify(canonical(held)) !== JSON.stringify(canonical(queried))) return false
+    if (table !== "legs") continue
+    const hashes = held.map((row) => hashOf(row.tx_hash))
+    if (!txs.every((tx) => hashes.includes(tx)) || gone.some((tx) => hashes.includes(tx))) return false
+  }
+  return true
+}
+
 const stop = new AbortController()
 const rewinds: Rewind[] = []
 let watchers: Watcher[] = []
@@ -230,6 +263,10 @@ async function reorg(depth: number, round: number) {
   miner.paused = false
   const oldSince = Date.now()
   for (const w of watchers) await until(`${label}: ${w.name} shows the old chain`, oldSince, () => walletMatches(w, oldSince, oldTxs, []))
+  await until(`${label}: followed rows have the old chain`, oldSince, async () => {
+    const held = await followed.read(WALLET, "legs", forkPoint + 1, forkPoint + 1)
+    return held !== null && oldTxs.every((tx) => held.some((row) => hashOf(row.tx_hash) === tx))
+  })
   // The old chain's price row has to be there for its removal to mean anything.
   const oldPriced = await until(`${label}: priced_legs has the old swap`, oldSince, async () => hasTx(await pricedTxs(forkPoint + 1), oldSwap))
 
@@ -284,6 +321,7 @@ async function reorg(depth: number, round: number) {
     until(`${label}: priced_legs stream rewound`, since, async () => rewinds.some((r) => r.table === "priced_legs" && r.at >= since && r.start <= first)).then((s) => (result.pricedStream = s)),
     until(`${label}: stream wallet said reorg`, since, async () => watchers[0]!.updates.some((u) => u.at >= since && u.reorgFrom !== null && u.reorgFrom <= first)).then((s) => (result.walletReorg = s)),
     ...watchers.map((w) => until(`${label}: ${w.name} matches the new chain`, since, () => walletMatches(w, since, newTxs, oldTxs)).then((s) => (result[w.name] = s))),
+    until(`${label}: followed rows match the new chain`, since, () => followedMatches(first, newHead, newTxs, oldTxs)).then((s) => (result.followed = s)),
   ])
   if (result.raw === null || result.legs === null || result.pricedLegs === null) await diagnose(first, newHead, probes, oldHashes, newHashes, oldTxs, newTxs)
   const wallets = Object.fromEntries(watchers.map((w) => [w.name, describeWallet(w, oldTxs)]))
@@ -305,6 +343,7 @@ watchers = [
   // Polling only, which is what a client gets while the stream is down.
   watch("polling wallet", pricetagClient(createQuery(FLIGHT, undefined), { ...config, follow: { pollMs: 1000 } }).watchWallet(WALLET, { signal: stop.signal })),
 ]
+await followed.read(WALLET, "legs", await head(), await head())
 await sleep(10_000)
 
 const summary = []

@@ -2,11 +2,13 @@
 
 import { create, toBinary } from "@bufbuild/protobuf"
 import { AnySchema, anyPack } from "@bufbuild/protobuf/wkt"
-import { ArrowFlight, createAuthInterceptor, createClient } from "@edgeandnode/amp"
+import { Arrow, ArrowFlight, createAuthInterceptor, createClient } from "@edgeandnode/amp"
 import * as Flight from "@edgeandnode/amp/proto/Flight_pb"
 import * as FlightSql from "@edgeandnode/amp/proto/FlightSql_pb"
 import type { Interceptor } from "@connectrpc/connect"
 import { createGrpcTransport } from "@connectrpc/connect-node"
+import { Table, tableFromIPC } from "apache-arrow"
+import * as Schema from "effect/Schema"
 
 export type Query = (<T>(sql: string, timeoutMs?: number) => Promise<T[]>) & {
   /**
@@ -184,23 +186,77 @@ const statement = (sql: string) => {
   return create(Flight.FlightDescriptorSchema, { type: Flight.FlightDescriptor_DescriptorType.CMD, cmd: toBinary(AnySchema, command) })
 }
 
-/**
- * Amp's own `client.stream` can't be used here, for two reasons found by running it. It drops each batch's block ranges, and
- * they're the only way to see a reorg. And it fails on the empty keepalive Amp sends every 30 s, because it reads that
- * as Arrow data. So this reads Flight directly, and only the metadata: rows always come from a bounded query.
- *
- * `network` is the name Amp's block ranges use, like `base-mainnet`.
- */
-export function createRangeStream(url: string, token: string | undefined, network: string): StreamRanges {
+/** Asks Amp to follow a query from just after `resume`, and gives what comes back with the schema Amp said it has. */
+function createFollow(url: string, token: string | undefined, network: string) {
   const { client } = ArrowFlight.make(createGrpcTransport({ baseUrl: url, interceptors: token ? [createAuthInterceptor(token)] : [] }))
-  return async function* (sql, resume, signal) {
+  return async (sql: string, resume: BlockMark, signal: AbortSignal) => {
     const headers = { "amp-stream": "true", "amp-resume": JSON.stringify({ [network]: { number: resume.blockNum, hash: resume.hash } }) }
     const info = await client.getFlightInfo(statement(sql), { signal, headers })
     const ticket = info.endpoint[0]?.ticket
     if (!ticket) throw new Error("Amp didn't answer the stream with a ticket")
-    for await (const message of client.doGet(ticket, { signal })) {
+    return { schema: info.schema, messages: client.doGet(ticket, { signal }) }
+  }
+}
+
+/**
+ * Amp's own `client.stream` can't be used here, for two reasons found by running it. It drops each batch's block ranges, and
+ * they're the only way to see a reorg. And it fails on the empty keepalive Amp sends every 30 s, because it reads that
+ * as Arrow data. So this reads Flight directly, and only the metadata: rows come from a bounded query, or `createRowStream`.
+ *
+ * `network` is the name Amp's block ranges use, like `base-mainnet`.
+ */
+export function createRangeStream(url: string, token: string | undefined, network: string): StreamRanges {
+  const follow = createFollow(url, token, network)
+  return async function* (sql, resume, signal) {
+    for await (const message of (await follow(sql, resume, signal)).messages) {
       const range = parseStreamRange(message.appMetadata, network)
       if (range) yield range
     }
   }
+}
+
+/** A stream message: the blocks it covers, and the rows it brought, in the shape a bounded query gives them. */
+export type StreamBatch = StreamRange & { rows: Record<string, unknown>[] }
+
+/** A query followed as new blocks arrive, rows included, from just after `resume`. */
+export type StreamRows = (sql: string, resume: BlockMark, signal: AbortSignal) => AsyncIterable<StreamBatch>
+
+/** One Flight message as Arrow's IPC format. The body has to start on a multiple of 8 bytes. */
+function ipcOf(header: Uint8Array, body: Uint8Array): Uint8Array {
+  const padding = (8 - ((8 + header.length) % 8)) % 8
+  const bytes = new Uint8Array(8 + header.length + padding + body.length)
+  const view = new DataView(bytes.buffer)
+  view.setUint32(0, 0xffffffff, true)
+  view.setUint32(4, header.length, true)
+  bytes.set(header, 8)
+  bytes.set(body, 8 + header.length + padding)
+  return bytes
+}
+
+/** `createRangeStream` with the rows. Each message is decoded alone, so a keepalive has nothing to trip over. */
+export function createRowStream(url: string, token: string | undefined, network: string): StreamRows {
+  const follow = createFollow(url, token, network)
+  return async function* (sql, resume, signal) {
+    const { schema: schemaIpc, messages } = await follow(sql, resume, signal)
+    const { schema } = tableFromIPC(schemaIpc)
+    // What `client.query` does with a batch, so a row is the same either way.
+    const encode = Schema.encodeSync(Schema.Array(Arrow.generateSchema(schema)))
+    for await (const message of messages) {
+      const range = parseStreamRange(message.appMetadata, network)
+      if (!range) continue
+      if (message.dataBody.length === 0) {
+        yield { ...range, rows: [] }
+        continue
+      }
+      const table = new Table(tableFromIPC(concat(schemaIpc, ipcOf(message.dataHeader, message.dataBody))).batches)
+      yield { ...range, rows: [...encode([...table] as never)] as Record<string, unknown>[] }
+    }
+  }
+}
+
+function concat(first: Uint8Array, second: Uint8Array): Uint8Array {
+  const bytes = new Uint8Array(first.length + second.length)
+  bytes.set(first)
+  bytes.set(second, first.length)
+  return bytes
 }

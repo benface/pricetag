@@ -193,7 +193,7 @@ describe("one request's reads", () => {
   const post = (path: string, body: unknown) => call(server, path, { method: "POST", body: JSON.stringify(body) })
 
   before(async () => {
-    server = createServer(createHandler(createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } }), null))
+    server = createServer(createHandler(createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } }), null))
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
   })
   after(() => server.close())
