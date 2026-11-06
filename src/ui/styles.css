@@ -88,13 +88,13 @@ button { font: inherit; cursor: pointer; color: inherit; }
 .attention-mark { color: var(--warn-ink); align-self: flex-start; }
 .attention-text { flex: 1 1 280px; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-weight: 500; }
 .attention-text .muted { font-weight: 400; }
-@media (max-width: 640px) {
-  .stats { margin-left: 0; }
-}
 .quiet-button { flex: none; padding: 4px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-0); font-size: 13px; font-weight: 500; white-space: nowrap; }
 .quiet-button:hover { border-color: var(--axis); }
 .stats { display: flex; flex-wrap: wrap; gap: 12px 24px; margin: 0 0 0 auto; }
 .stats dd { margin: 0; font-size: 15px; font-weight: 500; }
+@media (max-width: 640px) {
+  .stats { margin-left: 0; }
+}
 .partial { font-size: 12px; font-weight: 600; color: var(--warn-ink); margin-left: 8px; }
 .holdings-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
 .holdings-head h2 { margin: 0; }
