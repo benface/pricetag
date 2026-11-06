@@ -39,6 +39,7 @@ describe("the RPC throttle", () => {
 
   it("holds a burst to its rate", async () => {
     const arrivals: number[] = []
+    let started = 0
     await withThrottle(
       50,
       (_req, res) => {
@@ -46,12 +47,14 @@ describe("the RPC throttle", () => {
         res.end("{}")
       },
       async (url) => {
+        started = Date.now()
         await Promise.all(Array.from({ length: 10 }, () => call(url)))
       },
     )
     assert.equal(arrivals.length, 10)
-    // 9 gaps of 20 ms, with room for timers firing a little early.
-    assert.ok(arrivals.at(-1)! - arrivals[0]! >= 150)
+    // 9 gaps of 20 ms, with room for timers firing a little early. Measured from before the burst, not from its first
+    // arrival, which a stalled event loop can make late: a stall can only push the last arrival further out.
+    assert.ok(arrivals.at(-1)! - started >= 150)
   })
 
   it("retries a 429 instead of passing it on", async () => {
