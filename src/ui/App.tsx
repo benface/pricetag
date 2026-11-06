@@ -1,46 +1,43 @@
-import { Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react"
-import { CURRENCIES, MAIN_CURRENCY_CODES, TOKENS, formatAmount, formatMoney, formatPrice, formatReturn, formatSignedAmount, formatSignedMoney, formatTime, hasAnswer, isAddress, isMainCurrency, msBetweenBlocks, returnBps, sumTotals, type Coverage, type CurrencyCode, type HoldComparison, type Method, type Position } from "@pricetag/sdk/core"
+import { Suspense, lazy, useCallback, useEffect, useId, useMemo, useState, type FormEvent, type ReactNode } from "react"
+import { CURRENCIES, MAIN_CURRENCY_CODES, TOKENS, formatAmount, formatMoney, formatPrice, formatReturn, formatSignedMoney, formatTime, isAddress, isMainCurrency, msBetweenBlocks, returnBps, sumTotals, type CurrencyCode, type HoldComparison, type Method, type Position } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type WalletResponse } from "../core/api.ts"
 import { ExplainPanel } from "./ExplainPanel.tsx"
 import { firstSort, formatHoldingsSort, parseHoldingsSort, sortHoldings, type HoldingsColumn, type HoldingsSort } from "../core/holdings.ts"
-import { explainTarget, missingRatesLine, mismatchCause, type ExplainTarget, type Metric, type TotalMetric } from "../core/explain.ts"
+import { allBalancesMatch, attentionOf, attentionTarget, balanceFlag, isValuePartial, valueGaps, type Attention } from "../core/attention.ts"
+import { explainTarget, type ExplainTarget, type Metric, type TotalMetric } from "../core/explain.ts"
 import {
-  AVERAGE_PRICE_PAID,
-  BALANCE_CHECK,
-  CHECK_LABELS,
+  ABOUT_THIS_DATA,
+  AVERAGE_PAID,
   DEMO_NOTICE,
   ETH_NOTE,
-  HOLD_ETH,
   HOLD_PAST,
   HOLD_TITLE,
-  HOLD_WALLET,
   METHOD_HELP,
   METHOD_LABELS,
   METHOD_NAME,
   NETWORK_FEES,
   NOT_AN_ADDRESS,
   NOT_STARTED,
+  NO_PRICE,
   PNL_HELP,
-  PNL_UNAVAILABLE,
   READING,
-  ANSWER_QUESTIONS,
   REALIZED_HELP,
   RETURN_HELP,
-  UNPRICED_FEES,
+  SHOW_MISSING,
+  UNAVAILABLE,
+  UNKNOWN,
   UNREALIZED_HELP,
   answerQuestionsLabel,
   behindSentence,
   coverageSentence,
-  excludedSentence,
   feedDetail,
-  feesUnknownSentence,
   holdCaveatSentence,
-  holdDifferenceSentence,
+  holdSummarySentence,
   linkedFailedSentence,
-  networkFeeUnknownSentence,
-  withheldSentence,
+  noMarketSentence,
+  pnlHelp,
   staleSentence,
-  unseenEthCause,
+  valueGapsSentence,
 } from "../core/wording.ts"
 import { PnlChart } from "./PnlChart.tsx"
 import { ResolvePanel } from "./ResolvePanel.tsx"
@@ -53,7 +50,7 @@ import { useWallet } from "./useWallet.ts"
 import { currenciesIn, linkedWallets, walletsBehind } from "../core/book.ts"
 import { parseDeviceLink, type DeviceLink } from "../core/device-link.ts"
 import { exportCsv } from "../core/export.ts"
-import { foldBook } from "../core/resolve.ts"
+import { foldBook, type Question } from "../core/resolve.ts"
 
 // Only loads when someone asks for it, so looking at a wallet never pulls in any device code.
 const DevicePanel = lazy(() => import("./DevicePanel.tsx").then((m) => ({ default: m.DevicePanel })))
@@ -72,7 +69,7 @@ function readCurrency(): CurrencyCode {
   return isMainCurrency(value) ? value : "USD"
 }
 
-function Num({ onClick, label, children, tone }: { onClick: () => void; label: string; children: ReactNode; tone?: "gain" | "loss" | "warn" | null }) {
+function Num({ onClick, label, children, tone }: { onClick: () => void; label: string; children: ReactNode; tone?: "gain" | "loss" | "quiet" | null }) {
   return (
     <button type="button" className={`num-button ${tone ?? ""}`} onClick={onClick} aria-label={label}>
       {children}
@@ -80,14 +77,8 @@ function Num({ onClick, label, children, tone }: { onClick: () => void; label: s
   )
 }
 
-const toneOf = (micros: string | null) => (micros === null ? "warn" : BigInt(micros) > 0n ? "gain" : BigInt(micros) < 0n ? "loss" : null)
-
-function OnchainCheck({ position, onClick }: { position: Position; onClick: () => void }) {
-  const status = position.reconciliation?.status
-  if (status === "reconciled") return <Num label={`${position.asset} matches its actual balance`} onClick={onClick} tone="gain">✓ {CHECK_LABELS.reconciled}</Num>
-  if (status === "incomplete") return <Num label={`${position.asset} doesn't match its actual balance`} onClick={onClick} tone="warn">⚠ {CHECK_LABELS.incomplete}</Num>
-  return <Num label={`${position.asset} not checked against its actual balance`} onClick={onClick} tone="warn">⚠ {CHECK_LABELS.unchecked}</Num>
-}
+// What's unknown says so in gray, and the warning under the headline says it once.
+const toneOf = (micros: string | null) => (micros === null ? "quiet" : BigInt(micros) > 0n ? "gain" : BigInt(micros) < 0n ? "loss" : null)
 
 const est = (text: string, isEstimate: boolean) => (isEstimate ? `≈${text}` : text)
 
@@ -110,15 +101,32 @@ function SortHeader({ column, sort, onSort, numeric = true, title, children }: {
 function ReturnCell({ position, onClick }: { position: Position; onClick: () => void }) {
   const { asset, values, estimates } = position
   const bps = returnBps(values)
-  const text = bps !== null ? est(formatReturn(bps), estimates.unrealized) : values.costMicros === null ? "⚠ Unknown" : values.valueMicros === null ? "⚠ No price" : "—"
+  const text = bps !== null ? est(formatReturn(bps), estimates.unrealized) : values.costMicros === null ? UNKNOWN : values.valueMicros === null ? NO_PRICE : "—"
   return (
-    <Num label={`${asset} return`} onClick={onClick} tone={bps === null ? (text === "—" ? null : "warn") : BigInt(bps) > 0n ? "gain" : BigInt(bps) < 0n ? "loss" : null}>
+    <Num label={`${asset} return`} onClick={onClick} tone={bps === null ? "quiet" : BigInt(bps) > 0n ? "gain" : BigInt(bps) < 0n ? "loss" : null}>
       {text}
     </Num>
   )
 }
 
-function Holdings({ positions, currency, resolvable, explain, onResolve }: { positions: Position[]; currency: CurrencyCode; resolvable: ReadonlySet<string>; explain: (target: ExplainTarget) => void; onResolve: (asset: string) => void }) {
+/** What this covers, for whoever wants to know, one click away from the numbers. */
+function AboutData({ lines }: { lines: string[] }) {
+  const id = useId()
+  return (
+    <>
+      <button type="button" className="about-button" popoverTarget={id} aria-label={ABOUT_THIS_DATA} title={ABOUT_THIS_DATA}>
+        ⓘ
+      </button>
+      <div id={id} popover="auto" className="about-text small">
+        {lines.map((line) => (
+          <p key={line}>{line}</p>
+        ))}
+      </div>
+    </>
+  )
+}
+
+function Holdings({ positions, unread, about, currency, questions, method, onMethod, explain, onResolve }: { positions: Position[]; unread: readonly string[]; about: string[]; currency: CurrencyCode; questions: readonly Question[]; method: Method; onMethod: (method: Method) => void; explain: (target: ExplainTarget) => void; onResolve: (asset: string) => void }) {
   const open = ({ asset }: Position, metric: Metric) => () => explain({ kind: "asset", asset, metric })
   const money = (micros: string) => formatMoney(micros, currency)
   const signed = (micros: string) => formatSignedMoney(micros, currency)
@@ -128,9 +136,26 @@ function Holdings({ positions, currency, resolvable, explain, onResolve }: { pos
     localStorage.setItem(HOLDINGS_SORT_KEY, formatHoldingsSort(next))
     setSort(next)
   }
+  const matches = allBalancesMatch(positions, unread)
+  const questionsAbout = (asset: string) => questions.filter((q) => q.arrivals.some((a) => a.asset === asset)).length
   return (
     <section className="card">
-      <h2>Holdings</h2>
+      <div className="holdings-head">
+        <h2>Holdings</h2>
+        {matches ? <span className="matches small" title={matches}>✓ <span className="muted">{matches}</span></span> : null}
+        <span className="spacer" />
+        <label className="cost-method small" title={METHOD_HELP}>
+          <span className="muted">Cost:</span>
+          <select aria-label={METHOD_NAME} value={method} onChange={(e) => onMethod(e.target.value as Method)}>
+            {(["average", "fifo"] as const).map((m) => (
+              <option key={m} value={m}>
+                {METHOD_LABELS[m]}
+              </option>
+            ))}
+          </select>
+        </label>
+        {about.length > 0 ? <AboutData lines={about} /> : null}
+      </div>
       <div className="table-scroll">
         <table className="table">
           <thead>
@@ -138,7 +163,6 @@ function Holdings({ positions, currency, resolvable, explain, onResolve }: { pos
               <SortHeader column="asset" sort={sort} onSort={changeSort} numeric={false}>
                 Asset
               </SortHeader>
-              <th>{BALANCE_CHECK}</th>
               <SortHeader column="amount" sort={sort} onSort={changeSort}>
                 Amount
               </SortHeader>
@@ -146,7 +170,7 @@ function Holdings({ positions, currency, resolvable, explain, onResolve }: { pos
                 Price
               </SortHeader>
               <SortHeader column="average" sort={sort} onSort={changeSort}>
-                {AVERAGE_PRICE_PAID}
+                {AVERAGE_PAID}
               </SortHeader>
               <SortHeader column="value" sort={sort} onSort={changeSort}>
                 Value
@@ -164,88 +188,80 @@ function Holdings({ positions, currency, resolvable, explain, onResolve }: { pos
           </thead>
           <tbody>
             {sortHoldings(positions, sort).map((position) => {
-              const { asset, decimals, values, state } = position
+              const { asset, decimals, values } = position
               const held = BigInt(values.qty) > 0n
               const unknown = BigInt(values.unknownCostQty) > 0n
-              const mismatch = position.reconciliation?.status === "incomplete" ? position.reconciliation : null
-              const flagged = mismatch !== null || BigInt(state.shortfallQty) > 0n
+              const flag = balanceFlag(position)
+              const askable = held && unknown ? questionsAbout(asset) : 0
               return (
-                <Fragment key={asset}>
-                  <tr className={`${held ? "" : "closed"} ${mismatch ? "mismatched" : ""}`}>
-                    <td>
-                      <strong>{asset}</strong>
-                      {asset === "ETH" ? <span className="muted small"> {ETH_NOTE}</span> : null}
-                    </td>
-                    <td>
-                      <OnchainCheck position={position} onClick={open(position, "onchain")} />
-                    </td>
-                    <td className="num">
-                      <Num label={`${asset} amount`} onClick={open(position, "amount")} tone={flagged ? "warn" : null}>
-                        {flagged ? "⚠ " : ""}
-                        {formatAmount(values.qty, decimals)}
+                <tr key={asset} className={held ? "" : "closed"}>
+                  <td>
+                    <strong>{asset}</strong>
+                    {asset === "ETH" ? <span className="muted small"> {ETH_NOTE}</span> : null}
+                    {/* Once per row, however many of its numbers it affects. */}
+                    {flag ? (
+                      <button type="button" className="row-flag" title={flag.help} aria-label={`${asset}: ${flag.label}`} onClick={open(position, flag.metric)}>
+                        ⚠
+                      </button>
+                    ) : null}
+                  </td>
+                  <td className="num">
+                    <Num label={`${asset} amount`} onClick={open(position, "amount")}>
+                      {formatAmount(values.qty, decimals)}
+                    </Num>
+                  </td>
+                  <td className="num">
+                    {position.price ? (
+                      <Num label={`${asset} price`} onClick={open(position, "price")}>
+                        {est(formatPrice(position.price.micros, currency), position.estimates.value)}
                       </Num>
-                    </td>
-                    <td className="num">
-                      {position.price ? (
-                        <Num label={`${asset} price`} onClick={open(position, "price")}>
-                          {est(formatPrice(position.price.micros, currency), position.estimates.value)}
-                        </Num>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
-                    </td>
-                    <td className="num">
-                      {held ? (
-                        <Num label={`${asset} ${AVERAGE_PRICE_PAID.toLowerCase()}`} onClick={open(position, "average")} tone={unknown ? "warn" : null}>
-                          {values.averageCostMicros ? est(formatPrice(values.averageCostMicros, currency), position.estimates.cost) : "⚠ Unknown"}
-                        </Num>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
-                    </td>
-                    <td className="num">
-                      {held ? (
-                        <Num label={`${asset} value`} onClick={open(position, "value")} tone={values.valueMicros === null ? "warn" : null}>
-                          {values.valueMicros ? est(money(values.valueMicros), position.estimates.value) : "⚠ No price"}
-                        </Num>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
-                    </td>
-                    <td className="num" title={REALIZED_HELP}>
-                      <Num label={`${asset} realized PnL`} onClick={open(position, "realized")} tone={toneOf(values.realizedMicros)}>
-                        {values.realizedMicros === null ? `⚠ ${PNL_UNAVAILABLE}` : est(signed(values.realizedMicros), position.estimates.realized)}
+                    ) : (
+                      <span className="muted">{NO_PRICE}</span>
+                    )}
+                  </td>
+                  <td className="num">
+                    {held ? (
+                      <Num label={`${asset} ${AVERAGE_PAID.toLowerCase()}`} onClick={open(position, "average")} tone={unknown ? "quiet" : null}>
+                        {values.averageCostMicros ? est(formatPrice(values.averageCostMicros, currency), position.estimates.cost) : UNKNOWN}
                       </Num>
-                    </td>
-                    <td className="num" title={UNREALIZED_HELP}>
-                      {held ? (
-                        <>
-                          <Num label={`${asset} unrealized PnL`} onClick={open(position, "unrealized")} tone={toneOf(values.unrealizedMicros)}>
-                            {values.unrealizedMicros === null ? `⚠ ${PNL_UNAVAILABLE}` : est(signed(values.unrealizedMicros), position.estimates.unrealized)}
-                          </Num>
-                          {unknown && resolvable.has(asset) ? (
-                            <button type="button" className="resolve-button" aria-label={`Answer questions about ${asset}`} onClick={() => onResolve(asset)}>
-                              {ANSWER_QUESTIONS}
-                            </button>
-                          ) : null}
-                        </>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
-                    </td>
-                    <td className="num" title={RETURN_HELP}>
-                      {held ? <ReturnCell position={position} onClick={open(position, "return")} /> : <span className="muted">—</span>}
-                    </td>
-                  </tr>
-                  {mismatch ? (
-                    <tr className="mismatch">
-                      <td colSpan={9}>
-                        Worked out {formatAmount(mismatch.computedQty, decimals)} · Actual {formatAmount(mismatch.actualQty, decimals)} · Difference {formatSignedAmount(mismatch.differenceQty, decimals)} {asset}. {mismatchCause(asset, mismatch.differenceQty)}
-                        {mismatch.unseenEth ? ` ${unseenEthCause(mismatch.unseenEth)}` : null}
-                      </td>
-                    </tr>
-                  ) : null}
-                </Fragment>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </td>
+                  <td className="num">
+                    {held ? (
+                      <Num label={`${asset} value`} onClick={open(position, "value")} tone={values.valueMicros === null ? "quiet" : null}>
+                        {values.valueMicros ? est(money(values.valueMicros), position.estimates.value) : NO_PRICE}
+                      </Num>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </td>
+                  <td className="num" title={REALIZED_HELP}>
+                    <Num label={`${asset} realized PnL`} onClick={open(position, "realized")} tone={toneOf(values.realizedMicros)}>
+                      {values.realizedMicros === null ? UNKNOWN : est(signed(values.realizedMicros), position.estimates.realized)}
+                    </Num>
+                  </td>
+                  <td className="num" title={UNREALIZED_HELP}>
+                    {held ? (
+                      <>
+                        {askable > 0 ? (
+                          <button type="button" className="row-action" title={`${answerQuestionsLabel(askable)} about ${asset}, so what you paid is known`} aria-label={`${answerQuestionsLabel(askable)} about ${asset}`} onClick={() => onResolve(asset)}>
+                            ?
+                          </button>
+                        ) : null}
+                        <Num label={`${asset} unrealized PnL`} onClick={open(position, "unrealized")} tone={toneOf(values.unrealizedMicros)}>
+                          {values.unrealizedMicros === null ? UNKNOWN : est(signed(values.unrealizedMicros), position.estimates.unrealized)}
+                        </Num>
+                      </>
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </td>
+                  <td className="num" title={RETURN_HELP}>
+                    {held ? <ReturnCell position={position} onClick={open(position, "return")} /> : <span className="muted">—</span>}
+                  </td>
+                </tr>
               )
             })}
           </tbody>
@@ -350,10 +366,13 @@ export function App() {
   const totals = fold?.totals ?? sumTotals([])
   const points = fold?.points ?? []
   const questions = fold?.questions ?? []
-  const resolvable = useMemo(() => new Set(questions.flatMap((q) => q.arrivals.map((a) => a.asset))), [questions])
   const listed = positions.filter((p) => !p.noMarket)
-  const noMarketCount = totals.noMarket.length + (wallet?.unlisted.length ?? 0)
-  const caveat = [BigInt(totals.unresolvedMicros) > 0n ? `${formatMoney(totals.unresolvedMicros, currency)} cost unknown` : null, BigInt(totals.estimatedMicros) > 0n ? `${formatMoney(totals.estimatedMicros, currency)} estimated` : null].filter(Boolean).join(" · ")
+  const attention = fold && wallet ? attentionOf({ positions, unread, totals, pnlStatus: fold.pnlStatus, gasUnknownTxs: wallet.gasUnknownTxs, l1FeeUnknownTxs: wallet.l1FeeUnknownTxs, withheld: fold.withheld, currency, missingRateTxs: fold.view.missingRateTxs, hasCurrentRate: currency === "USD" || fold.view.latestRate !== null }) : null
+  const attentionBox = attention ? <AttentionBox attention={attention} questionCount={questions.length} onResolve={() => setResolving({ asset: null })} onShow={() => setTarget(attentionTarget(positions))} /> : null
+  const noMarket = wallet ? noMarketSentence(totals.noMarket, wallet.unlisted.length) : null
+  const about = wallet ? [...(hasStarted(wallet) ? [coverageSentence(wallet.coverage, TOKENS.length - 1, wallet.openingUnread.length > 0)] : []), ...(noMarket ? [noMarket] : [])] : []
+  // With no table to sit beside, what it covers stays on the page.
+  const aboutNotices = about.map((line) => <p className="notice" key={line}>{line}</p>)
   const download = () => {
     const link = document.createElement("a")
     link.href = URL.createObjectURL(new Blob([exportCsv(positions, currency)], { type: "text/csv" }))
@@ -430,8 +449,6 @@ export function App() {
             <p className="notice warn">⚠ {hasStarted(wallet) ? behindSentence(msBetweenBlocks(wallet.coverage.toBlock, wallet.latest.blockNum)) : NOT_STARTED}</p>
           ) : null}
           {wallet.mode === "demo" ? <p className="notice">{DEMO_NOTICE}</p> : null}
-          {hasStarted(wallet) ? <p className="notice">{coverageSentence(wallet.coverage, TOKENS.length - 1, wallet.openingUnread.length > 0)}</p> : null}
-          {wallet.gasUnknownTxs.length > 0 ? <p className="notice warn">⚠ {feesUnknownSentence(wallet.gasUnknownTxs.length)}</p> : null}
           {linkedFailed.length > 0 ? (
             <p className="notice warn">
               ⚠ {linkedFailedSentence(linkedFailed.length)}{" "}
@@ -440,55 +457,50 @@ export function App() {
               </button>
             </p>
           ) : null}
-          {fold?.withheld.map(({ wallet: from, asset }) => <p className="notice warn" key={`${from}:${asset}`}>⚠ {withheldSentence(from, asset)}</p>)}
-          {view && view.missingRateTxs.length > 0 ? <p className="notice warn">⚠ {missingRatesLine(view.missingRateTxs.length, currency)}</p> : null}
-          {currency !== "USD" && view && !view.latestRate ? <p className="notice warn">⚠ There's no current USD to {currency} rate, so what's held has no current value.</p> : null}
-          {wallet.l1FeeUnknownTxs.length > 0 ? <p className="notice warn" title={PNL_HELP}>⚠ {networkFeeUnknownSentence(wallet.l1FeeUnknownTxs.length)}</p> : null}
 
-          {positions.length === 0 && !hasStarted(wallet) ? null : positions.length === 0 && unread.length === 0 ? (
-            <section className="empty">
-              <p>
-                No activity for <code>{wallet.address}</code> in this time.
-              </p>
-            </section>
+          {positions.length === 0 && !hasStarted(wallet) ? attentionBox : positions.length === 0 && unread.length === 0 ? (
+            <>
+              {aboutNotices}
+              {attentionBox}
+              <section className="empty">
+                <p>
+                  No activity for <code>{wallet.address}</code> in this time.
+                </p>
+              </section>
+            </>
           ) : (
             <>
               <section className="summary">
-                <div className="headline">
-                  <span className="muted small" title={PNL_HELP}>
-                    Total PnL · {currency}
-                  </span>
-                  <Num label="Total PnL" onClick={() => openTotal("pnl")} tone={toneOf(totals.pnlMicros)}>
-                    <span className="big">{totals.pnlMicros === null ? `⚠ ${PNL_UNAVAILABLE}` : est(formatSignedMoney(totals.pnlMicros, currency), BigInt(totals.estimatedMicros) > 0n)}</span>
-                  </Num>
-                  {caveat ? <p className="caveat">{caveat}</p> : null}
-                  {questions.length > 0 ? (
-                    <button type="button" className="resolve-button big" onClick={() => setResolving({ asset: null })}>
-                      {answerQuestionsLabel(questions.length)}
-                    </button>
-                  ) : null}
-                  {totals.excluded.length > 0 ? (
-                    <p className="excluded">⚠ {excludedSentence(totals.excluded)}</p>
-                  ) : (
-                    <p className="muted small">Nothing excluded.</p>
-                  )}
-                  {totals.unpricedGas ? <p className="excluded">⚠ {UNPRICED_FEES}</p> : null}
+                <div className="lead">
+                  <div title={isValuePartial(totals) ? valueGapsSentence(valueGaps(positions, unread)) : undefined}>
+                    <span className="muted small">Value · {currency}</span>
+                    <Num label={`Value${isValuePartial(totals) ? ", partial" : ""}`} onClick={() => openTotal("value")} tone={totals.valueMicros === null ? "quiet" : null}>
+                      <span className="big">{totals.valueMicros === null ? UNAVAILABLE : est(formatMoney(totals.valueMicros, currency), totals.estimated.value)}</span>
+                    </Num>
+                  </div>
+                  <div>
+                    <span className="muted small" title={PNL_HELP}>
+                      Total PnL
+                    </span>
+                    <Num label={`Total PnL${fold?.pnlStatus === "partial" ? ", partial" : ""}`} onClick={() => openTotal("pnl")} tone={toneOf(totals.pnlMicros)}>
+                      <span className="second">{totals.pnlMicros === null ? UNAVAILABLE : est(formatSignedMoney(totals.pnlMicros, currency), BigInt(totals.estimatedMicros) > 0n)}</span>
+                    </Num>
+                  </div>
                 </div>
                 <dl className="stats">
-                  <Stat label="Value" onClick={() => openTotal("value")} coverage={totals.coverage.value} value={totals.valueMicros && est(formatMoney(totals.valueMicros, currency), totals.estimated.value)} />
-                  <Stat label="Realized" help={REALIZED_HELP} onClick={() => openTotal("realized")} coverage={totals.coverage.realized} value={totals.realizedMicros && est(formatSignedMoney(totals.realizedMicros, currency), totals.estimated.realized)} />
-                  <Stat label="Unrealized" help={UNREALIZED_HELP} onClick={() => openTotal("unrealized")} coverage={totals.coverage.unrealized} value={totals.unrealizedMicros && est(formatSignedMoney(totals.unrealizedMicros, currency), totals.estimated.unrealized)} />
-                  <Stat label={NETWORK_FEES} onClick={() => openTotal("gas")} coverage={{ known: 1, missing: totals.unpricedGas ? 1 : 0 }} value={totals.gasMicros && formatMoney(totals.gasMicros, currency)} />
+                  <Stat label="Realized" help={REALIZED_HELP} partial={totals.coverage.realized.missing > 0} onClick={() => openTotal("realized")} value={totals.realizedMicros && est(formatSignedMoney(totals.realizedMicros, currency), totals.estimated.realized)} />
+                  <Stat label="Unrealized" help={UNREALIZED_HELP} partial={totals.coverage.unrealized.missing > 0} onClick={() => openTotal("unrealized")} value={totals.unrealizedMicros && est(formatSignedMoney(totals.unrealizedMicros, currency), totals.estimated.unrealized)} />
+                  <Stat label={NETWORK_FEES} partial={totals.unpricedGas} onClick={() => openTotal("gas")} value={totals.gasMicros && formatMoney(totals.gasMicros, currency)} />
                 </dl>
-                <div className="method" role="group" aria-label={METHOD_NAME} title={METHOD_HELP}>
-                  {(["average", "fifo"] as const).map((m) => (
-                    <button key={m} type="button" className={method === m ? "on" : ""} aria-pressed={method === m} onClick={() => setMethod(m)}>
-                      {METHOD_LABELS[m]}
-                    </button>
-                  ))}
-                </div>
               </section>
-              <p className="tax-link">
+              {attentionBox}
+              <PnlChart points={points} currency={currency} onSelect={(point) => setTarget({ kind: "tx", txHash: point.txHash as string })} />
+              {listed.length > 0 ? <Holdings positions={listed} unread={unread} about={about} currency={currency} questions={questions} method={method} onMethod={setMethod} explain={setTarget} onResolve={(asset) => setResolving({ asset })} /> : aboutNotices}
+              {fold ? <HoldLine comparison={fold.holdComparison} currency={currency} onOpen={() => setTarget({ kind: "hold" })} /> : null}
+              <p className="exports">
+                <button type="button" className="link" onClick={download}>
+                  Export as CSV
+                </button>
                 <button
                   type="button"
                   className="link"
@@ -498,20 +510,6 @@ export function App() {
                   }}
                 >
                   Export a tax report…
-                </button>
-              </p>
-              {fold ? <HoldCard comparison={fold.holdComparison} currency={currency} onOpen={() => setTarget({ kind: "hold" })} /> : null}
-              <PnlChart points={points} currency={currency} onSelect={(point) => setTarget({ kind: "tx", txHash: point.txHash as string })} />
-              {listed.length > 0 ? <Holdings positions={listed} currency={currency} resolvable={resolvable} explain={setTarget} onResolve={(asset) => setResolving({ asset })} /> : null}
-              {noMarketCount > 0 ? (
-                <p className="notice">
-                  {noMarketCount} {noMarketCount === 1 ? "token" : "tokens"} with no market{totals.noMarket.length > 0 ? `: ${totals.noMarket.join(", ")}` : ""}
-                  {wallet.unlisted.length > 0 ? `${totals.noMarket.length > 0 ? ", plus" : ":"} ${wallet.unlisted.length} we don't track` : ""}. Often spam, and not counted in any total.
-                </p>
-              ) : null}
-              <p>
-                <button type="button" className="link" onClick={download}>
-                  Export as CSV
                 </button>
               </p>
             </>
@@ -555,46 +553,56 @@ export function App() {
   )
 }
 
-/** Calm on purpose: no colors for ahead or behind, and it asks nothing of anyone. Clicking it says how it's worked out. */
-function HoldCard({ comparison, currency, onOpen }: { comparison: HoldComparison; currency: CurrencyCode; onOpen: () => void }) {
-  const { walletMicros, walletLeavesOut, walletEstimated, holdMicros, differenceMicros, status, estimated } = comparison
-  const caveat = holdCaveatSentence(comparison, currency)
-  const signed = (micros: string | null, isEstimate: boolean) => (micros === null ? "⚠ Unavailable" : est(formatSignedMoney(micros, currency), isEstimate))
+/** What the numbers above leave out, once, in a sentence, with what to do about it. The full list is a hover or a click away. */
+function AttentionBox({ attention, questionCount, onResolve, onShow }: { attention: Attention; questionCount: number; onResolve: () => void; onShow: () => void }) {
   return (
-    <section className="card hold">
-      <div className="card-head">
-        <h2 className="muted small">{HOLD_TITLE} · {currency}</h2>
-        <span className="muted small">{HOLD_PAST}</span>
+    <section className="attention" title={attention.fullList ?? undefined}>
+      <span className="attention-mark" role="img" aria-label="Warning">⚠</span>
+      <div className="attention-text">
+        <p title={pnlHelp(attention.title)}>{attention.title}</p>
+        {attention.details.map((line) => (
+          <p key={line} className="muted small" title={pnlHelp(line)}>
+            {line}
+          </p>
+        ))}
       </div>
-      <button type="button" className="hold-numbers" onClick={onOpen} aria-label={`${HOLD_TITLE}. Shows how this is worked out`}>
-        <span>
-          <span className="muted small">{HOLD_WALLET}</span>
-          <strong>{signed(walletMicros, walletEstimated)}</strong>
-          {walletMicros !== null && walletLeavesOut ? <span className="partial">⚠ partial</span> : null}
-        </span>
-        <span>
-          <span className="muted small">{HOLD_ETH}</span>
-          <strong>{signed(holdMicros, estimated)}</strong>
-          {status === "partial" ? <span className="partial">⚠ partial</span> : null}
-        </span>
-        {differenceMicros !== null ? <span className="hold-difference">{holdDifferenceSentence(differenceMicros, currency, walletEstimated || estimated)}</span> : null}
-      </button>
-      {caveat ? <p className="caveat">⚠ {caveat}</p> : null}
+      {questionCount > 0 ? (
+        <button type="button" className="quiet-button" onClick={onResolve}>
+          {answerQuestionsLabel(questionCount)}
+        </button>
+      ) : (
+        <button type="button" className="quiet-button" onClick={onShow}>
+          {SHOW_MISSING}
+        </button>
+      )}
     </section>
   )
 }
 
-function Stat({ label, help, onClick, coverage, value }: { label: string; help?: string; onClick: () => void; coverage: Coverage; value: string | null }) {
+/** This wallet next to simply holding ETH, in a line. Calm on purpose: no colors for ahead or behind, and it asks nothing of anyone. Clicking it shows the numbers and how they're worked out. */
+function HoldLine({ comparison, currency, onOpen }: { comparison: HoldComparison; currency: CurrencyCode; onOpen: () => void }) {
+  // The fine print, a hover or a click away.
+  const fine = [holdCaveatSentence(comparison, currency), comparison.status === "unavailable" ? null : HOLD_PAST].filter((part) => part !== null).join(" ")
+  return (
+    <button type="button" className="hold-line" title={fine} aria-label={`${HOLD_TITLE}. ${holdSummarySentence(comparison, currency)} Shows how this is worked out`} onClick={onOpen}>
+      <span>{HOLD_TITLE}</span>
+      <span className="muted">{holdSummarySentence(comparison, currency)}</span>
+      <span className="muted" aria-hidden="true">›</span>
+    </button>
+  )
+}
+
+/** One of the sums beside the headline. What it leaves out is said once, under the headline. */
+function Stat({ label, help, partial, onClick, value }: { label: string; help?: string; partial: boolean; onClick: () => void; value: string | null }) {
   return (
     <div>
       <dt className="muted small" title={help}>
         {label}
       </dt>
       <dd>
-        <Num label={label} onClick={onClick} tone={value === null ? "warn" : null}>
-          {value ?? "⚠ Unavailable"}
+        <Num label={`${label}${value !== null && partial ? ", partial" : ""}`} onClick={onClick} tone={value === null ? "quiet" : null}>
+          {value ?? UNAVAILABLE}
         </Num>
-        {value !== null && hasAnswer(coverage) && coverage.missing > 0 ? <span className="partial">⚠ partial</span> : null}
       </dd>
     </div>
   )
@@ -603,7 +611,8 @@ function Stat({ label, help, onClick, coverage, value }: { label: string; help?:
 function LiveBadge({ wallet, stale }: { wallet: WalletResponse; stale: boolean }) {
   if (wallet.mode === "demo") return <span className="badge">Demo data</span>
   const detail = feedDetail(wallet.mode, wallet.coverage.toBlock)
-  if (stale) return <span className="badge warn" title={detail}>⚠ Not updating</span>
-  if (isBehind(wallet)) return <span className="badge warn" title={detail}>⚠ Catching up</span>
+  // The notice under it says what's wrong.
+  if (stale) return <span className="badge" title={detail}>Not updating</span>
+  if (isBehind(wallet)) return <span className="badge" title={detail}>Catching up</span>
   return <span className="badge live" title={detail}>Live</span>
 }

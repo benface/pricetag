@@ -4,12 +4,14 @@
 
 import { formatAmount, formatDuration, formatMoney, msBetweenBlocks, shortHash, worth, type CostLabel, type CurrencyCode, type FoldLeg, type HoldComparison, type Method, type PricedLeg, type PriceSource, type UnseenEth } from "@pricetag/sdk/core"
 import type { Mode } from "./api.ts"
+import type { ValueGaps } from "./attention.ts"
 
 export const METHOD_LABELS: Record<Method, string> = { average: "Average", fifo: "Oldest first" }
 export const METHOD_NAME = "How cost is worked out"
 export const METHOD_HELP = "Average spreads what you paid across all you hold. Oldest first counts what you sell as what you got earliest."
 
 export const AVERAGE_PRICE_PAID = "Average price paid"
+export const AVERAGE_PAID = "Average paid"
 export const NETWORK_FEES = "Network fees"
 export const BALANCE_CHECK = "Balance check"
 export const CHECK_LABELS = { reconciled: "Matches", incomplete: "Doesn't match", unchecked: "Not checked" }
@@ -46,6 +48,13 @@ export const tokenLabel = (symbol: string) => (symbol === "WETH" ? "wrapped ETH"
 export const ETH_NOTE = "incl. wrapped ETH"
 export const DEMO_NOTICE = "Demo data, not a real wallet."
 export const PNL_UNAVAILABLE = "PnL unavailable"
+export const UNKNOWN = "Unknown"
+export const NO_PRICE = "No price"
+export const UNAVAILABLE = "Unavailable"
+export const ABOUT_THIS_DATA = "What this covers"
+export const MARKET_ESTIMATES = "Some prices are estimates, from the market."
+export const PNL_INCOMPLETE = "PnL isn't complete"
+export const ALL_BALANCES_MATCH = "Every balance matches the chain."
 export const NOTHING_TO_CHART = "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't zero."
 export const UNPRICED_FEES = "Some network fees had no price at the time, and aren't in this total."
 export const READING = "Reading this wallet. The first read can take a minute."
@@ -148,6 +157,42 @@ export function activityTitle(count: number, shown: number): string {
 /** How much of a wallet's PnL rests on an estimate, or null when none does. */
 export const estimatedSentence = (micros: string, currency: CurrencyCode): string | null => (BigInt(micros) > 0n ? `${formatMoney(micros, currency)} of this is an estimate, from market prices.` : null)
 
+/** A few assets by name, the way a sentence says them. */
+const listAssets = (assets: readonly string[]) => new Intl.ListFormat("en-US", { type: "conjunction" }).format(assets)
+
+/** Why a value is partial. What's left out says so. A balance that couldn't be checked, or a history that's incomplete, is still in the value, so it's only said to be uncertain. */
+export function valueGapsSentence({ noPrice, unread, unchecked, incompleteHistory }: ValueGaps): string {
+  const sentences = [
+    noPrice.length > 0 ? `The value leaves out ${listAssets(noPrice)}, which ${noPrice.length === 1 ? "has" : "have"} no price right now.` : null,
+    unread.length > 0 ? `The value leaves out ${listAssets(unread)}, whose ${unread.length === 1 ? "balance" : "balances"} couldn't be read.` : null,
+    unchecked.length > 0 ? `Couldn't check the balance of ${listAssets(unchecked)}, so ${unchecked.length === 1 ? "its value is" : "their values are"} an estimate.` : null,
+    incompleteHistory.length > 0 ? `Incomplete history for ${listAssets(incompleteHistory)}, so ${incompleteHistory.length === 1 ? "its numbers" : "their numbers"} may not be all of it.` : null,
+  ].filter((sentence) => sentence !== null)
+  return sentences.length > 0 ? sentences.join(" ") : "The value isn't complete."
+}
+
+/** What a partial PnL leaves out, without a period. `also` when something before it already says part of it. */
+export const pnlLeavesOutSentence = (assets: readonly string[], also: boolean) => `PnL ${also ? "also " : ""}leaves out ${listAssets(assets)}`
+
+/** How much of the totals is unknown or estimated, or null when none is. */
+export function leavesOutSentence({ unresolvedMicros, estimatedMicros }: { unresolvedMicros: string; estimatedMicros: string }, currency: CurrencyCode): string | null {
+  const parts = [
+    BigInt(unresolvedMicros) > 0n ? `${formatMoney(unresolvedMicros, currency)} has an unknown cost, so it isn't in the PnL.` : null,
+    BigInt(estimatedMicros) > 0n ? `${formatMoney(estimatedMicros, currency)} is estimated.` : null,
+  ].filter((part) => part !== null)
+  return parts.length > 0 ? parts.join(" ") : null
+}
+
+export const unreadBalancesSentence = (assets: readonly string[]) => `Couldn't read the ${assets.join(", ")} ${assets.length === 1 ? "balance" : "balances"}.`
+
+/** What isn't listed with the holdings, and why it doesn't matter to the numbers. null when there's nothing. */
+export function noMarketSentence(listed: readonly string[], unlisted: number): string | null {
+  const total = listed.length + unlisted
+  if (total === 0) return null
+  const off = unlisted > 0 ? `${listed.length > 0 ? ", plus " : ""}${unlisted} we don't track` : ""
+  return `${total} ${total === 1 ? "token" : "tokens"} with no market: ${listed.join(", ")}${off}. Often spam, and not counted in any total.`
+}
+
 /** What a total leaves out, or null when it leaves out nothing. */
 export function excludedSentence(excluded: readonly { asset: string; reason: string }[]): string | null {
   if (excluded.length === 0) return null
@@ -162,6 +207,12 @@ export function holdDifferenceSentence(micros: string, currency: CurrencyCode, e
   const about = estimated ? "About " : ""
   if (difference === 0n) return `${about}${estimated ? "the" : "The"} same as holding ETH.`
   return `${about}${formatMoney(difference < 0n ? -difference : difference, currency)} ${difference > 0n ? "more" : "less"} than holding ETH.`
+}
+
+/** The comparison in a few words, for the line that opens the whole of it. */
+export function holdSummarySentence({ status, differenceMicros, walletEstimated, estimated }: Pick<HoldComparison, "status" | "differenceMicros" | "walletEstimated" | "estimated">, currency: CurrencyCode): string {
+  if (status === "partial") return "Not comparable yet"
+  return status === "complete" && differenceMicros !== null ? holdDifferenceSentence(differenceMicros, currency, walletEstimated || estimated) : "Not available yet"
 }
 
 /** What keeps the two from being set against each other, or null when nothing does. */
