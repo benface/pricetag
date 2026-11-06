@@ -11,10 +11,8 @@ import KeyVault
 /// - 1inch: https://github.com/1inch/limit-order-protocol (README, Base deployment)
 /// - Odos: https://github.com/odos-xyz/odos-router-v2 (README, Base deployment)
 public enum KnownContracts {
-    static let permit2 = EthereumAddress("0x000000000022d473030f116ddee9f6b43ac78ba3")!
-
     static let names: [EthereumAddress: String] = [
-        permit2: "Uniswap Permit2",
+        Base.permit2: "Uniswap Permit2",
         EthereumAddress("0x6ff5693b99212da76ad316178a184ab56d299b43")!: "Uniswap",
         EthereumAddress("0xfdf682f51fe81aa4898f0ae2163d8a55c127fbc7")!: "Uniswap",
         EthereumAddress("0xd6145b2d3f379919e8cdeda7b97e37c4b2ca9c40")!: "Uniswap",

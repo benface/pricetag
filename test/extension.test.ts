@@ -134,6 +134,28 @@ describe("the extension's rules", () => {
       rmSync(home, { recursive: true, force: true })
     }
   })
+
+  test("installing the host keeps the manifest valid wherever the app is", () => {
+    const home = mkdtempSync(join(tmpdir(), "bridge-install-"))
+    const install = (app: string) => {
+      mkdirSync(join(app, "Contents/Helpers"), { recursive: true })
+      const host = join(app, "Contents/Helpers/pricetag-bridge")
+      writeFileSync(host, "")
+      chmodSync(host, 0o755)
+      execFileSync(new URL("../macos/install-bridge.sh", import.meta.url).pathname, [app], { env: { ...process.env, HOME: home }, stdio: "pipe" })
+      return host
+    }
+    try {
+      const support = join(home, "Library/Application Support")
+      mkdirSync(join(support, "Google/Chrome"), { recursive: true })
+      const host = install(join(home, `Pat"i\\na.app`))
+      const written = JSON.parse(readFileSync(join(support, "Google/Chrome/NativeMessagingHosts/com.benface.patina.json"), "utf8"))
+      assert.equal(written.path, host)
+      assert.throws(() => install(join(home, "Pat\tina.app")), /control characters/)
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
 })
 
 type Listener = (event: any) => void

@@ -100,7 +100,7 @@ public struct SiteTransaction: Equatable, Sendable {
         } catch {
             throw .invalid("That value isn't a number this wallet can send.")
         }
-        value = valueWord.suffix(16).reduce(UInt128(0)) { $0 << 8 | UInt128($1) }
+        value = valueWord.low128
 
         let dataText = transaction["data"]?.string
         let inputText = transaction["input"]?.string
@@ -226,8 +226,7 @@ extension TransactionReview {
 
         /// nil if it doesn't fit, which for an amount means far more than anything's worth.
         func amount(_ index: Int) -> UInt128? {
-            guard let word = word(index), word.prefix(16).allSatisfy({ $0 == 0 }) else { return nil }
-            return word.suffix(16).reduce(UInt128(0)) { $0 << 8 | UInt128($1) }
+            word(index)?.uint128
         }
 
         func word(_ index: Int) -> ArraySlice<UInt8>? {
@@ -266,7 +265,7 @@ extension TransactionReview {
         let selector = Array(transaction.data.prefix(4))
         // Only a contract on the list is known to do what its selector says: Permit2 for its own, and a token for the rest. No token is a collection.
         let isOnTheList = switch selector {
-        case Selectors.permit2Approve: transaction.to == KnownContracts.permit2
+        case Selectors.permit2Approve: transaction.to == Base.permit2
         case Selectors.setApprovalForAll: false
         default: token != nil
         }
@@ -289,6 +288,22 @@ extension TransactionReview {
             token.map { "\(Money.text(ofUnits: amount, decimals: $0.decimals)) \($0.symbol)" } ?? "\(amount) units of this token"
         }
 
+        /// The words for nothing and for a limit are what differs between these calls. `asked` is nil only for a token Permit2 names that's off the list.
+        func allowance(spenderAt spenderIndex: Int, amountAt amountIndex: Int, of asked: Token?, at contract: EthereumAddress?, nothing: (_ spender: String, _ asset: String) -> String, limit: (_ spender: String, _ amount: String) -> String) {
+            spender = arguments.address(spenderIndex)
+            guard let who = spender.map(SiteWording.who) else { return }
+            let amount = arguments.amount(amountIndex)
+            if amount == 0 {
+                headline = nothing(who, asset(asked, at: contract))
+            } else if let amount, !Self.isUnlimited(amount, of: asked) {
+                headline = limit(who, amountText(amount, asked))
+                if asked == nil { warnings.append(SiteWarning(SiteWording.unknownAllowance(spender: who), isStrong: true)) }
+            } else {
+                headline = "Let \(who) spend all of your \(asset(asked, at: contract))"
+                warnings.append(SiteWarning(SiteWording.unlimited(spender: who, asset: asset(asked, at: contract)), isStrong: true))
+            }
+        }
+
         switch isOnTheList ? selector : [] {
         case Selectors.transfer:
             if let to = arguments.address(0), let amount = arguments.amount(1) {
@@ -301,47 +316,13 @@ extension TransactionReview {
             }
         case Selectors.increaseAllowance:
             // This adds to whatever's already allowed, which nothing here has read. So it can't say what the total comes to, and adding nothing doesn't stop anything.
-            spender = arguments.address(0)
-            if let spender = spender.map(SiteWording.who) {
-                let amount = arguments.amount(1)
-                if amount == 0 {
-                    headline = "Add nothing to what \(spender) can spend of your \(asset(token, at: transaction.to))"
-                } else if let amount, !Self.isUnlimited(amount, of: token) {
-                    headline = "Let \(spender) spend \(amountText(amount, token)) more"
-                } else {
-                    headline = "Let \(spender) spend all of your \(asset(token, at: transaction.to))"
-                    warnings.append(SiteWarning(SiteWording.unlimited(spender: spender, asset: asset(token, at: transaction.to)), isStrong: true))
-                }
-            }
+            allowance(spenderAt: 0, amountAt: 1, of: token, at: transaction.to, nothing: { "Add nothing to what \($0) can spend of your \($1)" }, limit: { "Let \($0) spend \($1) more" })
         case Selectors.approve:
-            spender = arguments.address(0)
-            if let spender = spender.map(SiteWording.who) {
-                let amount = arguments.amount(1)
-                if amount == 0 {
-                    headline = "Stop \(spender) from spending your \(asset(token, at: transaction.to))"
-                } else if let amount, !Self.isUnlimited(amount, of: token) {
-                    headline = "Let \(spender) spend up to \(amountText(amount, token))"
-                } else {
-                    headline = "Let \(spender) spend all of your \(asset(token, at: transaction.to))"
-                    warnings.append(SiteWarning(SiteWording.unlimited(spender: spender, asset: asset(token, at: transaction.to)), isStrong: true))
-                }
-            }
+            allowance(spenderAt: 0, amountAt: 1, of: token, at: transaction.to, nothing: { "Stop \($0) from spending your \($1)" }, limit: { "Let \($0) spend up to \($1)" })
         case Selectors.permit2Approve:
-            spender = arguments.address(1)
-            if let spender = spender.map(SiteWording.who) {
-                let approvedAddress = arguments.address(0)
-                let approved = approvedAddress.flatMap { address in Base.tokens.first { $0.contract == address } }
-                let amount = arguments.amount(2)
-                if amount == 0 {
-                    headline = "Stop \(spender) from spending your \(asset(approved, at: approvedAddress))"
-                } else if let amount, !Self.isUnlimited(amount, of: approved) {
-                    headline = "Let \(spender) spend up to \(amountText(amount, approved))"
-                    if approved == nil { warnings.append(SiteWarning(SiteWording.unknownAllowance(spender: spender), isStrong: true)) }
-                } else {
-                    headline = "Let \(spender) spend all of your \(asset(approved, at: approvedAddress))"
-                    warnings.append(SiteWarning(SiteWording.unlimited(spender: spender, asset: asset(approved, at: approvedAddress)), isStrong: true))
-                }
-            }
+            let approvedAddress = arguments.address(0)
+            let approved = approvedAddress.flatMap { address in Base.tokens.first { $0.contract == address } }
+            allowance(spenderAt: 1, amountAt: 2, of: approved, at: approvedAddress, nothing: { "Stop \($0) from spending your \($1)" }, limit: { "Let \($0) spend up to \($1)" })
         case Selectors.permit:
             spender = arguments.address(1)
             if let spender = spender.map(SiteWording.who) {

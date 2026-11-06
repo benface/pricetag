@@ -233,7 +233,7 @@ public final class AddSavingsModel {
         addProblem = nil
         // A link can arrive while Touch ID's asking, and that takes the answer back.
         guard try await wallet.addColdWallet(address: parsed.checksummed, name: name, isWanted: { canAdd && self.parsed == parsed }) else {
-            addProblem = wallet.sweepProblem
+            addProblem = wallet.lastActionProblem
             return
         }
         wallet.linkDeviceAccounts(link?.accountsToLink(accepted: acceptedAccounts, adding: address) ?? [])
