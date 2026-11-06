@@ -2,7 +2,7 @@
 // Everything keeps its price source and transaction, and what can't be priced stays unknown.
 
 import { createQuery, createRangeStream, describeError, type Logger, type Query, type StreamRanges } from "./amp.ts"
-import { ORACLE_TABLES, SWAP_TABLES, WALLET_TABLES, datasetReader, datasetSource, followSql, readHeadMark } from "./dataset.ts"
+import { ORACLE_TABLES, SWAP_TABLES, WALLET_TABLES, datasetReader, datasetSource, followSql, readBlockHashes, readHeadMark } from "./dataset.ts"
 import type { Method } from "./fold.ts"
 import { answerToMicros, buildPricedLegs, type LegRow, type PricedLeg, type PriceSource, type Reference } from "./legs.ts"
 import { followChain, type FollowConfig, type Via } from "./live.ts"
@@ -229,7 +229,7 @@ export function pricetagClient(query: Query, config: ClientConfig) {
       resolveRange({ from })
       const stop = new AbortController()
       const stopping = signal ? AbortSignal.any([signal, stop.signal]) : stop.signal
-      const ticks = followChain({ stream: config.stream ?? null, sql: followSql(config.dataset), readMark: (after) => readHeadMark(query, baseDataset, after), logger, ...config.follow }, stopping)
+      const ticks = followChain({ stream: config.stream ?? null, sql: followSql(config.dataset), readMark: (after) => readHeadMark(query, baseDataset, after), readHashes: (blocks) => readBlockHashes(query, baseDataset, blocks), logger, ...config.follow }, stopping)
       // Following starts before the first read, which can take a while, so no block or reorg goes by unseen.
       let next = ticks.next()
       let via: Via | null = null

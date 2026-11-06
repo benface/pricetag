@@ -55,6 +55,16 @@ export async function readHeadMark(query: Query, dataset: string, after: number 
   return row ? { blockNum: asNumber(row.block_num), hash: prefixed(hexOf(String(row.hash))) } : null
 }
 
+/** The hash the chain has at each of these blocks, leaving out any it doesn't have. */
+export async function readBlockHashes(query: Query, dataset: string, blocks: readonly number[]): Promise<Map<number, string>> {
+  const hashes = new Map<number, string>()
+  for (const { filter } of blockFilters(blocks)) {
+    const rows = await query<Row>(`SELECT block_num, hash FROM "${dataset}".blocks WHERE ${filter}`, 15_000)
+    for (const row of rows) hashes.set(asNumber(row.block_num), prefixed(hexOf(String(row.hash))))
+  }
+  return hashes
+}
+
 /**
  * What to stream to know a block has been processed. `priced_legs` is the last table to finish one, so a wallet read can
  * reach that block by then. No row matches: rows come from bounded queries, and a stream's progress is in its metadata.

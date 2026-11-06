@@ -5,8 +5,11 @@ import { formatAmount, formatSignedAmount, type CurrencyCode, type PnlStatus, ty
 import { missingRatesLine, type ExplainTarget } from "./explain.ts"
 import { ALL_BALANCES_MATCH, CHECK_LABELS, MARKET_ESTIMATES, PAST_COSTS_UNKNOWN, PNL_INCOMPLETE, UNPRICED_FEES, excludedSentence, feesUnknownSentence, leavesOutSentence, networkFeeUnknownSentence, pnlLeavesOutSentence, unreadBalancesSentence, unseenEthCause, valueGapsSentence, withheldSentence } from "./wording.ts"
 
+/** What these need of a position, which a combined one has too. */
+export type AttentionPosition = Pick<Position, "asset" | "decimals" | "values" | "noMarket" | "reconciliation"> & { state: Pick<Position["state"], "shortfallQty"> }
+
 export type AttentionFacts = {
-  positions: readonly Position[]
+  positions: readonly AttentionPosition[]
   unread: readonly string[]
   totals: Totals
   pnlStatus: PnlStatus
@@ -29,14 +32,14 @@ export type Attention = {
 
 export type ValueGaps = { noPrice: string[]; unread: string[]; unchecked: string[]; incompleteHistory: string[] }
 
-const listed = (positions: readonly Position[]) => positions.filter((p) => !p.noMarket)
-const hasShortfall = (position: Position) => BigInt(position.state.shortfallQty) > 0n
+const listed = <P extends AttentionPosition>(positions: readonly P[]) => positions.filter((p) => !p.noMarket)
+const hasShortfall = (position: AttentionPosition) => BigInt(position.state.shortfallQty) > 0n
 
 /** Whether the value leaves out something held, which changes what the number means. */
 export const isValuePartial = ({ valueMicros, coverage }: Totals) => valueMicros !== null && coverage.value.missing > 0 && coverage.value.known > 0
 
 /** Why the value is partial, by the same causes the SDK counts. The first two are left out of it. The last two are in it, as a best estimate. */
-export function valueGaps(positions: readonly Position[], unread: readonly string[]): ValueGaps {
+export function valueGaps(positions: readonly AttentionPosition[], unread: readonly string[]): ValueGaps {
   const shown = listed(positions)
   return {
     noPrice: shown.filter((p) => BigInt(p.values.qty) > 0n && p.values.valueMicros === null).map((p) => p.asset),
@@ -85,7 +88,7 @@ export function attentionOf({ positions, unread, totals, pnlStatus, gasUnknownTx
 export const pastCostsNote = (attention: Attention | null, questionCount: number) => (attention === null && questionCount > 0 ? PAST_COSTS_UNKNOWN : null)
 
 /** Where "Show What's Missing" goes: the balance that doesn't match when that's the reason, or else what the total is made of. */
-export function attentionTarget(positions: readonly Position[]): ExplainTarget {
+export function attentionTarget(positions: readonly AttentionPosition[]): ExplainTarget {
   for (const position of listed(positions)) {
     const flag = balanceFlag(position)
     if (flag) return { kind: "asset", asset: position.asset, metric: flag.metric }
@@ -94,14 +97,14 @@ export function attentionTarget(positions: readonly Position[]): ExplainTarget {
 }
 
 /** What the rows no longer say one by one. null unless every listed balance was checked and matches. */
-export function allBalancesMatch(positions: readonly Position[], unread: readonly string[]): string | null {
+export function allBalancesMatch(positions: readonly AttentionPosition[], unread: readonly string[]): string | null {
   const shown = listed(positions)
   // A balance that couldn't be read has no row, and hasn't been shown to match anything.
   return shown.length > 0 && unread.length === 0 && shown.every((p) => p.reconciliation?.status === "reconciled") ? ALL_BALANCES_MATCH : null
 }
 
 /** What a row flags about its balance, or null when there's nothing to flag: a balance that matches says nothing. */
-export function balanceFlag(position: Position): { label: string; help: string; metric: "onchain" | "amount" } | null {
+export function balanceFlag(position: AttentionPosition, { combined = false } = {}): { label: string; help: string; metric: "onchain" | "amount" } | null {
   const { asset, decimals, reconciliation } = position
   if (reconciliation?.status === "unchecked") return { label: CHECK_LABELS.unchecked, help: `${CHECK_LABELS.unchecked}. ${reconciliation.reason} PnL is unavailable until this balance is confirmed.`, metric: "onchain" }
   if (reconciliation?.status === "incomplete") {
@@ -110,5 +113,5 @@ export function balanceFlag(position: Position): { label: string; help: string; 
     return { label: CHECK_LABELS.incomplete, help: unseenEth ? `${check} ${unseenEthCause(unseenEth)}` : check, metric: "onchain" }
   }
   // Only the amount's explanation says this, because the balance itself may match.
-  return hasShortfall(position) ? { label: CHECK_LABELS.incomplete, help: "More left this wallet than we saw arrive, so its history is incomplete.", metric: "amount" } : null
+  return hasShortfall(position) ? { label: CHECK_LABELS.incomplete, help: `More left ${combined ? "your wallets" : "this wallet"} than we saw arrive, so ${combined ? "their" : "its"} history is incomplete.`, metric: "amount" } : null
 }

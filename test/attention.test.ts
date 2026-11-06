@@ -124,6 +124,11 @@ describe("pastCostsNote", () => {
 })
 
 describe("balanceFlag", () => {
+  it("says a shortfall of the wallets together, not of one wallet", () => {
+    assert.match(balanceFlag(position("USDC", { shortfallQty: "1" }))?.help ?? "", /left this wallet than we saw arrive, so its history/)
+    assert.match(balanceFlag(position("USDC", { shortfallQty: "1" }), { combined: true })?.help ?? "", /left your wallets than we saw arrive, so their history/)
+  })
+
   it("says nothing about a balance that matches", () => {
     assert.equal(balanceFlag(position("USDC")), null)
   })
