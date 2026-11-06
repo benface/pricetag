@@ -23,6 +23,17 @@ export const plainShelf = (storage: KeptIn): Shelf => ({
 
 const DATABASE = "patina"
 const STORE = "kept"
+const COULD_NOT_SAVE = "This browser couldn't save that."
+/** The slowest change seen on a machine at a load of 127 took 278 ms, so this long means it's stuck rather than slow. */
+const STALLED_MS = 5_000
+
+const inTime = <T>(work: Promise<T>): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout>
+  const stalled = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(COULD_NOT_SAVE)), STALLED_MS)
+  })
+  return Promise.race([work, stalled]).finally(() => clearTimeout(timer))
+}
 
 /**
  * IndexedDB decides what's true. localStorage holds a copy, which is what a page shows before it can read that, what a client
@@ -30,8 +41,8 @@ const STORE = "kept"
  */
 export function browserShelf(): Shelf {
   let opening: Promise<IDBDatabase | null> | undefined
-  const database = () =>
-    (opening ??= new Promise((resolve) => {
+  const open = () =>
+    new Promise<IDBDatabase | null>((resolve) => {
       try {
         const request = indexedDB.open(DATABASE, 1)
         request.onupgradeneeded = () => request.result.createObjectStore(STORE)
@@ -43,7 +54,11 @@ export function browserShelf(): Shelf {
       } catch {
         resolve(null)
       }
-    }))
+    })
+  // Chrome keeps a page someone just left, frozen, in case they come back. One frozen while creating the database holds up every
+  // open on this site, in every tab, for as long as it's kept. Chrome drops a frozen page holding a lock someone's waiting for, so
+  // each open waits for this one, which is why it can't be a shared lock. A late open stays the one everyone waits for, since another would only queue behind it.
+  const database = () => inTime((opening ??= navigator.locks ? navigator.locks.request(`${DATABASE}.opening`, open).catch(() => open()) : open()))
   const copy = (key: string, text: string | null) => {
     try {
       if (text !== null && localStorage.getItem(key) !== text) localStorage.setItem(key, text)
@@ -57,12 +72,32 @@ export function browserShelf(): Shelf {
       const store = transaction.objectStore(STORE)
       const found = store.get(key)
       let result: string | null = null
+      let late = false
+      const timer = setTimeout(() => {
+        // So it can't land after the user's been told it didn't. It can't be stopped once it's committing, and then it may.
+        try {
+          transaction.abort()
+        } catch {
+          late = true
+        }
+        reject(new Error(COULD_NOT_SAVE))
+      }, STALLED_MS)
       found.onsuccess = () => {
         const stored = typeof found.result === "string" ? found.result : null
         result = work(stored ?? localStorage.getItem(key), store)
       }
-      transaction.oncomplete = () => resolve(result)
-      transaction.onabort = () => reject(new Error("This browser couldn't save that."))
+      transaction.oncomplete = () => {
+        clearTimeout(timer)
+        resolve(result)
+        if (!late) return
+        // Whoever asked has moved on, so they hear it the way they'd hear another tab's write.
+        copy(key, result)
+        window.dispatchEvent(new StorageEvent("storage", { key }))
+      }
+      transaction.onabort = () => {
+        clearTimeout(timer)
+        reject(new Error(COULD_NOT_SAVE))
+      }
     })
   return {
     async read(key) {
