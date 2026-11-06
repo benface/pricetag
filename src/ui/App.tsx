@@ -73,6 +73,8 @@ function readAddress(): string | null {
   return value && (value === "demo" || value === ALL_YOURS || isAddress(value)) ? value : null
 }
 
+const NONE: readonly string[] = []
+
 const CURRENCY_KEY = "pricetag.currency"
 const HOLDINGS_SORT_KEY = "pricetag.holdingsSort"
 
@@ -303,7 +305,9 @@ export function App() {
   const singleRead = useWallet(single, chosenCurrency, chosenRule)
   const allRead = useAllYours(isAll ? yours : null, chosenCurrency, chosenRule)
   const { wallet } = singleRead
-  const { loading, error } = isAll ? allRead : singleRead
+  const { error } = isAll ? allRead : singleRead
+  // A read that came back with none of them yet has nothing to show, and it's still reading until one does.
+  const loading = isAll ? allRead.loading || (allRead.read !== null && allRead.read.wallets.length === 0 && allRead.read.unread.reading.length > 0) : singleRead.loading
   const together = useMemo(() => (isAll && allRead.read && allRead.read.wallets.length > 0 ? { read: allRead.read.wallets, unread: allRead.read.unread } : null), [isAll, allRead.read])
   const [resolving, setResolving] = useState<{ asset: string | null } | null>(null)
   // Another wallet's questions, asked for from a tax report that includes it: they open once it's read, and closing them
@@ -319,7 +323,9 @@ export function App() {
     const onPop = () => {
       setPendingResolve(null)
       setReturnTo(null)
-      setAddress(readAddress())
+      const next = readAddress()
+      setAddress(next)
+      setInput(next && isAddress(next) ? next : "")
       setTarget(null)
       setTaxOpen(false)
     }
@@ -623,9 +629,10 @@ export function App() {
           />
         </Suspense>
       ) : null}
-      {taxOpen && (together || single) ? <TaxPanel
-          // All of them is the first with the rest alongside, because the answers say the rest are theirs.
-          address={together ? (together.read[0] as WalletResponse).address : (single as string)}
+      {taxOpen && (isAll || single) ? <TaxPanel
+          // All of them is the first with the rest alongside, since a device account isn't always in the answers.
+          address={isAll ? (yours[0] as string) : (single as string)}
+          alongside={isAll ? yours : NONE}
           currency={chosenCurrency}
           book={book}
           year={taxYear}

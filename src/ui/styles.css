@@ -245,5 +245,5 @@ button { font: inherit; cursor: pointer; color: inherit; }
 .sort-button:hover { color: var(--text-primary); }
 .sort-button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; border-radius: 3px; }
 .sort-mark { display: inline-block; min-width: 1ch; }
-.holding-wallets { display: block; font-weight: 400; }
+.holding-wallets { display: block; font-weight: 400; white-space: normal; min-width: 26ch; }
 .wallet-parts { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 8px; }

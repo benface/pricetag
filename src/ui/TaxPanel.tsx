@@ -66,8 +66,10 @@ function unknownSentence({ unknownCount: count, soldCount, feeCount, sentCount }
   return `${n(count)} of these ${n(total)} ${count === 1 ? "has" : "have"} an unknown gain, in whole or in part. What's unknown is left out of the total.`
 }
 
-export function TaxPanel({ address, currency, book, year, onYear, overviewMethod, questionCount, onResolve, onClose }: {
+export function TaxPanel({ address, alongside, currency, book, year, onYear, overviewMethod, questionCount, onResolve, onClose }: {
   address: string
+  /** Wallets the report always covers with this one, on top of any listed here. */
+  alongside: readonly string[]
   currency: CurrencyCode
   book: Book
   /** Held by the page, so it stays the same while the report closes to answer another wallet's questions. */
@@ -116,7 +118,7 @@ export function TaxPanel({ address, currency, book, year, onYear, overviewMethod
     const controller = new AbortController()
     setLoading(true)
     setError(null)
-    fetchReport(address, { country, method, scope, year, currency, also: others, book }, controller.signal)
+    fetchReport(address, { country, method, scope, year, currency, also: [...new Set([...others, ...alongside])].filter((other) => other !== address.toLowerCase()), book }, controller.signal)
       .then((next) => {
         setYears(next.years)
         setReport(next)
@@ -130,7 +132,7 @@ export function TaxPanel({ address, currency, book, year, onYear, overviewMethod
         setLoading(false)
       })
     return () => controller.abort()
-  }, [address, country, method, scope, year, currency, others, badOther, book])
+  }, [address, alongside, country, method, scope, year, currency, others, badOther, book])
 
   const chooseMethod = (next: Method | null) => {
     remember(METHOD_KEY, next)
