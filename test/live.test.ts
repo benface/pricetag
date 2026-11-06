@@ -638,7 +638,7 @@ describe("watchWallet", () => {
     await updates.return()
   })
 
-  it("replaces a transfer when a reorg comes between a poll's two reads, with no stream at all", { timeout: 5_000 }, async () => {
+  it("replaces a transfer when a reorg comes between a poll's two reads, with no stream at all", { timeout: 5_000 }, async (t) => {
     // Found in WORK-520's review: the wallet kept 160:0xdd:1 for good, though the dataset no longer had it.
     let between: (() => void) | null = null
     let seen: string | null = null
@@ -653,7 +653,7 @@ describe("watchWallet", () => {
       between = null
     }
     const { chain, client } = chainAt(100, { legs: [], reference_prices: [{ ...REFERENCE, block_num: "100" }], balances: balancesThrough(600, "0") }, onQuery, { stream: null })
-    const updates = client.watchWallet(ADDRESS)
+    const updates = client.watchWallet(ADDRESS, { signal: t.signal })
     assert.deepEqual(legsOf((await updates.next()).value as WalletUpdate), [])
 
     chain.block = 200
@@ -668,8 +668,10 @@ describe("watchWallet", () => {
       chain.block = 500
       chain.tables = { ...chain.tables, legs: [], reference_prices: [{ ...REFERENCE, block_num: "500" }], balances: balancesThrough(600, "0") }
     }
+    // A wallet read already underway can get to the new head with the old transfer, just before it's told about the reorg.
     update = (await updates.next()).value as WalletUpdate
-    while (update.blocks.toBlock < 500) update = (await updates.next()).value as WalletUpdate
+    while (update.reorgFrom === null) update = (await updates.next()).value as WalletUpdate
+    assert.equal(update.reorgFrom, 101)
     assert.deepEqual(legsOf(update), [])
     await updates.return()
   })
