@@ -76,11 +76,14 @@ public enum AccessibilityTree {
             let label = [text(#selector(NSAccessibilityProtocol.accessibilityLabel)), text(#selector(NSAccessibilityProtocol.accessibilityTitle))].first { !$0.isEmpty } ?? ""
             let value = text(#selector(NSAccessibilityProtocol.accessibilityValue))
             // Not in the protocol, and only SwiftUI's own elements answer it. That's where the plain label's marks went.
-            var spelledOut: [String] = []
+            // A group that's combined into static text has its label as its value instead, and the marks are on the value's attributed string.
             let attributedLabel = NSSelectorFromString("accessibilityAttributedLabel")
-            if node.responds(to: attributedLabel), let answer = node.perform(attributedLabel)?.takeUnretainedValue() as? NSAttributedString {
-                answer.enumerateAttribute(NSAttributedString.Key("AXSpellOut"), in: NSRange(location: 0, length: answer.length)) { mark, range, _ in
-                    if (mark as? Bool) == true { spelledOut.append(answer.attributedSubstring(from: range).string) }
+            let marked = (node.responds(to: attributedLabel) ? node.perform(attributedLabel)?.takeUnretainedValue() as? NSAttributedString : nil)
+                ?? (node.accessibilityAttributedString?(for: NSRange(location: 0, length: value.utf16.count)) ?? nil)
+            var spelledOut: [String] = []
+            if let marked {
+                marked.enumerateAttribute(NSAttributedString.Key("AXSpellOut"), in: NSRange(location: 0, length: marked.length)) { mark, range, _ in
+                    if (mark as? Bool) == true { spelledOut.append(marked.attributedSubstring(from: range).string) }
                 }
             }
             let help = text(#selector(NSAccessibilityProtocol.accessibilityHelp))
