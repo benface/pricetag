@@ -250,7 +250,7 @@ public struct PricetagClient: PortfolioSource {
     }
 
     public func onrampCheckout(address: String, asset: String, cryptoAmount: String, fiat: Money?) async throws -> OnrampCheckout {
-        try await decoded(post("/api/onramp/checkout", body: CheckoutBody(address: address, asset: asset, cryptoAmount: cryptoAmount, fiat: fiat.map { .init(amount: Format.plainAmount($0.micros), currency: $0.currency) }), timeout: .seconds(30)))
+        try await decoded(post("/api/onramp/checkout", body: CheckoutBody(address: address, asset: asset, cryptoAmount: cryptoAmount, fiat: fiat.flatMap { money in Format.plainMoney(money.micros).map { .init(amount: $0, currency: money.currency) } }), timeout: .seconds(30)))
     }
 
     public func currentRate(currency: CurrencyCode) async throws -> String? {

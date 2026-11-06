@@ -475,6 +475,7 @@ describe("a reconciliation", () => {
     const unseenEth = [{ blockNum: 100, amount: "5", txHashes: ["0xswap"] }]
     const vectors = [
       reconcile("ETH", legs, 0n, onchain({ ETH: FUNDING })),
+      reconcile("ETH", legsOf([row(ETH_ADDRESS, "credit", FUNDING, "unseen_eth")]), 0n, onchain({ ETH: FUNDING })),
       reconcile("ETH", legs, 0n, { ...onchain({ ETH: FUNDING + 5n }), unseenEth }),
       reconcile("ETH", legs, 0n, { balances: null, l1FeeUnknownTxs: [], lastBalances: { ETH: { blockNum: 50, amount: "7" } } }),
       reconcile("ETH", legs, 0n, { balances: null, l1FeeUnknownTxs: [] }),

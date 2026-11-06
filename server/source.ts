@@ -210,7 +210,11 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
         withdrawals,
         gas: {
           cumulativeGas: new Map(previousGas.map((g) => [`${asNumber(g.block_num)}:${asNumber(g.tx_index)}`, String(g.gas_used)])),
-          baseFeeByBlock: new Map(baseFees.map((b) => [asNumber(b.block_num), decimalString(b.base_fee_per_gas) ?? "0"])),
+          // With no base fee, what a transaction paid isn't known, and it isn't free.
+          baseFeeByBlock: new Map(baseFees.flatMap((b) => {
+            const baseFee = decimalString(b.base_fee_per_gas)
+            return baseFee === null ? [] : [[asNumber(b.block_num), baseFee] as const]
+          })),
         },
       })
       return { rows, priced: null, gasUnknown }
