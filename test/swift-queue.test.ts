@@ -122,6 +122,21 @@ describe("swift-queue", { skip: process.platform !== "darwin" }, () => {
     })
   }
 
+  test("losing only its parent, like pnpm being killed, stops it and says so once", async () => {
+    const output = join(dir, "output")
+    const parent = spawn("bash", ["-c", `${script} bash -c '${withStray} echo holding; wait' > ${output} 2>&1; :`], { env, stdio: "ignore" })
+    const read = () => (existsSync(output) ? readFileSync(output, "utf8") : "")
+    await until(() => read().includes("holding"))
+    const stray = strayPid(read())
+    await until(() => isTracked(stray))
+    parent.kill("SIGKILL")
+    await until(() => !isRunning(stray))
+    await until(lockIsFree)
+    await until(() => read().includes("no result"))
+    await until(() => readdirSync(dir).every((name) => !name.startsWith("job.")))
+    assert.equal(read().match(/no result/g)?.length, 1)
+  })
+
   test("stops what a finished command left running, before the next turn starts", async () => {
     const gate = join(dir, "release")
     const run = start(`${withStray} until [ -e ${gate} ]; do sleep 0.05; done; exit 3`)

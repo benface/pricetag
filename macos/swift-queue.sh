@@ -124,9 +124,10 @@ watch() {
   while [ -e "$run" ]; do
     if ! kill -0 "$script" 2>/dev/null || { [ "$parent" -ne 1 ] && ! kill -0 "$parent" 2>/dev/null; }; then
       [ -e "$run" ] || return
+      # With only its parent gone, it can clean up and say so itself.
+      kill -TERM "$script" 2>/dev/null && return
       stop_job
       kill -TERM "$locker" 2>/dev/null
-      kill -TERM "$script" 2>/dev/null
       say "$(no_result)"
       rm -rf "$run"
       return
