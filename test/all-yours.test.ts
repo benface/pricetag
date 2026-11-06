@@ -12,7 +12,7 @@ import { NO_FACTS, combinedFacts, type TransactionGain } from "../src/core/activ
 import type { PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, answerSender, emptyBook, yourWallets, type Book } from "../src/core/book.ts"
 import { sortHoldings } from "../src/core/holdings.ts"
-import { allYoursFailedSentence, allYoursReadingSentence, coverageSentence, excludedSentence, holdCaveatSentence } from "../src/core/wording.ts"
+import { allYoursFailedSentence, allYoursOutdatedSentence, allYoursReadingSentence, allYoursUpdatingSentence, coverageSentence, excludedSentence, holdCaveatSentence } from "../src/core/wording.ts"
 import { DEMO_WALLET, demoWallet } from "../src/core/fixtures.ts"
 
 const HOT = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -226,6 +226,8 @@ describe("all your wallets, in the browser", () => {
     assert.match(coverageSentence({ fromBlock: 1, toBlock: 100 }, 10, false, { combined: true }), /What your wallets held/)
     assert.equal(allYoursReadingSentence([THIRD]), "Still reading 0xcccc…cccc, so it isn't in these numbers yet.")
     assert.equal(allYoursFailedSentence([HOT, COLD]), "Couldn't read 0xaaaa…aaaa and 0xbbbb…bbbb, so they aren't in these numbers.")
+    assert.equal(allYoursUpdatingSentence([THIRD]), "Updating 0xcccc…cccc. These numbers use its last read until then.")
+    assert.equal(allYoursOutdatedSentence([HOT, COLD]), "Couldn't update 0xaaaa…aaaa and 0xbbbb…bbbb, so these numbers use their last read.")
   })
 })
 
@@ -357,7 +359,7 @@ describe("all your wallets, when one of them can't keep up", () => {
   const move = { [HOT]: [row(15, "0x2", HOT, "credit", ONE, COLD)], [COLD]: [row(15, "0x2", COLD, "debit", ONE, HOT)] }
 
   /** A server over wallets whose rows and head the test moves on, with `trouble` for what one wallet's read or rates, or the price at a block, run into. */
-  function serve(trouble: { read?: (address: string) => Promise<void>; rates?: (address: string, block: number) => Promise<void>; reference?: () => Promise<void>; rollingHistory?: boolean; tokenReads?: string[] }) {
+  function serve(trouble: { read?: (address: string) => Promise<void>; rates?: (address: string, block: number) => Promise<void>; reference?: () => Promise<void>; rollingHistory?: boolean; tokenReads?: string[]; maxWallets?: number }) {
     const state = { head: 10, rows: structuredClone(before) as Record<string, LegRow[]>, troubled: false }
     const source: Source = {
       mode: "raw",
@@ -390,7 +392,7 @@ describe("all your wallets, when one of them can't keep up", () => {
       if (state.troubled) await trouble.rates?.(wallet.legs.some((leg) => leg.txHash === "0x1") ? COLD : wallet.legs.some((leg) => leg.txHash === "0x2") ? HOT : THIRD, wallet.latest.blockNum)
       return { byBlock: {}, latest: null }
     }
-    const api = createApi({}, { source, readRates, proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } })
+    const api = createApi({}, { source, readRates, proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } }, null, { maxWallets: trouble.maxWallets })
     const server = createServer((req, res) => void api(req, res))
     const ready = new Promise<string>((resolve) => server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server.address() as AddressInfo).port}`)))
     const post = async (path: string, body: unknown) => (await fetch(`${await ready}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json() as Promise<CombinedPortfolioResponse>
@@ -406,38 +408,111 @@ describe("all your wallets, when one of them can't keep up", () => {
   const stuck = () => new Promise<void>(() => {})
   const body = { method: "average", linked: [HOT, COLD] }
 
-  it("leaves out a wallet whose read just failed, rather than its old balance", async () => {
+  /** Both wallets at block 10, where savings has the 1 ETH, and neither has its transactions' worth of the move. */
+  const asLastRead = (all: CombinedPortfolioResponse) => all.positions.find((p) => p.asset === "ETH")?.wallets.map((w) => [w.wallet, w.qty])
+  const beforeTheMove = [[COLD, ONE.toString()]]
+
+  it("keeps a wallet in the total as it was last read when its read fails, with the others at that same block", async () => {
     const api = serve({ read: async (address) => (address === COLD ? Promise.reject(new Error("nope")) : undefined) })
     assert.equal(ethOf(await api.post("/api/portfolio/all", body)), ONE.toString())
     api.moveOn()
     const all = await api.post("/api/portfolio/all", body)
-    // Savings' old balance still has the ETH that's now in spending money. Counting both would say 2 ETH.
-    assert.equal(ethOf(all), ONE.toString())
-    assert.deepEqual(all.wallets.map((w) => [w.address, w.state]), [[HOT, "read"], [COLD, "failed"]])
-    assert.deepEqual([all.linkedFailed, all.linkedReading], [[COLD], []])
+    // Savings' last read still has the ETH that's now in spending money, so spending money stays at that block too. Counting both would say 2 ETH.
+    assert.deepEqual(asLastRead(all), beforeTheMove)
+    assert.deepEqual(all.wallets.map((w) => [w.address, w.state]), [[HOT, "read"], [COLD, "outdated"]])
+    assert.deepEqual([all.linkedOutdated, all.linkedUpdating, all.linkedFailed, all.linkedReading], [[COLD], [], [], []])
+    assert.equal(all.coverage.toBlock, 10)
     // And what's already been read says so too.
-    assert.deepEqual((await api.post("/api/portfolio/all/last", body)).linkedFailed, [COLD])
+    assert.deepEqual((await api.post("/api/portfolio/all/last", body)).linkedOutdated, [COLD])
     api.close()
   })
 
-  it("doesn't give the browser a wallet's old balance either", async () => {
+  it("gives the browser the same wallets, as it last read them", async () => {
     const api = serve({ read: async (address) => (address === COLD ? Promise.reject(new Error("nope")) : undefined) })
     await api.post("/api/portfolio/all/wallets", body)
     api.moveOn()
     const { wallets, unread } = (await api.post("/api/portfolio/all/wallets", body)) as unknown as AllYoursRead
-    assert.deepEqual(wallets.map((w) => w.address.toLowerCase()), [HOT])
-    assert.deepEqual(unread, { reading: [], failed: [COLD] })
-    assert.equal(ethOf(combinedPortfolioOf(wallets, "average", emptyBook(), unread)), ONE.toString())
+    assert.deepEqual(wallets.map((w) => w.address.toLowerCase()), [HOT, COLD])
+    assert.deepEqual(unread, { reading: [], failed: [], updating: [], outdated: [COLD] })
+    assert.deepEqual(asLastRead(combinedPortfolioOf(wallets, "average", emptyBook(), unread)), beforeTheMove)
     api.close()
   })
 
-  it("leaves out a wallet whose read is taking too long, rather than its old balance", async () => {
-    const api = serve({ read: async (address) => (address === COLD ? stuck() : undefined) })
+  it("keeps a wallet in the total as it was last read while its read takes too long", async () => {
+    let release = () => {}
+    const api = serve({ read: async (address) => (address === COLD ? new Promise<void>((resolve) => (release = resolve)) : undefined) })
     await api.post("/api/portfolio/all", body)
     api.moveOn()
+    const started = Date.now()
     const all = await api.post("/api/portfolio/all", body)
-    assert.equal(ethOf(all), ONE.toString())
-    assert.deepEqual([all.linkedReading, all.linkedFailed], [[COLD], []])
+    assert.ok(Date.now() - started < 10_000)
+    assert.deepEqual(asLastRead(all), beforeTheMove)
+    assert.deepEqual(all.wallets.map((w) => [w.address, w.state]), [[HOT, "read"], [COLD, "updating"]])
+    assert.deepEqual([all.linkedUpdating, all.linkedReading, all.linkedOutdated], [[COLD], [], []])
+    // Once it's back, the move's there, once.
+    release()
+    const caughtUp = await api.post("/api/portfolio/all", body)
+    assert.deepEqual(asLastRead(caughtUp), [[HOT, ONE.toString()], [COLD, "0"]])
+    assert.deepEqual(caughtUp.wallets.map((w) => w.state), ["read", "read"])
+    assert.deepEqual(caughtUp.linkedUpdating, [])
+    api.close()
+  })
+
+  it("doesn't wait on every wallet being slow when it has a last answer", async () => {
+    const api = serve({ read: stuck })
+    await api.post("/api/portfolio/all", body)
+    api.moveOn()
+    const started = Date.now()
+    const all = await api.post("/api/portfolio/all", body)
+    assert.ok(Date.now() - started < 10_000)
+    assert.deepEqual(asLastRead(all), beforeTheMove)
+    assert.deepEqual(all.linkedUpdating.sort(), [HOT, COLD].sort())
+    api.close()
+  })
+
+  it("keeps a wallet in the total when the server has forgotten it, as memory running short does", async () => {
+    const api = serve({ maxWallets: 1 })
+    await api.post("/api/portfolio/all", body)
+    const last = await api.post("/api/portfolio/all/last", body)
+    assert.equal(ethOf(last), ONE.toString())
+    assert.deepEqual([last.linkedUpdating, last.linkedReading], [[HOT], []])
+    assert.deepEqual(last.wallets.map((w) => w.state), ["updating", "read"])
+    api.close()
+  })
+
+  it("adds a wallet's first read without taking anything away", async () => {
+    const api = serve({ read: async (address) => (address === THIRD ? stuck() : undefined) })
+    const linked = [HOT, COLD, THIRD]
+    api.state.troubled = true
+    await api.post("/api/portfolio/all", { ...body, linked })
+    api.moveOn()
+    const all = await api.post("/api/portfolio/all", { ...body, linked })
+    assert.deepEqual([all.linkedReading, all.linkedUpdating], [[THIRD], []], "it's never been in the numbers, so nothing's held back for it")
+    assert.deepEqual(asLastRead(all), [[HOT, ONE.toString()], [COLD, "0"]])
+    api.close()
+  })
+
+  it("keeps out a wallet that's only just been read when the others have to stay where they were", async () => {
+    let waitingOn = THIRD
+    const api = serve({ read: async (address) => (address === waitingOn ? stuck() : undefined) })
+    const linked = [HOT, COLD, THIRD]
+    api.state.troubled = true
+    await api.post("/api/portfolio/all", { ...body, linked })
+    api.moveOn()
+    waitingOn = COLD
+    const all = await api.post("/api/portfolio/all", { ...body, linked })
+    assert.deepEqual(all.wallets.map((w) => [w.address, w.state]), [[HOT, "read"], [COLD, "updating"], [THIRD, "reading"]])
+    assert.deepEqual(asLastRead(all), beforeTheMove)
+    api.close()
+  })
+
+  it("doesn't keep a preview's answer, whose rates are for answers the user hasn't given", async () => {
+    const api = serve({ read: async (address) => (address === COLD ? stuck() : undefined) })
+    for (const address of [HOT, COLD]) await api.post(`/api/portfolio/${address}`, { method: "average" })
+    await api.post("/api/portfolio/all/preview", { ...body, candidates: [{}] })
+    api.moveOn()
+    const all = await api.post("/api/portfolio/all", body)
+    assert.deepEqual([all.linkedReading, all.linkedUpdating], [[COLD], []])
     api.close()
   })
 
@@ -540,7 +615,7 @@ describe("all your wallets, when one of them can't keep up", () => {
       () => (armed = true),
     )
     const last = await api.post("/api/portfolio/all/last", { ...body, currency: "CAD", linked: [HOT, COLD, THIRD] })
-    // Spending money at block 20 has the ETH that savings still has at block 10.
+    // Spending money at block 20 has the ETH that savings still has at block 10. These three have no last answer together to fall back on.
     assert.equal(ethOf(last), ONE.toString())
     assert.deepEqual([last.linkedReading, last.linkedFailed], [[HOT], []])
     assert.deepEqual(last.wallets.map((w) => [w.address, w.state]), [[COLD, "read"], [THIRD, "read"], [HOT, "reading"]])
@@ -554,7 +629,8 @@ describe("all your wallets, when one of them can't keep up", () => {
     const last = await api.post("/api/portfolio/all/last", body)
     assert.ok(Date.now() - started < 10_000)
     assert.equal(ethOf(last), ONE.toString())
-    assert.deepEqual([last.linkedReading, last.linkedFailed], [[HOT], []])
+    assert.deepEqual([last.linkedUpdating, last.linkedReading, last.linkedFailed], [[HOT], [], []], "its last answer stands")
+    assert.deepEqual(asLastRead(last), beforeTheMove)
     api.close()
   })
 
@@ -573,8 +649,13 @@ describe("all your wallets, when one of them can't keep up", () => {
       failing = trouble
       const last = await api.post("/api/portfolio/all/last", { ...body, currency: "CAD" })
       assert.equal(ethOf(last), ONE.toString())
+      // In this currency, these wallets have no last answer to fall back on.
       assert.deepEqual([last.linkedFailed, last.linkedReading], [[HOT], []], trouble)
     }
+    failing = "price"
+    const last = await api.post("/api/portfolio/all/last", body)
+    assert.deepEqual(asLastRead(last), beforeTheMove)
+    assert.deepEqual([last.linkedOutdated, last.linkedFailed, last.linkedReading], [[HOT], [], []])
     api.close()
   })
 

@@ -35,7 +35,9 @@ import {
   UNKNOWN,
   UNREALIZED_HELP,
   allYoursFailedSentence,
+  allYoursOutdatedSentence,
   allYoursReadingSentence,
+  allYoursUpdatingSentence,
   answerQuestionsLabel,
   behindSentence,
   coverageSentence,
@@ -575,7 +577,7 @@ export function App() {
         <button type="button" onClick={() => setBuying(true)}>
           Buy
         </button>
-        {showing ? <LiveBadge wallet={showing} stale={error !== null} updating={(combined?.linkedReading.length ?? 0) > 0} /> : null}
+        {showing ? <LiveBadge wallet={showing} stale={error !== null} updating={(combined?.linkedReading.length ?? 0) + (combined?.linkedUpdating.length ?? 0) > 0} /> : null}
       </header>
       {inputError ? <p className="notice warn">⚠ {inputError}</p> : null}
       {notSaved ? <p className="notice warn" role="alert">⚠ {NOT_SAVED}</p> : null}
@@ -605,9 +607,18 @@ export function App() {
         <main>
           {error ? <ProblemNotice problem={feedProblem(error, location.origin, started ? staleSentence(formatTime(showing.latest.timestamp)) : null)} action={tryRead} /> : null}
           {combined && combined.linkedReading.length > 0 ? <p className="notice">{allYoursReadingSentence(combined.linkedReading)}</p> : null}
+          {combined && combined.linkedUpdating.length > 0 ? <p className="notice">{allYoursUpdatingSentence(combined.linkedUpdating)}</p> : null}
           {combined && combined.linkedFailed.length > 0 ? (
             <p className="notice warn">
               ⚠ {allYoursFailedSentence(combined.linkedFailed)}{" "}
+              <button type="button" className="link" onClick={allRead.retry}>
+                Try again
+              </button>
+            </p>
+          ) : null}
+          {combined && combined.linkedOutdated.length > 0 ? (
+            <p className="notice warn">
+              ⚠ {allYoursOutdatedSentence(combined.linkedOutdated)}{" "}
               <button type="button" className="link" onClick={allRead.retry}>
                 Try again
               </button>

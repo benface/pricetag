@@ -49,6 +49,19 @@ struct AllYoursTests {
         #expect(!eth.matches("usdc savings", names: [c: "Savings"]))
     }
 
+    @Test func saysWhichWalletsAreInTheNumbersAsTheyWereLastRead() throws {
+        var text = String(decoding: try Data(contentsOf: try #require(Bundle.module.url(forResource: "all-yours-portfolio", withExtension: "json", subdirectory: "Resources"))), as: UTF8.self)
+        text = text.replacing("\"linkedUpdating\": []", with: "\"linkedUpdating\": [\"\(a)\"]").replacing("\"linkedOutdated\": []", with: "\"linkedOutdated\": [\"\(b)\"]")
+        text = text.replacing("\"state\": \"reading\"", with: "\"state\": \"updating\"")
+        let portfolio = try JSONDecoder().decode(Portfolio.self, from: Data(text.utf8))
+        #expect(portfolio.linkedUpdating == [a])
+        #expect(portfolio.linkedOutdated == [b])
+        #expect(portfolio.wallets?.last?.state == .updating)
+        #expect(Wording.allYoursUpdating(["Savings"]) == "Updating Savings. These numbers use its last read until then.")
+        #expect(Wording.allYoursOutdated(["Savings", "Ledger 2"]) == "Couldn't update Savings and Ledger 2, so these numbers use their last read.")
+        #expect(Wording.updatingLastRead(2) == "Updating. 2 wallets are being read again, and these numbers use their last read until then.")
+    }
+
     @Test func readsWhatTheServerSends() throws {
         let portfolio = try resource("all-yours-portfolio", as: Portfolio.self)
         #expect(portfolio.isAllYours)

@@ -21,8 +21,11 @@ import { MAX_LEGS, bookContext, legOf, responseOf } from "./portfolio.ts"
 /** What a client asks for in place of an address, for all of its user's wallets at once. */
 export const ALL_YOURS = "all"
 
-/** How far each wallet's read has got. One that's still reading or failed isn't in the numbers yet. */
-export type CombinedWallet = { address: string; state: "read" | "reading" | "failed" }
+/**
+ * How far each wallet's read has got. One that's still reading or failed isn't in the numbers yet. One that's updating, or
+ * outdated because its latest read failed, is in them as it was last read, and so is every other wallet, at that same block.
+ */
+export type CombinedWallet = { address: string; state: "read" | "reading" | "failed" | "updating" | "outdated" }
 
 /** One wallet's share of a holding, so an unknown can say where it is. */
 export type PositionPart = Pick<PortfolioPosition["values"], "qty" | "unknownCostQty" | "costMicros" | "valueMicros"> & { wallet: string; pnlMicros: string | null; resolvable: boolean; reconciliation: Reconciliation["status"] | null }
@@ -36,10 +39,14 @@ export type CombinedPortfolioResponse = Omit<PortfolioResponse, "positions" | "p
   totals: Omit<Totals, "excluded"> & { excluded: (Exclusion & { wallet: string })[] }
   points: CombinedPoint[]
   wallets: CombinedWallet[]
+  /** Wallets being read again, whose last read is what's in the numbers. */
+  linkedUpdating: string[]
+  /** Wallets whose latest read failed, whose last good read is what's in the numbers. */
+  linkedOutdated: string[]
 }
 
-/** Which wallets aren't in the numbers yet. */
-export type Unread = { reading: readonly string[]; failed: readonly string[] }
+/** Which wallets aren't in the numbers yet, and which are only in them as they were last read. */
+export type Unread = { reading: readonly string[]; failed: readonly string[]; updating?: readonly string[]; outdated?: readonly string[] }
 
 /** Every wallet that could be read, all at one block so a move between them is in both or neither, for a client that runs the fold itself. */
 export type AllYoursRead = { wallets: WalletResponse[]; unread: Unread }
@@ -245,7 +252,7 @@ function combine(read: readonly WalletResponse[], method: Method, book: Book, { 
 
 /**
  * The portfolio of every wallet in `read`, as one. `unread` is the wallets asked about that aren't read yet, or failed, which
- * aren't in the numbers, so they're listed apart. `read` needs at least one wallet, all in the same currency and by the same rule.
+ * aren't in the numbers, so they're listed apart, and which of `read` are only as they were last read. `read` needs at least one wallet, all in the same currency and by the same rule.
  */
 export function combinedPortfolioOf(read: readonly WalletResponse[], method: Method, book: Book, unread: Unread = { reading: [], failed: [] }): CombinedPortfolioResponse {
   const linking = linkingAll(book, [...read.map((wallet) => wallet.address), ...unread.reading, ...unread.failed])
@@ -286,7 +293,9 @@ export function combinedPortfolioOf(read: readonly WalletResponse[], method: Met
     withheld: [...withheld.values()],
     purchases: first.purchases,
     marketChecked: responses.every((r) => r.marketChecked),
-    wallets: [...read.map((wallet) => ({ address: wallet.address.toLowerCase(), state: "read" as const })), ...unread.reading.map((address) => ({ address, state: "reading" as const })), ...unread.failed.map((address) => ({ address, state: "failed" as const }))],
+    linkedUpdating: [...(unread.updating ?? [])],
+    linkedOutdated: [...(unread.outdated ?? [])],
+    wallets: [...read.map((wallet) => ({ address: wallet.address.toLowerCase(), state: unread.updating?.includes(wallet.address.toLowerCase()) ? ("updating" as const) : unread.outdated?.includes(wallet.address.toLowerCase()) ? ("outdated" as const) : ("read" as const) })), ...unread.reading.map((address) => ({ address, state: "reading" as const })), ...unread.failed.map((address) => ({ address, state: "failed" as const }))],
   }
 }
 

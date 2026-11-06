@@ -111,11 +111,12 @@ extension [String: String] {
 
 extension PortfolioStore {
     /// nil unless there are numbers on screen that this read may change. All Yours also changes when a wallet that's still
-    /// being read is done, so it says so until then.
+    /// being read, or read again, is done, so it says so until then.
     public var updatingNote: String? {
         guard let portfolio else { return nil }
         if feed == .reading { return Wording.updating(lastUpdate: portfolio.latest.date.map(Format.time) ?? portfolio.latest.timestamp) }
         if portfolio.isAllYours, !portfolio.linkedReading.isEmpty, !feed.isStale { return Wording.updatingWallets(portfolio.linkedReading.count) }
+        if portfolio.isAllYours, let updating = portfolio.linkedUpdating, !updating.isEmpty, !feed.isStale { return Wording.updatingLastRead(updating.count) }
         return nil
     }
 }

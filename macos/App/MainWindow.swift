@@ -466,7 +466,7 @@ struct MainWindow: View {
 
     /// What can add or remove a whole block of the page.
     private func pageShape(_ portfolio: Portfolio) -> [Bool] {
-        [firstRun.explainsNumbers, firstRun.warnsOfContract(store.address), portfolio.attention == nil, portfolio.canChart(navigation.chartMetric), store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) == nil, portfolio.linkedFailed.isEmpty, portfolio.linkedReading.isEmpty]
+        [firstRun.explainsNumbers, firstRun.warnsOfContract(store.address), portfolio.attention == nil, portfolio.canChart(navigation.chartMetric), store.feed.staleNotice(serverURL: store.serverURL, portfolio: portfolio) == nil, portfolio.linkedFailed.isEmpty, portfolio.linkedReading.isEmpty, portfolio.linkedUpdating?.isEmpty ?? true, portfolio.linkedOutdated?.isEmpty ?? true]
     }
 
     private func chartHeight(_ pageHeight: CGFloat, rows: Int) -> CGFloat {
@@ -509,7 +509,7 @@ struct MainWindow: View {
         }
     }
 
-    /// Wallets that aren't in All Yours' numbers yet, by name, since the numbers are only theirs once they are.
+    /// Wallets that aren't in All Yours' numbers yet, or are only as they were last read, by name, since the numbers depend on them.
     @ViewBuilder
     private func allYoursNotices(_ portfolio: Portfolio) -> some View {
         let names = store.walletList(hotWallet: hotWallet).names
@@ -522,6 +522,17 @@ struct MainWindow: View {
         }
         if !portfolio.linkedReading.isEmpty {
             Notice(.info, Wording.allYoursReading(portfolio.linkedReading.map(names.walletName)))
+                .arrives()
+        }
+        if let outdated = portfolio.linkedOutdated, !outdated.isEmpty {
+            HStack(spacing: 8) {
+                Notice(.warning, Wording.allYoursOutdated(outdated.map(names.walletName)))
+                Button("Try Again") { store.refresh() }
+            }
+            .arrives()
+        }
+        if let updating = portfolio.linkedUpdating, !updating.isEmpty {
+            Notice(.info, Wording.allYoursUpdating(updating.map(names.walletName)))
                 .arrives()
         }
     }

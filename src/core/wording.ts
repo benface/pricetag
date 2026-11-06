@@ -314,6 +314,12 @@ export const allYoursReadingSentence = (wallets: readonly string[]) => `Still re
 /** Wallets in All Yours whose read failed, which aren't in its numbers. */
 export const allYoursFailedSentence = (wallets: readonly string[]) => `Couldn't read ${walletList(wallets)}, so ${wallets.length === 1 ? "it isn't" : "they aren't"} in these numbers.`
 
+/** Wallets in All Yours being read again, whose last read is what these numbers use. */
+export const allYoursUpdatingSentence = (wallets: readonly string[]) => `Updating ${walletList(wallets)}. These numbers use ${wallets.length === 1 ? "its" : "their"} last read until then.`
+
+/** Wallets in All Yours whose latest read failed, whose last good read is what these numbers use. */
+export const allYoursOutdatedSentence = (wallets: readonly string[]) => `Couldn't update ${walletList(wallets)}, so these numbers use ${wallets.length === 1 ? "its" : "their"} last read.`
+
 /** A wallet's history that doesn't add up, or can't be checked, and what that does to what it sent. */
 export function withheldSentence(wallet: string, asset: string): string {
   return `${shortHash(wallet)}'s ${asset} history can't be confirmed, so what it sent has an unknown cost where it arrived.`

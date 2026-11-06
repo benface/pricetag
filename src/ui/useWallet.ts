@@ -167,11 +167,11 @@ export function useWallet(address: string | null, currency: CurrencyCode, rule: 
 
 /**
  * Reads all the user's wallets together, so they're all at one block, and again on each new block. Each is its own read on the
- * server, so a slow one doesn't hold up the rest: it's listed as still reading, and looked at again soon. Answering for another
+ * server, so a slow one doesn't hold up the rest: it's listed as still reading or updating, and looked at again soon. Answering for another
  * wallet adds it without clearing what's on screen.
  */
 export function useAllYours(addresses: readonly string[] | null, currency: CurrencyCode, rule: string | null, paid: string) {
   const [attempt, setAttempt] = useState(0)
-  const { value, loading, error } = useLiveRead(addresses ? ALL_YOURS : null, `${addresses?.join(",")}:${currency}:${rule}:${paid}`, (signal) => fetchAllYours(addresses as string[], currency, rule, paid, signal), { live: true, unfinished: ({ unread }) => unread.reading.length > 0 }, attempt)
+  const { value, loading, error } = useLiveRead(addresses ? ALL_YOURS : null, `${addresses?.join(",")}:${currency}:${rule}:${paid}`, (signal) => fetchAllYours(addresses as string[], currency, rule, paid, signal), { live: true, unfinished: ({ unread }) => unread.reading.length > 0 || (unread.updating?.length ?? 0) > 0 }, attempt)
   return { read: value, loading, error, retry: () => setAttempt((n) => n + 1) }
 }

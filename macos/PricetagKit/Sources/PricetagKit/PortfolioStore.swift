@@ -324,7 +324,7 @@ public final class PortfolioStore {
             return
         }
         // While All Yours still has wallets on their way, they could be done by the next read, block or not.
-        let isWaitingOnWallets = portfolio?.isAllYours == true && portfolio?.linkedReading.isEmpty == false
+        let isWaitingOnWallets = portfolio?.isAllYours == true && (portfolio?.linkedReading.isEmpty == false || portfolio?.linkedUpdating?.isEmpty == false)
         let duration = isPushed && delay == reachableDelay && !feed.isStale && !isWaitingOnWallets ? pushedDelay : delay
         let sleeping = Task { _ = try? await Task.sleep(for: duration) }
         sleeper = sleeping

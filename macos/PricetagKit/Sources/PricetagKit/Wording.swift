@@ -382,6 +382,21 @@ public enum Wording {
         "Couldn't read \(names.formatted(.list(type: .and))), so \(names.count == 1 ? "it isn't" : "they aren't") in these numbers."
     }
 
+    /// Wallets in All Yours being read again, whose last read is what these numbers use.
+    public static func allYoursUpdating(_ names: [String]) -> String {
+        "Updating \(names.formatted(.list(type: .and))). These numbers use \(names.count == 1 ? "its" : "their") last read until then."
+    }
+
+    /// Wallets in All Yours whose latest read failed, whose last good read is what these numbers use.
+    public static func allYoursOutdated(_ names: [String]) -> String {
+        "Couldn't update \(names.formatted(.list(type: .and))), so these numbers use \(names.count == 1 ? "its" : "their") last read."
+    }
+
+    /// What an update says while some of All Yours' wallets are being read again, and are in these numbers as they were.
+    public static func updatingLastRead(_ count: Int) -> String {
+        "Updating. \(count == 1 ? "1 wallet is" : "\(count) wallets are") being read again, and these numbers use \(count == 1 ? "its" : "their") last read until then."
+    }
+
     /// What an update says while some of All Yours' wallets are still being read.
     public static func updatingWallets(_ count: Int) -> String {
         "Updating. \(count == 1 ? "1 wallet is" : "\(count) wallets are") still being read, and \(count == 1 ? "isn't" : "aren't") in these numbers yet."
