@@ -1,34 +1,51 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import type { CurrencyCode } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../core/api.ts"
-import { applyAnswer, changeStoredBook, isBookKey, linkDeviceAccounts, recordPurchase, storedBook, undoAnswer, type Book, type Purchase } from "../core/book.ts"
+import { applyAnswer, changeStoredBook, isBookKey, linkDeviceAccounts, readStoredBook, recordPurchase, same, storedBook, undoAnswer, type Book, type Purchase } from "../core/book.ts"
 import { readKey, readsMatching } from "../core/resolve.ts"
+import { browserShelf } from "../core/shelf.ts"
 import { walletUrl } from "./useWallet.ts"
 
 type Step = { before: Book; after: Book }
+
+/** Shared with `usePurchases`. */
+export const shelf = browserShelf()
 
 /** The user's answers, kept in this browser and nowhere else. Undo goes back one of this tab's answers at a time, and leaves what other tabs have said. */
 export function useBook() {
   const [book, setBook] = useState(() => storedBook(localStorage))
   const [history, setHistory] = useState<Step[]>([])
 
-  const save = useCallback((update: (latest: Book) => Book) => {
-    const next = changeStoredBook(localStorage, update)
-    if (next) setBook(next)
-  }, [])
+  const show = useCallback((latest: Book) => setBook((shown) => (same(shown, latest) ? shown : latest)), [])
+
+  // On screen right away, and then whatever the stored book says it became, with what other tabs have added. It rejects if that couldn't be saved.
+  const save = useCallback(
+    async (update: (latest: Book) => Book) => {
+      setBook(update)
+      try {
+        show(await changeStoredBook(shelf, update))
+      } catch (error) {
+        show(storedBook(localStorage))
+        throw error
+      }
+    },
+    [show],
+  )
 
   useEffect(() => {
+    const read = () => void readStoredBook(shelf).then(show, console.error)
     const onStorage = (event: StorageEvent) => {
-      if (isBookKey(event.key)) setBook(storedBook(localStorage))
+      if (isBookKey(event.key)) read()
     }
+    read()
     window.addEventListener("storage", onStorage)
     return () => window.removeEventListener("storage", onStorage)
-  }, [])
+  }, [show])
 
   const change = useCallback(
     (next: Book) => {
       setHistory((h) => [...h, { before: book, after: next }])
-      save((latest) => applyAnswer(latest, book, next))
+      save((latest) => applyAnswer(latest, book, next)).catch(console.error)
     },
     [book, save],
   )
@@ -36,19 +53,18 @@ export function useBook() {
     const step = history.at(-1)
     if (!step) return
     setHistory(history.slice(0, -1))
-    save((latest) => undoAnswer(latest, step.before, step.after))
+    save((latest) => undoAnswer(latest, step.before, step.after)).catch(console.error)
   }, [history, save])
 
   // Not an answer, so undo doesn't take it back, whichever answers came before it.
   const linkAccounts = useCallback(
     (addresses: readonly string[]) => {
-      save((latest) => linkDeviceAccounts(latest, addresses))
-      setHistory((earlier) => earlier.map(({ before, after }) => ({ before: linkDeviceAccounts(before, addresses), after: linkDeviceAccounts(after, addresses) })))
+      save((latest) => linkDeviceAccounts(latest, addresses)).catch(console.error)
     },
     [save],
   )
 
-  // What an order says, and not an answer either.
+  // What an order says, and not an answer either. Whoever calls this hears if it wasn't saved, so the order can be read again.
   const addPurchase = useCallback((purchase: Purchase) => save((latest) => recordPurchase(latest, purchase)), [save])
 
   return { book, change, undo, canUndo: history.length > 0, linkAccounts, addPurchase }

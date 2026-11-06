@@ -4,8 +4,9 @@
 
 import { TOKENS, formatAmount, formatMoney, formatPaid, isAddress, isCurrencyCode, normalizeAddress, plainAmount, type CurrencyCode } from "@pricetag/sdk/core"
 import type { OnrampOrder } from "./api.ts"
-import { parseBook, type KeptIn, type Money, type Purchase } from "./book.ts"
+import { parseBook, type Money, type Purchase } from "./book.ts"
 import type { PurchaseState } from "./resolve.ts"
+import type { KeptIn, Shelf } from "./shelf.ts"
 
 /** The one thing the flow says about who the provider is, along with where its page is. */
 export const PROVIDER = "Coinbase"
@@ -203,23 +204,31 @@ const PURCHASES_KEY = "patina.purchases"
 
 export const isPurchasesKey = (key: string | null) => key === null || key === PURCHASES_KEY
 
-export function storedPurchases(storage: KeptIn): TrackedPurchase[] {
+function purchasesFrom(text: string | null): TrackedPurchase[] {
   try {
-    return parseTrackedPurchases(JSON.parse(storage.getItem(PURCHASES_KEY) ?? "null"))
+    return parseTrackedPurchases(JSON.parse(text ?? "null"))
   } catch {
     return []
   }
 }
 
-export function changeStoredPurchases(storage: KeptIn, change: (latest: TrackedPurchase[]) => TrackedPurchase[]): TrackedPurchase[] {
-  const next = change(storedPurchases(storage))
-  storage.setItem(PURCHASES_KEY, JSON.stringify(next))
-  return next
+/** The copy a page can show right away, until `readStoredPurchases` says what's true. */
+export const storedPurchases = (storage: KeptIn): TrackedPurchase[] => purchasesFrom(storage.getItem(PURCHASES_KEY))
+
+export const readStoredPurchases = async (shelf: Shelf): Promise<TrackedPurchase[]> => purchasesFrom(await shelf.read(PURCHASES_KEY))
+
+export async function changeStoredPurchases(shelf: Shelf, change: (latest: TrackedPurchase[]) => TrackedPurchase[]): Promise<TrackedPurchase[]> {
+  const text = await shelf.change(PURCHASES_KEY, (text) => {
+    const latest = purchasesFrom(text)
+    const next = JSON.stringify(change(latest))
+    return next === JSON.stringify(latest) ? text : next
+  })
+  return purchasesFrom(text)
 }
 
-/** What an order says. It goes in the book first, because trimming can take its row away, and then nothing would say it again. */
-export function settleOrder(storage: KeptIn, ref: string, order: OnrampOrder, record: (purchase: Purchase) => void): TrackedPurchase[] {
+/** What an order says. It goes in the book first and has to get there, because trimming can take its row away, and then nothing would say it again. */
+export async function settleOrder(shelf: Shelf, ref: string, order: OnrampOrder, record: (purchase: Purchase) => unknown): Promise<TrackedPurchase[]> {
   const purchase = purchaseOf(order)
-  if (purchase) record(purchase)
-  return changeStoredPurchases(storage, (current) => trimmed(current.map((one) => (one.ref === ref ? { ...one, order } : one)), ref))
+  if (purchase) await record(purchase)
+  return changeStoredPurchases(shelf, (current) => trimmed(current.map((one) => (one.ref === ref ? { ...one, order } : one)), ref))
 }

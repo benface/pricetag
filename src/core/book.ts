@@ -2,6 +2,7 @@
 // each request, and the server doesn't store them. Writing one onchain would publicly tie the wallets together.
 
 import { isAddress, isCurrencyCode, normalizeAddress, type CurrencyCode } from "@pricetag/sdk/core"
+import type { KeptIn, Shelf } from "./shelf.ts"
 
 export const DEMO_ADDRESS = "0x00000000000000000000000000000000000de300"
 /** The demo's other wallet. Nothing links them until someone answers that it's theirs. */
@@ -60,6 +61,8 @@ export type Book = {
   withdrawals: ExchangeWithdrawal[]
   /** The wallets a client already knows are the user's, like the Mac app's hot and cold ones. Nobody answered for these. */
   linked?: string[]
+  /** Accounts a hardware device proved are the user's. They're in `senders` too, and this is what says no answer put them there, so undoing one can't take them out. */
+  deviceAccounts?: string[]
   purchases?: Purchase[]
 }
 
@@ -93,7 +96,7 @@ export function answerSender(book: Book, focus: string | null, sender: string, a
 export function linkDeviceAccounts(book: Book, addresses: readonly string[]): Book {
   const senders: Book["senders"] = { ...book.senders }
   for (const address of addresses) senders[normalizeAddress(address)] = { kind: "mine" }
-  return { ...book, senders }
+  return { ...book, senders, deviceAccounts: [...new Set([...(book.deviceAccounts ?? []), ...addresses.map(normalizeAddress)])] }
 }
 
 /** A purchase in the book. An order's read again as more is known, like its block, so this takes over from what it said before. If nothing's new, it's the same book. */
@@ -105,7 +108,7 @@ export function recordPurchase(book: Book, purchase: Purchase): Book {
 
 /** Sorted first, because a book that's been saved and read back has the same things in a different order. */
 const canonical = (value: unknown) => JSON.stringify(value, (_, inner) => (plainRecord(inner) ? Object.fromEntries(Object.entries(inner).sort(([a], [b]) => (a < b ? -1 : 1))) : inner))
-const same = (a: unknown, b: unknown) => canonical(a) === canonical(b)
+export const same = (a: unknown, b: unknown) => canonical(a) === canonical(b)
 
 function moveEntries<T>(latest: Readonly<Record<string, T>>, from: Readonly<Record<string, T>>, to: Readonly<Record<string, T>>, keepNewer: boolean): Record<string, T> {
   const moved = { ...latest }
@@ -132,8 +135,15 @@ function moveRows<T>(latest: readonly T[], from: readonly T[], to: readonly T[])
  */
 export const applyAnswer = (latest: Book, before: Book, after: Book): Book => ({ ...latest, senders: moveEntries(latest.senders, before.senders, after.senders, false), costs: moveEntries(latest.costs, before.costs, after.costs, false), withdrawals: moveRows(latest.withdrawals, before.withdrawals, after.withdrawals) })
 
-/** Takes back only what an answer changed. Anything said about the same thing since, here or in another tab, is newer, so it stays. */
-export const undoAnswer = (latest: Book, before: Book, after: Book): Book => ({ ...latest, senders: moveEntries(latest.senders, after.senders, before.senders, true), costs: moveEntries(latest.costs, after.costs, before.costs, true), withdrawals: moveRows(latest.withdrawals, after.withdrawals, before.withdrawals) })
+/**
+ * Takes back only what an answer changed. Anything said about the same thing since, here or in another tab, is newer, so it
+ * stays, and so does an account a device has linked since, which no answer can take back.
+ */
+export function undoAnswer(latest: Book, before: Book, after: Book): Book {
+  const linkedSince = new Set((latest.deviceAccounts ?? []).filter((address) => !after.deviceAccounts?.includes(address)))
+  const open = (senders: Book["senders"]) => Object.fromEntries(Object.entries(senders).filter(([address]) => !linkedSince.has(address)))
+  return { ...latest, senders: moveEntries(latest.senders, open(after.senders), open(before.senders), true), costs: moveEntries(latest.costs, after.costs, before.costs, true), withdrawals: moveRows(latest.withdrawals, after.withdrawals, before.withdrawals) }
+}
 
 /** Saying what was paid for a sender's open receipts, by asset. It takes over for those receipts, and any others keep their earlier answers. */
 export function enterExchangeCosts(book: Book, focus: string, sender: string, receipts: readonly Receipt[], amounts: Readonly<Record<string, Money>>): Book {
@@ -212,28 +222,31 @@ function parsePurchase(value: unknown): Purchase | null {
   return { provider: row.provider, order: row.order, wallet: normalizeAddress(row.wallet), asset: row.asset, units: row.units, txHash: row.txHash.toLowerCase(), blockNum: blockNum as number | null, cost, costUsdMicros: costUsdMicros as string | null }
 }
 
-/** Where a client keeps something. A second tab shares it, so each change starts from what's there, never from what's on screen. */
-export type KeptIn = Pick<Storage, "getItem" | "setItem">
-
 const BOOK_KEY = "patina.book"
 
 export const isBookKey = (key: string | null) => key === null || key === BOOK_KEY
 
-export function storedBook(storage: KeptIn): Book {
+function bookFrom(text: string | null): Book {
   try {
-    return parseBook(JSON.parse(storage.getItem(BOOK_KEY) ?? "null")) ?? emptyBook()
+    return parseBook(JSON.parse(text ?? "null")) ?? emptyBook()
   } catch {
     return emptyBook()
   }
 }
 
-/** A change to what's stored. Null when it changes nothing, so nothing's written and no other tab hears about it. */
-export function changeStoredBook(storage: KeptIn, change: (latest: Book) => Book): Book | null {
-  const latest = storedBook(storage)
-  const next = change(latest)
-  if (same(next, latest)) return null
-  storage.setItem(BOOK_KEY, JSON.stringify(next))
-  return next
+/** The copy a page can show right away, until `readStoredBook` says what's true. */
+export const storedBook = (storage: KeptIn): Book => bookFrom(storage.getItem(BOOK_KEY))
+
+export const readStoredBook = async (shelf: Shelf): Promise<Book> => bookFrom(await shelf.read(BOOK_KEY))
+
+/** A change to what's stored, whatever this tab last heard about it. When it changes nothing, nothing's written and no other tab hears about it. */
+export async function changeStoredBook(shelf: Shelf, change: (latest: Book) => Book): Promise<Book> {
+  const text = await shelf.change(BOOK_KEY, (text) => {
+    const latest = bookFrom(text)
+    const next = change(latest)
+    return same(next, latest) ? text : JSON.stringify(next)
+  })
+  return bookFrom(text)
 }
 
 /** A book from a request, or null when it isn't one. Clients can send anything here. */
@@ -266,6 +279,10 @@ export function parseBook(value: unknown): Book | null {
     const purchase = parsePurchase(raw)
     if (!purchase) return null
     parsed.purchases = [...(parsed.purchases ?? []), purchase]
+  }
+  if (book.deviceAccounts !== undefined) {
+    if (!Array.isArray(book.deviceAccounts) || !book.deviceAccounts.every((address) => typeof address === "string" && isAddress(address))) return null
+    parsed.deviceAccounts = book.deviceAccounts.map((address: string) => normalizeAddress(address))
   }
   return parsed
 }
