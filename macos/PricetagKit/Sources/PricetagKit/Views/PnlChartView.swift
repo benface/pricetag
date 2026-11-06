@@ -504,7 +504,7 @@ private struct DrawnPnlChart: View {
 }
 #endif
 
-/// The chart for VoiceOver's own chart tools, like Audio Graph: one value after each transaction, over time. Unknown stretches have no points, as the line has none.
+/// The chart for VoiceOver's own chart tools, like Audio Graph: the values the line goes through, over time, so Value's are from before each transaction too. Unknown stretches have no points, as the line has none.
 private struct PnlChartDescriptor: AXChartDescriptorRepresentable {
     let series: any PlottedSeries
     let metric: ChartMetric
@@ -512,9 +512,9 @@ private struct PnlChartDescriptor: AXChartDescriptorRepresentable {
     let summary: String
 
     func makeChartDescriptor() -> AXChartDescriptor {
-        let known = series.plotted.filter { $0.value != nil }
+        let known = series.spokenPoints(currency)
         let times = known.map { $0.date.timeIntervalSince1970 }
-        let values = known.compactMap(\.value)
+        let values = known.map(\.value)
         let x = AXNumericDataAxisDescriptor(
             title: "Time",
             range: (times.min() ?? 0)...(max(times.max() ?? 1, (times.min() ?? 0) + 1)),
@@ -531,9 +531,7 @@ private struct PnlChartDescriptor: AXChartDescriptorRepresentable {
             let micros = String(Int(($0 * 1_000_000).rounded()))
             return metric == .value ? Format.money(micros, currency) : Format.signedMoney(micros, currency)
         }
-        let points = known.map { plotted in
-            AXDataPoint(x: plotted.date.timeIntervalSince1970, y: plotted.value ?? 0, label: Spoken.chartStep(plotted, currency, metric: metric))
-        }
+        let points = known.map { AXDataPoint(x: $0.date.timeIntervalSince1970, y: $0.value, label: $0.label) }
         return AXChartDescriptor(
             title: "\(name) over time",
             summary: summary,
