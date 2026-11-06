@@ -177,7 +177,7 @@ describe("the portfolio endpoint with linked wallets", () => {
   let server: Server
   let base: string
   before(async () => {
-    const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } })
+    const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } })
     server = createServer((req, res) => void api(req, res))
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
@@ -253,7 +253,7 @@ describe("the portfolio endpoint with linked wallets", () => {
     let other: Server
     let url: string
     before(async () => {
-      const api = createApi({}, { source: flaky, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } })
+      const api = createApi({}, { source: flaky, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } })
       other = createServer((req, res) => void api(req, res))
       await new Promise<void>((resolve) => other.listen(0, "127.0.0.1", resolve))
       url = `http://127.0.0.1:${(other.address() as AddressInfo).port}`
@@ -287,7 +287,7 @@ describe("the portfolio endpoint with linked wallets", () => {
       broken = true
       const asked: string[] = []
       const counting: Source = { ...flaky, readWindow: async (address, ...rest) => (asked.push(address), flaky.readWindow(address, ...rest)) }
-      const api = createApi({}, { source: counting, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } })
+      const api = createApi({}, { source: counting, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } })
       const server = createServer((req, res) => void api(req, res))
       await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
       const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
@@ -318,7 +318,7 @@ describe("the portfolio endpoint with linked wallets", () => {
       if (address === HOT) throw new Error("nope")
       return { rows: rows[address] ?? [], priced: null, gasUnknown: [] }
     } }
-    const api = createApi({}, { source: failing, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } })
+    const api = createApi({}, { source: failing, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } })
     const other = createServer((req, res) => void api(req, res))
     await new Promise<void>((resolve) => other.listen(0, "127.0.0.1", resolve))
     const response = await fetch(`http://127.0.0.1:${(other.address() as AddressInfo).port}/api/portfolio/${COLD}?linked=${HOT}`)

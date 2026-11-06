@@ -58,7 +58,7 @@ process.on("exit", () => {
 for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => process.exit(1))
 const dist = join(work, "dist")
 await build({ logLevel: "warn", build: { outDir: dist, emptyOutDir: true } })
-const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } }, null)
+const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } }, null)
 const server = createServer(createHandler(api, dist))
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
 const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`

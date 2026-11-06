@@ -1,7 +1,7 @@
 // Builds rows in the `legs` shape from raw `transactions` and `logs` rows, the same way the dataset's tables do.
 // Pure, so it can be tested without Amp.
 
-import { ETH_ADDRESS, WETH_ADDRESS, normalizeAddress, tokenByAddress, type GasUnknownTx, type LegRow, type RateRound } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, WETH_ADDRESS, normalizeAddress, tokenByAddress, type GasUnknownTx, type LegRow } from "@pricetag/sdk/core"
 
 export const TRANSFER_TOPIC = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 export const DEPOSIT_TOPIC = "e1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c"
@@ -154,46 +154,4 @@ export function legRowsFromRaw({ account, txs, logs, withdrawals, gas }: RawInpu
     })
   }
   return { rows, gasUnknown }
-}
-
-/** A `latestRoundData()` result's answer and when it last updated, or null when the read failed or it isn't a positive answer. */
-export function decodeRound(data: string | null | undefined): RateRound | null {
-  const answer = decodeRoundAnswer(data)
-  const updatedAt = data?.slice(192, 256)
-  if (!answer || answer === "0" || !updatedAt || updatedAt.length !== 64) return null
-  return { answer, updatedAt: Number(BigInt(`0x${updatedAt}`)) }
-}
-
-/**
- * Fills in who was on the other side of each ERC-20 and plain ETH row, from `Transfer` logs and the transactions behind them.
- * The dataset's `legs` table has one row per side, and doesn't say.
- */
-export function withCounterparties(rows: readonly LegRow[], logs: readonly Pick<RawLog, "tx_hash" | "log_index" | "topic1" | "topic2">[], txs: readonly Pick<RawTx, "tx_hash" | "from" | "to">[]): LegRow[] {
-  const byLog = new Map(logs.map((log) => [`${normalizeAddress(log.tx_hash)}:${log.log_index}`, log]))
-  const byTx = new Map(txs.map((tx) => [normalizeAddress(tx.tx_hash), tx]))
-  return rows.map((row) => {
-    if (row.kind === "erc20") {
-      const log = byLog.get(`${row.tx_hash}:${row.log_index}`)
-      if (!log) return row
-      return { ...row, counterparty: topicToAddress(row.side === "credit" ? log.topic1 : log.topic2) }
-    }
-    if (row.kind === "eth") {
-      const tx = byTx.get(row.tx_hash)
-      if (!tx) return row
-      if (row.side === "credit") return { ...row, counterparty: normalizeAddress(tx.from) }
-      return { ...row, counterparty: tx.to === null ? null : normalizeAddress(tx.to) }
-    }
-    return row
-  })
-}
-
-/** The blocks worth looking up for one kind of row, so a wallet's first read doesn't scan every block for the few that touch it. */
-export const counterpartyBlocks = (rows: readonly LegRow[], kind: "erc20" | "eth"): number[] => [...new Set(rows.filter((r) => r.kind === kind).map((r) => r.block_num))]
-
-/** The `answer` word of a `latestRoundData()` result, or "" when the read failed. */
-export function decodeRoundAnswer(data: string | null | undefined): string {
-  const word = data?.slice(64, 128)
-  if (!word || word.length !== 64) return ""
-  const answer = BigInt(`0x${word}`)
-  return answer >> 255n === 1n ? "" : answer.toString()
 }

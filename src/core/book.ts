@@ -2,6 +2,7 @@
 // each request, and the server doesn't store them. Writing one onchain would publicly tie the wallets together.
 
 import { isAddress, isCurrencyCode, normalizeAddress, type CurrencyCode } from "@pricetag/sdk/core"
+import type { KeptIn, Shelf } from "./shelf.ts"
 
 export const DEMO_ADDRESS = "0x00000000000000000000000000000000000de300"
 /** The demo's other wallet. Nothing links them until someone answers that it's theirs. */
@@ -60,6 +61,8 @@ export type Book = {
   withdrawals: ExchangeWithdrawal[]
   /** The wallets a client already knows are the user's, like the Mac app's hot and cold ones. Nobody answered for these. */
   linked?: string[]
+  /** How many times a hardware device has proved each account is the user's. They're in `senders` too, and this is what says a device spoke after an answer, so undoing that answer can't take them out. */
+  deviceLinks?: Record<string, number>
   purchases?: Purchase[]
 }
 
@@ -92,25 +95,65 @@ export function answerSender(book: Book, focus: string | null, sender: string, a
 /** Accounts from one hardware device are all the user's, and the device already proved it, so nobody's asked. This overrides any earlier answer about them. */
 export function linkDeviceAccounts(book: Book, addresses: readonly string[]): Book {
   const senders: Book["senders"] = { ...book.senders }
-  for (const address of addresses) senders[normalizeAddress(address)] = { kind: "mine" }
-  return { ...book, senders }
+  const deviceLinks = { ...book.deviceLinks }
+  for (const address of new Set(addresses.map(normalizeAddress))) {
+    senders[address] = { kind: "mine" }
+    deviceLinks[address] = (deviceLinks[address] ?? 0) + 1
+  }
+  return { ...book, senders, deviceLinks }
 }
 
-/** A book and what undo goes back to, oldest first. */
-export type BookState = { book: Book; history: Book[] }
+/** A purchase in the book. An order's read again as more is known, like its block, so this takes over from what it said before. If nothing's new, it's the same book. */
+export function recordPurchase(book: Book, purchase: Purchase): Book {
+  const earlier = book.purchases ?? []
+  if (earlier.some((one) => JSON.stringify(one) === JSON.stringify(purchase))) return book
+  return { ...book, purchases: [...earlier.filter(({ order }) => order !== purchase.order), purchase] }
+}
+
+/** Sorted first, because a book that's been saved and read back has the same things in a different order. */
+const canonical = (value: unknown) => JSON.stringify(value, (_, inner) => (plainRecord(inner) ? Object.fromEntries(Object.entries(inner).sort(([a], [b]) => (a < b ? -1 : 1))) : inner))
+export const same = (a: unknown, b: unknown) => canonical(a) === canonical(b)
+
+function moveEntries<T>(latest: Readonly<Record<string, T>>, from: Readonly<Record<string, T>>, to: Readonly<Record<string, T>>, keepNewer: boolean): Record<string, T> {
+  const moved = { ...latest }
+  for (const key of new Set([...Object.keys(from), ...Object.keys(to)])) {
+    if (same(from[key], to[key]) || (keepNewer && !same(latest[key], from[key]))) continue
+    const value = to[key]
+    if (value === undefined) delete moved[key]
+    else moved[key] = value
+  }
+  return moved
+}
+
+function moveRows<T>(latest: readonly T[], from: readonly T[], to: readonly T[]): T[] {
+  const keys = (rows: readonly T[]) => new Set(rows.map(canonical))
+  const [was, is] = [keys(from), keys(to)]
+  const kept = latest.filter((row) => !was.has(canonical(row)) || is.has(canonical(row)))
+  const there = keys(kept)
+  return [...kept, ...to.filter((row) => !was.has(canonical(row)) && !there.has(canonical(row)))]
+}
+
+/**
+ * Only what an answer changed, on top of the latest book, so whatever another tab has saved since stays. Purchases and linked
+ * wallets aren't answers, so they're never touched. The latest word on anything the answer changed is the answer, since someone just gave it.
+ */
+export const applyAnswer = (latest: Book, before: Book, after: Book): Book => ({ ...latest, senders: moveEntries(latest.senders, before.senders, after.senders, false), costs: moveEntries(latest.costs, before.costs, after.costs, false), withdrawals: moveRows(latest.withdrawals, before.withdrawals, after.withdrawals) })
+
+/**
+ * Takes back only what an answer changed. Anything said about the same thing since, here or in another tab, is newer, so it
+ * stays, and so does an account a device has linked since, even one it had linked before, which no answer can take back.
+ */
+export function undoAnswer(latest: Book, before: Book, after: Book): Book {
+  const linkedSince = new Set(Object.entries(latest.deviceLinks ?? {}).flatMap(([address, links]) => (links > (after.deviceLinks?.[address] ?? 0) ? [address] : [])))
+  const open = (senders: Book["senders"]) => Object.fromEntries(Object.entries(senders).filter(([address]) => !linkedSince.has(address)))
+  return { ...latest, senders: moveEntries(latest.senders, open(after.senders), open(before.senders), true), costs: moveEntries(latest.costs, after.costs, before.costs, true), withdrawals: moveRows(latest.withdrawals, after.withdrawals, before.withdrawals) }
+}
 
 /** A new book, or how to get one from the latest. Anything that waited on something has to use the latest, because the book may have changed meanwhile. */
 export type BookChange = Book | ((latest: Book) => Book)
 
-export const changeBook = ({ book, history }: BookState, change: BookChange): BookState => ({ book: typeof change === "function" ? change(book) : change, history: [...history, book] })
-
-export function undoBook(state: BookState): BookState {
-  const previous = state.history.at(-1)
-  return previous ? { book: previous, history: state.history.slice(0, -1) } : state
-}
-
-/** Not an answer, so undo doesn't take it back, whichever answers came before it. */
-export const linkAccountsInBook = ({ book, history }: BookState, addresses: readonly string[]): BookState => ({ book: linkDeviceAccounts(book, addresses), history: history.map((one) => linkDeviceAccounts(one, addresses)) })
+/** A change on top of the latest book, where a new book was worked out from the one on screen, `shown`. */
+export const applyChange = (latest: Book, shown: Book, change: BookChange): Book => (typeof change === "function" ? change(latest) : applyAnswer(latest, shown, change))
 
 /** Saying what was paid for a sender's open receipts, by asset. It takes over for those receipts, and any others keep their earlier answers. */
 export function enterExchangeCosts(book: Book, focus: string, sender: string, receipts: readonly Receipt[], amounts: Readonly<Record<string, Money>>): Book {
@@ -203,6 +246,33 @@ function parsePurchase(value: unknown): Purchase | null {
   return { provider: row.provider, order: row.order, wallet: normalizeAddress(row.wallet), asset: row.asset, units: row.units, txHash: row.txHash.toLowerCase(), blockNum: blockNum as number | null, cost, costUsdMicros: costUsdMicros as string | null }
 }
 
+const BOOK_KEY = "patina.book"
+
+export const isBookKey = (key: string | null) => key === null || key === BOOK_KEY
+
+function bookFrom(text: string | null): Book {
+  try {
+    return parseBook(JSON.parse(text ?? "null")) ?? emptyBook()
+  } catch {
+    return emptyBook()
+  }
+}
+
+/** The copy a page can show right away, until `readStoredBook` says what's true. */
+export const storedBook = (storage: KeptIn): Book => bookFrom(storage.getItem(BOOK_KEY))
+
+export const readStoredBook = async (shelf: Shelf): Promise<Book> => bookFrom(await shelf.read(BOOK_KEY))
+
+/** A change to what's stored, whatever this tab last heard about it. When it changes nothing, nothing's written and no other tab hears about it. */
+export async function changeStoredBook(shelf: Shelf, change: (latest: Book) => Book): Promise<Book> {
+  const text = await shelf.change(BOOK_KEY, (text) => {
+    const latest = bookFrom(text)
+    const next = change(latest)
+    return same(next, latest) ? text : JSON.stringify(next)
+  })
+  return bookFrom(text)
+}
+
 /** A book from a request, or null when it isn't one. Clients can send anything here. */
 export function parseBook(value: unknown): Book | null {
   const book = plainRecord(value)
@@ -233,6 +303,15 @@ export function parseBook(value: unknown): Book | null {
     const purchase = parsePurchase(raw)
     if (!purchase) return null
     parsed.purchases = [...(parsed.purchases ?? []), purchase]
+  }
+  if (book.deviceLinks !== undefined) {
+    const deviceLinks = plainRecord(book.deviceLinks)
+    if (!deviceLinks) return null
+    parsed.deviceLinks = {}
+    for (const [address, links] of Object.entries(deviceLinks)) {
+      if (!isAddress(address) || !Number.isSafeInteger(links) || (links as number) < 1) return null
+      parsed.deviceLinks[normalizeAddress(address)] = links as number
+    }
   }
   return parsed
 }

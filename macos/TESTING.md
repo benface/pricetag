@@ -150,6 +150,8 @@ If what a run started can't be verified gone after about 7 seconds, because some
 
 The lock is at `~/Library/Caches/patina-swift-queue/`, outside the repo so that every worktree shares it. Don't delete it: a run waiting on the old file wouldn't see the new one.
 
+The queue has its own tests, in `macos/swift-queue.test.ts`, because they take about a minute and only protect the Mac's builds, so they're not in `pnpm test`. `pnpm check:swift-queue` runs them, and a full `pnpm check:mac` runs them first, before its turn, because they use their own queue and compile nothing. `--quick` and a run that finds its code already passed skip them. They're in `macos/`, so changing them runs everything again. Run them whenever you change `swift-queue.sh`: this lock protects every run on this Mac. A failure names its test, and so does a signal: `Its tests got SIGTERM during "…"` came from outside them, so it has no result, like `… was stopped partway`.
+
 A test that waits for something needs a deadline. If it spins forever and `swift test` is killed outside the queue, its `swiftpm-testing-helper` keeps using a whole core with nobody to stop it.
 
 ## Which check to run

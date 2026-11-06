@@ -194,7 +194,7 @@ Moving prices to logs ([WORK-381]) removed the first two from the dataset's path
 | Data | Where | Could it avoid the call? | Worth it? |
 |---|---|---|---|
 | Exchange rates | `feedRounds`, `server/source.ts:17` | Yes, from logs. Nothing's missing | **Yes,** and Verify could then cover rates. [WORK-479] |
-| Current prices for the other 8 tokens | `readFeedRoundsAt`, `server/source.ts:35` | Yes, by adding their aggregators to `price_updates`. [WORK-381]'s method, not tried on these feeds | **Yes, after the demo.** It needs a dataset replacement. [WORK-494] |
+| Current prices for the other 8 tokens | `readFeedRoundsAt`, `packages/sdk/src/dataset.ts` | Yes, by adding their aggregators to `price_updates`. [WORK-381]'s method, not tried on these feeds | **Yes, after the demo.** It needs a dataset replacement. [WORK-494] |
 | Balance checks and finding unseen ETH | `packages/sdk/src/balances.ts:81`, `dataset.ts:236` | No. Balances aren't in logs. Amp has no state table | **No.** This is Amp at its best |
 | Raw mode's prices | `server/source.ts:84` | Not needed | **No.** It's the fallback |
 

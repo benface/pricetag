@@ -12,6 +12,12 @@ let repo: string
 let calls: string
 let env: Record<string, string | undefined>
 
+// The queue's own tests have their own record, because they're not one of the steps in a turn.
+const fakePnpm = `#!/bin/sh
+echo "pnpm $*" >>"$FAKE_PNPM_CALLS"
+[ -z "\${FAKE_QUEUE_TESTS_FAIL:-}" ] || exit 1
+`
+
 const fakeTool = (name: string) => `#!/bin/sh
 case "$*" in
   *--version* | -version) echo "${name} \${FAKE_TOOLS:-1}"; exit 0 ;;
@@ -94,8 +100,10 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
       writeFileSync(join(bin, tool), fakeTool(tool))
       chmodSync(join(bin, tool), 0o755)
     }
+    writeFileSync(join(bin, "pnpm"), fakePnpm)
+    chmodSync(join(bin, "pnpm"), 0o755)
     calls = join(root, "calls")
-    env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_CALLS: calls, SWIFT_QUEUE_DIR: join(root, "queue"), CHECK_MAC_PASSES: join(root, "passes") }
+    env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_CALLS: calls, FAKE_PNPM_CALLS: join(root, "pnpm-calls"), SWIFT_QUEUE_DIR: join(root, "queue"), CHECK_MAC_PASSES: join(root, "passes") }
     for (const name of ["SWIFT_QUEUE_TURN", "ANVIL_RPC_URL", "BASE_READ_RPC_URL", "CONFIGURATION", "npm_lifecycle_event", "CHECK_MAC_PASSED", "SWIFT_QUEUE_ON_PASS", "SWIFT_QUEUE_ON_STOP", "GIT_DIR", "GIT_INDEX_FILE"]) delete env[name]
   })
 
@@ -112,6 +120,28 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
     assert.match(readFileSync(join(repo, "macos/build/watch-only/build.xcconfig"), "utf8"), /^#include ".*WatchOnly\.xcconfig"\nPATINA_SERVER_HOST = \S+\n$/)
     assert.ok(ran.some((call) => call.includes("-scheme PricetagKit") && call.includes("generic/platform=iOS")))
     assert.ok(ran.some((call) => call.includes("-scheme HotWalletKit") && call.includes("generic/platform=iOS")))
+  })
+
+  const queueTestRuns = () => (existsSync(join(root, "pnpm-calls")) ? readFileSync(join(root, "pnpm-calls"), "utf8").trim().split("\n") : [])
+
+  test("a full run does the queue's own tests, and a run that skips or only tests doesn't", () => {
+    check()
+    assert.deepEqual(queueTestRuns(), ["pnpm --silent check:swift-queue"])
+    check()
+    assert.equal(queueTestRuns().length, 1)
+    check(["--quick"])
+    assert.equal(queueTestRuns().length, 1)
+    check(["--force"])
+    assert.equal(queueTestRuns().length, 2)
+  })
+
+  test("the queue's own tests failing builds nothing, and forgets an earlier pass", () => {
+    check()
+    const { status, ran, output } = check(["--force"], { FAKE_QUEUE_TESTS_FAIL: "1" })
+    assert.equal(status, 1)
+    assert.deepEqual(ran, [])
+    assert.match(output, /so nothing was built/)
+    assert.equal(check().ran.length, 6)
   })
 
   test("the same code runs nothing the second time, and says so", () => {

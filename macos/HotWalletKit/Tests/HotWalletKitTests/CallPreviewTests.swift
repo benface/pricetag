@@ -304,6 +304,44 @@ private let wethText = weth.contract!.lowercased
         #expect(review.warnings.first?.text.contains("all of your USDC") == true)
     }
 
+    /// A selector means nothing on a contract off the list, so it gets the estimate like any other call.
+    @Test func aKnownSelectorOffTheListIsSimulated() async throws {
+        let chain = FakeChain(snapshot())
+        await chain.setSimulation(.success(simulated(swapLogs)))
+        let stop = SiteTransaction(to: scamToken, value: 0, data: Calldata.approve(router, amount: 0))
+        let review = try await quoted(stop, chain: chain)
+        #expect(review.preview != nil)
+        #expect(review.title == "Swap 200 USDC for about 0.1 ETH")
+        #expect(review.promptWords == "approve a request this app can't read")
+    }
+
+    /// What the call says and what the estimate finds are the same warning when they agree, and it stays when they don't.
+    @Test func anEstimateNeverTakesAwayWhatACallSaysItAllows() async throws {
+        let max = "0x" + String(repeating: "f", count: 64)
+        let call = SiteTransaction(to: scamToken, value: 0, data: Calldata.approve(router, amount: .max))
+        let agrees = FakeChain(snapshot())
+        await agrees.setSimulation(.success(simulated([approval(scamToken.lowercased, spender: router, data: max)])))
+        #expect(try await quoted(call, chain: agrees).warnings.filter(\.isStrong).count == 1)
+        let denies = FakeChain(snapshot())
+        await denies.setSimulation(.success(simulated([])))
+        #expect(try await quoted(call, chain: denies).warnings.filter(\.isStrong).count == 1)
+    }
+
+    @Test func anAllowanceOfAnUnknownTokenIsStrongAtAnyAmount() async throws {
+        let chain = FakeChain(snapshot())
+        await chain.setSimulation(.success(simulated([approval(scamToken.lowercased, spender: router, data: amountData(5)), approval("0x6666666666666666666666666666666666666666", spender: router, data: amountData(5))])))
+        let review = try await quoted(unreadable, chain: chain)
+        #expect(review.warnings.filter(\.isStrong).map(\.text) == [SiteWording.unknownAllowance(spender: nil)])
+    }
+
+    @Test func nearlyUnlimitedInACallIsUnlimited() async throws {
+        let chain = FakeChain(snapshot())
+        await chain.setSimulation(.success(simulated([approval(usdcText, spender: router, data: amountData((UInt128(1) << 96) - 1))])))
+        let review = try await quoted(unreadable, chain: chain)
+        #expect(review.preview?.allowances.map(\.words) == ["all of your USDC"])
+        #expect(review.warnings.first?.isStrong == true)
+    }
+
     @Test func manyUnlimitedAllowancesAreOneWarningThatCantPushTheRestAway() async throws {
         let unlimited = "0x" + String(repeating: "f", count: 64)
         let chain = FakeChain(snapshot())

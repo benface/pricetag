@@ -6,6 +6,7 @@
   "lines": [
     "What you received minus what it cost, on what was sold or spent on network fees. The fees themselves are a separate cost in the total."
   ],
+  "priceProof": null,
   "legCount": 2,
   "legs": [
     {

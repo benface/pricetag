@@ -437,7 +437,7 @@ function latestSends(sides: readonly Side[]): Map<string, { leg: PricedLeg; amou
 }
 
 function evidenceFor(sender: string, sends: ReturnType<typeof latestSends>, known: KnownSender | null, book: Book): string[] {
-  const evidence = [...(known ? [`From a ${known.name} address`] : []), ...(book.senders[sender]?.kind === "mine" ? ["You've said this is your wallet. Choose My wallet if the one you're looking at is yours too, or Someone else if it isn't."] : [])]
+  const evidence = [...(known ? [`From ${/^[AEIOU]/.test(known.name) ? "an" : "a"} ${known.name} address`] : []), ...(book.senders[sender]?.kind === "mine" ? ["You've said this is your wallet. Choose My wallet if the one you're looking at is yours too, or Someone else if it isn't."] : [])]
   const last = sends.get(sender)
   if (!last) return evidence
   return [...evidence, `You sent this address ${formatAmount(last.amount, last.leg.decimals)} ${last.leg.asset} on ${day(last.leg.timestamp)}`]

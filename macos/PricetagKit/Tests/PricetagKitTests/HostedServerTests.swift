@@ -19,6 +19,41 @@ final class RecordingProtocol: URLProtocol, @unchecked Sendable {
     }
 }
 
+/// Refuses every request the way the server does when a proof's price has moved on, after noting what it was asked.
+final class MovedPriceProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var urls: [URL] = []
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func stopLoading() {}
+
+    override func startLoading() {
+        Self.urls.append(request.url!)
+        let response = HTTPURLResponse(url: request.url!, statusCode: 412, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(#"{"error":"This price has just changed."}"#.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+}
+
+@Suite(.serialized) struct PriceProofRequestTests {
+    @Test func namesThePriceAndTheRevisionAndTellsAMovedPriceApart() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MovedPriceProtocol.self]
+        MovedPriceProtocol.urls = []
+        let client = PricetagClient(serverURL: URL(string: "http://127.0.0.1:8787")!, invite: nil, configuration: configuration)
+        await #expect(throws: FetchError.priceChanged("This price has just changed.")) {
+            try await client.priceProof(asset: "ETH", price: "3000000000", address: "0xabc", currency: .USD, rule: nil)
+        }
+        await #expect(throws: FetchError.priceChanged("This price has just changed.")) {
+            try await client.priceVerification(asset: "ETH", revision: "a:b", address: "0xabc", currency: .USD, rule: nil)
+        }
+        let queries = MovedPriceProtocol.urls.map { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems ?? [] }
+        #expect(queries[0].contains(URLQueryItem(name: "price", value: "3000000000")))
+        #expect(queries[1].contains(URLQueryItem(name: "revision", value: "a:b")))
+    }
+}
+
 @Suite(.serialized) struct HostedServerTests {
     private func rules(from server: String, invite: String?) async throws -> String? {
         let configuration = URLSessionConfiguration.ephemeral
