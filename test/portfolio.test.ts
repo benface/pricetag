@@ -305,6 +305,67 @@ describe("what the value chart can join", () => {
   it("matches the file the Swift package reads", () => {
     assertMatchesFile("value-breaks.json", { unnamedEth, differentOmissions })
   })
+
+  describe("with prices read between transactions", () => {
+    const held = [move(0, "0x1", ETH_ADDRESS, ETH), move(100, "0x2", USDC_ADDRESS, DOLLAR)]
+    const at = (blockNum: number, ethUsd = "200000000000") => ({ ...constant(blockNum), ethUsd })
+    const sampled = (rows: LegRow[], blocks: ReturnType<typeof constant>[], samples: number[], last = 150) => {
+      const legs = buildPricedLegs({ account: ME, rows, references: blocks, priced: derivePricedRows(rows, blocks) })
+      const prices = { ETH: { micros: "2000000000", source: "oracle" as const, blockNum: last }, USDC: { micros: "1000000", source: "oracle" as const, blockNum: last } }
+      return pnlOverTime(legs, "average", prices, referenceMarks(blocks), { blockNum: last, timestamp: minute(last) }, new Set(), new Set(), samples)
+    }
+
+    it("adds a point with no transaction, at that moment's prices, and the stretches around it are known", () => {
+      const points = sampled(held, [at(0), at(50, "300000000000"), at(100)], [50])
+      assert.deepEqual(points.map((p) => [p.blockNum, p.txHash]), [[0, "0x1"], [50, null], [100, "0x2"], [150, null]])
+      assert.equal(points[1]!.valueMicros, "3000000000")
+      assert.equal(points[1]!.timestamp, new Date(Date.parse(minute(150)) - 100 * 2000).toISOString(), "worked out from the last block")
+      assert.deepEqual(points.map((p) => p.valueRead), [undefined, true, true, true])
+    })
+
+    it("leaves what PnL says alone, and the same at every transaction", () => {
+      const references = [at(0), at(50, "300000000000"), at(100)]
+      const points = sampled(held, references, [50])
+      const without = sampled(held, references, [])
+      assert.equal(points[1]!.pnlMicros, points[0]!.pnlMicros)
+      assert.equal(points[1]!.excludedCount, points[0]!.excludedCount)
+      assert.deepEqual(points.filter((p) => p.blockNum !== 50).map((p) => [p.txHash, p.pnlMicros, p.valueMicros, p.valueBeforeMicros]), without.map((p) => [p.txHash, p.pnlMicros, p.valueMicros, p.valueBeforeMicros]))
+    })
+
+    it("calls no stretch read when nothing was sampled", () => {
+      assert.ok(sampled(held, [at(0), at(100)], []).every((p) => p.valueRead === undefined))
+    })
+
+    it("adds no point where something held has no price, and that stretch stays a guess", () => {
+      const points = sampled(held, [at(0), { ...at(50), ethUsd: "" }, at(70), at(100)], [50, 70])
+      assert.deepEqual(points.map((p) => p.blockNum), [0, 70, 100, 150])
+      assert.deepEqual(points.map((p) => p.valueRead), [undefined, undefined, true, true], "from the transaction to the first price it could read")
+    })
+
+    it("keeps a sample that leaves out what the point before already left out", () => {
+      const unpriced = [{ ...at(0), ethUsd: "" }, { ...at(50), ethUsd: "" }, { ...at(100), ethUsd: "" }]
+      const points = sampled(held, unpriced, [50])
+      assert.deepEqual(points.map((p) => p.valueExcludedCount), [1, 1, 1, 0])
+      assert.equal(points[1]!.txHash, null)
+      assert.equal(points[1]!.valueRead, true)
+    })
+
+    it("still breaks at ETH that arrived with no transaction, and is back to known after that", () => {
+      const rows = [...held, move(120, "", ETH_ADDRESS, ETH, "unseen_eth")]
+      const points = sampled(rows, [at(0), at(100), at(120), at(130), at(140)], [130, 140])
+      assert.deepEqual(points.map((p) => [p.blockNum, p.valueContinues, p.valueRead]), [[0, false, undefined], [100, true, true], [130, false, undefined], [140, true, true], [150, true, true]])
+    })
+
+    it("has nothing to join before the first transaction, or to add at the last point's own block", () => {
+      const points = sampled([move(50, "0x1", ETH_ADDRESS, ETH)], [at(10), at(50), at(150)], [10, 150])
+      assert.deepEqual(points.map((p) => [p.blockNum, p.txHash]), [[50, "0x1"], [150, null]])
+    })
+
+    it("comes after every transaction in its own block", () => {
+      const points = sampled([move(50, "0x1", ETH_ADDRESS, ETH), move(50, "0x2", USDC_ADDRESS, DOLLAR)], [at(50)], [50])
+      assert.deepEqual(points.map((p) => [p.blockNum, p.txHash]), [[50, "0x1"], [50, "0x2"], [50, null], [150, null]])
+    })
+  })
 })
 
 describe("parseExplainTarget", () => {

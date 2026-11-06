@@ -8,7 +8,7 @@ import { CURRENCIES, normalizeAddress, type CurrencyCode, type PaidRates, type R
 import { settledThrough } from "@pricetag/sdk/internal"
 import type { RoundReader } from "./source.ts"
 
-type ReadRates = (currency: CurrencyCode, wallet: Pick<WalletResponse, "legs" | "latest">) => Promise<Rates | null>
+type ReadRates = (currency: CurrencyCode, wallet: Pick<WalletResponse, "legs" | "latest" | "priceSamples">) => Promise<Rates | null>
 
 /** Reads rates, and forgets the ones from blocks a reorg replaced, when it can. */
 export type RatesReader = ReadRates & { rewind?(block: number): void }
@@ -25,7 +25,7 @@ export function createRates(readRounds: RoundReader): RatesReader {
     const known = settled.get(currency) ?? new Map<number, RateRound>()
     settled.set(currency, known)
     const head = wallet.latest.blockNum
-    const blocks = [...new Set(wallet.legs.filter((leg) => !leg.opening).map((leg) => leg.blockNum))]
+    const blocks = [...new Set([...wallet.legs.filter((leg) => !leg.opening).map((leg) => leg.blockNum), ...(wallet.priceSamples ?? []).map((sample) => sample.blockNum)])]
     const current = newest.get(currency)
     const wanted = blocks.filter((block) => !known.has(block))
     if (current?.blockNum !== head) wanted.push(head)

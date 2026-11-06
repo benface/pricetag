@@ -4,10 +4,37 @@ import Testing
 
 @Suite struct ValueSeriesTests {
     /// Value in whole dollars before and after a transaction at that second.
-    func point(_ second: Int, before: Int?, after: Int?, excluded: Int = 0, tx: Bool = true, continues: Bool = true) -> PnlPoint {
+    func point(_ second: Int, before: Int?, after: Int?, excluded: Int = 0, tx: Bool = true, continues: Bool = true, read: Bool? = nil) -> PnlPoint {
         let date = Date(timeIntervalSince1970: 1_800_000_000 + Double(second))
         let timestamp = date.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
-        return PnlPoint(blockNum: second, timestamp: timestamp, txHash: tx ? "0x\(second)" : nil, pnlMicros: nil, excludedCount: 0, valueMicros: after.map { "\($0 * 1_000_000)" }, valueBeforeMicros: before.map { "\($0 * 1_000_000)" }, valueExcludedCount: excluded, valueContinues: continues)
+        return PnlPoint(blockNum: second, timestamp: timestamp, txHash: tx ? "0x\(second)" : nil, pnlMicros: nil, excludedCount: 0, valueMicros: after.map { "\($0 * 1_000_000)" }, valueBeforeMicros: before.map { "\($0 * 1_000_000)" }, valueExcludedCount: excluded, valueContinues: continues, valueRead: read)
+    }
+
+    @Test func aStretchWithPricesReadAlongItIsKnown() {
+        let series = ValueSeries(points: [
+            point(0, before: 0, after: 100),
+            point(30, before: 120, after: 120, tx: false, read: true),
+            point(60, before: 110, after: 210, read: true),
+            point(120, before: 200, after: 200, tx: false),
+        ])
+        #expect(series.lines.map(\.known) == [true, true, true, true, false])
+        #expect(series.lines[1].steps.map(\.value) == [100, 120])
+        #expect(series.lines[2].steps.map(\.value) == [120, 110])
+        #expect(series.gaps.isEmpty)
+        #expect(series.values.contains(120), "what's only read between transactions is on the scale")
+    }
+
+    @Test func pointsWithNoTransactionArentTransactions() {
+        let series = ValueSeries(points: [point(0, before: 0, after: 100), point(30, before: 120, after: 120, tx: false, read: true), point(60, before: 110, after: 110, read: true)])
+        #expect(series.nearestTransaction(to: series.plotted[1].date)?.point.txHash != nil)
+        #expect(TransactionLog(points: series.plotted.map(\.point)).items.count == 2)
+    }
+
+    @Test func aRangeThatStartsBetweenTwoReadPointsGoesBetweenThem() {
+        let points = [point(0, before: 0, after: 100), point(3600, before: 200, after: 200, tx: false, read: true), point(7200, before: 300, after: 300, tx: false, read: true), point(7300, before: 300, after: 300, read: true)]
+        let window = ChartWindow(points: points, range: .hour)
+        #expect(window.points.first?.valueMicros.map { Int($0)! / 1_000_000 } == 202)
+        #expect(ValueSeries(points: window.points).lines.allSatisfy { $0.known })
     }
 
     @Test func aDepositIsAKnownJumpAndWhatsBetweenIsAnEstimate() {

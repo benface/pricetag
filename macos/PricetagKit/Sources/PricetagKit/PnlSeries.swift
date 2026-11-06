@@ -76,8 +76,8 @@ extension PlottedSeries {
 
 extension PnlSeries: PlottedSeries {}
 
-/// What was held, which is only known where prices were read: at the wallet's own transactions, and now.
-/// At each one it's known just before and just after, so a deposit is a jump. Between them only prices moved, and nobody read them, so that stretch is a straight line marked as an estimate.
+/// What was held, which is only known where prices were read: at the wallet's own transactions, between them where the server read some, and now.
+/// At each transaction it's known just before and just after, so a deposit is a jump. Between them only prices moved. If they were read along the way, that stretch is known. If nobody read them, it's a straight line marked as an estimate.
 /// Where it's unknown there's a gap. So is a stretch where more than prices moved: two points that leave out different things, or ETH that arrived with no transaction to show for it.
 struct ValueSeries: PlottedSeries {
     struct Line: Identifiable, Equatable {
@@ -116,7 +116,7 @@ struct ValueSeries: PlottedSeries {
             let before = item.point.valueBeforeMicros.map(Format.chartValue)
             if let previous, let from = previous.value {
                 if let before, item.point.valueContinues == true {
-                    lines.append(Line(id: lines.count, known: false, steps: [PnlSeries.Step(id: previous.id, date: previous.date, value: from), PnlSeries.Step(id: "\(item.id):before", date: item.date, value: before)]))
+                    lines.append(Line(id: lines.count, known: item.point.valueRead == true, steps: [PnlSeries.Step(id: previous.id, date: previous.date, value: from), PnlSeries.Step(id: "\(item.id):before", date: item.date, value: before)]))
                 } else {
                     gaps.append(previous.date...item.date)
                 }

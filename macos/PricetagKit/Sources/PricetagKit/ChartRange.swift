@@ -112,7 +112,7 @@ public struct ChartWindow: Equatable, Sendable {
         points = [carried] + inside
     }
 
-    /// What's held doesn't change between two transactions, but prices weren't read there, so this is on the straight line between them, like the chart's dashed one.
+    /// What's held doesn't change between two points, but prices weren't read there, so this is on the straight line between them, like the chart's.
     /// nil without both ends to go between, or if more than prices moved between them, which leaves the range's start a gap.
     private static func valueBetween(_ before: PnlPoint, _ next: PnlPoint?, at date: Date) -> String? {
         guard let next, next.valueContinues == true, let from = before.valueMicros.flatMap({ Double($0) }), let to = next.valueBeforeMicros.flatMap({ Double($0) }),

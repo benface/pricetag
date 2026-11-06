@@ -154,7 +154,7 @@ function combinedPoints(started: readonly Folded[], mark: MarkPrice, latest: { b
   for (const { address, fold } of started) for (const position of fold.positions) prices[key(address, position.asset)] = fold.view.prices[position.asset]
   const unconfirmed = new Set(started.flatMap(({ address, fold }) => [...unconfirmedAssets(fold.positions, fold.unread)].map((asset) => key(address, asset))))
   const noMarket = new Set(started.flatMap(({ address, fold }) => fold.totals.noMarket.map((asset) => key(address, asset))))
-  return pnlOverTime(legs, method, prices, (blockNum, keyed) => mark(blockNum, assetOf(keyed)), latest, unconfirmed, noMarket)
+  return pnlOverTime(legs, method, prices, (blockNum, keyed) => mark(blockNum, assetOf(keyed)), latest, unconfirmed, noMarket, started.flatMap(({ wallet }) => (wallet.priceSamples ?? []).map((sample) => sample.blockNum)))
 }
 
 /** What a transaction did across the wallets. A move between them says so, rather than that one sent and another received. */
