@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { after, before, describe, it } from "node:test"
 import { createApi } from "../server/app.ts"
 import { createHandler } from "../server/http.ts"
-import { createWallets, datasetSource, describeError, isNotStarted, settledThrough, type ReadL1Fees, type Source, type StreamRange, type StreamRanges } from "@pricetag/sdk/internal"
+import { createWallets, datasetSource, describeError, isNotStarted, settledThrough, type Query, type ReadL1Fees, type Source, type StreamRange, type StreamRanges } from "@pricetag/sdk/internal"
 import { resolvingSource, settledL1Fees, sharedReads } from "../server/source.ts"
 import { ETH_ADDRESS, encodeNote, marketPrice } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../src/core/api.ts"
@@ -749,6 +749,38 @@ describe("a dataset whose tables haven't started", () => {
     assert.equal(await datasetSource(query, config).processedThrough(1, 100), 70)
     tops.unlisted_legs = 60
     assert.equal(await datasetSource(query, config).processedThrough(1, 100), 60)
+  })
+
+  describe("when Amp says how far its tables have got", () => {
+    const answering = (end: () => Promise<number | null>) => {
+      const rows: string[] = []
+      const query: Query = Object.assign(async <T,>(sql: string) => (rows.push(sql), [] as T[]), { snapshotEnd: end })
+      return { source: datasetSource(query, config), rows }
+    }
+
+    it("counts a block as processed with no row in it, in one query", async () => {
+      const { source, rows } = answering(async () => 90)
+      assert.equal(await source.processedThrough(1, 100), 90)
+      assert.deepEqual(rows, [])
+    })
+
+    it("stops at the head a read asked for, and at nothing if the tables aren't that far", async () => {
+      const { source } = answering(async () => 90)
+      assert.equal(await source.processedThrough(1, 80), 80)
+      assert.equal(await source.processedThrough(91, 100), null)
+      assert.equal(await source.processedThrough(90, 100), 90)
+    })
+
+    it("reads as not processed when a table hasn't started, and a real failure still fails", async () => {
+      assert.equal(await answering(() => Promise.reject(notStarted)).source.processedThrough(1, 100), null)
+      await assert.rejects(answering(() => Promise.reject(new Error("connection refused"))).source.processedThrough(1, 100), /connection refused/)
+    })
+
+    it("falls back on each table's newest row when Amp doesn't say", async () => {
+      const { source, rows } = answering(async () => null)
+      assert.equal(await source.processedThrough(1, 100), null)
+      assert.equal(rows.length, 4)
+    })
   })
 
   it("keeps an NFT row's kind and ID, including ID 0, so both data paths net it the same way", async () => {

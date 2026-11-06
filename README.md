@@ -98,7 +98,7 @@ It adds a marked block to the end of `.env.local` that points the app at the loc
 
 | Start | Time to chain head | After that |
 | --- | --- | --- |
-| Default, 1,800 blocks | About 7 minutes for the raw dataset, `legs` and `reference_prices`. About 11 until the script said so, waiting on `priced_legs`, which has few rows there | 3–11 blocks behind (about 2 s at most) for 6 minutes, with no job errors |
+| Default, 1,800 blocks | About 7 minutes for the raw dataset, `legs` and `reference_prices` | 3–11 blocks behind (about 2 s at most) for 6 minutes, with no job errors |
 | `PRICETAG_HISTORY_BLOCKS=300` | About 2 minutes | 5 blocks behind |
 
 Mainnet's RPC and blocks may differ. The previous dataset, which read prices with `eth_call`, couldn't follow these blocks: its `reference_prices` kept falling behind, or held hundreds of blocks behind, at 20, 25 and 35 requests a second.

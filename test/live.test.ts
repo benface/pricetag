@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
 import { createPricetag, type WalletUpdate } from "@pricetag/sdk"
 import type { CostNote, RateRound } from "@pricetag/sdk/core"
-import { createRangeStream, createWallets, datasetSource, followChain, parseStreamRange, pricetagClient, type BlockMark, type ChainTick, type FollowConfig, type Query, type Source, type StreamRange, type StreamRanges } from "@pricetag/sdk/internal"
+import { createQuery, createRangeStream, createWallets, datasetSource, followChain, parseSnapshotEnd, parseStreamRange, pricetagClient, type BlockMark, type ChainTick, type FollowConfig, type Query, type Source, type StreamRange, type StreamRanges } from "@pricetag/sdk/internal"
 import { createApi } from "../server/app.ts"
 import { createRates } from "../server/rates.ts"
 import { fakeAmp, type Tables } from "./support/fake-amp.ts"
@@ -498,7 +498,7 @@ describe("Amp's stream on the wire", () => {
       req.resume()
       res.writeHead(200, { "content-type": "application/grpc+proto" })
       if (req.url.endsWith("/GetFlightInfo")) {
-        seen.push({ stream: req.headers["amp-stream"] as string, resume: req.headers["amp-resume"] as string, auth: req.headers.authorization })
+        seen.push({ stream: req.headers["amp-stream"] as string, resume: req.headers["amp-resume"] as string, auth: req.headers.authorization, alias: req.headers["amp-alias"] as string })
         res.write(grpcFrame(flightInfo()))
       } else {
         // What Amp sends: the schema, a batch of rows, its watermark, then the empty keepalive, which isn't Arrow.
@@ -522,7 +522,21 @@ describe("Amp's stream on the wire", () => {
     const ranges: StreamRange[] = []
     for await (const range of stream("SELECT 1", { blockNum: 100, hash: "0x100" }, new AbortController().signal)) ranges.push(range)
     assert.deepEqual(ranges, [{ start: 101, end: 101, hash: "0x101", complete: false }, { start: 101, end: 101, hash: "0x101", complete: true }, { start: 102, end: 102, hash: "0x102", complete: true }])
-    assert.deepEqual(seen.at(-1), { stream: "true", resume: JSON.stringify({ "base-mainnet": { number: 100, hash: "0x100" } }), auth: "Bearer secret" })
+    assert.deepEqual(seen.at(-1), { stream: "true", resume: JSON.stringify({ "base-mainnet": { number: 100, hash: "0x100" } }), auth: "Bearer secret", alias: undefined })
+  })
+
+  it("reads how far a query's tables have got from an empty answer, with the token and any aliases", async () => {
+    const query = createQuery(`http://127.0.0.1:${port}`, "secret")
+    assert.equal(await query.snapshotEnd!("SELECT 1"), 102)
+    assert.equal(seen.at(-1)!.auth, "Bearer secret")
+    assert.equal(await query.aliased({ pricetag: "benface/pricetag@aa" }).snapshotEnd!("SELECT 1"), 102)
+    assert.equal(seen.at(-1)!.alias, JSON.stringify({ pricetag: "benface/pricetag@aa" }))
+  })
+
+  it("has no snapshot end for a message with no ranges, which is what Amp's newer backend sends so far", () => {
+    assert.equal(parseSnapshotEnd(new Uint8Array()), null)
+    assert.equal(parseSnapshotEnd(new TextEncoder().encode(JSON.stringify({ ranges: [], ranges_complete: true }))), null)
+    assert.equal(parseSnapshotEnd(metadata(5, 9, true)), 9)
   })
 
   it("fails on another network's ranges, since its resume wouldn't have counted", async () => {
