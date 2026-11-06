@@ -174,6 +174,10 @@ The invites live in `~/.config/pricetag/invites.txt`, mode 600, outside any repo
 
 That restarts the machine, so wallet reads start over, the limits reset and the apps reconnect. Nothing else is lost, because it keeps nothing else. The dataset settings are secrets too, so when `.env.local` moves to a new version, set the same ones with `fly secrets import`, and only after that version reaches head. Code changes reach it with `fly deploy --ha=false`.
 
+### The watch-only build
+
+`pnpm mac:watch-only` builds the copy colleagues can install: a Developer ID `.dmg` with no key code in it and its own bundle ID, which reads `PATINA_HOSTED_SERVER_HOST` in `macos/Config/App.xcconfig`, notarized and stapled. It tells you what to do if this Mac has no notarytool profile yet. `pnpm check:watch-only` checks a built one, and `macos/WATCH-ONLY.md` is what to send people. `pnpm mac` never uses any of this.
+
 ## How it's put together
 
 - `packages/sdk/`: `@pricetag/sdk`, what other apps can build on too. [Its quickstart](packages/sdk/README.md) covers the tables, the API and plain SQL.
@@ -350,6 +354,30 @@ The Mac app's Security page (⌘5) has a short checklist, each item checked wher
 - **Revoking** is only for Spending Money, through the same review and Touch ID as any send, with its fee read first. Each token is one transaction (`approve(spender, 0)`), and everything Permit2 holds is one `lockdown`, up to 20 at once. Only a tracked token or Permit2 is ever called, so an untracked token's or an NFT collection's approval is listed with a pointer to revoke it elsewhere. A savings wallet's approvals are from before Patina, because its flow only signs plain transfers, so the page points to revoking them with the device in a browser wallet. A watched wallet's are only shown.
 - **This Mac.** A login password is what `LAContext` says, and FileVault is what `fdesetup isactive` says. When it can't run, which the sandbox may prevent, it says it couldn't check, never that it's on.
 
+## Pricing any token
+
+`PRICETAG_TOKENS_DATASET` turns this on, and it's off until that's set. `dataset/tokens.json` is its own dataset, so adding it replaces nothing, like the feeds and exchange rates. It reads `pricetag`'s tables and adds `token_trades`: every trade of any token against ETH, WETH or USDC, as the pool saw it. Amounts stay in a token's smallest unit, so there's no list and no decimals, and a token can't change what it's worth by lying about them. The USD comes from the ETH or USDC side.
+
+`tokenMarketPrice` in `packages/sdk/src/token-market.ts` decides when those trades are a market. Over the last 24 hours, it needs at least 10 senders buying and 10 selling, $2,000 on each side, no sender above half of it all, and both sides trading in 6 separate hours. The price is the middle of the last hour's trades, from at least 3 senders, with the highest and lowest within 25% of each other. Trades under $10 don't count. Otherwise there's no price, for a stated reason, and it's never $0.
+
+What each one is for:
+
+| Attack | What stops it |
+|---|---|
+| Two wallets paying each other any rate | Only a contract that emits a swap event can be a row's pool |
+| One bot washing its own pool | Counting senders, and the limit on any one sender's share |
+| Many wallets faking volume with dust | Trades under $10 don't count, and $2,000 on each side |
+| A token that can be bought but not sold | Sellers count separately from buyers |
+| A token made an hour ago | 6 separate hours of trading on both sides |
+| A pool so thin that each trade moves the price | The 25% limit on the last hour's trades, which stands in for depth |
+| One odd trade | The middle of the trades, ignoring the highest and lowest tenth |
+
+**None of this can make faking impossible.** Wallets are free to make, and fees in a pool you own come back to you, so someone determined could pass these for a few dollars of gas a day. That's why **a price only ever says a swap happened.** When one token off the list left and one on the list arrived, or the other way around, with nothing else moving, and the market says they were worth within 25% of each other, what arrived costs what the listed side was worth at its own feed. It's labeled as an estimate. A fake market can't raise that number, because it doesn't come from the market. It can only stop a question being asked about a real payment.
+
+A price rests on its whole 24 hours, and only what `token_trades` has processed counts as read. So a token whose dataset is behind, or still replaying a reorg, has no price until it's caught up, and the swap keeps asking until then. Its trades are grouped by the same 5-minute buckets prices are worked out at, and a price only uses the groups inside its own blocks, so it doesn't depend on which wallet was read first or how far that read went.
+
+It doesn't give these tokens a position or a value, so they're still listed with no price and left out of totals. Nothing here changes what's swept, the cap, what's signed or what's sent: a sweep never acts on a realized gain that rests on an estimate, and only ever moves allowlisted tokens.
+
 ## Known gaps
 
 - Sending only covers ETH and the tokens the app tracks, so nothing else in a wallet can be moved from here.
@@ -357,7 +385,7 @@ The Mac app's Security page (⌘5) has a short checklist, each item checked wher
 - The hardware wallet flows haven't run against a real device yet. See [the checklist](HARDWARE-WALLETS.md#checklist-for-a-real-device).
 - Exchange names are only as good as the list in `src/core/senders.ts`. Each comes from a Basescan name tag or a confirmed withdrawal. A withdrawal from an address not on the list won't say where it came from, and that includes some from Coinbase and any from another exchange. An imported history still matches them.
 - A cost entered in CAD can't be shown in USD for a wallet read in USD, because that read has no rates. It shows as unresolved there, and never as the wrong number.
-- Only the allowlist in `packages/sdk/src/tokens.ts` gets a position and a price. A transaction that also moves another token is never valued as a swap, because its payment can't be split: what arrived has an unknown cost, and what left has unknown proceeds. Internal ETH isn't seen without traces, so it can't trigger this.
+- Only the allowlist in `packages/sdk/src/tokens.ts` gets a position and a price. A transaction that also moves another token isn't valued as a swap, because its payment can't be split: what arrived has an unknown cost, and what left has unknown proceeds. The exception, with `PRICETAG_TOKENS_DATASET` set, is one token for one listed token whose market agrees (see [Pricing any token](#pricing-any-token)). Internal ETH isn't seen without traces, so it can't trigger this.
 - Market prices need the Pricetag dataset, so reading the raw dataset, a past transfer of a token with no oracle reads has no price.
 - The dataset nets per token, then only prices an account's single pair. A split route that nets to one token out and one in gets a price. A token that mostly cancels out (under half of what moved is left) is what a router or pool kept, so it gets no price. Paying with ETH and WETH together makes two pairs, so the other token has no price, though the app still knows what was paid. A pair gets no price either when something off the allowlist moved with it, unless that token netted to zero.
 - There are no traces: a WETH `Withdrawal` is only a claim that ETH reached the transaction's sender, because a contract can send it elsewhere or keep a cut. The server settles each claim against the wallet's ETH balance before and after its block (`settleUnwraps`). When that can't say how much arrived, the swap's cost and proceeds stay unknown, even if its other token's balance matches.

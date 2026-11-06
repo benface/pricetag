@@ -24,6 +24,7 @@ import { warnOfNewAggregators, warnOfNewRateAggregators, warnOfNewTokenAggregato
 import { createManifestReader, createProofs, currentProofOf, currentRevision, currentVerificationOf, feedBehind, isSeed, proofOf, verificationOf, type BlockRead, type CheckedUpdate, type PriceBehind, type Proofs } from "./proof.ts"
 import { rawSource, resolvingSource, settledL1Fees, sharedReads, type SharedReads } from "./source.ts"
 import { createApprovals, demoApprovals, type Approvals } from "./approvals.ts"
+import { createContractCheck } from "./contract.ts"
 import { TAX_COUNTRIES, isTaxCountryCode, parseTaxYear, taxReportOf, type TaxScope } from "../src/core/tax.ts"
 
 type Env = Record<string, string | undefined>
@@ -119,7 +120,7 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
       const ruleSource = (id: string, name: string, hash: string | undefined, priceDataset: string): RuleSource => ({
         rule: { id, ...RULE_TEXT[id]!, dataset: name, hash: hash as string },
         // The stream reads the default rule's prices, so only that rule can use them.
-        source: resolvingSource(query.aliased({ pricetag: pin, pricing: priceDataset }), { baseDataset, dataset: "pricetag", priceDataset: "pricing", feedsDataset, startBlock, network, followed: priceDataset === pin ? followed : undefined }, shared),
+        source: resolvingSource(query.aliased({ pricetag: pin, pricing: priceDataset }), { baseDataset, dataset: "pricetag", priceDataset: "pricing", feedsDataset, startBlock, network, tokensDataset: env.PRICETAG_TOKENS_DATASET, followed: priceDataset === pin ? followed : undefined }, shared),
       })
       const rules = [
         ruleSource(MARKET_RULE_ID, env.PRICETAG_DATASET, env.PRICETAG_DATASET_HASH, pin),
@@ -131,7 +132,7 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
     const followed = followedOf(env.PRICETAG_DATASET)
     const shared = sharedReads(query, { baseDataset, dataset: env.PRICETAG_DATASET, network, followed })
     const approvals = createApprovals(query, { baseDataset, dataset: { reference: env.PRICETAG_DATASET, name: env.PRICETAG_DATASET }, network, historyFrom: () => startBlock })
-    return { source: resolvingSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, feedsDataset, startBlock, network, followed }, shared), readRates, proofs, follow: followOf(followSql(env.PRICETAG_DATASET), startBlock), shared, approvals }
+    return { source: resolvingSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, feedsDataset, startBlock, network, tokensDataset: env.PRICETAG_TOKENS_DATASET, followed }, shared), readRates, proofs, follow: followOf(followSql(env.PRICETAG_DATASET), startBlock), shared, approvals }
   }
   const historyBlocks = env.PRICETAG_HISTORY_BLOCKS ? Number(env.PRICETAG_HISTORY_BLOCKS) : null
   if (historyBlocks !== null && (!Number.isSafeInteger(historyBlocks) || historyBlocks <= 0)) throw new Error("PRICETAG_HISTORY_BLOCKS must be a positive number")
@@ -299,6 +300,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     if (subscribers.size > 0) void followLoop()
   }
 
+  const isContract = createContractCheck(env.BASE_RPC_URL || DEFAULT_RPC_URL)
   const readL1Fees = settledL1Fees(createL1FeeReader(env.BASE_RPC_URL || DEFAULT_RPC_URL, fetch, undefined, console, Number(env.BASE_RPC_RATE_LIMIT) || undefined), () => head?.blockNum ?? null)
   // Shared by the rules, since no rule changes what a token says about itself or what a wallet holds of it.
   const otherTokens = source?.readTokenFacts && createOtherTokens(source.readTokenFacts)
@@ -805,6 +807,15 @@ export function createApi(env: Env, created: Created | null = createSource(env),
         return true
       }
       await answerRate(currency, res)
+      return true
+    }
+
+    const progressMatch = /^\/api\/wallet\/([^/]+)\/progress$/.exec(path)
+    if (progressMatch) {
+      const address = (progressMatch[1] as string).toLowerCase()
+      if (address === "demo" || address === DEMO_ADDRESS || demoWallet(address)) sendJson(res, 200, { stage: "costs", transfers: null, isContract: false })
+      else if (!isAddress(address)) sendJson(res, 400, { error: "That isn't a Base address." })
+      else sendJson(res, 200, { ...(wallets?.progress(address) ?? { stage: "waiting", transfers: null }), isContract: await isContract(address) })
       return true
     }
 

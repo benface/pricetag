@@ -180,7 +180,9 @@ public enum HotWalletWording {
     public static func problem(_ error: any Error) -> String {
         switch error {
         case is RecordsNotSaved: cantSaveRecords
+        #if !PATINA_WATCH_ONLY
         case KeyVault.Failure.noSuchKey: keyMissing
+        #endif
         default: problemOnThisDevice
         }
     }
