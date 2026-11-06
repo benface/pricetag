@@ -410,6 +410,8 @@ enum TestScene: String, CaseIterable {
     case resolveAnsweredWallet = "resolve-answered-wallet"
     /// Past the last card with every question skipped.
     case resolveAllSkipped = "resolve-all-skipped"
+    /// The card for an address known to be an exchange's, which has no My wallet.
+    case resolveKnownExchange = "resolve-known-exchange"
     case walletSwitcher = "wallet-switcher"
     case walletSwitcherAllYours = "wallet-switcher-all-yours"
     case walletSwitcherFirstRun = "wallet-switcher-first-run"
@@ -1104,6 +1106,13 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(ContrastScene(store: store)), isReady: isReady)
         case .resolve, .resolveCostWithheld, .resolveAnsweredWallet, .resolveFinished, .resolveNothingLeft:
             return TestScreen(view: AnyView(ResolveFlow(store: store)), size: CGSize(width: 520, height: 560), isReady: isReady)
+        case .resolveKnownExchange:
+            let model = ResolveModel(store: store)
+            return TestScreen(view: AnyView(ResolveFlow(store: store, model: model)), size: CGSize(width: 520, height: 560), isReady: {
+                guard isReady() else { return false }
+                while let question = model.current, question.known == nil { model.skip() }
+                return true
+            })
         case .resolveAllSkipped:
             let model = ResolveModel(store: store)
             return TestScreen(view: AnyView(ResolveFlow(store: store, model: model)), size: CGSize(width: 520, height: 560), isReady: {

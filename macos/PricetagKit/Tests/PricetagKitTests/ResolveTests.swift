@@ -549,6 +549,34 @@ actor BookSource: PortfolioSource {
         #expect(Book().answering(sender, .someoneElse, focus: watched).senders == [sender: .someoneElse], "that's only about a sender already said to be theirs")
     }
 
+    @Test func anAddressWithANameIsntOfferedAsAWallet() async throws {
+        let (store, source, _) = try makeStore([try demoPortfolio()])
+        await _ = store.poll()
+        let model = ResolveModel(store: store)
+        #expect(model.current?.known == nil)
+        #expect(model.options == Ownership.allCases, "nothing's known about this one, so it could be anything")
+        model.skip()
+        let sender = try #require(model.current?.sender)
+        #expect(model.current?.known?.kind == "exchange")
+        #expect(model.options == [.myExchange, .someoneElse], "its exchange account comes first")
+
+        model.answer(.mine)
+        #expect(store.book.senders[sender] == nil, "neither a key nor a swipe can say it")
+        await source.answerPreviews([BookPreview(pnlMicros: "1", pnlStatus: .complete, estimatedMicros: "0", unresolvedMicros: "0", open: 0, pending: false, failed: false)])
+        await model.loadPreviews()
+        #expect(Array(model.previews.keys) == [.someoneElse], "so nothing asks what it would do")
+
+        store.setBook(store.book.answering(sender, .mine, focus: nil))
+        await _ = store.poll()
+        #expect(model.current?.sender == sender, "this fixture keeps asking, as a wallet that isn't theirs would")
+        #expect(model.options == [.mine, .someoneElse], "an answer given before still works, and this card is about the wallet it reached")
+        #expect(store.book.senders[sender]?.kind == .mine)
+        store.changeAnswer(try #require(store.answerEntries.first { $0.id == AnswerEntry.senderID(sender) }), to: .myExchange)
+        #expect(store.book.senders[sender]?.kind == .myExchange, "and it can be changed in Answers")
+        await _ = store.poll()
+        #expect(model.options == [.myExchange, .someoneElse])
+    }
+
     @Test func aSenderSaidToBeAWalletCantAlsoBeAnExchange() async throws {
         let portfolio = try demoPortfolio()
         let (store, source, _) = try makeStore([portfolio])

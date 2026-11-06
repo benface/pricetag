@@ -121,7 +121,7 @@ public struct ResolveFlow: View {
     }
 
     private func swipeKey(_ ownership: Ownership) -> KeyPress.Result {
-        guard let question = model.current, question.kind == .sender, !isTakingCost(question) else { return .ignored }
+        guard let question = model.current, question.kind == .sender, !isTakingCost(question), model.options.contains(ownership) else { return .ignored }
         model.answer(ownership)
         return .handled
     }
@@ -249,7 +249,7 @@ public struct ResolveFlow: View {
     }
 
     private var dragged: String? {
-        if drag.width > 40 { return Ownership.mine.title }
+        if drag.width > 40, model.options.contains(.mine) { return Ownership.mine.title }
         if drag.width < -40 { return Ownership.someoneElse.title }
         if drag.height < -40, model.options.contains(.myExchange) { return Ownership.myExchange.title }
         if drag.height > 40 { return "Skip" }
