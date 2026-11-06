@@ -517,6 +517,12 @@ public final class HotWallet {
 
     public var capText: String { display.cap(settings.capUsdMicros) }
 
+    /// What everything priced here is worth, ETH kept for gas included, so it reads the same as this wallet's numbers anywhere else.
+    /// The cap counts the plan's value, which leaves that ETH out. Nil until the first read.
+    public var valueUsdMicros: UInt128? {
+        plan.map { _ in holdings.reduce(0) { $0 + ($1.valueUsdMicros ?? 0) } }
+    }
+
     /// Whether something needs the user, for places with room for only a triangle.
     public var needsAttention: Bool {
         alarm != nil || notices.contains { $0.kind == .warning }

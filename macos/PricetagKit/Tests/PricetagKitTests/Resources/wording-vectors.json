@@ -203,7 +203,7 @@
     }
   ],
   "sentences": {
-    "methodName": "How cost is worked out",
+    "methodName": "Cost method",
     "methodHelp": "Average spreads what you paid across all you hold. Oldest first counts what you sell as what you got earliest.",
     "averagePricePaid": "Average price paid",
     "networkFees": "Network fees",

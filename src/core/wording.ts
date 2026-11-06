@@ -8,7 +8,7 @@ import type { ValueGaps } from "./attention.ts"
 import type { ReadFailure } from "./read-failure.ts"
 
 export const METHOD_LABELS: Record<Method, string> = { average: "Average", fifo: "Oldest first" }
-export const METHOD_NAME = "How cost is worked out"
+export const METHOD_NAME = "Cost method"
 export const METHOD_HELP = "Average spreads what you paid across all you hold. Oldest first counts what you sell as what you got earliest."
 
 export const AVERAGE_PRICE_PAID = "Average price paid"
