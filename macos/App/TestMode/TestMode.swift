@@ -1211,7 +1211,7 @@ enum TestScene: String, CaseIterable {
         case .popoverLongName, .popoverLongNameReading, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverUpdating, .popoverServerDown, .popoverPricesDown, .popoverRetrying, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance:
             return TestScreen(view: AnyView(PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)), isReady: isReady)
         case .invitePrompt, .invitePromptRefused:
-            return TestScreen(view: AnyView(InvitePrompt(store: store, isRefused: self == .invitePromptRefused)), isReady: isReady)
+            return TestScreen(view: AnyView(InvitePrompt(store: store, decline: {}, isRefused: self == .invitePromptRefused)), isReady: isReady)
         case .menuBarLabel:
             return TestScreen(view: AnyView(MenuBarLabelScene(portfolio: { store.portfolio })), isReady: isReady)
         case .settings, .settingsRules, .settingsSmallDisplay, .settingsServer, .settingsServerProblem, .settingsCAD, .settingsAnswers, .settingsAnswersEmpty, .settingsNotificationsOff:

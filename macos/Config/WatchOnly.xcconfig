@@ -10,6 +10,5 @@ APP_BUNDLE_ID = com.benface.pricetag.macos.watch
 APP_INFOPLIST = Config/WatchOnly-Info.plist
 INFOPLIST_KEY_NSCameraUsageDescription =
 
-// The hosted server, by host name. WORK-529 sets this when it deploys. Empty builds a copy that reads this Mac's server, which is only
-// good for testing, so macos/watch-only.sh refuses to notarize it.
-PATINA_SERVER_HOST =
+// The hosted server, from App.xcconfig. macos/watch-only.sh sets this over it for --local, which reads this Mac's server and is never notarized.
+PATINA_SERVER_HOST = $(PATINA_HOSTED_SERVER_HOST)

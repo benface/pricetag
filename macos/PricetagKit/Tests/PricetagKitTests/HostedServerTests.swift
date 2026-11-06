@@ -135,6 +135,36 @@ private struct InvitedSource: PortfolioSource {
     func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation { throw FetchError.unreachable }
 }
 
+/// A server that takes only the invite it's told to, whichever client asks.
+private final class InviteGate: @unchecked Sendable {
+    var takes = false
+    /// Holds the next answer until `release`, and whatever it says then is what it would have said when it was asked.
+    var holdsNext = false
+    private(set) var held: CheckedContinuation<Void, Never>?
+
+    func answer() async throws -> [PricingRule] {
+        let takes = self.takes
+        if holdsNext {
+            holdsNext = false
+            await withCheckedContinuation { held = $0 }
+        }
+        guard takes else { throw FetchError.needsInvite("This server needs an invite.") }
+        return []
+    }
+
+    func release() {
+        held?.resume()
+        held = nil
+    }
+}
+
+private struct InviteGateSource: PortfolioSource {
+    let gate: InviteGate
+    func rules() async throws -> [PricingRule] { try await gate.answer() }
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio { throw FetchError.unreachable }
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation { throw FetchError.unreachable }
+}
+
 @MainActor @Suite struct InvitePromptTests {
     private func defaults() -> UserDefaults {
         let name = "invite-\(UUID().uuidString)"
@@ -154,10 +184,69 @@ private struct InvitedSource: PortfolioSource {
         store.stop()
     }
 
+    @Test func aWrongInviteAsksAgainUntilARightOneTakes() async throws {
+        let gate = InviteGate()
+        let store = PortfolioStore(defaults: defaults(), makeSource: { _ in InviteGateSource(gate: gate) })
+        await store.refreshRules()
+        #expect(store.asksForInvite)
+        store.setInvite("wrong")
+        #expect(!store.asksForInvite, "Closes while the server decides")
+        await store.refreshRules()
+        #expect(store.asksForInvite && store.invite == "wrong", "Comes back, and says that one was refused")
+        store.setInvite("right")
+        gate.takes = true
+        await store.refreshRules()
+        #expect(!store.asksForInvite && !store.needsInvite)
+        store.stop()
+    }
+
+    @Test func notNowStopsAskingUntilAnInviteIsGiven() async throws {
+        let gate = InviteGate()
+        let store = PortfolioStore(defaults: defaults(), makeSource: { _ in InviteGateSource(gate: gate) })
+        await store.refreshRules()
+        store.declineInvite()
+        #expect(!store.asksForInvite)
+        await store.refreshRules()
+        #expect(store.needsInvite && !store.asksForInvite, "Another refusal doesn't bring it back")
+        store.setInvite("wrong")
+        await store.refreshRules()
+        #expect(store.asksForInvite, "Giving one, say from Settings, means they want to hear how it went")
+        store.declineInvite()
+        store.setInvite("wrong")
+        #expect(store.asksForInvite, "Even the same one again")
+        store.declineInvite()
+        store.askForInvite()
+        #expect(store.asksForInvite, "A page that needs one can ask for it after Not Now")
+        store.stop()
+    }
+
+    @Test func notNowDoesNothingWhenNothingIsAsked() async throws {
+        let gate = InviteGate()
+        let store = PortfolioStore(defaults: defaults(), makeSource: { _ in InviteGateSource(gate: gate) })
+        store.declineInvite()
+        await store.refreshRules()
+        #expect(store.asksForInvite)
+        store.stop()
+    }
+
+    @Test func aRefusalFromBeforeAnInviteSaysNothingAboutIt() async throws {
+        let gate = InviteGate()
+        gate.holdsNext = true
+        let store = PortfolioStore(defaults: defaults(), makeSource: { _ in InviteGateSource(gate: gate) })
+        let asking = Task { await store.refreshRules() }
+        while gate.held == nil { await Task.yield() }
+        gate.takes = true
+        store.setInvite("right")
+        gate.release()
+        await asking.value
+        #expect(!store.asksForInvite)
+        store.stop()
+    }
+
     @Test func anOutageIsNotAReasonToAsk() async throws {
         let store = PortfolioStore(defaults: defaults(), makeSource: { _ in FixtureFree() })
         await store.refreshRules()
-        #expect(!store.needsInvite)
+        #expect(!store.needsInvite && !store.asksForInvite)
     }
 
     @Test func anOutageNeverLooksLikeAnEmptyWallet() throws {

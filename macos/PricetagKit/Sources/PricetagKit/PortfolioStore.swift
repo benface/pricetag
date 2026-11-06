@@ -134,6 +134,10 @@ public final class PortfolioStore {
     public private(set) var needsInvite = false
     /// What the last question to the server found, for when there's no wallet being read to say so.
     public private(set) var serverCheck = ServerCheck.checking
+    /// They said not now, so nothing asks again until they give an invite or move to another server.
+    private var isInviteDeclined = false
+    /// Whether to ask for an invite now. Giving one stops asking until the server answers, and if it's refused, this asks again.
+    public var asksForInvite: Bool { needsInvite && !isInviteDeclined }
     /// What the user has said about where things came from. It stays on this device.
     private var answers: Book
     /// What each answer replaced, newest last, so Undo is always there. Accounts aren't in here, so it can't bring back one that's gone.
@@ -714,6 +718,7 @@ public final class PortfolioStore {
         invite = Self.invites(in: defaults)[Self.origin(of: url)]
         needsInvite = false
         serverCheck = .checking
+        isInviteDeclined = false
         source = makeSource(url)
         rules = []
         // Another server's numbers can be different facts, so these aren't kept even for a moment. What's known is this server's own.
@@ -727,6 +732,7 @@ public final class PortfolioStore {
     public func setInvite(_ value: String?) {
         let value = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         let next = value?.isEmpty == false ? value : nil
+        isInviteDeclined = false
         guard next != invite else { return }
         invite = next
         needsInvite = false
@@ -737,6 +743,16 @@ public final class PortfolioStore {
         source = makeSource(serverURL)
         rules = []
         answersChanged()
+    }
+
+    /// They've changed their mind about Not Now.
+    public func askForInvite() {
+        isInviteDeclined = false
+    }
+
+    /// Not now. It only answers the question being asked, so it can't silence one the server hasn't raised yet.
+    public func declineInvite() {
+        if needsInvite { isInviteDeclined = true }
     }
 
     /// Takes effect right away, and the numbers follow as soon as the server has folded them. Undo goes back to what this replaced,
@@ -938,6 +954,7 @@ public final class PortfolioStore {
             guard isCurrent() else { return .zero }
             portfolio = next
             updatedAt = now()
+            needsInvite = false
             cache.remember(next, of: address, on: serverURL, at: now())
             feed = state(of: next)
             expireLive()

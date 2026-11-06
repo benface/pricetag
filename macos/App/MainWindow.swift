@@ -33,8 +33,6 @@ struct MainWindow: View {
     @State private var columns = NavigationSplitViewVisibility.all
     @State private var width: CGFloat = 1120
     @State private var exporting = false
-    /// Not Now on the invite prompt, until the next launch. Settings can still ask for one.
-    @State private var isInviteDeclined = false
     @State private var exportDocument: CSVDocument?
     @State private var exportError: String?
     /// Asked for from the details sheet, which closes first.
@@ -126,8 +124,9 @@ struct MainWindow: View {
             }
         }
         // On the way to a first wallet, the welcome asks for it itself.
-        .sheet(isPresented: Binding(get: { Build.isWatchOnly && store.needsInvite && !isInviteDeclined && !firstRun.isWelcoming }, set: { if !$0 { isInviteDeclined = true } })) {
-            InvitePrompt(store: store)
+        .sheet(isPresented: Binding(get: { Build.isWatchOnly && store.asksForInvite && !isOnWayToWallet }, set: { if !$0 { store.declineInvite() } })) {
+            // The store closes this when an invite's given, and opens it again if the server refuses that one.
+            InvitePrompt(store: store, decline: store.declineInvite)
         }
         .sheet(isPresented: $navigation.isShowingWelcomeAgain) {
             WelcomeAgain()
@@ -236,7 +235,7 @@ struct MainWindow: View {
             ToolbarItem(placement: .primaryAction) {
                 Button("Skip") {
                     // There's still the invite to give, but this has said to leave it for now.
-                    isInviteDeclined = true
+                    store.declineInvite()
                     firstRun.skip()
                 }
                 .keyboardShortcut(.cancelAction)
@@ -356,7 +355,7 @@ struct MainWindow: View {
             Group {
                 // A failure says what's wrong even before there's anything to show, rather than only that the data hasn't reached this wallet.
                 if !portfolio.progress.started, store.feed.isStale {
-                    Unavailable(store: store, firstRun: firstRun) { isInviteDeclined = false }
+                    Unavailable(store: store, firstRun: firstRun)
                 } else if !portfolio.progress.started {
                     ContentUnavailableView("Almost There", systemImage: "hourglass", description: Text(Wording.notStarted))
                 } else if portfolio.isEmpty {
@@ -383,7 +382,7 @@ struct MainWindow: View {
             }
             .transition(.opacity)
         } else {
-            Unavailable(store: store, firstRun: firstRun) { isInviteDeclined = false }
+            Unavailable(store: store, firstRun: firstRun)
         }
     }
 
@@ -1147,8 +1146,6 @@ private struct Welcome: View {
 private struct Unavailable: View {
     let store: PortfolioStore
     let firstRun: FirstRun
-    /// Opens the invite prompt again, after Not Now.
-    let askForInvite: () -> Void
 
     /// A server that wants an invite isn't something to try again or restart: only a watch-only build's invite answers it.
     private var wantsInvite: Bool { Build.isWatchOnly && store.needsInvite }
@@ -1170,7 +1167,7 @@ private struct Unavailable: View {
         } actions: {
             if wantsInvite {
                 Button("Enter Invite…") {
-                    if firstRun.isWelcoming { store.setWallet(nil) } else { askForInvite() }
+                    if firstRun.isWelcoming { store.setWallet(nil) } else { store.askForInvite() }
                 }
                 .buttonStyle(.borderedProminent)
             } else if firstRun.isWelcoming {
