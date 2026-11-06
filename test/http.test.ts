@@ -14,6 +14,9 @@ import { ETH_ADDRESS, encodeNote, marketPrice } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../src/core/api.ts"
 import { eachPart } from "./support/fake-amp.ts"
 
+/** Fails a step that hangs in seconds. Node's own request timeouts take 5 minutes, and a test timing out wouldn't reach its `finally` to close its server. */
+const within = <T>(step: Promise<T>, ms = 15_000): Promise<T> => Promise.race([step, new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`Still waiting after ${ms} ms`)), ms).unref())])
+
 /** Sends the path exactly as written, which fetch wouldn't. */
 function get(server: Server, path: string): Promise<{ status: number; body: string }> {
   const { port } = server.address() as { port: number }
@@ -674,8 +677,8 @@ describe("reading a wallet by two pricing rules", () => {
       })
       const cfg = { baseDataset: "base", dataset: "ds", startBlock: 50, network: "base_mainnet" }
       const shared = sharedReads(query, cfg)
-      const hand = { send: (_: StreamRange) => {} }
       const queued: StreamRange[] = []
+      const hand = { send: (range: StreamRange) => void queued.push(range) }
       const stream: StreamRanges = async function* (_sql, _resume, signal) {
         while (!signal.aborted) {
           const next = queued.shift()
@@ -703,7 +706,6 @@ describe("reading a wallet by two pricing rules", () => {
       try {
         assert.equal(await paid(), "-1024")
         const events = (await fetch(`${base}/api/events`, { signal: t.signal })).body!.getReader()
-        await new Promise((resolve) => setTimeout(resolve, 20))
         state = { amount: "2000", fee: 34 }
         hand.send({ start: 100, end: 200, hash: "0xnew", complete: true })
         for (let seen = ""; !seen.includes("event: head"); ) seen += new TextDecoder().decode((await events.read()).value)
@@ -856,7 +858,16 @@ describe("head reads that overlap", () => {
     const at = (blockNum: number) => ({ blockNum, timestamp: "2026-11-04T00:00:00.000Z" })
     let finishOlder = () => {}
     const older = new Promise<void>((resolve) => (finishOlder = resolve))
-    const heads = [() => older.then(() => at(1000)), async () => at(1010), async () => null]
+    let reachedOlder = () => {}
+    const reached = new Promise<void>((resolve) => (reachedOlder = resolve))
+    const heads = [
+      () => {
+        reachedOlder()
+        return older.then(() => at(1000))
+      },
+      async () => at(1010),
+      async () => null,
+    ]
     const source: Source = {
       mode: "raw",
       startBlock: null,
@@ -872,21 +883,25 @@ describe("head reads that overlap", () => {
     const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } }, null)
     const server = createServer((req, res) => void api(req, res))
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
-    const read = async (wallet: string) => (await (await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/api/portfolio/0x${wallet.repeat(40)}`)).json()) as { latest: { blockNum: number } }
-    const first = read("a")
-    await new Promise((resolve) => setTimeout(resolve, 50))
-    assert.equal((await read("b")).latest.blockNum, 1010)
-    finishOlder()
-    await first
-    assert.equal((await read("c")).latest.blockNum, 1010)
-    server.close()
+    const read = (wallet: string) => within((async () => (await (await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/api/portfolio/0x${wallet.repeat(40)}`)).json()) as { latest: { blockNum: number } })())
+    try {
+      const first = read("a")
+      await within(reached)
+      assert.equal((await read("b")).latest.blockNum, 1010)
+      finishOlder()
+      await first
+      assert.equal((await read("c")).latest.blockNum, 1010)
+    } finally {
+      server.closeAllConnections()
+      server.close()
+    }
   })
 
   /** An API following a chain the test controls, with one head read it can hold, and every head a request went on to use. */
   async function reorging(shared?: SharedReads) {
     const at = (blockNum: number) => ({ blockNum, timestamp: "2026-11-04T00:00:00.000Z" })
     let tip = 110
-    let held: { answer: number; gate: Promise<void> } | null = null
+    let held: { answer: number; gate: Promise<void>; reached: () => void } | null = null
     const asked: (number | null)[] = []
     const used: number[] = []
     const source: Source = {
@@ -897,7 +912,10 @@ describe("head reads that overlap", () => {
         asked.push(after)
         const read = held
         held = null
-        if (read) await read.gate
+        if (read) {
+          read.reached()
+          await read.gate
+        }
         const answer = read?.answer ?? tip
         return answer >= (after ?? 0) ? at(answer) : null
       },
@@ -908,8 +926,8 @@ describe("head reads that overlap", () => {
       readBalances: async () => null,
       readEthBalances: async () => new Map(),
     }
-    const hand = { send: (_: StreamRange) => {} }
     const queued: StreamRange[] = []
+    const hand = { send: (range: StreamRange) => void queued.push(range) }
     const stream: StreamRanges = async function* (_sql, _resume, signal) {
       while (!signal.aborted) {
         const next = queued.shift()
@@ -943,23 +961,26 @@ describe("head reads that overlap", () => {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
     const stop = new AbortController()
-    const events = (await fetch(`${base}/api/events`, { signal: stop.signal })).body!.getReader()
+    const events = (await within(fetch(`${base}/api/events`, { signal: stop.signal }))).body!.getReader()
     return {
       asked,
       used,
-      base,
+      get: (path: string) => within(fetch(base + path)),
       /** Replaces the chain from block 100 on with a shorter one that ends at 105. */
       reorg() {
         tip = 105
         hand.send({ start: 100, end: 105, hash: "0xnew", complete: true })
       },
-      /** The next head read answers `answer`, from the old chain, once `gate` lets it. */
+      /**
+       * The next head read answers `answer`, from the old chain, once `gate` lets it. This settles when that read has started.
+       * Wait for it before a reorg: otherwise the head read after the reorg is the one held, and the head event it sends never comes.
+       */
       hold(answer: number, gate: Promise<void>) {
-        held = { answer, gate }
+        return within(new Promise<void>((reached) => (held = { answer, gate, reached })))
       },
       async headEvent(): Promise<number> {
         for (let seen = ""; ; ) {
-          seen += new TextDecoder().decode((await events.read()).value)
+          seen += new TextDecoder().decode((await within(events.read())).value)
           const head = /event: head\ndata: (\{.*\})\n\n/.exec(seen)
           if (head) return (JSON.parse(head[1]!) as { blockNum: number }).blockNum
         }
@@ -979,20 +1000,20 @@ describe("head reads that overlap", () => {
     it(`throws away the old chain's head when ${name} spans a reorg`, async () => {
       const chain = await reorging()
       try {
-        assert.equal((await fetch(chain.base + path)).status, 200)
+        assert.equal((await chain.get(path)).status, 200)
         assert.equal(chain.used.at(-1), 110)
 
         let release = () => {}
-        chain.hold(120, new Promise<void>((resolve) => (release = resolve)))
-        const spanning = fetch(chain.base + path)
-        await new Promise((resolve) => setTimeout(resolve, 20))
+        const reached = chain.hold(120, new Promise<void>((resolve) => (release = resolve)))
+        const spanning = chain.get(path)
+        await reached
         chain.reorg()
         assert.equal(await chain.headEvent(), 105)
 
         release()
         assert.equal((await spanning).status, 200)
         assert.equal(chain.used.at(-1), 105, "the request reads the head again")
-        assert.equal((await fetch(chain.base + path)).status, 200)
+        assert.equal((await chain.get(path)).status, 200)
         assert.equal(chain.used.at(-1), 105, "and so does the next")
         assert.equal(chain.asked.at(-1), 105, "the next head read starts from the replacement chain")
       } finally {
@@ -1014,14 +1035,14 @@ describe("head reads that overlap", () => {
     } as unknown as SharedReads)
     const path = `/api/approvals/0x${"a".repeat(40)}`
     try {
-      assert.equal((await fetch(chain.base + path)).status, 200)
+      assert.equal((await chain.get(path)).status, 200)
 
       let release = () => {}
-      chain.hold(120, new Promise<void>((resolve) => (release = resolve)))
-      const spanning = fetch(chain.base + path)
-      await new Promise((resolve) => setTimeout(resolve, 20))
+      const reached = chain.hold(120, new Promise<void>((resolve) => (release = resolve)))
+      const spanning = chain.get(path)
+      await reached
       chain.reorg()
-      await started
+      await within(started)
 
       release()
       assert.equal((await spanning).status, 200)
@@ -1029,7 +1050,7 @@ describe("head reads that overlap", () => {
 
       applied()
       assert.equal(await chain.headEvent(), 105)
-      assert.equal((await fetch(chain.base + path)).status, 200)
+      assert.equal((await chain.get(path)).status, 200)
       assert.equal(chain.used.at(-1), 105)
     } finally {
       chain.close()
