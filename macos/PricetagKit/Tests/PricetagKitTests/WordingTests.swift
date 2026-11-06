@@ -43,6 +43,11 @@ struct WordingVectors: Decodable {
         let answerQuestions, showMissing, senderQuestion, senderWhy, costQuestion, costWhy, exchangeCostWhy, allAnswered, nothingLeft: String
         let moneyUnaffected: String
     }
+    struct FinishNote: Decodable {
+        let open, answered, waiting: Int
+        let text: String
+    }
+    let finishNotes: [FinishNote]
     struct Problem: Decodable {
         let kind: String
         let said: String?
@@ -163,6 +168,9 @@ struct WordingVectors: Decodable {
         #expect(sentences.exchangeCostWhy == Wording.exchangeCostWhy)
         #expect(sentences.allAnswered == Wording.allAnswered)
         #expect(sentences.nothingLeft == Wording.nothingLeft)
+        for note in vectors.finishNotes {
+            #expect(Wording.finishNote(Meter(open: note.open, answered: note.answered, waiting: note.waiting)) == note.text)
+        }
     }
 }
 

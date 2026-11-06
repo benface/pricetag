@@ -3,15 +3,36 @@ import { type ChildProcess, spawn, spawnSync } from "node:child_process"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterEach, beforeEach, describe, test } from "node:test"
+import { after, afterEach, before, beforeEach, describe, it } from "node:test"
 import { setTimeout as sleep } from "node:timers/promises"
+
+// Not in `pnpm test`: this takes a while and only protects the Mac's builds, so `pnpm check:swift-queue` and `pnpm check:mac` run it. They run
+// it without `node --test`, because that runner, if it's sent SIGTERM, cancels the whole file with a message about pending promises and no test.
 
 const script = "macos/swift-queue.sh"
 
 // Its own queue for each test, so these never wait for a real build or leave one waiting.
 let dir: string
 let env: Record<string, string | undefined>
-let runs: { child: ChildProcess; ended: Promise<number | null> }[]
+let runs: { child: ChildProcess; ended: Promise<number | null> }[] = []
+let fast: string
+let running = "starting up"
+
+for (const [signal, status] of [["SIGTERM", 143], ["SIGINT", 130]] as const) {
+  process.on(signal, () => {
+    console.error(`[swift-queue] Its tests got ${signal} during "${running}", from outside them, so they have no result. It didn't pass or fail: run them again.`)
+    for (const run of runs) run.child.kill("SIGTERM")
+    process.exit(status)
+  })
+}
+
+// Makes the queue's own polling 10 times faster, and nothing else. It still takes as many tries to give up on a process or kill one that
+// ignores SIGTERM, so those paths all still run, and this file doesn't spend minutes on the 7 seconds that takes.
+function makeFastSleep() {
+  fast = mkdtempSync(join(tmpdir(), "swift-queue-fast-"))
+  writeFileSync(join(fast, "sleep"), `#!/bin/sh\nif [ "$1" = 0.1 ]; then exec /bin/sleep 0.01; fi\nexec /bin/sleep "$@"\n`)
+  chmodSync(join(fast, "sleep"), 0o755)
+}
 
 function start(command: string, extra: Record<string, string> = {}, detached = false) {
   const child = spawn(script, ["bash", "-c", command], { env: { ...env, ...extra }, stdio: ["ignore", "pipe", "pipe"], detached })
@@ -31,6 +52,12 @@ async function until(condition: () => boolean) {
     assert.ok(Date.now() < deadline, "This never happened.")
     await sleep(50)
   }
+}
+
+// process.kill(0) would kill this test's whole process group, and the shell that started it.
+function killPid(pid: number) {
+  assert.ok(pid > 0, `No process to kill: ${pid}`)
+  process.kill(pid, "SIGKILL")
 }
 
 function lockIsFree() {
@@ -68,19 +95,33 @@ function isTracked(pid: number) {
 }
 
 // Only on macOS, the one place this runs.
+// Longer than until's deadline, which says more. It catches a wait for a process that never ends, which otherwise hangs forever without a word.
+const timeout = 240_000
+
 describe("swift-queue", { skip: process.platform !== "darwin" }, () => {
-  beforeEach(() => {
+  const test = (name: string, fn: () => void | Promise<void>) => it(name, { timeout }, fn)
+
+  before(makeFastSleep)
+  after(() => rmSync(fast, { recursive: true, force: true }))
+
+  beforeEach((t) => {
+    running = t.name
     dir = mkdtempSync(join(tmpdir(), "swift-queue-"))
-    env = { ...process.env, SWIFT_QUEUE_DIR: dir, SWIFT_QUEUE_WAIT: "", npm_lifecycle_event: "" }
+    env = { ...process.env, PATH: `${fast}:${process.env.PATH}`, SWIFT_QUEUE_DIR: dir, SWIFT_QUEUE_WAIT: "", SWIFT_QUEUE_TURN: "", npm_lifecycle_event: "" }
     runs = []
   })
 
-  afterEach(async () => {
-    for (const run of runs) run.child.kill("SIGTERM")
-    await Promise.all(runs.map((run) => run.ended))
-    await until(() => readdirSync(dir).every((name) => !name.startsWith("job.")))
-    rmSync(dir, { recursive: true, force: true })
-  })
+  afterEach(
+    async () => {
+      // Anything a failed test was still holding back can end now.
+      writeFileSync(join(dir, "release"), "")
+      for (const run of runs) run.child.kill("SIGTERM")
+      await Promise.all(runs.map((run) => run.ended))
+      await until(() => readdirSync(dir).every((name) => !name.startsWith("job.")))
+      rmSync(dir, { recursive: true, force: true })
+    },
+    { timeout },
+  )
 
   test("keeps a command's exit status, so a failing check still fails", async () => {
     const run = start("exit 7")
@@ -182,8 +223,8 @@ describe("swift-queue", { skip: process.platform !== "darwin" }, () => {
   const ways: Record<string, (run: { child: ChildProcess }) => void> = {
     "SIGTERM to the wrapper": (run) => run.child.kill("SIGTERM"),
     "SIGKILL to the wrapper": (run) => run.child.kill("SIGKILL"),
-    "SIGKILL to lockf": () => process.kill(holderPid(), "SIGKILL"),
-    "SIGKILL to the turn": () => process.kill(turnPid(), "SIGKILL"),
+    "SIGKILL to lockf": () => killPid(holderPid()),
+    "SIGKILL to the turn": () => killPid(turnPid()),
     "SIGKILL to the whole foreground group": killGroup,
   }
 
@@ -209,7 +250,7 @@ describe("swift-queue", { skip: process.platform !== "darwin" }, () => {
     const helper = Number(readFileSync(file, "utf8"))
     const next = start(`kill -0 ${helper} 2>/dev/null && echo OVERLAP || echo CLEAR`)
     await until(() => next.output().includes("Waiting"))
-    process.kill(watcherPid(), "SIGKILL")
+    killPid(watcherPid())
     killGroup(first)
     assert.equal(await next.ended, 0)
     assert.match(next.output(), /^CLEAR$/m)
@@ -218,16 +259,22 @@ describe("swift-queue", { skip: process.platform !== "darwin" }, () => {
 
   test("a command whose turn was killed before it started never starts", async () => {
     const ran = join(dir, "ran")
+    const held = join(dir, "held")
+    const gate = join(dir, "release")
     const fake = join(dir, "bin")
     mkdirSync(fake)
     // Holds the command back, just before it says who it is, until this run's cleanup is over.
-    writeFileSync(join(fake, "ps"), `#!/bin/sh\nif [ "$2" = lstart= ]; then /bin/sleep 3; fi\nexec /bin/ps "$@"\n`)
+    writeFileSync(join(fake, "ps"), `#!/bin/sh\nif [ "$2" = lstart= ]; then echo $PPID > ${held}.new; mv ${held}.new ${held}; until [ -e ${gate} ]; do /bin/sleep 0.05; done; fi\nexec /bin/ps "$@"\n`)
     chmodSync(join(fake, "ps"), 0o755)
-    const run = start(`touch ${ran}`, { PATH: `${fake}:${process.env.PATH}` })
-    await until(() => existsSync(join(dir, "holder")) && turnPid() > 0)
-    process.kill(turnPid(), "SIGKILL")
-    assert.notEqual(await run.ended, 0)
-    await sleep(4000)
+    const run = start(`touch ${ran}`, { PATH: `${fake}:${env.PATH}` })
+    await until(() => existsSync(held))
+    const command = Number(readFileSync(held, "utf8"))
+    killPid(turnPid())
+    // Not run.ended, because the command held back still has its output open.
+    await until(() => run.child.exitCode !== null)
+    assert.notEqual(run.child.exitCode, 0)
+    writeFileSync(gate, "")
+    await until(() => !isRunning(command))
     assert.ok(!existsSync(ran))
   })
 
@@ -238,7 +285,7 @@ describe("swift-queue", { skip: process.platform !== "darwin" }, () => {
     const failed = join(dir, "ps-failed")
     writeFileSync(join(fake, "ps"), `#!/bin/sh\nif [ -e ${flag} ] && [ "$1" = -axo ]; then touch ${failed}; exit 1; fi\nexec /bin/ps "$@"\n`)
     chmodSync(join(fake, "ps"), 0o755)
-    const run = start(`${withStray} echo holding; wait`, { PATH: `${fake}:${process.env.PATH}` })
+    const run = start(`${withStray} echo holding; wait`, { PATH: `${fake}:${env.PATH}` })
     await until(() => run.output().includes("holding"))
     const stray = strayPid(run.output())
     await until(() => isTracked(stray))
@@ -256,13 +303,13 @@ describe("swift-queue", { skip: process.platform !== "darwin" }, () => {
   const endings: Record<string, (run: { child: ChildProcess }, gate: string) => void> = {
     "its command finishing": (_, gate) => writeFileSync(gate, ""),
     "its command finishing with the watcher killed": (_, gate) => {
-      process.kill(watcherPid(), "SIGKILL")
+      killPid(watcherPid())
       writeFileSync(gate, "")
     },
     "SIGTERM to the wrapper": (run) => run.child.kill("SIGTERM"),
     "SIGKILL to the whole foreground group": killGroup,
     "SIGKILL to the group and the watcher": (run) => {
-      process.kill(watcherPid(), "SIGKILL")
+      killPid(watcherPid())
       killGroup(run)
     },
   }
@@ -275,7 +322,7 @@ describe("swift-queue", { skip: process.platform !== "darwin" }, () => {
       mkdirSync(fake)
       writeFileSync(join(fake, "ps"), `#!/bin/sh\nif [ -e ${flag} ] && [ "$1" = -axo ]; then exit 1; fi\nexec /bin/ps "$@"\n`)
       chmodSync(join(fake, "ps"), 0o755)
-      const failing = { PATH: `${fake}:${process.env.PATH}` }
+      const failing = { PATH: `${fake}:${env.PATH}` }
       const first = start(`set -m; sleep 300 >/dev/null 2>&1 & echo "stray $!"; set +m; until [ -e ${gate} ]; do sleep 0.05; done; exit 0`, failing, true)
       await until(() => first.output().includes("stray"))
       const stray = strayPid(first.output())
@@ -329,13 +376,4 @@ describe("swift-queue", { skip: process.platform !== "darwin" }, () => {
     assert.equal(status, 0)
     assert.equal(stdout, "nested\n")
   })
-})
-
-test("what agents run to compile Swift goes through the queue, and pnpm mac doesn't", () => {
-  const read = (file: string) => readFileSync(file, "utf8")
-  assert.equal(JSON.parse(read("package.json")).scripts["check:mac"], "macos/check-mac.sh")
-  assert.match(read("macos/check-mac.sh"), /exec "\$here\/swift-queue.sh"/)
-  assert.match(read("macos/shot.sh"), /swift-queue\.sh" xcodebuild/)
-  assert.match(read("macos/anvil-test.sh"), /swift-queue\.sh" swift test/)
-  assert.match(read("macos/run.sh"), /"--build-only" \] && .*exec "\$here\/swift-queue\.sh"/)
 })

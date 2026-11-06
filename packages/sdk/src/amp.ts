@@ -8,7 +8,13 @@ import * as FlightSql from "@edgeandnode/amp/proto/FlightSql_pb"
 import type { Interceptor } from "@connectrpc/connect"
 import { createGrpcTransport } from "@connectrpc/connect-node"
 
-export type Query = <T>(sql: string, timeoutMs?: number) => Promise<T[]>
+export type Query = (<T>(sql: string, timeoutMs?: number) => Promise<T[]>) & {
+  /**
+   * The last block Amp had finished in every table this SQL reads, whatever rows the SQL finds, or null if Amp doesn't say.
+   * A plain function can be a `Query` too, for tests and proofs, and it just doesn't have this.
+   */
+  snapshotEnd?: (sql: string) => Promise<number | null>
+}
 
 /** Where the SDK says something went wrong without stopping, like a slow query or a read it will retry. */
 export type Logger = { warn(message: string): void }
@@ -54,7 +60,7 @@ export function describeError(error: unknown): string {
 export const isNotStarted = (error: unknown) => describeError(error).includes("no common canonical watermark")
 
 export function createQuery(url: string, token: string | undefined, { timeoutMs: maxTimeoutMs = DEFAULT_TIMEOUT_MS, logger = console, maxConcurrent = 1 }: QueryOptions = {}): AmpQuery {
-  const clientWith = (aliases?: Record<string, string>) => {
+  const transportWith = (aliases?: Record<string, string>) => {
     const auth: Interceptor[] = token ? [createAuthInterceptor(token)] : []
     const alias: Interceptor[] = aliases
       ? [
@@ -64,7 +70,7 @@ export function createQuery(url: string, token: string | undefined, { timeoutMs:
           },
         ]
       : []
-    return createClient(createGrpcTransport({ baseUrl: url, interceptors: [...auth, ...alias] }))
+    return createGrpcTransport({ baseUrl: url, interceptors: [...auth, ...alias] })
   }
   // Staging is shared, so only this many queries run at once, whatever they read through. The rest wait in order.
   let running = 0
@@ -82,7 +88,7 @@ export function createQuery(url: string, token: string | undefined, { timeoutMs:
     else running -= 1
   }
 
-  const run = async <T>(client: ReturnType<typeof clientWith>, sql: string, timeoutMs: number): Promise<T[]> => {
+  const run = async <T>(client: ReturnType<typeof createClient>, sql: string, timeoutMs: number): Promise<T[]> => {
     const iterator = client.query(sql)[Symbol.asyncIterator]()
     const rows: T[] = []
     let timer: NodeJS.Timeout | undefined
@@ -104,20 +110,45 @@ export function createQuery(url: string, token: string | undefined, { timeoutMs:
     }
   }
 
-  // A caller's limit is the most any query gets, including ones that normally ask for less.
-  const queryWith = (client: ReturnType<typeof clientWith>): Query => async <T>(sql: string, timeoutMs = maxTimeoutMs) => {
+  /** Waits its turn, and logged if it's slow. */
+  const queued = async <R>(sql: string, read: () => Promise<R>, count: (result: R) => number) => {
     await startTurn()
     try {
       const started = Date.now()
-      const rows = await run<T>(client, sql, Math.min(timeoutMs, maxTimeoutMs))
+      const value = await read()
       const took = Date.now() - started
-      if (took > 5000) logger.warn(`Slow Amp query: ${took} ms, ${rows.length} rows: ${sql.replace(/\s+/g, " ").slice(0, 100)}…`)
-      return rows
+      if (took > 5000) logger.warn(`Slow Amp query: ${took} ms, ${count(value)} rows: ${sql.replace(/\s+/g, " ").slice(0, 100)}…`)
+      return value
     } finally {
       endTurn()
     }
   }
-  return Object.assign(queryWith(clientWith()), { aliased: (aliases: Record<string, string>) => queryWith(clientWith(aliases)) })
+
+  const queryWith = (transport: ReturnType<typeof transportWith>): Query => {
+    const client = createClient(transport)
+    const { client: flight } = ArrowFlight.make(transport)
+    // A caller's limit is the most any query gets, including ones that normally ask for less.
+    const query: Query = <T>(sql: string, timeoutMs = maxTimeoutMs) => queued(sql, () => run<T>(client, sql, Math.min(timeoutMs, maxTimeoutMs)), (rows) => rows.length)
+    const snapshotEnd = (sql: string) =>
+      queued(
+        sql,
+        async () => {
+          const signal = AbortSignal.timeout(maxTimeoutMs)
+          try {
+            const ticket = (await flight.getFlightInfo(statement(sql), { signal })).endpoint[0]?.ticket
+            if (!ticket) throw new Error("Amp didn't answer the query with a ticket")
+            let end: number | null = null
+            for await (const message of flight.doGet(ticket, { signal })) end = parseSnapshotEnd(message.appMetadata) ?? end
+            return end
+          } catch (error) {
+            throw new Error(describeError(error), { cause: error })
+          }
+        },
+        () => 0,
+      )
+    return Object.assign(query, { snapshotEnd })
+  }
+  return Object.assign(queryWith(transportWith()), { aliased: (aliases: Record<string, string>) => queryWith(transportWith(aliases)) })
 }
 
 /** A block and its hash, which is what a stream resumes from. */
@@ -141,6 +172,18 @@ export function parseStreamRange(metadata: Uint8Array, network: string): StreamR
   return { start: range.numbers.start, end: range.numbers.end, hash: range.hash, complete }
 }
 
+/** What a one-shot query's message says is the last block of the snapshot it read, or null for one that says nothing. */
+export function parseSnapshotEnd(metadata: Uint8Array): number | null {
+  if (metadata.length === 0) return null
+  const { ranges } = JSON.parse(new TextDecoder().decode(metadata)) as { ranges: { numbers: { end: number } }[] }
+  return ranges.length === 0 ? null : Math.min(...ranges.map((r) => r.numbers.end))
+}
+
+const statement = (sql: string) => {
+  const command = anyPack(FlightSql.CommandStatementQuerySchema, create(FlightSql.CommandStatementQuerySchema, { query: sql }))
+  return create(Flight.FlightDescriptorSchema, { type: Flight.FlightDescriptor_DescriptorType.CMD, cmd: toBinary(AnySchema, command) })
+}
+
 /**
  * Amp's own `client.stream` can't be used here, for two reasons found by running it. It drops each batch's block ranges, and
  * they're the only way to see a reorg. And it fails on the empty keepalive Amp sends every 30 s, because it reads that
@@ -151,10 +194,8 @@ export function parseStreamRange(metadata: Uint8Array, network: string): StreamR
 export function createRangeStream(url: string, token: string | undefined, network: string): StreamRanges {
   const { client } = ArrowFlight.make(createGrpcTransport({ baseUrl: url, interceptors: token ? [createAuthInterceptor(token)] : [] }))
   return async function* (sql, resume, signal) {
-    const command = anyPack(FlightSql.CommandStatementQuerySchema, create(FlightSql.CommandStatementQuerySchema, { query: sql }))
-    const descriptor = create(Flight.FlightDescriptorSchema, { type: Flight.FlightDescriptor_DescriptorType.CMD, cmd: toBinary(AnySchema, command) })
     const headers = { "amp-stream": "true", "amp-resume": JSON.stringify({ [network]: { number: resume.blockNum, hash: resume.hash } }) }
-    const info = await client.getFlightInfo(descriptor, { signal, headers })
+    const info = await client.getFlightInfo(statement(sql), { signal, headers })
     const ticket = info.endpoint[0]?.ticket
     if (!ticket) throw new Error("Amp didn't answer the stream with a ticket")
     for await (const message of client.doGet(ticket, { signal })) {

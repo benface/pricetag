@@ -250,7 +250,7 @@ struct CallSimulation {
             case .amount(let amount, let token):
                 let name = token?.symbol ?? "a token this app doesn't know"
                 let asset = token?.symbol ?? "tokens at \(contractText)"
-                let isUnlimited = amount.map { $0 >= TransactionReview.unlimitedAt } ?? true
+                let isUnlimited = TransactionReview.isUnlimited(amount, of: token)
                 let words: String
                 if isUnlimited {
                     words = token == nil ? "all of \(name)" : "all of your \(name)"

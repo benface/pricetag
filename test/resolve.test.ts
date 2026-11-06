@@ -5,7 +5,7 @@ import { explainPortfolio, portfolioOf } from "../src/core/portfolio.ts"
 import { createWallets, type Source } from "@pricetag/sdk/internal"
 import { ASSETS, CURRENCIES, ETH_ADDRESS, USDC_ADDRESS, buildPricedLegs, openingLegs, shortHash, type LegRow, type Method, type Reference, encodeNote, parseNote } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../src/core/api.ts"
-import { answerSender, changeBook, costKey, emptyBook, enterExchangeCosts, linkAccountsInBook, linkMessage, linkedWallets, parseBook, proofOwner, undoBook, type Book, type BookChange, type BookState, type Money, type Receipt, type SenderAnswer } from "../src/core/book.ts"
+import { answerSender, applyChange, costKey, emptyBook, enterExchangeCosts, linkDeviceAccounts, linkMessage, linkedWallets, parseBook, proofOwner, undoAnswer, type Book, type BookChange, type Money, type Receipt, type SenderAnswer } from "../src/core/book.ts"
 import { matchWithdrawals, parseCoinbaseCsv } from "../src/core/exchange-import.ts"
 import { exportCsv } from "../src/core/export.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_SAVINGS_WALLET, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
@@ -1410,16 +1410,16 @@ describe("what the UI gets", () => {
     assert.equal(of("DEGEN").resolvable, false, "no market means no question")
   })
 
-  it("exports marks what's exact, estimated, unresolved and without a market", () => {
+  it("exports marks what's exact, estimated, unknown and without a market", () => {
     const { positions } = foldBook(DEMO_WALLET, [], "average", emptyBook())
     const lines = exportCsv(positions, "USD").trim().split("\n")
     assert.deepEqual(lines[0]?.split(","), ["time", "block", "transaction", "asset", "amount", "kind", "currency", "price", "price_source", "cost", "cost_source", "proceeds", "status"])
     const status = (asset: string, predicate = (_: string[]) => true) => lines.slice(1).map((l) => l.split(",")).filter((c) => c[3] === asset && predicate(c)).map((c) => c.at(-1))
-    assert.ok(status("USDC").includes("unresolved"))
+    assert.ok(status("USDC").includes("unknown"))
     assert.deepEqual(status("USDT"), ["estimated"])
     assert.ok(status("AERO").includes("exact"))
     assert.deepEqual(status("DEGEN"), ["no market"])
-    assert.ok(lines.slice(1).every((l) => /,(exact|estimated|unresolved|no market)$/.test(l)))
+    assert.ok(lines.slice(1).every((l) => /,(exact|estimated|unknown|no market)$/.test(l)))
   })
 
   it("asks about what's unresolved upstream too", () => {
@@ -1431,11 +1431,11 @@ describe("what the UI gets", () => {
   it("exports a transfer out as what it carried, not as exact", () => {
     const statuses = (rows: LegRow[], answers = emptyBook()) => exportCsv(foldBook(wallet(A, rows), [], "average", answers).positions, "USD").trim().split("\n").slice(1).map((l) => l.split(",").at(-1))
     const out = (from: string) => [...send(10, "0x1", from, A, 100n * E6), ...send(20, "0x2", A, B, 100n * E6)]
-    assert.deepEqual(statuses(out(STRANGER)), ["unresolved", "unresolved"], "unknown cost")
+    assert.deepEqual(statuses(out(STRANGER)), ["unknown", "unknown"], "unknown cost")
     assert.deepEqual(statuses(out(ACROSS)), ["estimated", "estimated"], "estimated cost")
     assert.deepEqual(statuses([...buy(5, "0x0", A, 100n), ...send(20, "0x2", A, B, 50n * E6)]).slice(-1), ["exact"], "paid")
     const partly = [...buy(5, "0x0", A, 100n), ...send(10, "0x1", STRANGER, A, 100n * E6), ...send(20, "0x2", A, B, 150n * E6)]
-    assert.deepEqual(statuses(partly).slice(-1), ["unresolved"], "partly unknown")
+    assert.deepEqual(statuses(partly).slice(-1), ["unknown"], "partly unknown")
   })
 
   it("explains where a cost came from, in plain words", () => {
@@ -1516,18 +1516,26 @@ describe("a book from a request", () => {
 describe("a book that changes while a wallet signs", () => {
   /** A browser wallet whose signature comes back when `finish` is called, with the book kept the way `useBook` keeps it. */
   function signing(start = emptyBook()) {
-    let state: BookState = { book: start, history: [] }
+    let book = start
+    const history: { before: Book; after: Book }[] = []
     let finish = (_: unknown) => {}
     const signature = new Promise((resolve) => (finish = resolve))
     const ethereum = { request: async ({ method }: { method: string }) => (method === "eth_requestAccounts" ? [B] : signature) }
-    const change = (next: BookChange) => void (state = changeBook(state, next))
+    const change = (next: BookChange) => {
+      const before = book
+      book = applyChange(before, before, next)
+      history.push({ before, after: book })
+    }
     return {
       finish,
       change,
-      link: () => linkByProof(ethereum, A, () => state.book, change, async () => true),
-      linkAccounts: (addresses: readonly string[]) => void (state = linkAccountsInBook(state, addresses)),
-      undo: () => void (state = undoBook(state)),
-      senders: () => state.book.senders,
+      link: () => linkByProof(ethereum, A, () => book, change, async () => true),
+      linkAccounts: (addresses: readonly string[]) => void (book = linkDeviceAccounts(book, addresses)),
+      undo: () => {
+        const step = history.pop()
+        if (step) book = undoAnswer(book, step.before, step.after)
+      },
+      senders: () => book.senders,
     }
   }
   const prompted = () => new Promise((resolve) => setImmediate(resolve))
@@ -1590,13 +1598,11 @@ describe("a book that changes while a wallet signs", () => {
     assert.deepEqual(signed, [linkMessage(C, B)])
   })
 
-  it("takes a plain book too, and undoing with nothing to go back to does nothing", () => {
-    const answered = answerSender(emptyBook(), A, STRANGER, { kind: "someone-else" })
-    const state = changeBook({ book: emptyBook(), history: [] }, answered)
-    assert.equal(state.book, answered)
-    assert.deepEqual(state.history, [emptyBook()])
-    const untouched = { book: answered, history: [] }
-    assert.equal(undoBook(untouched), untouched)
+  it("takes a plain book too, on top of what's been said since it was worked out", () => {
+    const shown = emptyBook()
+    const latest = answerSender(shown, null, C, { kind: "mine" })
+    const changed = applyChange(latest, shown, answerSender(shown, A, STRANGER, { kind: "someone-else" }))
+    assert.deepEqual(changed.senders, { [C]: { kind: "mine" }, [STRANGER]: { kind: "someone-else" } })
   })
 })
 

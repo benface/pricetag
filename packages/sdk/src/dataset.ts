@@ -5,9 +5,10 @@
 import { asIso, asNumber, decimalString, hexOf, isNotStarted, prefixed, type BlockMark, type Query } from "./amp.ts"
 import { blockBefore } from "./chain.ts"
 import { MULTICALL3, decodeEthBalance, encodeEthBalanceCall, readBalancesAt } from "./balances.ts"
+import type { RateRound } from "./currency.ts"
 import type { LegRow, PayoutTx, PricedRow, Reference } from "./legs.ts"
-import type { Head } from "./portfolio.ts"
-import type { PriceFeed } from "./tokens.ts"
+import type { FeedRound, Head } from "./portfolio.ts"
+import { TOKEN_FEEDS, type PriceFeed } from "./tokens.ts"
 import type { Source } from "./wallets.ts"
 
 export type Row = Record<string, unknown>
@@ -63,6 +64,10 @@ export function txFilters(txs: readonly { block_num: number; tx_hash: string }[]
   return result
 }
 
+/**
+ * The newest block from `after` on. With no newer block to go from, pass the dataset's start block if there is one:
+ * Amp only skips files on a range, and on staging this query took 8 s with no bound and 0.4 s with one.
+ */
 export async function readHead(query: Query, dataset: string, after: number | null): Promise<Head | null> {
   const where = after === null ? "" : `WHERE block_num >= ${after}`
   const rows = await query<Row>(`SELECT block_num, timestamp FROM "${dataset}".blocks ${where} ORDER BY block_num DESC LIMIT 1`, 15_000)
@@ -153,7 +158,7 @@ export const SWAP_TABLES = ["legs", "unlisted_legs", "priced_legs"]
 /** The tables a pricing rule decides. Everything else is what happened on the chain, whichever rule prices it. */
 const PRICE_TABLES = ["priced_legs", "reference_prices"]
 
-export function datasetReader(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined }) {
+export function datasetReader(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined; startBlock?: number | null | undefined }) {
   const ds = `"${config.dataset}"`
   // A fork of the pricing rule only needs the tables the rule reaches, so these can come from somewhere else.
   const prices = `"${config.priceDataset ?? config.dataset}"`
@@ -187,14 +192,22 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
   const readPricedOf = async (rows: readonly LegRow[], address: string, from: number, to: number) => (rows.length > 0 ? readPriced(address, from, to) : [])
 
   return {
-    head: (after: number | null) => readHead(query, config.baseDataset, after),
+    head: (after: number | null) => readHead(query, config.baseDataset, after ?? config.startBlock ?? null),
 
     /**
      * The newest block, in `after`..`head`, that all these tables have processed, or null if one has none.
      * Reads never go past this. A derived table can lag the chain, and a block read before it's processed looks empty.
      */
     async processedThrough(after: number, head: number, tables: readonly string[] = WALLET_TABLES): Promise<number | null> {
-      const newestIn = (table: string) => `SELECT block_num FROM ${PRICE_TABLES.includes(table) ? prices : ds}.${table} WHERE block_num >= ${after} ORDER BY block_num DESC LIMIT 1`
+      const tableOf = (table: string) => `${PRICE_TABLES.includes(table) ? prices : ds}.${table}`
+      // One query matching no rows: Amp says how far all its tables have got, and a table can be done with a block it has no row for.
+      const end = await query.snapshotEnd?.(tables.map((table) => `SELECT block_num FROM ${tableOf(table)} WHERE false`).join(" UNION ALL ")).catch((error: unknown) => {
+        if (isNotStarted(error)) return null
+        throw error
+      })
+      if (end !== undefined && end !== null) return end < after ? null : Math.min(end, head)
+      // Without that, a table's newest row is as far as it can be shown to have got.
+      const newestIn = (table: string) => `SELECT block_num FROM ${tableOf(table)} WHERE block_num >= ${after} ORDER BY block_num DESC LIMIT 1`
       // One query, because this is on every wallet read and a hosted Amp is shared. On staging it took about a third as long.
       const merged = await query<Row>(tables.map((table) => `SELECT block_num FROM (${newestIn(table)})`).join(" UNION ALL ")).catch(async (error: unknown) => {
         if (!isNotStarted(error)) throw error
@@ -311,6 +324,49 @@ export async function readPayoutTxsAt(query: Query, baseDataset: string, address
   return txs
 }
 
+/** The `answer` word of a `latestRoundData()` result, or "" when the read failed. */
+export function decodeRoundAnswer(data: string | null | undefined): string {
+  const word = data?.slice(64, 128)
+  if (!word || word.length !== 64) return ""
+  const answer = BigInt(`0x${word}`)
+  return answer >> 255n === 1n ? "" : answer.toString()
+}
+
+/** A `latestRoundData()` result's answer and when it last updated, or null when the read failed or it isn't a positive answer. */
+export function decodeRound(data: string | null | undefined): RateRound | null {
+  const answer = decodeRoundAnswer(data)
+  const updatedAt = data?.slice(192, 256)
+  if (!answer || answer === "0" || !updatedAt || updatedAt.length !== 64) return null
+  return { answer, updatedAt: Number(BigInt(`0x${updatedAt}`)) }
+}
+
+/**
+ * One query however many feeds and blocks: a wallet that holds several asks for them all at once, and a chart's points share one. The filter sits in an inner subquery
+ * with a LIMIT, and the outer query reads no field of the result. WORK-320 found the other shapes can run eth_call on every block on the chain.
+ */
+export function readFeedRoundsAt(query: Query, config: { baseDataset: string; network: string }): NonNullable<Source["readFeedRounds"]> {
+  return async (assets, blocks) => {
+    const result = new Map<number, Record<string, FeedRound>>()
+    const feeds = assets.flatMap((asset) => {
+      const feed = TOKEN_FEEDS[asset]
+      return feed ? [{ asset, address: feed.address }] : []
+    })
+    if (feeds.length === 0) return result
+    const calls = feeds.map(({ address }, i) => `rpc.${config.network}.eth_call(NULL, evm_encode_hex('${address}'), evm_encode_params('latestRoundData()'), block_num) AS f${i}`)
+    for (const { filter, count } of blockFilters(blocks)) {
+      for (const row of await query<Row>(`SELECT block_num, timestamp, ${calls.join(", ")} FROM (SELECT block_num, timestamp FROM "${config.baseDataset}".blocks WHERE ${filter} LIMIT ${count})`)) {
+        const rounds: Record<string, FeedRound> = {}
+        feeds.forEach(({ asset }, i) => {
+          const round = decodeRound((row[`f${i}`] as { data?: string } | null)?.data)
+          if (round) rounds[asset] = { ...round, blockNum: asNumber(row.block_num), timestamp: asIso(row.timestamp) }
+        })
+        result.set(asNumber(row.block_num), rounds)
+      }
+    }
+    return result
+  }
+}
+
 export function datasetSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined; startBlock: number | null; network: string }): Source {
   return {
     mode: "dataset",
@@ -319,6 +375,7 @@ export function datasetSource(query: Query, config: { baseDataset: string; datas
     readBalances: (address, block) => readBalancesAt(query, config.network, address, block),
     readEthBalances: (address, blocks) => readEthBalancesAt(query, config.network, config.baseDataset, address, blocks),
     readPayoutTxs: (address, blocks) => readPayoutTxsAt(query, config.baseDataset, address, blocks),
+    readFeedRounds: readFeedRoundsAt(query, config),
     ...datasetReader(query, config),
   }
 }
