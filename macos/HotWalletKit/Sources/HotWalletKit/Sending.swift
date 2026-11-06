@@ -62,6 +62,13 @@ public enum SendPlanner {
     }
 }
 
+/// An address the user knows that a recipient only looks like.
+public struct LookalikeMatch: Equatable, Sendable {
+    public let address: EthereumAddress
+    /// What it is to them, as in "This only looks like Treasury".
+    public let name: String
+}
+
 /// What the Send sheet needs: what's been typed, whether to ask about the address, and sending it. The answer's only saved once
 /// something's on its way, and a skipped question just comes back next time. What's typed can't change once it's being confirmed.
 @MainActor
@@ -71,14 +78,36 @@ public final class SendModel {
         case composing, confirming, sent
     }
 
+    /// What the amount is typed in. Either way, what's signed is the token amount, and that's shown before anything's confirmed.
+    public enum Unit: Equatable, Sendable {
+        case token, money
+    }
+
     public private(set) var stage = Stage.composing
     /// What this send put on its way, once it has.
     private var sentHashes: [String] = []
-    public var token: Token
-    public var amountText = ""
-    public var addressText = "" {
-        didSet { if addressText != oldValue { ownership = nil } }
+    public var token: Token {
+        didSet { if token != oldValue { tokenChanged() } }
     }
+    public private(set) var unit = Unit.token
+    public var amountText = "" {
+        // Any edit is ordinary input, even one that types Max's amount again.
+        didSet { if amountText != pinnedMaximum?.text { pinnedMaximum = nil } }
+    }
+    public var addressText = "" {
+        didSet {
+            guard addressText != oldValue else { return }
+            ownership = nil
+            acceptsLookalike = false
+        }
+    }
+    /// The deliberate step it takes to send to an address that looks like one they know. It's for that address only.
+    public var acceptsLookalike = false
+    /// Fixed when it's confirmed, so a price or a rate that moves while Touch ID asks can't change what it signs.
+    private var confirmedAmount: UInt128?
+    /// What Max put in the field, in money, and the exact token amount it stood for then. Until the field changes, that's the amount,
+    /// rather than what the rounded money would buy, and never a different maximum that a new balance makes.
+    private var pinnedMaximum: (text: String, units: UInt128)?
     /// The answer to "Is this yours?", if they've given one.
     public var ownership: Ownership?
     public private(set) var failure: String?
@@ -100,7 +129,83 @@ public final class SendModel {
         EthereumAddress(addressText.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    public var amount: UInt128? { Money.units(fromText: amountText, decimals: token.decimals) }
+    /// The token amount, which is all that's ever signed. In money, it's what that buys at the price shown, never more.
+    public var amount: UInt128? {
+        stage == .composing ? typedAmount : confirmedAmount
+    }
+
+    private var typedAmount: UInt128? {
+        switch unit {
+        case .token:
+            return Money.units(fromText: amountText, decimals: token.decimals)
+        case .money:
+            if let pinnedMaximum, amountText == pinnedMaximum.text { return pinnedMaximum.units }
+            guard let price, let shown = Money.units(fromText: amountText, decimals: 6) else { return nil }
+            let units = Money.amount(ofUsdMicros: wallet.display.usdMicros(ofShown: shown), priceMicros: price, decimals: token.decimals)
+            // Digits past these are worth nothing anyone would count, and only make the amount harder to check.
+            let step = (0..<max(token.decimals - Self.moneyDecimals, 0)).reduce(UInt128(1)) { value, _ in value * 10 }
+            return units - units % step
+        }
+    }
+
+    private static let moneyDecimals = 8
+
+    private var price: UInt128? {
+        wallet.holdings.first { $0.token == token }?.priceUsdMicros.flatMap { $0 > 0 ? $0 : nil }
+    }
+
+    /// Only with a price to work it out from.
+    public var canTypeMoney: Bool { price != nil }
+
+    /// What goes before an amount typed in money.
+    public var moneySymbol: String { wallet.display.symbol }
+
+    /// Typing in the other unit, keeping what's there as near as it can be said in it.
+    public func switchUnit() {
+        guard unit == .money || canTypeMoney else { return }
+        let current = typedAmount
+        let wasMaximum = current != nil && current == maximum && maximum > 0
+        unit = unit == .token ? .money : .token
+        pinnedMaximum = nil
+        guard !amountText.isEmpty else { return }
+        // Without an amount to carry over, say because the price is gone, the digits mean nothing in the other unit.
+        guard let current, let text = unit == .token ? Money.text(ofUnits: current, decimals: token.decimals) : moneyText(of: current) else {
+            amountText = ""
+            return
+        }
+        amountText = text
+        if wasMaximum, unit == .money { pinnedMaximum = (text, current) }
+    }
+
+    private func tokenChanged() {
+        pinnedMaximum = nil
+        if unit == .money, !canTypeMoney {
+            unit = .token
+            amountText = ""
+        }
+    }
+
+    /// In money, to the cent and rounded down, as it's typed.
+    private func moneyText(of units: UInt128) -> String? {
+        guard let price else { return nil }
+        let cents = wallet.display.shownMicros(Money.usdMicros(of: units, priceMicros: price, decimals: token.decimals)) / 10_000
+        let fraction = String(cents % 100)
+        return "\(cents / 100).\(fraction.count == 1 ? "0" : "")\(fraction)"
+    }
+
+    /// The most that can be sent, in what's being typed.
+    public var availableText: String? {
+        guard wallet.snapshot != nil else { return nil }
+        switch unit {
+        case .token: return "\(Format.amount(String(maximum), decimals: token.decimals)) \(token.symbol)"
+        case .money: return price.map { wallet.money(Money.usdMicros(of: maximum, priceMicros: $0, decimals: token.decimals)) }
+        }
+    }
+
+    /// The exact token amount, to the last digit, which is what Touch ID will sign.
+    public var tokenAmountText: String? {
+        amount.map { "\(Money.text(ofUnits: $0, decimals: token.decimals)) \(token.symbol)" }
+    }
 
     /// The amount as it's confirmed: exactly what it is, written the way it was typed, so 12.50 doesn't become 12.5 on the next step.
     public var amountShown: String? {
@@ -118,7 +223,7 @@ public final class SendModel {
 
     /// An address nobody's said anything about. Accounts in this wallet are always in the book, so they never come up.
     public var asksIfItsYours: Bool {
-        guard let recipient, recipientProblem == nil else { return false }
+        guard let recipient, recipientProblem == nil, lookalike == nil else { return false }
         return store.book.senders[recipient.lowercased] == nil
     }
 
@@ -134,8 +239,22 @@ public final class SendModel {
     }
 
     public var usdMicros: UInt128? {
-        guard let amount else { return nil }
-        return wallet.holdings.first { $0.token == token }?.priceUsdMicros.map { Money.usdMicros(of: amount, priceMicros: $0, decimals: token.decimals) }
+        guard let amount, let price else { return nil }
+        return Money.usdMicros(of: amount, priceMicros: price, decimals: token.decimals)
+    }
+
+    /// An address they know that this one only starts and ends like, which is how address poisoning works. Checked against what's on
+    /// this Mac only: their wallets, this one, and where it's sent before. Named ones come first, because a name is what they'd recognize.
+    public var lookalike: LookalikeMatch? {
+        guard let recipient, recipientProblem == nil else { return nil }
+        var known: [(address: String, name: String)] = wallet.settings.coldWallets.map { ($0.address.lowercased, $0.name) }
+        known += store.savedWallets.compactMap { saved in saved.name.map { (saved.address, $0) } }
+        if let own = wallet.address { known.append((own.lowercased, HotWalletWording.title)) }
+        known += store.savedWallets.filter { $0.name == nil }.map { ($0.address, "a wallet you watch") }
+        known += wallet.records.map { ($0.to.lowercased, "an address you've sent to") }
+        known += store.book.senders.keys.sorted().map { ($0, "an address you've used") }
+        guard let match = Lookalike.match(for: recipient.lowercased, among: known.map(\.address)), let address = EthereumAddress(match) else { return nil }
+        return known.first { $0.address == match }.map { LookalikeMatch(address: address, name: $0.name) }
     }
 
     public var worthText: String? { usdMicros.map(wallet.money) }
@@ -169,18 +288,27 @@ public final class SendModel {
     public var maximum: UInt128 { wallet.maximumSend(of: token) }
 
     public func useMaximum() {
-        amountText = Money.text(ofUnits: maximum, decimals: token.decimals)
+        let most = maximum
+        // Without a price to say it in money, it's said in the token, so what's shown is always what's sent.
+        guard unit == .money, let text = moneyText(of: most) else {
+            unit = .token
+            amountText = Money.text(ofUnits: most, decimals: token.decimals)
+            return
+        }
+        amountText = text
+        pinnedMaximum = (text, most)
     }
 
     public var canSend: Bool {
         guard wallet.canSend, !isSending, let amount, amount > 0, recipient != nil else { return false }
-        return recipientProblem == nil && amountProblem == nil
+        return recipientProblem == nil && amountProblem == nil && (lookalike == nil || acceptsLookalike)
     }
 
-    /// On to what Touch ID will be asked about.
+    /// On to what Touch ID will be asked about, with the amount as it is now.
     public func confirm() {
         guard canSend else { return }
         failure = nil
+        confirmedAmount = typedAmount
         stage = .confirming
     }
 
@@ -212,7 +340,7 @@ public final class SendModel {
         }
         failure = nil
         guard await wallet.send(SendRequest(token: token, amount: amount, to: recipient), in: prompt) else {
-            failure = wallet.sweepProblem
+            failure = wallet.sweepProblem.map(HotWalletWording.sendFailure)
             return false
         }
         sentHashes = wallet.lastSubmitted

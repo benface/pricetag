@@ -69,12 +69,18 @@ public final class ResolveModel {
     /// Every question's answered. Anything skipped doesn't count.
     public var isBalanced: Bool { meter?.isBalanced == true && store.portfolio?.withheld.isEmpty == true }
 
+    /// The wallet an answer is about: the one showing, or with all the user's wallets showing, the one it arrived in.
+    private func focus(of question: Question?) -> String? {
+        guard let portfolio = store.portfolio else { return nil }
+        return portfolio.isAllYours ? question?.wallet : portfolio.address
+    }
+
     /// The books each answer leads to. "My exchange account" changes nothing until there's a cost, so it isn't one.
     private func candidate(_ ownership: Ownership, for question: Question) -> Book? {
         guard let sender = question.sender else { return nil }
         switch ownership {
-        case .mine: return store.book.answering(sender, .mine, focus: store.portfolio?.address)
-        case .someoneElse: return store.book.answering(sender, .someoneElse, focus: store.portfolio?.address)
+        case .mine: return store.book.answering(sender, .mine, focus: focus(of: question))
+        case .someoneElse: return store.book.answering(sender, .someoneElse, focus: focus(of: question))
         case .myExchange: return nil
         }
     }
@@ -101,7 +107,7 @@ public final class ResolveModel {
         case .myExchange:
             // What was entered for this sender before stays, because it covers what had arrived by then.
             let earlier = store.book.senders[sender.lowercased()]
-            store.setBook(store.book.answering(sender, earlier?.kind == .myExchange ? earlier! : SenderAnswer(kind: .myExchange), focus: store.portfolio?.address), about: about(question))
+            store.setBook(store.book.answering(sender, earlier?.kind == .myExchange ? earlier! : SenderAnswer(kind: .myExchange), focus: focus(of: question)), about: about(question))
             isAskingCost = true
         case .mine, .someoneElse:
             if let book = candidate(ownership, for: question) { store.setBook(book, about: about(question)) }
@@ -117,7 +123,7 @@ public final class ResolveModel {
             micros[arrival.asset] = Money(micros: amount, currency: currency ?? store.currency)
         }
         if let sender = question.sender {
-            return store.book.enteringExchangeCosts(sender, receipts: question.receipts, amounts: micros, focus: store.portfolio?.address)
+            return store.book.enteringExchangeCosts(sender, receipts: question.receipts, amounts: micros, focus: focus(of: question))
         }
         guard let key = question.costKey, let cost = micros.values.first else { return nil }
         return store.book.enteringCost(key, cost)
@@ -186,7 +192,7 @@ public final class ResolveModel {
     /// They own the account but don't have what they paid, so the price when it arrived will do, as an estimate.
     public func usePriceWhenItArrived() {
         guard let question = current, let sender = question.sender else { return }
-        store.setBook(store.book.answering(sender, .someoneElse, focus: store.portfolio?.address), about: about(question))
+        store.setBook(store.book.answering(sender, .someoneElse, focus: focus(of: question)), about: about(question))
         advance()
     }
 

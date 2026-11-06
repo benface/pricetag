@@ -77,8 +77,10 @@ private struct HotWalletSetup: View {
                 Image(systemName: "banknote")
                     .font(.system(size: 30))
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
                 Text("Spending Money")
                     .font(.sheetTitle)
+                    .accessibilityAddTraits(.isHeader)
                 Text("\(HotWalletWording.summary) Anything above your cap moves to your savings.")
                     .fixedSize(horizontal: false, vertical: true)
                 // What can't be undone stays in full, and on screen.
@@ -114,6 +116,7 @@ private struct HotWalletSetup: View {
                     }
                 }
                     .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
                     .disabled(!understands || wallet.isWorking)
                 if let problem = wallet.sweepProblem {
                     WarningText(problem).font(.callout)
@@ -274,9 +277,12 @@ struct HotWalletDetails<Overview: View>: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .firstTextBaseline) {
                     DisplayNumber(wallet.valueUsdMicros.map(wallet.money) ?? "—", size: 20, tone: wallet.plan?.excessUsdMicros ?? 0 > 0 ? .warning : .neutral)
+                        .accessibilityLabel(Spoken.number("Balance", wallet.valueUsdMicros.map(wallet.money)) + (wallet.plan?.excessUsdMicros ?? 0 > 0 ? ", above the cap" : ""))
                     Button("of \(wallet.capText)") { isChangingCap.toggle() }
                         .buttonStyle(.link)
                         .help("Change the cap")
+                        .accessibilityLabel("Cap, \(wallet.capText)")
+                        .accessibilityHint("Change the cap")
                         .popover(isPresented: $isChangingCap, arrowEdge: .bottom) { capEditor }
                     Spacer()
                     Label(HotWalletWording.label, systemImage: "flask")
@@ -293,7 +299,7 @@ struct HotWalletDetails<Overview: View>: View {
                 if let plan = wallet.plan, plan.gasKeptWei > 0 {
                     Text(HotWalletWording.keptOutOfCap(plan.gasKeptWei))
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                 }
                 if let address {
                     HStack {
@@ -374,7 +380,7 @@ struct HotWalletDetails<Overview: View>: View {
     private var holdings: some View {
         DetailsSection("Holdings") {
             if wallet.holdings.isEmpty {
-                Text("Reading…").foregroundStyle(.secondary)
+                Text("Reading…").secondaryText()
             }
             ForEach(wallet.holdings) { holding in
                 LabeledContent(holding.token.symbol) {
@@ -384,15 +390,18 @@ struct HotWalletDetails<Overview: View>: View {
                         if let value = holding.valueUsdMicros {
                             Text(wallet.money(value))
                                 .monospacedDigit()
-                                .foregroundStyle(.secondary)
+                                .secondaryText()
                                 .frame(minWidth: 72, alignment: .trailing)
                         } else {
-                            WarningText("No price")
+                            WarningText(Wording.noPrice)
                                 .font(.caption)
                                 .frame(minWidth: 72, alignment: .trailing)
                         }
                     }
                 }
+                // "ETH, 0.005, $13.20" doesn't say which number is which.
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(holding.token.symbol), \(Format.amount(String(holding.balance), decimals: holding.token.decimals)), \(holding.valueUsdMicros.map { "worth \(wallet.money($0))" } ?? "no price")")
             }
         }
     }
@@ -409,17 +418,13 @@ struct HotWalletDetails<Overview: View>: View {
     }
 
     private var savings: some View {
-        DetailsSection("Savings", footer: wallet.settings.coldWallets.isEmpty ? nil : "Sweeps go to the checked one. Click another to change it.") {
+        DetailsSection("Savings") {
             if wallet.settings.coldWallets.isEmpty {
                 Text("No savings wallet yet.")
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
             }
             ForEach(wallet.settings.coldWallets) { cold in
                 HStack {
-                    Image(systemName: cold.address == wallet.settings.sweepDestination ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(cold.address == wallet.settings.sweepDestination ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
-                        .contentTransition(.symbolEffect(.replace))
-                        .animation(Motion.state, value: wallet.settings.sweepDestination)
                     VStack(alignment: .leading) {
                         Text(cold.name)
                         AddressLine(cold.address.checksummed)
@@ -438,9 +443,16 @@ struct HotWalletDetails<Overview: View>: View {
                     .help("Remove from savings")
                     .disabled(wallet.isWorking)
                 }
-                .contentShape(Rectangle())
-                .onTapGesture { wallet.setSweepDestination(cold.address) }
-                .accessibilityAddTraits(cold.address == wallet.settings.sweepDestination ? .isSelected : [])
+            }
+            if !wallet.settings.coldWallets.isEmpty {
+                Picker("Sweeps go to", selection: Binding(get: { wallet.settings.sweepDestination }, set: { if let address = $0 { wallet.setSweepDestination(address) } })) {
+                    ForEach(wallet.settings.coldWallets) { cold in
+                        // Two can have the same name, and this decides where money goes.
+                        Text("\(cold.name) (\(Format.shortHash(cold.address.checksummed)))").tag(Optional(cold.address))
+                    }
+                }
+                .pickerStyle(.radioGroup)
+                .accessibilityLabel("Sweeps go to")
             }
             Button(HotWalletWording.addSavingsButton, systemImage: "plus") { isAddingCold = true }
         }
@@ -514,8 +526,8 @@ struct HotWalletDetails<Overview: View>: View {
 
     private var sweep: some View {
         Button("Sweep Everything…") { isSweeping = true }
-            .disabled(wallet.settings.sweepDestination == nil || wallet.isWorking || wallet.isKeyMissing)
-            .help(wallet.settings.sweepDestination == nil ? "Add a savings wallet first" : "Move everything on this wallet to your savings. \(HotWalletWording.newDevice)")
+            .disabled(wallet.settings.sweepDestination == nil || wallet.isWorking || wallet.isKeyMissing || wallet.sweepPreview?.whyNothing != nil)
+            .help(wallet.settings.sweepDestination == nil ? "Add a savings wallet first" : wallet.sweepPreview?.whyNothing ?? "Move everything on this wallet to your savings. \(HotWalletWording.newDevice)")
     }
 
     /// This wallet's own settings. App-wide ones are in Settings. What's rare and can't be undone comes last.
@@ -557,7 +569,7 @@ struct HotWalletDetails<Overview: View>: View {
             }
             .confirmationDialog("Replace this wallet's key?", isPresented: $isConfirmingRotation) {
                 Button("Replace Key") { Task { await wallet.replaceKey() } }
-                if wallet.settings.sweepDestination != nil {
+                if wallet.settings.sweepDestination != nil, wallet.sweepPreview?.whyNothing == nil {
                     Button("Sweep Everything to Savings Instead") { isSweeping = true }
                 }
             } message: {
@@ -572,7 +584,7 @@ struct HotWalletDetails<Overview: View>: View {
                 }
             }
             .confirmationDialog("Delete this wallet's key?", isPresented: $isConfirmingDelete) {
-                if wallet.settings.sweepDestination != nil {
+                if wallet.settings.sweepDestination != nil, wallet.sweepPreview?.whyNothing == nil {
                     Button("Sweep Everything to Savings First") { Task { await wallet.sweepEverything() } }
                 }
                 Button("Delete Forever", role: .destructive) { Task { await wallet.deleteWallet() } }
@@ -608,7 +620,7 @@ struct HotWalletDetails<Overview: View>: View {
             ForEach(wallet.records) { record in
                 HStack {
                     VStack(alignment: .leading) {
-                        Text(record.reason == .note ? "What you paid for \(record.symbol)" : "\(Format.amount(record.amount, decimals: record.decimals)) \(record.symbol)")
+                        Text(recordTitle(record))
                             .monospacedDigit()
                         Text("\(reasonText(record)) · \(Format.time(record.createdAt))")
                             .font(.caption)
@@ -620,6 +632,7 @@ struct HotWalletDetails<Overview: View>: View {
                         Link(destination: url) { Image(systemName: "arrow.up.right.square") }
                             .foregroundStyle(.secondary)
                             .help("Open this transaction")
+                            .accessibilityLabel("Open this transaction on Basescan")
                     }
                 }
                 .contentShape(Rectangle())
@@ -657,6 +670,15 @@ struct HotWalletDetails<Overview: View>: View {
         case .site: record.site.map(siteName) ?? "A site"
         case .sent: "Sent to \(Format.shortHash(record.to.checksummed))"
         case .note: "Published for anyone to read"
+        case .revoke: "Revoked, for \(Format.shortHash(record.to.checksummed))"
+        }
+    }
+
+    private func recordTitle(_ record: SignedRecord) -> String {
+        switch record.reason {
+        case .note: "What you paid for \(record.symbol)"
+        case .revoke: "Approval for \(record.symbol)"
+        default: "\(Format.amount(record.amount, decimals: record.decimals)) \(record.symbol)"
         }
     }
 
@@ -761,7 +783,7 @@ private struct RecordStatus: View {
             }
             Text(text)
                 .contentTransition(.opacity)
-                .foregroundStyle(status == .failed || status == .dropped ? Tone.warning.style : AnyShapeStyle(.secondary))
+                .foregroundStyle(status == .failed || status == .dropped ? Tone.warning.style : Tone.secondary.style)
         }
         .font(.caption)
         .animation(Motion.state, value: status)
@@ -809,7 +831,7 @@ struct TopUpSheet: View {
                 }
                 Text(HotWalletWording.topUpRoom(wallet.money(wallet.topUpRoom), hasDestination: hasDestination))
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .fixedSize(horizontal: false, vertical: true)
                 if let deviceLink {
                     DeviceBrowserNote(choice: found, outcome: "your hardware wallet signs the transfer.") { open(deviceLink, in: nil) }
@@ -831,7 +853,8 @@ struct TopUpSheet: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.top, 6)
                 }
-                if wallet.holdings.first(where: { $0.token.isNative })?.balance ?? 0 < SweepPlanner.minimumGasReserveWei {
+                // Nothing read yet means no holdings at all, which says nothing about its gas.
+                if let eth = wallet.holdings.first(where: { $0.token.isNative }), eth.balance < SweepPlanner.minimumGasReserveWei {
                     Notice(.warning, HotWalletWording.topUpNeedsGas(hasDestination: hasDestination))
                 }
             }

@@ -8,8 +8,7 @@
 //   FORK_OF=benface/pricetag@0.1.0 AMP_ADMIN_URL=... node dataset/build.ts --fork [start block]
 //
 // Writes dataset/rates.json with --rates: exchange rates, as their own small dataset, so adding a currency doesn't replace the one
-// the app's prices come from. The start block is the Pricetag dataset's, and it reaches back from there. It defaults to the fork's,
-// which is the one staging serves.
+// the app's prices come from. The start block is the Pricetag dataset's, and it reaches back from there.
 //
 //   AMP_ADMIN_URL=... node dataset/build.ts --rates [start block]
 //
@@ -18,7 +17,7 @@
 // and UDFs that never return null or throw, because one bad row stops the whole dataset.
 
 import { readFileSync, writeFileSync } from "node:fs"
-import { CURRENCIES, ERC20_ADDRESSES, ETH_ADDRESS, MAX_ROUND_AGE_SECONDS, PRICE_FEEDS, SEED_TX, TOKENS, WETH_ADDRESS, blockBefore, type PriceFeed } from "@pricetag/sdk/core"
+import { APPROVAL_LOGS, CURRENCIES, ERC20_ADDRESSES, ETH_ADDRESS, MAX_ROUND_AGE_SECONDS, PRICE_FEEDS, SEED_TX, TOKENS, WETH_ADDRESS, blockBefore, type PriceFeed } from "@pricetag/sdk/core"
 
 const MANIFEST = new URL("./pricetag.json", import.meta.url)
 const CAUTIOUS_MANIFEST = new URL("./cautious-eth.json", import.meta.url)
@@ -248,6 +247,11 @@ JOIN self.pair_counts c ON p._block_num = c._block_num AND p.tx_hash = c.tx_hash
 WHERE c.pair_count = 1 AND ${since}`,
 
     priced_legs: pricedLegsSql("self.single_pairs", since),
+
+    // Every approval event, as the logs have it, so a wallet's are one read by owner. What each still allows is read
+    // from its contract when it's asked for, because spending and revoking change it.
+    approvals: `SELECT block_num, timestamp, tx_hash, log_index, address, topic0, topic1, topic2, topic3 FROM base.logs
+WHERE ${APPROVAL_LOGS} AND ${since}`,
   }
 }
 
@@ -408,7 +412,7 @@ async function build() {
     return
   }
   if (args[0] === "--rates") {
-    await write(admin, RATES_MANIFEST, { dependencies: DEPENDENCIES, tables: { rate_updates: rateUpdatesSql(Number(args[1] ?? startOf(CAUTIOUS_MANIFEST))) }, functions: {} })
+    await write(admin, RATES_MANIFEST, { dependencies: DEPENDENCIES, tables: { rate_updates: rateUpdatesSql(Number(args[1] ?? startOf(MANIFEST))) }, functions: {} })
     return
   }
   await write(admin, MANIFEST, { dependencies: DEPENDENCIES, tables: tablesSql(Number(args[0] ?? startOf(MANIFEST))), functions: functions() })

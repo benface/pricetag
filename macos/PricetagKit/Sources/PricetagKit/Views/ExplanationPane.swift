@@ -4,11 +4,16 @@ import SwiftUI
 public struct ExplanationPane: View {
     let target: ExplainTarget
     let store: PortfolioStore
+    /// Opens the questions about an asset, which is what fixes an unknown cost.
+    let onResolve: ((String) -> Void)?
     @State private var model: ExplanationModel
+    @Environment(\.opensFirstProof) private var opensFirstProof
+    @Environment(\.walletNames) private var walletNames
 
-    public init(target: ExplainTarget, store: PortfolioStore) {
+    public init(target: ExplainTarget, store: PortfolioStore, onResolve: ((String) -> Void)? = nil) {
         self.target = target
         self.store = store
+        self.onResolve = onResolve
         _model = State(initialValue: ExplanationModel(fetch: { try await store.explanation(for: $0) }))
     }
 
@@ -35,23 +40,37 @@ public struct ExplanationPane: View {
         if case .asset(_, .onchain) = target { true } else { false }
     }
 
+    /// An asset's number is named by the picker above, which also says which asset it is.
+    private var hasMetricPicker: Bool {
+        if case .asset(let asset, _) = target { store.portfolio?.positions.contains { $0.asset == asset } == true } else { false }
+    }
+
+    /// How many questions answering would fix this asset's unknown costs.
+    private func questionCount(for asset: String) -> Int {
+        store.portfolio?.questions.count { $0.arrivals.contains { $0.asset == asset } } ?? 0
+    }
+
     private func content(_ explanation: Explanation) -> some View {
         List {
             Section {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(explanation.title).font(.headline).help(Wording.pnlHelp(for: explanation.title) ?? "")
+                    if !hasMetricPicker {
+                        Text(explanation.title).font(.headline).help(Wording.pnlHelp(for: explanation.title) ?? "")
+                            .accessibilityAddTraits(.isHeader)
+                    }
                     if let value = explanation.value {
-                        LiveNumber(value).font(.sheetTitle)
+                        LiveNumber(value).font(.sheetTitle).help(Wording.pnlHelp(for: explanation.title) ?? "")
+                            .accessibilityLabel(Spoken.number(explanation.title, value, isLive: !store.feed.isStale))
                     } else if !isBalanceCheck {
                         WarningText("Unavailable").font(.title3.weight(.semibold))
                     }
                     if let sourceValue = explanation.sourceValue {
-                        Text(sourceValue).font(.callout).monospacedDigit().foregroundStyle(.secondary)
+                        Text(sourceValue).font(.callout).monospacedDigit().secondaryText()
                     }
                     ForEach(explanation.lines, id: \.self) { line in
                         Text(line)
                             .font(.callout)
-                            .foregroundStyle(.secondary)
+                            .secondaryText()
                             .fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
                             .help(Wording.pnlHelp(for: line) ?? "")
@@ -62,12 +81,49 @@ public struct ExplanationPane: View {
                 }
                 .padding(.vertical, 4)
             }
+            if let parts = explanation.parts, !parts.isEmpty {
+                Section("In Each Wallet") {
+                    ForEach(parts) { part in
+                        WalletPartRow(part: part, name: walletNames.walletName(part.wallet))
+                    }
+                }
+            }
             Section(Wording.activityTitle(count: explanation.legCount, shown: explanation.legs.count)) {
-                ForEach(explanation.legs) { leg in
-                    LegRow(leg: leg, currency: explanation.currency, store: store)
+                let first = explanation.legs.first(where: \.hasTransaction)?.rowID
+                ForEach(explanation.legs, id: \.rowID) { leg in
+                    LegRow(leg: leg, currency: explanation.currency, store: store, questions: questionCount(for: leg.asset), showsProof: opensFirstProof && leg.rowID == first, onResolve: onResolve)
                 }
             }
         }
+    }
+}
+
+/// One wallet's side of a number shown across several: its name, its number, and how that's worked out.
+private struct WalletPartRow: View {
+    let part: ExplanationPart
+    let name: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(name).fontWeight(.medium).lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 8)
+                if let value = part.value {
+                    LiveNumber(value)
+                } else {
+                    WarningText("Unavailable")
+                }
+            }
+            ForEach(part.lines, id: \.self) { line in
+                Text(line)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(.vertical, 3)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -75,68 +131,121 @@ public struct LegRow: View {
     let leg: ExplanationLeg
     let currency: CurrencyCode
     let store: PortfolioStore
+    /// Questions whose answers would fix what isn't known about it.
+    let questions: Int
+    let onResolve: ((String) -> Void)?
     @State private var showsProof = false
+    @Environment(\.walletNames) private var walletNames
 
-    public init(leg: ExplanationLeg, currency: CurrencyCode, store: PortfolioStore) {
+    public init(leg: ExplanationLeg, currency: CurrencyCode, store: PortfolioStore, questions: Int = 0, showsProof: Bool = false, onResolve: ((String) -> Void)? = nil) {
         self.leg = leg
         self.currency = currency
         self.store = store
+        self.questions = questions
+        self.onResolve = onResolve
+        _showsProof = State(initialValue: showsProof)
     }
 
+    /// A fee is a cost of doing something, not something the person did, so it reads quieter. Its unknown is a word, not a line, with the reason in its tooltip.
+    private var isFee: Bool { leg.kind == "gas" }
+
     public var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
-                Text("\(Format.signedAmount(leg.delta, decimals: leg.decimals)) \(leg.asset)")
-                    .monospacedDigit()
-                    .fontWeight(.medium)
-                    .monospacedDigit()
+                Text(leg.summary)
+                    .font(isFee ? .callout : .body)
+                    .fontWeight(isFee ? .regular : .medium)
+                    .foregroundStyle(isFee ? Tone.secondary.style : AnyShapeStyle(.primary))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .help(Wording.pnlHelp(for: leg.effect) ?? "")
                 Spacer(minLength: 8)
                 if let date = leg.date {
                     Text(Format.time(date)).font(.caption).foregroundStyle(.secondary)
                 }
             }
-            tags
-            Text("\(leg.effect).").font(.callout).fixedSize(horizontal: false, vertical: true).help(Wording.pnlHelp(for: leg.effect) ?? "")
-            if let note = leg.priceNote {
-                Text(note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
-            if let netting = leg.netting {
-                Text(netting).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
-            if let conversion = leg.conversion {
-                Text(conversion).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
-            HStack(spacing: 6) {
-                if let url = leg.transactionURL {
-                    Link(destination: url) {
-                        Label("\(Format.shortHash(leg.txHash)) on Basescan", systemImage: "arrow.up.right.square")
+            if isFee {
+                feeFacts
+            } else {
+                tags
+                if let unknown = leg.unknown {
+                    WarningText(unknown).font(.callout).fixedSize(horizontal: false, vertical: true)
+                }
+                if let note = leg.priceNote {
+                    Text(note).font(.caption).secondaryText().fixedSize(horizontal: false, vertical: true)
+                }
+                HStack(spacing: 14) {
+                    proofButton
+                    if leg.answerable, questions > 0, let onResolve {
+                        Button(Wording.answerQuestions(questions)) { onResolve(leg.asset) }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.tint)
+                            .help("Say where this \(leg.asset) came from, so its cost can be worked out")
                     }
                 }
-                if leg.hasTransaction {
-                    Button {
-                        showsProof.toggle()
-                    } label: {
-                        Label("Proof", systemImage: showsProof ? "chevron.down" : "chevron.right")
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.tint)
-                }
-                Spacer(minLength: 0)
-                Text("Block \(Format.block(leg.blockNum))").foregroundStyle(.secondary).monospacedDigit()
+                .font(.caption)
             }
-            .font(.caption)
-            if showsProof, let address = store.address {
-                ProofPanel(leg: leg.id, address: address, store: store, costNote: leg.costSource.map { Wording.costProof(source: $0, label: leg.costLabel) }).id("\(address):\(leg.id):\(currency.rawValue):\(store.selectedRule ?? "")")
+            if showsProof {
+                details
             }
         }
         .padding(.vertical, 3)
         .contextMenu {
+            if leg.hasTransaction || hasBreakdown {
+                Button(showsProof ? "Hide \(proofTitle)" : "Show \(proofTitle)") { showsProof.toggle() }
+            }
             if leg.hasTransaction {
-                Button(showsProof ? "Hide Proof" : "Show Proof") { showsProof.toggle() }
                 Divider()
                 TransactionActions(hash: leg.txHash)
             }
         }
+    }
+
+    private var proofTitle: String { leg.hasTransaction ? "Proof" : "Details" }
+
+    private var hasBreakdown: Bool { leg.netting != nil || leg.conversion != nil }
+
+    /// The one way into the block, the hash, the breakdown and where the price comes from.
+    @ViewBuilder
+    private var proofButton: some View {
+        if leg.hasTransaction || hasBreakdown {
+            Button {
+                showsProof.toggle()
+            } label: {
+                Label(proofTitle, systemImage: showsProof ? "chevron.down" : "chevron.right")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.tint)
+            .font(.caption)
+            .accessibilityValue(showsProof ? "Showing" : "Hidden")
+        }
+    }
+
+    /// How the sentence was worked out, the transaction, and where its price comes from. Proof stays one click away, since the demo shows it.
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("\(leg.effect).").font(.caption).secondaryText().fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            if let netting = leg.netting {
+                Text(netting).font(.caption).secondaryText().fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            }
+            if let conversion = leg.conversion {
+                Text(conversion).font(.caption).secondaryText().fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            }
+            if leg.hasTransaction {
+                Text("Block \(Format.block(leg.blockNum)) · \(Format.shortHash(leg.txHash))")
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .help(leg.txHash)
+                HStack(spacing: 12) { TransactionActions(hash: leg.txHash) }
+                    .font(.caption)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.tint)
+                if let address = leg.wallet ?? store.address {
+                    ProofPanel(leg: leg.id, address: address, store: store, costNote: leg.costSource.map { Wording.costProof(source: $0, label: leg.costLabel) }).id("\(address):\(leg.id):\(currency.rawValue):\(store.selectedRule ?? "")")
+                }
+            }
+        }
+        .padding(.top, 2)
     }
 
     private var tags: some View {
@@ -148,26 +257,65 @@ public struct LegRow: View {
         }
     }
 
+    /// A fee's facts take one line when they fit. When they don't, the wallet moves up first, because Proof should stay beside the amount for as long as it can.
+    /// A long wallet name gets cut there, rather than pushing everything else onto its own line, and its tooltip has the rest.
+    private var feeFacts: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                walletTag
+                feeTags
+                Spacer(minLength: 8)
+                proofButton
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                walletTag.frame(idealWidth: 0, maxWidth: .infinity, alignment: .leading)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    feeTags
+                    Spacer(minLength: 8)
+                    proofButton
+                }
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                walletTag
+                feeTags
+                proofButton
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var walletTag: some View {
+        if let wallet = leg.wallet {
+            let name = walletNames.walletName(wallet)
+            Tag(name).help(name)
+        }
+    }
+
+    @ViewBuilder
+    private var feeTags: some View {
+        Tag("\(Format.signedAmount(leg.delta, decimals: leg.decimals)) \(leg.asset)")
+        if leg.priceMicros == nil {
+            Tag(Wording.noPrice, isWarning: true)
+        }
+        if let unknown = leg.unknown {
+            Tag("Gain unknown", isWarning: true).help(unknown)
+        }
+    }
+
     @ViewBuilder
     private var tagList: some View {
-        Tag(leg.opening ? Wording.startingBalance : Wording.action(kind: leg.kind, isIncoming: leg.isIncoming))
+        walletTag
+        Tag("\(Format.signedAmount(leg.delta, decimals: leg.decimals)) \(leg.asset)")
         if let price = leg.priceMicros, let source = leg.priceSource {
-            Button("\(Format.price(price, currency)) · \(Wording.priceSource(source))") {
-                showsProof.toggle()
-            }
-            .font(.caption.weight(.medium))
-            .monospacedDigit()
-            .lineLimit(1)
-            .buttonStyle(.plain)
-            .foregroundStyle(.tint)
-            .disabled(!leg.hasTransaction)
-            .help(leg.hasTransaction ? "See where this price comes from" : "")
+            Tag("\(Format.price(price, currency)) · \(Wording.priceSource(source))")
+                .help("The price per \(leg.asset) at this block. Proof says where it comes from.")
+                .accessibilityLabel("Price, \(Format.price(price, currency)), \(Wording.priceSource(source))")
         } else {
-            Tag("No price", isWarning: true)
+            Tag(Wording.noPrice, isWarning: true)
         }
-        if leg.isIncoming {
-            Tag(Wording.costTag(leg.costLabel, source: leg.costSource), isWarning: leg.costLabel == "unknown")
-            if leg.partlyUnknown { Tag("Partly unknown", isWarning: true) }
+        // An unknown cost has its own line below, with what fixes it.
+        if leg.isIncoming, leg.costLabel != "unknown" {
+            Tag(Wording.costTag(leg.costLabel, source: leg.costSource))
         }
         if leg.estimated { Tag("Estimate") }
     }
@@ -188,6 +336,11 @@ struct Tag: View {
             .font(.caption.weight(.medium))
             .monospacedDigit()
             .lineLimit(1)
-            .foregroundStyle(isWarning ? Tone.warning.style : AnyShapeStyle(.secondary))
+            .foregroundStyle(isWarning ? Tone.warning.style : Tone.secondary.style)
     }
+}
+
+extension EnvironmentValues {
+    /// Opens the first transaction's Proof, for a screenshot that can't click.
+    @Entry public var opensFirstProof = false
 }

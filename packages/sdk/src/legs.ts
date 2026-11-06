@@ -1,6 +1,7 @@
 // Turns a wallet's rows in the dataset's shapes into the priced legs the fold reads.
 // Pure, so it can run on fixtures, on the raw dataset's rows and on the Pricetag dataset's rows alike.
 
+import type { CurrencyCode } from "./currency.ts"
 import { worth, type CostLabel, type FoldLeg } from "./fold.ts"
 import { ETH_ADDRESS, normalizeAddress, tokenByAddress, TOKENS, type Token } from "./tokens.ts"
 
@@ -142,6 +143,8 @@ export type PricedLeg = FoldLeg & {
   conversion?: LegConversion
   /** What the wallet already held before the first block read. It isn't a transaction, so `txHash` is empty. */
   opening?: boolean
+  /** The cost as entered, on an opening leg shown in another currency. Its cost here is an estimate, at the rate when the history starts. */
+  enteredAs?: { micros: string; currency: CurrencyCode }
   /** This transaction claims ETH reached the wallet, and the chain hasn't confirmed how much. See `isUnwrapClaim`. */
   unsettledCredit?: boolean
   /** On what moved in a transaction whose claims were settled. This outlives the credit's rows, which can merge or vanish. */
@@ -411,12 +414,18 @@ function markUnseenEth({ rows, ethBalances, feeUnknownTxs, gasUnknownBlocks }: P
   }
   const feeUnknown = new Set(feeUnknownTxs)
   const gasUnknown = new Set(gasUnknownBlocks)
+  const byBlock = new Map<number, LegRow[]>()
+  for (const row of rows) {
+    const blockRows = byBlock.get(row.block_num)
+    if (blockRows) blockRows.push(row)
+    else byBlock.set(row.block_num, [row])
+  }
   const unseenEth: UnseenEth[] = []
   for (const [block, txHashes] of sends) {
     const before = ethBalances.get(block - 1)
     const after = ethBalances.get(block)
     if (before === undefined || after === undefined || gasUnknown.has(block)) continue
-    const blockRows = rows.filter((row) => row.block_num === block)
+    const blockRows = byBlock.get(block) ?? []
     if (blockRows.some((row) => feeUnknown.has(row.tx_hash))) continue
     let arrived = BigInt(after) - BigInt(before)
     for (const row of blockRows) {
@@ -598,6 +607,8 @@ type Input = {
 export function buildPricedLegs({ account, rows, references, priced, market }: Input): PricedLeg[] {
   const me = normalizeAddress(account)
   const refs = new Map(references.map((r) => [r.blockNum, r]))
+  const pricedByTx = new Map<string, PricedRow>()
+  for (const p of priced) if (p.account === me && !pricedByTx.has(p.tx_hash)) pricedByTx.set(p.tx_hash, p)
   const own = rows.filter((row) => row.account === me)
   // ETH that arrived with no row is its own movement. It goes ahead of whatever else its block did, so what left has something to come from.
   const unseen = own.filter((row) => row.kind === "unseen_eth").map((row) => [row])
@@ -682,7 +693,7 @@ export function buildPricedLegs({ account, rows, references, priced, market }: I
     const anyIn = moved.some((n) => n.delta > 0n) || unlistedMoves.some((delta) => delta > 0n)
     // A claim can cancel out what left, so whether anything arrived can't decide this while it stands.
     const isExchange = isSwap || unlistedUnreadable || unsettledCredit || unseenEth || (anyOut && anyIn)
-    const pricedRow = priced.find((p) => p.tx_hash === first.tx_hash && p.account === me)
+    const pricedRow = pricedByTx.get(first.tx_hash)
 
     const resolved = moved.map((net) => {
       let price = oracle(net.token)

@@ -10,6 +10,7 @@ struct SettingsView: View {
     @Binding var tab: Pane
     @State var server = ""
     @State var serverError: String?
+    @State var invite = ""
     @State private var isComparing = false
     /// How tall what's in each tab wants to be. A tab has no answer until it's first shown.
     @State private var contentHeights: [Pane: CGFloat] = [:]
@@ -40,6 +41,7 @@ struct SettingsView: View {
         .onAppear {
             // What didn't save stays, next to what's wrong with it.
             if serverError == nil { server = store.serverURL.absoluteString }
+            invite = store.invite ?? ""
         }
         .task { await store.refreshRules() }
         // The person may have just changed it in System Settings.
@@ -96,7 +98,7 @@ struct SettingsView: View {
                     RulePicker(store: store)
                         .help(Wording.rulesHelp)
                     Button("Compare Side by Side…") { isComparing = true }
-                        .disabled(store.address == nil || store.address == WalletAddress.demo)
+                        .disabled(store.address == nil || store.address == WalletAddress.demo || WalletAddress.isAllYours(store.address))
                 }
             }
             Section {
@@ -123,12 +125,16 @@ struct SettingsView: View {
         pane(.server) {
             Section {
                 TextField("Address", text: $server, prompt: Text(PortfolioStore.defaultServerURL.absoluteString))
-                    .onSubmit(applyServer)
+                    .onSubmit(applyConnection)
                     // Leaving the tab or closing the window counts as being done, because there's no Save button to say otherwise.
-                    .onDisappear(perform: applyServer)
+                    .onDisappear(perform: applyConnection)
                 if let serverError {
                     WarningText(serverError).font(.callout)
                 }
+                SecureField("Invite", text: $invite, prompt: Text("Only for a shared server"))
+                    .onSubmit(applyConnection)
+                    .onDisappear(perform: applyConnection)
+                    .help("Only sent over HTTPS, to the server above.")
             } footer: {
                 Text("Where \(AppName.current) gets prices and history. It runs on this Mac unless you change this.")
                     .font(.caption)
@@ -137,14 +143,23 @@ struct SettingsView: View {
         }
     }
 
-    private func applyServer() {
+    /// Both fields at once, whichever was left last, so an invite is always saved for the server beside it. One that was only
+    /// still showing from the last server stays that server's, and the new one's own shows instead.
+    private func applyConnection() {
         let value = server.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: value), url.scheme == "http" || url.scheme == "https", url.host() != nil else {
             serverError = "That isn't a web address. It should look like \(PortfolioStore.defaultServerURL.absoluteString)."
             return
         }
         serverError = nil
+        let shownFor = store.invite ?? ""
+        let moved = PortfolioStore.origin(of: url) != PortfolioStore.origin(of: store.serverURL)
         store.setServerURL(url)
+        if moved && invite == shownFor {
+            invite = store.invite ?? ""
+        } else {
+            store.setInvite(invite)
+        }
     }
 }
 

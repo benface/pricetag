@@ -137,13 +137,14 @@ public enum Wording {
     }
 
     /// What a total leaves out, or nil when it leaves out nothing.
-    public static func excluded(_ excluded: [Exclusion]) -> String? {
+    /// `name` says what a wallet's called, for a total across several, where each exclusion says which wallet it's in.
+    public static func excluded(_ excluded: [Exclusion], name: (String) -> String = Format.shortHash) -> String? {
         if excluded.isEmpty { return nil }
         var reasons: [String] = []
         var assetsByReason: [String: [String]] = [:]
         for item in excluded {
             if assetsByReason[item.reason] == nil { reasons.append(item.reason) }
-            assetsByReason[item.reason, default: []].append(item.asset)
+            assetsByReason[item.reason, default: []].append(item.wallet.map { "\(item.asset) in \(name($0))" } ?? item.asset)
         }
         let parts = reasons.map { "\(assetsByReason[$0]!.joined(separator: ", ")) (\($0))" }
         return "Excludes \(parts.joined(separator: "; "))."
@@ -321,13 +322,33 @@ public enum Wording {
         return "\(total) \(total == 1 ? "token" : "tokens") with no market: \(listed.joined(separator: ", "))\(off). Often spam, and not counted in any total."
     }
 
+    /// How many wallets All Yours adds up.
+    public static func walletCount(_ count: Int) -> String {
+        count == 1 ? "1 wallet" : "\(count) wallets"
+    }
+
+    /// Wallets in All Yours that aren't in its numbers yet, because they're still being read.
+    public static func allYoursReading(_ names: [String]) -> String {
+        "Still reading \(names.formatted(.list(type: .and))), so \(names.count == 1 ? "it isn't" : "they aren't") in these numbers yet."
+    }
+
+    /// Wallets in All Yours whose read failed, which aren't in its numbers.
+    public static func allYoursFailed(_ names: [String]) -> String {
+        "Couldn't read \(names.formatted(.list(type: .and))), so \(names.count == 1 ? "it isn't" : "they aren't") in these numbers."
+    }
+
+    /// What an update says while some of All Yours' wallets are still being read.
+    public static func updatingWallets(_ count: Int) -> String {
+        "Updating. \(count == 1 ? "1 wallet is" : "\(count) wallets are") still being read, and \(count == 1 ? "isn't" : "aren't") in these numbers yet."
+    }
+
     public static func linkedFailed(_ count: Int) -> String {
         count == 1 ? "Couldn't read your other wallet, so what came from it may show an unknown cost." : "Couldn't read \(count) of your other wallets, so what came from them may show an unknown cost."
     }
 
     /// A wallet's history that doesn't add up, or can't be checked, and what that does to what it sent.
-    public static func withheld(wallet: String, asset: String) -> String {
-        "\(Format.shortHash(wallet))'s \(asset) history can't be confirmed, so what it sent has an unknown cost where it arrived."
+    public static func withheld(wallet: String, asset: String, name: (String) -> String = Format.shortHash) -> String {
+        "\(name(wallet))'s \(asset) history can't be confirmed, so what it sent has an unknown cost where it arrived."
     }
 
     /// A preview's headline, as it would read.
@@ -377,8 +398,13 @@ public enum Wording {
     public static let pnlUnavailable = "PnL unavailable"
     public static let valueUnavailable = "Value unavailable"
     public static let unknown = "Unknown"
+    public static let noPrice = "No price"
     public static let chartGap = "Where it's shaded, the PnL depends on a cost or price that isn't known, so there's no line. It isn't zero."
+    public static let valueChartGap = "Where it's shaded, a price is missing or more than prices changed, so this wallet's value can't be told and there's no line. It isn't zero."
     public static let nothingToChart = "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't zero."
+    public static let noValueToChart = "Nothing here had a known price when it moved, so there's no value to chart. It isn't zero."
+    public static let valueChartHelp = "What this wallet held, at the prices when each of its transactions happened. Prices are only read then, so the dashed line between two transactions is an estimate."
+    public static let valueChartLeavesOut = "Something here doesn't add up to what the wallet holds, or had no price, so the chart can't say what it was worth. The value above still counts it when it can."
     public static let tooNewToChart = "Not enough history for a chart yet."
     public static let reading = "Reading this wallet. The first read can take a minute."
     /// A failed read never touches what's onchain, so this is true of every problem the feed has.

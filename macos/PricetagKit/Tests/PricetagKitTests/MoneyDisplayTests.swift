@@ -136,7 +136,8 @@ struct CurrentRateTests {
         let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, rateRetryDelay: .milliseconds(10))
         store.start()
         defer { store.stop() }
-        while await source.asked.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+        for _ in 0..<2000 where await source.asked.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+        #expect(await !source.asked.isEmpty)
         #expect(!store.moneyDisplay.isConverted)
         await source.say(.success("1400000"))
         for _ in 0..<400 where !store.moneyDisplay.isConverted { try await Task.sleep(for: .milliseconds(5)) }
@@ -160,5 +161,37 @@ struct CurrentRateTests {
         store.setServerURL(URL(string: "http://127.0.0.1:1")!)
         #expect(store.moneyDisplay == MoneyDisplay(main: .CAD))
         store.stop()
+    }
+}
+
+@Suite struct ShownMoneyTests {
+    @Test func whatsTypedComesBackAsUSD() {
+        let cad = MoneyDisplay(main: .CAD, rateMicros: "1400000")
+        #expect(cad.usdMicros(ofShown: 14_000_000) == 10_000_000)
+        #expect(cad.shownMicros(10_000_000) == 14_000_000)
+        let noRate = MoneyDisplay(main: .CAD)
+        #expect(noRate.usdMicros(ofShown: 14_000_000) == 14_000_000, "without a rate it's typed in USD, and says so")
+    }
+}
+
+@Suite struct LookalikeTests {
+    private let real = "0x1234567890123456789012345678901234567890"
+
+    @Test func sameEndsButNotTheSameIsALookalike() {
+        #expect(Lookalike.match(for: "0x123aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa890", among: [real]) == real)
+        #expect(Lookalike.match(for: "0x123AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA890", among: [real]) == real, "case doesn't hide it")
+    }
+
+    @Test func theSameAddressOrDifferentEndsIsnt() {
+        #expect(Lookalike.match(for: real, among: [real]) == nil)
+        #expect(Lookalike.match(for: real.uppercased().replacing("0X", with: "0x"), among: [real]) == nil)
+        #expect(Lookalike.match(for: "0x12aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa890", among: [real]) == nil)
+        #expect(Lookalike.match(for: "0x123aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa89f", among: [real]) == nil)
+        #expect(Lookalike.match(for: "0x123", among: [real]) == nil)
+    }
+
+    @Test func differencesAreWhereTheyDiffer() {
+        #expect(Lookalike.differences(between: "0x12ab", and: "0x12cb") == [4])
+        #expect(Lookalike.differences(between: "0xAB", and: "0xab").isEmpty)
     }
 }

@@ -106,9 +106,10 @@ public enum HotWalletWording {
     public static let noEthPrice = "ETH's price can't be read right now, so gas can't be valued and nothing is swept automatically."
     public static let wrongChain = "The network address in Settings isn't on Base, so nothing will be signed."
     public static let cantReachChain = "Can't reach the network, so balances may be old and nothing is being swept."
-    public static let cantCheckAmp = "Can't read this wallet's history from Amp right now, so it isn't being compared with what this app signed. It still checks how many transactions this key has sent."
+    public static let cantCheckAmp = "Can't read this wallet's history right now, so it isn't being compared with what this app signed. It still checks how many transactions this key has sent."
     public static let feesLookWrong = "The network is quoting far higher fees than Base ever charges, so nothing was signed. Check the network address in Settings."
     public static let keyMissing = "This device no longer has this wallet's key, so nothing here can be moved. This can happen after restoring onto a different device."
+    public static let keyCameBack = "This device still had another key that's been used, so it's your wallet now rather than being lost. You can delete it too if you don't want it."
     public static let rotating = "Moving everything off the old key. It's deleted once there's nothing left on it."
     public static let deleteWaitsForRotation = "This wallet's key is being replaced, and some of its money may already be on the new key. You can delete it once that's finished."
 
@@ -123,6 +124,12 @@ public enum HotWalletWording {
 
     public static func nothingToSweep(tooCostly symbols: [String]) -> String {
         symbols.isEmpty ? "There's nothing on this wallet to sweep." : "There's nothing to sweep except \(tooCostlyToMove(symbols))."
+    }
+
+    /// Why moving everything wouldn't move anything, if it wouldn't.
+    public static func whyNothingSweeps(_ plan: SweepPlan) -> String? {
+        guard plan.transfers.isEmpty else { return nil }
+        return plan.blockers.contains(.notEnoughGas) ? noGas : nothingToSweep(tooCostly: plan.notWorthTheGas.map(\.symbol))
     }
 
     /// A sweep that stopped partway. The rest stays on this wallet, and sweeping again moves it once this has landed.
@@ -171,10 +178,38 @@ public enum HotWalletWording {
     public static let unreadableAnswer = "The network sent an answer this app can't read, so nothing was signed. Try again in a moment."
     public static let changedWhileWaiting = "This wallet changed while that was waiting, so nothing was signed."
 
+    /// What a node's refusal means, and what to do about it. Nodes word these differently, so one this doesn't know keeps the node's own words.
+    public static func refusal(_ message: String) -> String {
+        let lower = message.lowercased()
+        if lower.contains("insufficient funds") { return "There isn't enough ETH for this and its network fee. Add some ETH, then try again." }
+        if lower.contains("revert") { return "The token's contract refused it. Check the amount and the address." }
+        if lower.contains("nonce") || lower.contains("already known") || lower.contains("replacement transaction") {
+            return "Another transaction from this wallet went first. Try again in a moment."
+        }
+        if lower.contains("underpriced") || lower.contains("fee cap") || lower.contains("base fee") { return "Network fees went up. Try again." }
+        return "The network refused it, saying \u{201C}\(message)\u{201D}. Try again in a moment."
+    }
+
+    /// A send or a note the node refused, before or after it was signed. Either way, nothing left this wallet.
+    public static func notSent(_ message: String) -> String {
+        "Nothing was sent. \(refusal(message))"
+    }
+
+    /// What stopped a send, said for a send. The wallet's own wording is for everything it does, like sweeping.
+    public static func sendFailure(_ problem: String) -> String {
+        switch problem {
+        case cantReachChain: "Nothing was sent, because the network can't be reached. Check your internet connection, then try again."
+        case touchIDDidNotConfirm: "Nothing was sent, because Touch ID didn't confirm it. Try again."
+        default: problem
+        }
+    }
+
     public static func failedOnchain(_ record: SignedRecord) -> String {
-        record.reason == .note
-            ? "Publishing the cost of \(record.symbol) failed onchain. Nothing was published, but its gas was spent."
-            : "Sending \(record.symbol) failed onchain. Nothing moved, but its gas was spent."
+        switch record.reason {
+        case .note: "Publishing the cost of \(record.symbol) failed onchain. Nothing was published, but its gas was spent."
+        case .revoke: "Revoking an approval for \(record.symbol) failed onchain. It may still be there, and its gas was spent."
+        default: "Sending \(record.symbol) failed onchain. Nothing moved, but its gas was spent."
+        }
     }
 
     public static func alarm(_ alarm: StolenKeyAlarm) -> String {

@@ -2,15 +2,15 @@
 // One source of PnL logic: this calls what the browser calls, and adds nothing to the math.
 
 import { TOKENS, answerToMicros, returnBps, worth, type CurrencyCode, type WalletView, type LegEffect, type Method, type Position, type PricedLeg, type Reference } from "@pricetag/sdk/core"
-import { hasStarted, isBehind, type ExplanationLeg, type ExplanationResponse, type PortfolioExchange, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "../src/core/api.ts"
-import { emptyBook, walletsBehind, type Book } from "../src/core/book.ts"
-import { describeConversion, describeEffect, describeNetting, explainTarget, missingRatesLine, rateSource, type ExplainContext, type ExplainTarget, type Metric, type TotalMetric } from "../src/core/explain.ts"
-import { foldBook, missingWallets, type Question } from "../src/core/resolve.ts"
-import { differenceOf, whySentence, type PricingRule, type RuleComparison, type RuleRow, type RuleTransaction } from "../src/core/rules.ts"
-import { ETH_NOTE, UNPRICED_FEES, estimatedSentence, excludedSentence, feesUnknownSentence, networkFeeUnknownSentence, withheldSentence } from "../src/core/wording.ts"
+import { hasStarted, isBehind, type ExplanationLeg, type ExplanationResponse, type PortfolioExchange, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "./api.ts"
+import { emptyBook, walletsBehind, type Book } from "./book.ts"
+import { describeConversion, describeEffect, describeNetting, explainTarget, summarizeEffect, missingRatesLine, rateSource, type ExplainContext, type ExplainTarget, type Metric, type TotalMetric } from "./explain.ts"
+import { foldBook, missingWallets, type BookFold, type Question } from "./resolve.ts"
+import { differenceOf, whySentence, type PricingRule, type RuleComparison, type RuleRow, type RuleTransaction } from "./rules.ts"
+import { ETH_NOTE, UNPRICED_FEES, estimatedSentence, excludedSentence, feesUnknownSentence, networkFeeUnknownSentence, withheldSentence } from "./wording.ts"
 
 /** Matches the web panel: a busy wallet has thousands of legs, and the newest are the ones anyone reads. */
-const MAX_LEGS = 200
+export const MAX_LEGS = 200
 
 const ASSET_METRICS: readonly string[] = ["amount", "average", "price", "value", "return", "realized", "unrealized", "onchain"] satisfies Metric[]
 const TOTAL_METRICS: readonly string[] = ["pnl", "value", "realized", "unrealized", "gas"] satisfies TotalMetric[]
@@ -25,7 +25,7 @@ export function parseExplainTarget(params: URLSearchParams): ExplainTarget | nul
   return TOTAL_METRICS.includes(metric) ? { kind: "total", metric: metric as TotalMetric } : null
 }
 
-function positionOf({ asset, decimals, price, values, state, effects, reconciliation, noMarket, estimates }: Position, questions: readonly Question[]): PortfolioPosition {
+export function positionOf({ asset, decimals, price, values, state, effects, reconciliation, noMarket, estimates }: Position, questions: readonly Question[]): PortfolioPosition {
   const held = BigInt(values.qty) > 0n
   const { realizedMicros: realized, unrealizedMicros: unrealized } = values
   const pnl = (() => {
@@ -47,10 +47,15 @@ function outgoingTxsOf(wallet: WalletResponse): string[] {
 }
 
 /** What a portfolio goes by without any answers: the wallets it's read with are the user's own, and that's all it knows. */
-const linkingTo = (others: readonly WalletResponse[]): Book => ({ ...emptyBook(), linked: others.map((other) => other.address.toLowerCase()) })
+export const linkingTo = (others: readonly WalletResponse[]): Book => ({ ...emptyBook(), linked: others.map((other) => other.address.toLowerCase()) })
 
 export function portfolioOf(wallet: WalletResponse, method: Method, others: readonly WalletResponse[] = [], book: Book = linkingTo(others), failed: readonly string[] = []): PortfolioResponse {
-  const { view, positions, unread, totals, pnlStatus, points, holdComparison, questions, meter, withheld, purchases } = foldBook(wallet, others, method, book)
+  return responseOf(wallet, method, others, book, failed, foldBook(wallet, others, method, book))
+}
+
+/** The same, from a fold that's already been run. */
+export function responseOf(wallet: WalletResponse, method: Method, others: readonly WalletResponse[], book: Book, failed: readonly string[], fold: BookFold): PortfolioResponse {
+  const { view, positions, unread, totals, pnlStatus, points, holdComparison, questions, meter, withheld, purchases } = fold
   const missing = missingWallets(book, wallet, others)
   const linkedFailed = walletsBehind(book, wallet).filter((address) => failed.includes(address))
   return {
@@ -95,7 +100,7 @@ export function bookContext(wallet: WalletResponse, others: readonly WalletRespo
   return { view, ruleNote, source: { positions, totals, points, holdComparison } }
 }
 
-function legOf(effect: LegEffect, currency: CurrencyCode): ExplanationLeg {
+export function legOf(effect: LegEffect, currency: CurrencyCode): ExplanationLeg {
   const { leg } = effect
   return {
     id: leg.id,
@@ -114,6 +119,7 @@ function legOf(effect: LegEffect, currency: CurrencyCode): ExplanationLeg {
     timestamp: leg.timestamp,
     txHash: leg.txHash,
     opening: leg.opening === true,
+    ...summarizeEffect(effect, currency),
     effect: describeEffect(effect, currency),
     netting: describeNetting(leg),
     conversion: describeConversion(leg, currency),

@@ -38,7 +38,7 @@ public struct PortfolioSummary: View {
     private func sums(_ layout: some Layout) -> some View {
         layout {
             ForEach(portfolio.totalStats, id: \.metric) { stat in
-                TotalStat(label: stat.label, help: stat.help, text: stat.text, coverage: stat.coverage, isLive: isLive) { onOpen(stat.metric) }
+                TotalStat(label: stat.label, help: stat.help, text: stat.text, isEstimate: stat.isEstimate, coverage: stat.coverage, isLive: isLive) { onOpen(stat.metric) }
             }
         }
     }
@@ -48,12 +48,13 @@ public struct PortfolioSummary: View {
             statLabel("Value · \(portfolio.currency.rawValue)")
                 .help(portfolio.partialValueReason ?? "")
                 .updatingMark(.trailing)
+                // The number's own label says all of this.
+                .accessibilityHidden(true)
             Button { onOpen(.value) } label: {
                 big(value, size: size, tone: .neutral)
             }
             .buttonStyle(NumberButtonStyle())
-            // Read alone, it still says it's incomplete.
-            .accessibilityLabel("Value, \(value ?? "unavailable")\(portfolio.isValuePartial ? ", partial" : "")")
+            .accessibilityLabel(Spoken.number("Value", portfolio.spokenValueText, isPartial: portfolio.isValuePartial, isLive: isLive))
             .accessibilityHint("Shows the activity behind this number")
         }
     }
@@ -63,11 +64,12 @@ public struct PortfolioSummary: View {
             statLabel("Total PnL")
                 .help(Wording.pnlHelp)
                 .updatingMark(.trailing)
+                .accessibilityHidden(true)
             Button { onOpen(.pnl) } label: {
                 big(pnl, size: size * 0.6, tone: isLive ? portfolio.totalPnlTone : .neutral)
             }
             .buttonStyle(NumberButtonStyle())
-            .accessibilityLabel("Total PnL, \(pnl ?? Wording.pnlUnavailable)\(portfolio.pnlStatus == .partial ? ", partial" : "")")
+            .accessibilityLabel(Spoken.number("Total PnL", portfolio.spokenPnlText, isPartial: portfolio.pnlStatus == .partial, isLive: isLive))
             .accessibilityHint("Shows the activity behind this number")
         }
     }
@@ -75,7 +77,7 @@ public struct PortfolioSummary: View {
     private func statLabel(_ text: String) -> some View {
         Text(text)
             .font(.subheadline)
-            .foregroundStyle(.secondary)
+            .secondaryText()
     }
 
     /// One line whatever it says: a big number shrinks to fit instead of pushing everything down. What's unknown stays a word, never $0.
@@ -84,15 +86,13 @@ public struct PortfolioSummary: View {
             if let text {
                 DisplayNumber(text, size: size, tone: tone)
             } else {
-                Text("Unavailable")
+                LiveNumber("Unavailable", tone: .secondary)
                     .font(.display(max(size * 0.6, 17)))
-                    .foregroundStyle(.secondary)
             }
         }
         .lineLimit(1)
         .minimumScaleFactor(0.5)
-        .opacity(isLive ? 1 : 0.55)
-        .animation(Motion.state, value: isLive)
+        .stale(!isLive)
     }
 }
 
@@ -101,6 +101,7 @@ public struct PortfolioAttention: View {
     let portfolio: Portfolio
     let onOpen: (ExplainTarget) -> Void
     let onResolve: () -> Void
+    @Environment(\.walletNames) private var walletNames
 
     public init(portfolio: Portfolio, onOpen: @escaping (ExplainTarget) -> Void, onResolve: @escaping () -> Void) {
         self.portfolio = portfolio
@@ -109,7 +110,7 @@ public struct PortfolioAttention: View {
     }
 
     public var body: some View {
-        if let attention = portfolio.attention {
+        if let attention = portfolio.attention(names: walletNames) {
             WrappingRow(alignment: .center, spacing: 12, lineSpacing: 8) {
                 message(attention)
             } trailing: {
@@ -136,11 +137,13 @@ public struct PortfolioAttention: View {
                 ForEach(attention.details, id: \.self) { line in
                     Text(line)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                 }
             }
             .fixedSize(horizontal: false, vertical: true)
         }
+        // One sentence, not a picture and then its words.
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder
@@ -164,14 +167,17 @@ public struct TotalStat: View {
     let help: String?
     /// nil when nothing in the sum is known.
     let text: String?
+    /// Only read aloud. On screen, the line under the headline says it once.
+    let isEstimate: Bool
     let coverage: SumCoverage?
     let isLive: Bool
     let onOpen: () -> Void
 
-    public init(label: String, help: String? = nil, text: String?, coverage: SumCoverage? = nil, isLive: Bool, onOpen: @escaping () -> Void) {
+    public init(label: String, help: String? = nil, text: String?, isEstimate: Bool = false, coverage: SumCoverage? = nil, isLive: Bool, onOpen: @escaping () -> Void) {
         self.label = label
         self.help = help
         self.text = text
+        self.isEstimate = isEstimate
         self.coverage = coverage
         self.isLive = isLive
         self.onOpen = onOpen
@@ -181,23 +187,24 @@ public struct TotalStat: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label)
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .help(help ?? "")
+                .accessibilityHidden(true)
             Button(action: onOpen) {
                 Group {
                     if let text {
                         LiveNumber(text)
                     } else {
-                        Text("Unavailable").foregroundStyle(.secondary)
+                        LiveNumber("Unavailable", tone: .secondary)
                     }
                 }
                 .font(.body.weight(.medium))
                 .lineLimit(1)
-                .opacity(isLive ? 1 : 0.55)
-                .animation(Motion.state, value: isLive)
+                .stale(!isLive)
             }
             .buttonStyle(NumberButtonStyle())
-            .accessibilityLabel("\(label), \(text ?? "unavailable")\(text != nil && coverage?.isPartial == true ? ", partial" : "")")
+            .accessibilityLabel(Spoken.number(label, text.map { Format.estimate($0, isEstimate) }, isPartial: coverage?.isPartial == true, isLive: isLive))
+            .accessibilityHint(help ?? "")
         }
     }
 }
@@ -212,6 +219,16 @@ extension Portfolio {
     public var totalPnlText: String? {
         guard pnlStatus != .unavailable else { return nil }
         return totals.pnlMicros.map { Format.signedMoney($0, currency) }
+    }
+
+    /// The value read aloud, which says it's an estimate. A number read alone doesn't have the line under it.
+    public var spokenValueText: String? {
+        totalValueText.map { Format.estimate($0, totals.estimated.value) }
+    }
+
+    /// The PnL read aloud, which says it's an estimate. A number read alone doesn't have the line under it.
+    public var spokenPnlText: String? {
+        totalPnlText.map { Format.estimate($0, isPositive(totals.estimatedMicros)) }
     }
 
     /// Whether the value leaves out something held, which changes what the number means.
@@ -279,13 +296,13 @@ extension Portfolio {
     }
 
     /// The sums beside the headline, in reading order.
-    public var totalStats: [(metric: TotalMetric, label: String, help: String?, text: String?, coverage: SumCoverage?)] {
+    public var totalStats: [(metric: TotalMetric, label: String, help: String?, text: String?, isEstimate: Bool, coverage: SumCoverage?)] {
         let money = { Format.money($0, currency) }
         let signed = { Format.signedMoney($0, currency) }
         return [
-            (.realized, "Realized", Wording.realizedHelp, totals.realizedMicros.map(signed), totals.coverage.realized),
-            (.unrealized, "Unrealized", Wording.unrealizedHelp, totals.unrealizedMicros.map(signed), totals.coverage.unrealized),
-            (.gas, Wording.networkFees, nil, totals.gasMicros.map(money), SumCoverage(known: 1, missing: totals.unpricedGas ? 1 : 0)),
+            (.realized, "Realized", Wording.realizedHelp, totals.realizedMicros.map(signed), totals.estimated.realized, totals.coverage.realized),
+            (.unrealized, "Unrealized", Wording.unrealizedHelp, totals.unrealizedMicros.map(signed), totals.estimated.unrealized, totals.coverage.unrealized),
+            (.gas, Wording.networkFees, nil, totals.gasMicros.map(money), false, SumCoverage(known: 1, missing: totals.unpricedGas ? 1 : 0)),
         ]
     }
 
@@ -300,18 +317,22 @@ extension Portfolio {
 
     /// The one place the headline says it's incomplete or estimated, so it's never nil while any of its numbers is.
     /// nil when the numbers leave out nothing and rest on nothing estimated.
-    public var attention: Attention? {
+    public var attention: Attention? { attention(names: [:]) }
+
+    /// The same, calling each of the user's wallets by its name in `names`, for a total across several of them.
+    public func attention(names: [String: String]) -> Attention? {
+        let name = { (address: String) in names[address] ?? Format.shortHash(address) }
         // A value that's partial says it of what couldn't be read, with what that means for the value.
         var lines = isValuePartial ? [] : Wording.unreadBalances(unreadAssets).map { [$0] } ?? []
         if totals.unpricedGas { lines.append(Wording.unpricedFees) }
         if !gasUnknownTxs.isEmpty { lines.append(Wording.feesUnknown(gasUnknownTxs.count)) }
         if !l1FeeUnknownTxs.isEmpty { lines.append(Wording.networkFeeUnknown(l1FeeUnknownTxs.count)) }
-        lines += withheld.map { Wording.withheld(wallet: $0.wallet, asset: $0.asset) }
+        lines += withheld.map { Wording.withheld(wallet: $0.wallet, asset: $0.asset, name: name) }
         lines += Wording.missingRates(self)
         // The sentence about estimates only counts what's in the PnL. A value from a market price is an estimate too.
         let estimates = totals.estimated
         if !isPositive(totals.estimatedMicros), estimates.value || estimates.realized || estimates.unrealized { lines.append(Wording.marketEstimates) }
-        let excludedList = Wording.excluded(totals.excluded)
+        let excludedList = Wording.excluded(totals.excluded, name: name)
         // What the value is missing or can't vouch for. The list below names exclusions from the PnL, and says nothing about which of them the value still holds.
         let valueLine = isValuePartial ? [Wording.valueGaps(valueGaps)] : []
         if let title = Wording.leavesOut(totals, currency) {

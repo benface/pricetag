@@ -138,9 +138,9 @@ const UNKNOWN_PROCEEDS = "What this sold for isn't known."
 const NO_RATE = "There's no exchange rate at this block, so this can't be shown in this currency."
 const NO_GAS_PRICE = "ETH had no price at this block."
 const SENT = "Sent to another address, so it's not counted as a sale. If that's your own wallet, add it to this report. If it paid for something or was a gift, it's generally taxable."
-const ESTIMATED_COST = "Part of its cost is an estimate, from a market price."
+const ESTIMATED_COST = "Part of its cost is an estimate, from a market price or an exchange rate."
 const ESTIMATED_PROCEEDS = "What it sold for is an estimate, from a market price."
-const ESTIMATED_BOTH = "What it sold for and part of its cost are estimates, from market prices."
+const ESTIMATED_BOTH = "What it sold for and part of its cost are estimates, from market prices or exchange rates."
 const REPORTED_COST = "Part of its cost is what you entered or imported, which the chain can't confirm."
 const purchasedCost = (source: string) => `Some or all of its cost: ${source}, fees included.`
 const MISMATCH = "This asset's history doesn't match its onchain balance, so its cost can't be trusted."
@@ -263,7 +263,7 @@ const canBeMove = (leg: PricedLeg) => leg.kind === "transfer" && !leg.opening &&
  * Transfers that only went from one of these wallets to another: the same transaction and asset, netting to nothing.
  * Moving between your own wallets isn't a sale in either country. A move that loses some on the way isn't one of these.
  */
-function movesBetween(sources: readonly Source[]): Set<string> {
+export function movesBetween(sources: readonly Pick<Source, "wallet" | "view">[]): Set<string> {
   const moves = new Map<string, { net: bigint; wallets: Set<string> }>()
   for (const { wallet, view } of sources) {
     for (const leg of view.legs) {
@@ -277,7 +277,7 @@ function movesBetween(sources: readonly Source[]): Set<string> {
   return new Set([...moves].filter(([, { net, wallets }]) => net === 0n && wallets.size > 1).map(([key]) => key))
 }
 
-const isMove = (leg: PricedLeg, moves: ReadonlySet<string>) => canBeMove(leg) && moves.has(moveKey(leg))
+export const isMove = (leg: PricedLeg, moves: ReadonlySet<string>) => canBeMove(leg) && moves.has(moveKey(leg))
 
 /** Whether anything arrived from one of these wallets with a cost that still isn't all known. */
 const hasUnknownMove = (sources: readonly Source[], moves: ReadonlySet<string>) => sources.some(({ view }) => view.legs.some((leg) => isMove(leg, moves) && BigInt(leg.delta) > 0n && leg.costMicros === null))
@@ -405,14 +405,21 @@ export function taxRows(wallets: readonly WalletResponse[], { method, scope, cou
   return rowsFrom(sourcesOf(wallets, method, context), method, scope, country ? TAX_COUNTRIES[country] : null)
 }
 
+const walletWords = (text: string) => text.split(/[\s,]+/).filter(Boolean)
+
 /**
  * The wallets someone typed in, and the first that can't be one. The demo wallet can't be combined with anything, so
  * what's saved from another wallet is ignored there: it mustn't block a report whose field for fixing it isn't shown.
  */
 export function readOtherWallets(text: string, address: string): { others: string[]; bad: string | null } {
   if (address === "demo") return { others: [], bad: null }
-  const others = text.split(/[\s,]+/).filter(Boolean)
+  const others = walletWords(text)
   return { others: others.map((other) => other.toLowerCase()), bad: others.find((other) => !isAddress(other)) ?? null }
+}
+
+/** What's worth keeping of that text: only its addresses, so anything pasted there by mistake isn't saved. */
+export function savedOtherWallets(text: string): string {
+  return [...new Set(walletWords(text).filter(isAddress).map((other) => other.toLowerCase()))].join("\n")
 }
 
 const plural = (count: number, one: string, many = `${one}s`) => `${count.toLocaleString("en-US")} ${count === 1 ? one : many}`

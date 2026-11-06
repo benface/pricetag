@@ -8,7 +8,9 @@ export type Via = "stream" | "polling"
 
 /**
  * block: `blockNum` is the newest block, and `reorgFrom`, when it isn't null, is the first block a reorg replaced since the
- * last tick. Polling only sees a reorg at the head. Deeper ones are left to the re-read of recent blocks.
+ * last tick, or may have: what polling said counts as replaced once the stream is back, since only the stream can vouch for
+ * it. While polling, `reorgFrom` is the block after the newest one it said that the chain still has, so it can be a little
+ * before the real one.
  * down: neither the stream nor polling can reach Amp.
  */
 export type ChainTick = { kind: "block"; blockNum: number; reorgFrom: number | null; via: Via } | { kind: "down"; message: string }
@@ -19,6 +21,8 @@ export type FollowConfig = {
   /** What to stream. Its rows are ignored. */
   sql: string
   readMark(after: number | null): Promise<BlockMark | null>
+  /** The hash the chain has at each of these blocks, leaving out any it doesn't have. Without it, polling only sees a reorg at the head. */
+  readHashes?: ((blocks: readonly number[]) => Promise<ReadonlyMap<number, string>>) | undefined
   logger?: Logger | undefined
   pollMs?: number | undefined
   /** How long to poll before trying the stream again. */
@@ -44,10 +48,28 @@ function merged(pending: ChainTick | null, next: ChainTick): ChainTick {
   return { ...next, reorgFrom: Math.min(pending.reorgFrom, next.reorgFrom ?? pending.reorgFrom) }
 }
 
-async function pump({ stream, sql, readMark, logger = console, pollMs = POLL_MS, retryMs = RETRY_MS, stallMs = STALL_MS }: FollowConfig, emit: (tick: ChainTick) => void, signal: AbortSignal) {
+async function pump({ stream, sql, readMark, readHashes, logger = console, pollMs = POLL_MS, retryMs = RETRY_MS, stallMs = STALL_MS }: FollowConfig, emit: (tick: ChainTick) => void, signal: AbortSignal) {
   let last: BlockMark | null = null
+  /** What ticks said, oldest first, to find where a reorg polling sees starts. They can be from a replaced chain, so each is checked before it's believed. */
+  let marks: BlockMark[] = []
+  /**
+   * Where the stream resumes: the last block it finished, not the newest one polling found. Polling can't see a reorg
+   * before it's checked a block, so this lets Amp say if one replaced this block in the meantime, however deep it was.
+   */
+  let resume: BlockMark | null = null
   /** The first block replaced by a reorg that no tick has said yet. It outlives a stream that dies halfway through reporting one. */
   let reorgFrom: number | null = null
+  /**
+   * The first block polling said that the stream hasn't been through. Amp only reports a reorg before where the stream
+   * resumes, so one after it would pass as new blocks. A hash can't rule that out, since polling can read one block from the
+   * old chain and the next from the new one. So they count as replaced when the stream catches up, however many tries it takes.
+   */
+  let unconfirmedFrom: number | null = null
+
+  const remember = (mark: BlockMark) => {
+    last = mark
+    marks = [...marks.filter(({ blockNum }) => blockNum < mark.blockNum && mark.blockNum - blockNum <= MAX_REWIND_BLOCKS), mark]
+  }
 
   const tickFor = (blockNum: number, via: Via): ChainTick => {
     const tick: ChainTick = { kind: "block", blockNum, reorgFrom, via }
@@ -59,6 +81,7 @@ async function pump({ stream, sql, readMark, logger = console, pollMs = POLL_MS,
     const stalled = new AbortController()
     const watchdog = setTimeout(() => stalled.abort(new Error(`No new block in ${stallMs} ms`)), stallMs)
     let at = from
+    if (last && last.blockNum > from.blockNum) unconfirmedFrom ??= from.blockNum + 1
     try {
       for await (const range of streamed(sql, from, AbortSignal.any([signal, stalled.signal]))) {
         watchdog.refresh()
@@ -66,7 +89,12 @@ async function pump({ stream, sql, readMark, logger = console, pollMs = POLL_MS,
         const isSameBlock = range.end === at.blockNum && range.hash === at.hash
         if (range.start <= at.blockNum && !isSameBlock) reorgFrom = Math.min(reorgFrom ?? range.start, range.start)
         if (!range.complete || isSameBlock) continue
-        at = last = { blockNum: range.end, hash: range.hash }
+        at = resume = { blockNum: range.end, hash: range.hash }
+        // Catching up on blocks polling already said, with nothing replaced so far.
+        if (reorgFrom === null && last && range.end < last.blockNum) continue
+        if (unconfirmedFrom !== null) reorgFrom = Math.min(reorgFrom ?? unconfirmedFrom, unconfirmedFrom)
+        unconfirmedFrom = null
+        remember(at)
         emit(tickFor(range.end, "stream"))
       }
       throw new Error("The stream ended")
@@ -75,14 +103,30 @@ async function pump({ stream, sql, readMark, logger = console, pollMs = POLL_MS,
     }
   }
 
+  /**
+   * A reorg that also made the chain longer looks like a new block at the head, so the last block a tick said has to be
+   * checked. One the chain doesn't have says nothing, since it can be a read behind, and it's checked again once it's there.
+   */
+  async function findReorg() {
+    if (!readHashes || !last) return
+    const hash = (await readHashes([last.blockNum])).get(last.blockNum)
+    if (hash === undefined || hash === last.hash) return
+    const hashes = await readHashes(marks.map(({ blockNum }) => blockNum))
+    const agreed = marks.findLast(({ blockNum, hash }) => hashes.get(blockNum) === hash)
+    const from = agreed ? agreed.blockNum + 1 : marks[0]!.blockNum
+    reorgFrom = Math.min(reorgFrom ?? from, from)
+  }
+
   async function pollOnce() {
     // A reorg the stream reported can leave a shorter chain, which reading from the last block wouldn't find.
     const mark = await readMark(reorgFrom === null ? (last?.blockNum ?? null) : reorgFrom - 1)
+    // After the head, or a reorg between the two reads would go unseen: this mark replaces the last one, and only the last one gets checked.
+    await findReorg()
     if (!mark) return
     const replaced = mark.blockNum === last?.blockNum && mark.hash !== last.hash
     const shorter = reorgFrom !== null && last !== null && mark.blockNum < last.blockNum
     if (last && mark.blockNum <= last.blockNum && !replaced && !shorter) return
-    last = mark
+    remember(mark)
     if (replaced) reorgFrom = Math.min(reorgFrom ?? mark.blockNum, mark.blockNum)
     emit(tickFor(mark.blockNum, "polling"))
   }
@@ -90,8 +134,12 @@ async function pump({ stream, sql, readMark, logger = console, pollMs = POLL_MS,
   while (!signal.aborted) {
     if (stream) {
       try {
-        last ??= await readMark(null)
-        if (last) await followStream(stream, last)
+        if (!last) {
+          const mark = await readMark(null)
+          if (mark) remember(mark)
+        }
+        resume ??= last
+        if (resume) await followStream(stream, resume)
       } catch (error) {
         if (signal.aborted) return
         logger.warn(`Amp's stream stopped, so polling until it's back: ${describeError(error)}`)

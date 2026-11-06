@@ -229,6 +229,65 @@ struct AnvilTests {
         #expect((try await client.snapshot(of: hot)).nonce == 3)
     }
 
+    @Test func revokesTokenAndPermit2ApprovalsForReal() async throws {
+        let vault = KeyVault(store: MemoryKeys())
+        let hot = try await vault.createKey()
+        let client = RPCChainClient(url: rpc!)
+        let spender = EthereumAddress("0x000000000000000000000000000000000000bEEF")!
+        let router = EthereumAddress("0x6fF5693b99212Da76ad316178A184AB56D299b43")!
+        let token = usdc.contract!
+        _ = try await anvil("anvil_setBalance", [hot.lowercased, hex(oneEth / 100)])
+
+        // What a site would have had it approve, sent as the address itself. This app never sends an approval of its own.
+        let unlimited = [UInt8](repeating: 0xff, count: 32)
+        let word = { (address: EthereumAddress) in [UInt8](repeating: 0, count: 12) + address.bytes }
+        _ = try await anvil("anvil_impersonateAccount", [hot.lowercased])
+        for (to, data) in [
+            (token, Calldata.selector("approve(address,uint256)") + word(spender) + unlimited),
+            (token, Calldata.selector("approve(address,uint256)") + word(Base.permit2) + unlimited),
+            (Base.permit2, Calldata.selector("approve(address,address,uint160,uint48)") + word(token) + word(router) + [UInt8](repeating: 0, count: 12) + [UInt8](repeating: 0xff, count: 20) + [UInt8](repeating: 0, count: 26) + [0xff, 0xff, 0xff, 0xff, 0xff, 0xff]),
+        ] {
+            _ = try await anvil("eth_sendTransaction", [["from": hot.lowercased, "to": to.lowercased, "data": "0x" + Hex.encode(data)]])
+        }
+        _ = try await anvil("anvil_stopImpersonatingAccount", [hot.lowercased])
+
+        let stateStore = MemoryStateStore()
+        var state = DeviceWalletState()
+        state.active = hot
+        // Those three were sent above, as a site would have had them sent, so they're not the alarm's business here.
+        state.acknowledgedThroughNonce = 3
+        try stateStore.save(state)
+        let unreachable = ScriptedPortfolios(.failure(.unreachable))
+        let wallet = HotWallet(signer: vault, settingsStore: MemorySettingsStore(), stateStore: stateStore, presence: FakePresence(allows: true), portfolioSource: { unreachable }, makeChain: { _ in client })
+        await wallet.tick()
+
+        let allowance = { (data: [UInt8], to: EthereumAddress) async throws -> String? in
+            try await anvil("eth_call", [["to": to.lowercased, "data": "0x" + Hex.encode(data)], "latest"]) as? String
+        }
+        let tokenAllowance = Calldata.selector("allowance(address,address)") + word(hot) + word(spender)
+        let permit2Allowance = Calldata.selector("allowance(address,address,address)") + word(hot) + word(token) + word(router)
+        #expect(try await allowance(tokenAllowance, token) == "0x" + String(repeating: "f", count: 64))
+
+        let revocations = [
+            Revocation(kind: .token, token: token, spender: spender, label: "USDC"),
+            Revocation(kind: .permit2, token: token, spender: router, label: "USDC"),
+        ]
+        let quote = try #require(await wallet.quoteRevocations(revocations))
+        #expect(quote.transactions == 2)
+        #expect(quote.feeWei > 0)
+        #expect(await wallet.revoke(revocations))
+        #expect(wallet.sweepProblem == nil)
+        await wallet.tick()
+        await wallet.tick()
+        #expect(wallet.records.allSatisfy { $0.status == .confirmed && $0.reason == .revoke })
+        #expect(try await allowance(tokenAllowance, token) == "0x" + String(repeating: "0", count: 64))
+        let permit2 = try #require(try await allowance(permit2Allowance, Base.permit2))
+        #expect(permit2.prefix(66) == "0x" + String(repeating: "0", count: 64), "lockdown leaves nothing to spend")
+        // What wasn't asked for is untouched.
+        #expect(try await allowance(Calldata.selector("allowance(address,address)") + word(hot) + word(Base.permit2), token) == "0x" + String(repeating: "f", count: 64))
+        #expect(wallet.alarm == nil, "what it signed doesn't look stolen")
+    }
+
     /// Compiled-in addresses are the whole of the trust here, so each one is asked what it is, on the real chain's code and state.
     @Test func everyFeedIsWhatItSays() async throws {
         let feeds = Array(Oracle.others.values) + [.eth, .usdc]

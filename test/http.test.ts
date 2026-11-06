@@ -49,6 +49,14 @@ describe("the server", () => {
     })
   }
 
+  it("answers the demo's approvals, and says why it can't for anything else", async () => {
+    const demo = JSON.parse((await get(server, "/api/approvals/demo")).body) as { mode: string; approvals: unknown[] }
+    assert.equal(demo.mode, "demo")
+    assert.ok(demo.approvals.length > 0)
+    assert.equal((await get(server, "/api/approvals/nope")).status, 400)
+    assert.equal((await get(server, `/api/approvals/0x${"1".repeat(40)}`)).status, 503)
+  })
+
   it("has no rules to choose from when it has only one", async () => {
     assert.deepEqual(JSON.parse((await get(server, "/api/rules")).body), { rules: [] })
   })
@@ -635,7 +643,7 @@ describe("reading a wallet by two pricing rules", () => {
       assert.equal(reads, 2)
     })
 
-    it("reaches them all from the server, so a wallet read after it has the new chain", async () => {
+    it("reaches them all from the server, so a wallet read after it has the new chain", { timeout: 30_000 }, async (t) => {
       const GAS = { block_num: 100, timestamp: 1_800_000_000_000, tx_hash: "ab", tx_index: 1, log_index: 0, token: ETH_ADDRESS.slice(2), account: ME, side: "debit", amount: "1000", kind: "gas" }
       let state = { amount: "1000", fee: 24 }
       const rpc = createServer((req, res) => {
@@ -681,17 +689,15 @@ describe("reading a wallet by two pricing rules", () => {
       await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
       const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
       const paid = async () => ((await (await fetch(`${base}/api/wallet/0x${ME}`)).json()) as WalletResponse).legs.find((leg) => leg.kind === "gas")?.delta
-      const stop = new AbortController()
       try {
         assert.equal(await paid(), "-1024")
-        const events = (await fetch(`${base}/api/events`, { signal: stop.signal })).body!.getReader()
+        const events = (await fetch(`${base}/api/events`, { signal: t.signal })).body!.getReader()
         await new Promise((resolve) => setTimeout(resolve, 20))
         state = { amount: "2000", fee: 34 }
         hand.send({ start: 100, end: 200, hash: "0xnew", complete: true })
         for (let seen = ""; !seen.includes("event: head"); ) seen += new TextDecoder().decode((await events.read()).value)
         assert.equal(await paid(), "-2034")
       } finally {
-        stop.abort()
         server.closeAllConnections()
         server.close()
         rpc.close()
