@@ -102,7 +102,7 @@ struct SettingsView: View {
                     RulePicker(store: store)
                         .help(Wording.rulesHelp)
                     Button("Compare Side by Side…") { isComparing = true }
-                        .disabled(store.address == nil || store.address == WalletAddress.demo)
+                        .disabled(store.address == nil || store.address == WalletAddress.demo || WalletAddress.isAllYours(store.address))
                 }
             }
             Section {

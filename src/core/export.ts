@@ -31,7 +31,8 @@ function amount(units: string, decimals: number): string {
 
 const quote = (cell: string) => (/[",\n]/.test(cell) ? `"${cell.replaceAll('"', '""')}"` : cell)
 
-export function exportCsv(positions: readonly Position[], currency: CurrencyCode): string {
+/** `walletOf` adds a column saying which wallet each row is in, for an export of several wallets at once. */
+export function exportCsv(positions: readonly Position[], currency: CurrencyCode, walletOf?: (leg: LegEffect["leg"]) => string): string {
   const rows = positions
     .flatMap((position) => position.effects.map((effect) => ({ effect, noMarket: position.noMarket })))
     .sort((a, b) => a.effect.leg.blockNum - b.effect.leg.blockNum || a.effect.leg.txIndex - b.effect.leg.txIndex)
@@ -52,7 +53,8 @@ export function exportCsv(positions: readonly Position[], currency: CurrencyCode
         incoming ? (leg.purchaseSource ? (leg.costLabel === "inherited" ? `inherited: ${leg.purchaseSource}` : leg.purchaseSource) : leg.costLabel) : "",
         money(leg.proceedsMicros),
         statusOf(effect, noMarket),
+        ...(walletOf ? [walletOf(leg)] : []),
       ]
     })
-  return [HEADER, ...rows].map((row) => row.map(quote).join(",")).join("\n") + "\n"
+  return [walletOf ? [...HEADER, "wallet"] : HEADER, ...rows].map((row) => row.map(quote).join(",")).join("\n") + "\n"
 }

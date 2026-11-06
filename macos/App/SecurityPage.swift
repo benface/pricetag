@@ -55,7 +55,10 @@ struct SecurityPage: View {
     @State private var revoking: [Revocation] = []
     @State private var showsSource = false
 
-    private var entry: WalletEntry? { store.walletList(hotWallet: hotWallet).entry(for: store.address) }
+    /// The wallet whose approvals these are. All Yours has no address of its own to read them from.
+    private var entry: WalletEntry? {
+        WalletAddress.isAllYours(store.address) ? nil : store.walletList(hotWallet: hotWallet).entry(for: store.address)
+    }
 
     /// Only Spending Money signs here, and only while it can send.
     private var canRevoke: Bool {
@@ -67,7 +70,11 @@ struct SecurityPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 checklist
-                if let entry { approvals(entry) }
+                if let entry {
+                    approvals(entry)
+                } else if WalletAddress.isAllYours(store.address) {
+                    Notice(.info, "Each wallet has its own approvals. Choose one of your wallets to see what it lets apps spend.")
+                }
                 unlisted
                 tips
             }
@@ -79,7 +86,7 @@ struct SecurityPage: View {
         .task { basics = await readBasics() }
         .task(id: store.address) {
             selection = []
-            guard let address = store.address else {
+            guard let address = store.address, !WalletAddress.isAllYours(address) else {
                 model = nil
                 return
             }
@@ -224,6 +231,8 @@ struct SecurityPage: View {
         case .yours: "This wallet's key isn't in \(AppName.current), so revoke these from the wallet that holds it."
         case .watching: "You're watching this wallet, so this list is only to look at."
         case .demo: "This is the demo wallet, so these are made up, and there's nothing to revoke."
+        // `entry` leaves it out, so it never has a list.
+        case .allYours: nil
         }
     }
 

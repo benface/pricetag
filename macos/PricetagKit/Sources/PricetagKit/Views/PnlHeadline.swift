@@ -101,6 +101,7 @@ public struct PortfolioAttention: View {
     let portfolio: Portfolio
     let onOpen: (ExplainTarget) -> Void
     let onResolve: () -> Void
+    @Environment(\.walletNames) private var walletNames
 
     public init(portfolio: Portfolio, onOpen: @escaping (ExplainTarget) -> Void, onResolve: @escaping () -> Void) {
         self.portfolio = portfolio
@@ -109,7 +110,7 @@ public struct PortfolioAttention: View {
     }
 
     public var body: some View {
-        if let attention = portfolio.attention {
+        if let attention = portfolio.attention(names: walletNames) {
             WrappingRow(alignment: .center, spacing: 12, lineSpacing: 8) {
                 message(attention)
             } trailing: {
@@ -300,18 +301,22 @@ extension Portfolio {
 
     /// The one place the headline says it's incomplete or estimated, so it's never nil while any of its numbers is.
     /// nil when the numbers leave out nothing and rest on nothing estimated.
-    public var attention: Attention? {
+    public var attention: Attention? { attention(names: [:]) }
+
+    /// The same, calling each of the user's wallets by its name in `names`, for a total across several of them.
+    public func attention(names: [String: String]) -> Attention? {
+        let name = { (address: String) in names[address] ?? Format.shortHash(address) }
         // A value that's partial says it of what couldn't be read, with what that means for the value.
         var lines = isValuePartial ? [] : Wording.unreadBalances(unreadAssets).map { [$0] } ?? []
         if totals.unpricedGas { lines.append(Wording.unpricedFees) }
         if !gasUnknownTxs.isEmpty { lines.append(Wording.feesUnknown(gasUnknownTxs.count)) }
         if !l1FeeUnknownTxs.isEmpty { lines.append(Wording.networkFeeUnknown(l1FeeUnknownTxs.count)) }
-        lines += withheld.map { Wording.withheld(wallet: $0.wallet, asset: $0.asset) }
+        lines += withheld.map { Wording.withheld(wallet: $0.wallet, asset: $0.asset, name: name) }
         lines += Wording.missingRates(self)
         // The sentence about estimates only counts what's in the PnL. A value from a market price is an estimate too.
         let estimates = totals.estimated
         if !isPositive(totals.estimatedMicros), estimates.value || estimates.realized || estimates.unrealized { lines.append(Wording.marketEstimates) }
-        let excludedList = Wording.excluded(totals.excluded)
+        let excludedList = Wording.excluded(totals.excluded, name: name)
         // What the value is missing or can't vouch for. The list below names exclusions from the PnL, and says nothing about which of them the value still holds.
         let valueLine = isValuePartial ? [Wording.valueGaps(valueGaps)] : []
         if let title = Wording.leavesOut(totals, currency) {
