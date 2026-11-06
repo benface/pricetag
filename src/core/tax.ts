@@ -455,7 +455,7 @@ function units(amount: string, decimals: number): string {
   return `${size / scale}${fraction ? `.${fraction}` : ""}`
 }
 
-const STATUS_LABELS: Record<TaxRowStatus, string> = { resolved: "OK", estimated: "ESTIMATED", "self-reported": "SELF-REPORTED", unresolved: "UNRESOLVED" }
+const STATUS_LABELS: Record<TaxRowStatus, string> = { resolved: "OK", estimated: "ESTIMATED", "self-reported": "SELF-REPORTED", unresolved: "UNKNOWN GAIN" }
 
 const CSV_HEADER = ["Date (UTC)", "Type", "Asset", "Amount", "Proceeds", "Cost", "Gain", "Currency", "Method", "Calculation", "Price source", "Status", "Notes", "Wallet", "Transaction"]
 
@@ -515,7 +515,7 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
   ])
 
   const warnings: string[] = partialYear === null ? [] : [partialYear]
-  if (unresolved > 0) warnings.push(`${plural(unresolved, "row")} of ${rows.length.toLocaleString("en-US")} ${unresolved === 1 ? "is" : "are"} unresolved. What can't be worked out says "unknown". It's never counted as 0, and it isn't in the gain total.`)
+  if (unresolved > 0) warnings.push(`${plural(unresolved, "row")} of ${rows.length.toLocaleString("en-US")} ${unresolved === 1 ? "has" : "have"} an unknown gain. What can't be worked out says "unknown". It's never counted as 0, and it isn't in the gain total.`)
   if (estimated > 0) warnings.push(`${plural(estimated, "row")} of ${rows.length.toLocaleString("en-US")} ${estimated === 1 ? "rests" : "rest"} on an estimate.`)
   if (selfReported > 0) warnings.push(`${plural(selfReported, "row")} of ${rows.length.toLocaleString("en-US")} ${selfReported === 1 ? "uses" : "use"} a cost you entered or imported, which the chain can't confirm, so keep your records for it.`)
   if (given > 0) warnings.push(`${plural(given, "row")} of ${rows.length.toLocaleString("en-US")} ${given === 1 ? "uses" : "use"} a market price from when something you said came from someone else arrived. ${country.marketWarning}`)
