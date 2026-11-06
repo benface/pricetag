@@ -149,7 +149,7 @@ Ranked by what it cost us. "Current" says what was checked against `main` at `5c
 
 That backs up our earlier inference that the time is file and object store work, not data volume. Three copies of the dataset put a number on it: `legs` row groups left of total were 31 of 67 serving, 17 of 53 in a control, and 3 of 60 with filters. `legs` was 844 MB on all three, so the filters' cost didn't show. They're marked experimental in the [docs](https://github.com/edgeandnode/amp/blob/5c966c6f37203fe242175a9e407c1d7ec1fb5dec/docs/feat/datasets-manifest-bloom-filters.md), only new files get them, and we had to pick the `ndv` ourselves (200,000 for `legs` and `unlisted_legs`, 20,000 for `priced_legs`).
 
-**What the whole app gained was less.** The demo wallet's cold read went from 23 to 22 s, and a very busy wallet's from 178 to 46 s, one sample each. That replacement also added `legs.counterparty`, which removed raw `logs` and `transactions` scans from a read, so we can't say how much of the 132 s was bloom filters. Most of a cold read was never in those queries. One 18.1 s read, before these fixes, was 22 queries in a row: 6.7 s on one unbounded head lookup, 4.1 s on the three wallet queries, and most of the rest on about 20 small ones. We have no breakdown of the 13 to 14 s on Nov 6.
+**What the whole app gained was less.** The demo wallet's cold read went from a median of 23.1 s (19.9–34.4) to 21.8 s (15.4–26.4), five runs per version, and those ranges overlap, so that gain is inconclusive. A very busy wallet's went from 178 to 46 s, one run per version. That replacement also added `legs.counterparty`, which removed raw `logs` and `transactions` scans from a read, so we can't say how much of the 132 s was bloom filters. Most of a cold read was never in those queries. One 18.1 s read, before these fixes, was 22 queries in a row: 6.7 s on one unbounded head lookup, 4.1 s on the three wallet queries, and most of the rest on about 20 small ones. We have no breakdown of the 13 to 14 s on Nov 6.
 
 **A per-wallet stream works, and is off.** `legs WHERE account = ...` matched bounded reads, 174 of 174 rows over 324 blocks on the final code. It saves about 0.3 s of a 2 s update on the demo wallet, and takes a busy wallet's data reads from 8.3 s to 2.5 s, but its full update only from about 12.7 s to 10.6 s, 6 samples each ([WORK-584]). Those timings predate a merge that went from four streams to three. It hasn't been through a real reorg, and 2 gateway errors in about 25 minutes with streams on, against none in about 10 without, is too few to judge ([WORK-611]).
 
@@ -218,8 +218,8 @@ Checked against `main` at `a25c96a9`, with a search for `eth_call`, `fetch` and 
 
 | Data | Where | Could it avoid the call? | Worth it? |
 |---|---|---|---|
-| Exchange rates | `updateRounds`, or `feedRounds` without a rates dataset, `packages/sdk/src/rates.ts:18` | **Built and running, but the demo's `.env.local` doesn't turn it on.** `benface/pricetag_rates@0.1.0` is at head, and logs matched `eth_call` on 231 of 231 and 30 of 30 ([WORK-479]). The head and recent blocks still read the contract, since the table only has rows on updates, and Verify doesn't cover rates | **Yes, after the demo.** One env line, and the job watch then covers it too. A demo in USD reads no rates, so it doesn't matter on stage |
-| Current prices for the other 8 tokens | `readFeedRoundsAt`, `packages/sdk/src/dataset.ts:367`, `updateFeedRounds`, `server/source.ts:39` | **Partly done.** History and Verify's proofs read logs from `benface/pricetag_feeds@0.1.0`, and logs matched contract reads on 240 of 240 and 48 of 48. What's held now stays on `eth_call`, because a table with rows only on updates can't show it has reached the head ([WORK-494]) | **No more to do,** unless Amp says how far such a table has reached. Logs didn't make reads faster, and the gain was proofs for all 10 tokens |
+| Exchange rates | `updateRounds`, or `feedRounds` without a rates dataset, `packages/sdk/src/rates.ts:18` | **Built and running, but the demo's `.env.local` doesn't turn it on.** `benface/pricetag_rates@0.1.0` is at head, and logs matched `eth_call` on 231 of 231 and 30 of 30 ([WORK-479]). The head and recent blocks still read the contract, since the table only has rows on updates and `updateRounds` only looks at rows, not the progress Amp reports ([WORK-628]). Verify doesn't cover rates | **Yes, after the demo.** One env line, and the job watch then covers it too. A demo in USD reads no rates, so it doesn't matter on stage |
+| Current prices for the other 8 tokens | `readFeedRoundsAt`, `packages/sdk/src/dataset.ts:367`, `updateFeedRounds`, `server/source.ts:39` | **Partly done.** History and Verify's proofs read logs from `benface/pricetag_feeds@0.1.0`, and logs matched contract reads on 240 of 240 and 48 of 48. What's held now stays on `eth_call`, because the table only has rows on updates and `updateFeedRounds` only looks at rows ([WORK-494]). That's our reader's limit, not Amp's: query metadata already says how far such a table has reached, with `feed_updates` through block 53888641 and its newest row at 53887517 (measured, Nov 6) | **Maybe, after the demo.** Reading that metadata is untested here, for correctness and speed ([WORK-628]). Logs didn't make reads faster, and the gain was proofs for all 10 tokens |
 | Whether an approval is still active | `server/approvals.ts:256` | No. An allowance is state, and the event only says what was granted | **No** |
 | Balance checks and finding unseen ETH | `packages/sdk/src/balances.ts:81`, `dataset.ts:308` | No. Balances aren't in logs. Amp has no state table | **No.** This is Amp at its best |
 | Raw mode's prices | `server/source.ts:106` | Not needed | **No.** It's the fallback |
@@ -251,8 +251,8 @@ Checked against `main` at `a25c96a9`, with a search for `eth_call`, `fetch` and 
 | Did | Result | Still open |
 |---|---|---|
 | **Exchange rates from logs** ([WORK-479]) | Live as its own dataset, and it matched `eth_call` on 231 of 231 and 30 of 30 | Not turned on in the demo's env. Verify doesn't cover rates |
-| **The other 8 feeds from logs** ([WORK-494]) | Live as its own dataset, about 330 rows a day. Every listed token's price has a proof, and all 10 passed Verify on real wallets. No number changed | Held prices still use `eth_call`, and logs aren't faster |
-| **Bloom filters on `account`, and `legs.counterparty`** ([WORK-493]) | Row groups 73 to 4, and three tables on quiet wallets from 7.4 s to 3.1 s cold, nothing warm. The demo wallet's whole cold read went from 23 to 22 s, and a very busy wallet's from 178 to 46 s, one sample each | Bloom filters are experimental. We can't separate their gain from `counterparty`'s |
+| **The other 8 feeds from logs** ([WORK-494]) | Live as its own dataset, about 330 rows a day. Every listed token's price has a proof, and all 10 passed Verify on real wallets. No number changed | Held prices still use `eth_call`, and logs aren't faster. Whether query metadata could change that is item 6 below |
+| **Bloom filters on `account`, and `legs.counterparty`** ([WORK-493]) | Row groups 73 to 4, and three tables on quiet wallets from 7.4 s to 3.1 s cold, nothing warm. The demo wallet's whole cold read went from a median of 23.1 s (19.9–34.4) to 21.8 s (15.4–26.4), five runs per version, with overlapping ranges, so that gain is inconclusive. A very busy wallet's went from 178 to 46 s, one run per version | Bloom filters are experimental. We can't separate their gain from `counterparty`'s |
 | **Per-wallet stream** ([WORK-584]) | Merged and off. About 0.3 s of a 2 s update on the demo wallet, and 12.7 s to 10.6 s on a busy one | No real reorg yet, and timings predate the final code ([WORK-611]) |
 | **Fewer queries** ([WORK-515], [552][WORK-552], [585][WORK-585]) | A head lookup from 8.0 s to 0.4 s, a read with nothing new from 2.1 s to 1.1 s, and a chart's second read from 9.5 s to 3 s. Our own code, not Amp's | A test-only follow-up is open as PR #193 |
 | **Approvals from their own table** ([WORK-540]) | Security from about 25 s to 2.5 s on one wallet | |
@@ -266,8 +266,9 @@ Checked against `main` at `a25c96a9`, with a search for `eth_call`, `fetch` and 
 | 3 | **Find where a cold read's 13 s goes now** | It's what a new user waits through, and it may be our queries rather than Amp | No breakdown since the fixes landed |
 | 4 | **Check the wallet stream against a real reorg,** measure it again, then decide ([WORK-611]) | Helps busy wallets' updates some, and quiet wallets barely | Reorgs, gateway errors |
 | 5 | **Turn on the rates dataset** | Fewer `eth_call`s for wallets not in USD. One env line | Nothing much. Add Verify for rates if anyone needs it |
-| 6 | **Ask for compressed results** ([#3377] merged) for busy wallets | Smaller transfers for 75,000-row reads | Client support not checked. A busy wallet's 59 MB reply is ours to shrink first ([WORK-565]) |
-| 7 | **Join on the block number directly,** now that those joins stack | Fewer stages | Only schema-checked, so low value on its own |
+| 6 | **Try Amp's query metadata for current feed and rate prices** ([WORK-628]) | Fewer `eth_call`s at the head, since metadata shows a table with few rows has reached past its newest one | Correctness and speed are untested. A wrong price is worse than a contract read, and an extra query may cancel the gain |
+| 7 | **Ask for compressed results** ([#3377] merged) for busy wallets | Smaller transfers for 75,000-row reads | Client support not checked. A busy wallet's 59 MB reply is ours to shrink first ([WORK-565]) |
+| 8 | **Join on the block number directly,** now that those joins stack | Fewer stages | Only schema-checked, so low value on its own |
 
 **Tried or read, and not worth it now:**
 - **`client.stream`:** switch back once [WORK-141] and [144][WORK-144] ship, and delete `createRangeStream` and `createRowStream`.
@@ -377,7 +378,7 @@ No new issues were filed in the `amp` project: everything that meets its bar alr
 **Don't say:**
 - "Under a second" or "verified by Amp," without what's above.
 - "Any EVM chain." Say: "The same SQL ran on Ethereum, but correct gas needs per-chain work, and only some chains' raw data is fresh."
-- "Bloom filters made it fast." The demo wallet's cold read barely moved, 23 to 22 s, and a very busy wallet's 178 to 46 s, one sample each. A read past the first is what's quick.
+- "Bloom filters made it fast." The demo wallet's cold read barely moved, a median of 23 to 22 s over five runs per version, with overlapping ranges, so that gain is inconclusive. A very busy wallet's went from 178 to 46 s, one run per version. A read past the first is what's quick.
 - "Correct through reorgs," with nothing after it. We forced them locally on Anvil, not on Base ([WORK-497]), and deep ones took Amp up to about 3 minutes, or didn't recover. Say: "We forced reorgs through a local Amp. Up to 136 blocks, 27 seconds of Base, the app fixed itself within a minute and a half."
 - "All through Amp." L1 fees and deposit fields come from an RPC, and sends always will.
 - "We could add PnL leaderboards." It can't be a shared table, and it isn't this product anyway.
@@ -456,6 +457,7 @@ No new issues were filed in the `amp` project: everything that meets its bar alr
 [WORK-615]: https://multica.ai/benface-work/issues/01a1af67-9c54-7123-b555-0551b03113dc
 [WORK-616]: https://multica.ai/benface-work/issues/01a1af67-9f53-788c-abbf-87b703ed88e7
 [WORK-626]: https://multica.ai/benface-work/issues/01a1afd2-6013-7c23-874e-e204a734597c
+[WORK-628]: https://multica.ai/benface-work/issues/01a1b0d5-4367-77f0-b765-05038118f3ec
 [#479]: https://github.com/edgeandnode/amp/issues/479
 [#1819]: https://github.com/edgeandnode/amp/issues/1819
 [#3187]: https://github.com/edgeandnode/amp/issues/3187
