@@ -30,6 +30,10 @@ Either way, the page shows an address as checked only after you say every charac
 
 Accounts in use on the device, plus the one you pick, are linked: they go in the book as `mine` with no question, so costs follow what moves between them (`linkDeviceAccounts` in `src/core/book.ts`). A new account you've never used stays out until you pick it. **Add to the Mac app as savings** opens a `patina://` link with the account and the others in use, and a Ledger shows the address again at the same moment, so there's something to compare with. Anyone can make that link too, so the Mac app can't take its word for any of it. It shows its check step, where you compare the address with the device, and lists the others for you to tick the ones you know are yours. Those only link costs, and nothing's ever swept to them. A new link takes back any answers you'd given.
 
+## Where the Mac app's page comes from
+
+With `pnpm mac`, the page is `/` on the server it runs on this Mac. A hosted server only answers the API, because a device page served from a shared host would be a site a cold wallet connects to. So a build that reads one carries `device.html`, which is only this panel, and serves it itself on `127.0.0.1` at a random port (`DevicePageServer.swift`). It stops 15 seconds after the page closes, or after 2 minutes if the page never opens, or after an hour regardless. A new port is a new site to a browser, so each time it asks again for the Ledger or the camera, and a browser wallet asks to connect again. It also reads in USD, since it has no server to ask for a rate. Build it with `macos/device-pages.sh` before the app, and set `REQUIRE_DEVICE_PAGES=YES` so a build without it fails. `pnpm check:device-pages` goes through each flow against a local fork, with a stand-in for the device.
+
 ## Adding a savings wallet from the Mac app
 
 **Add a Savings Wallet…** asks which device it is, then goes one step at a time, with what to do if a step doesn't match. The address only ever gets added after you say every character matches the device's screen, however it got there.
