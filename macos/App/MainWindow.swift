@@ -367,7 +367,7 @@ struct MainWindow: View {
                 .arrives()
             PnlHistorySection(portfolio: portfolio, isLive: isLive, range: $navigation.chartRange) { navigation.target = .transaction($0) }
                 .frame(height: portfolio.hasChartableData && !portfolio.isTooNewToChart ? chartHeight(pageHeight, rows: portfolio.listedPositions.count) : nil)
-            HoldingsSection(portfolio: portfolio, store: store, isLive: isLive, target: $navigation.target) { navigation.resolve($0) }
+            HoldingsSection(portfolio: portfolio, store: store, isLive: isLive, navigation: navigation)
             HoldComparisonCard(comparison: portfolio.holdComparison, currency: portfolio.currency, isLive: isLive) { navigation.target = .holdComparison }
         }
         // A notice, the attention box or the chart coming or going, without the page below it jumping.
@@ -469,13 +469,15 @@ struct CostMethodMenu: View {
     }
 }
 
-/// What a wallet holds: a table when there's room for its columns, and two-line rows when there isn't.
+/// What a wallet holds: a table when there's room for its columns, and two-line rows when there isn't. ⌘F searches them.
 private struct HoldingsSection: View {
     let portfolio: Portfolio
     let store: PortfolioStore
     let isLive: Bool
-    @Binding var target: ExplainTarget?
-    let onResolve: (String) -> Void
+    @Bindable var navigation: Navigation
+    @Environment(\.walletNames) private var walletNames
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @FocusState private var isSearching: Bool
     @State private var width: CGFloat = 800
     @State private var showsAbout = false
     /// Costs that were unknown until this last read. They're lit for a moment, and only ever after the server's said so.
@@ -484,11 +486,42 @@ private struct HoldingsSection: View {
     /// The narrowest the table fits in, with only the columns that never give way.
     private static let tableWidth: CGFloat = 640
 
+    private static let scrollID = "holdings"
+
     private var sort: Binding<HoldingsSort> {
         Binding(get: { store.holdingsSort }, set: { store.holdingsSort = $0 })
     }
 
+    private var shown: [Position] {
+        portfolio.listedPositions.filter { $0.matches(navigation.holdingsQuery, names: walletNames) }
+    }
+
     var body: some View {
+        // Inside the page's scroll view, which is the one it scrolls.
+        ScrollViewReader { proxy in
+            section
+                .id(Self.scrollID)
+                // They can be below the chart, out of sight of what's being typed.
+                .onChange(of: navigation.holdingsQuery.isEmpty, initial: true) { _, isEmpty in
+                    if !isEmpty { reveal(with: proxy) }
+                }
+                .onChange(of: navigation.wantsSearch, initial: true) { _, wants in
+                    guard wants else { return }
+                    navigation.wantsSearch = false
+                    isSearching = true
+                    reveal(with: proxy)
+                }
+        }
+        .searchable(text: $navigation.holdingsQuery, placement: .toolbar, prompt: portfolio.isAllYours ? "Token or wallet" : "Token")
+        .searchFocused($isSearching)
+        .onDisappear { navigation.holdingsQuery = "" }
+    }
+
+    private func reveal(with proxy: ScrollViewProxy) {
+        withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo(Self.scrollID, anchor: .top) }
+    }
+
+    private var section: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Text("Holdings").font(.headline)
@@ -513,9 +546,12 @@ private struct HoldingsSection: View {
                     .help("What this covers")
                     .popover(isPresented: $showsAbout, arrowEdge: .bottom) { about }
             }
-            if width >= Self.tableWidth {
-                HoldingsTable(portfolio: portfolio, isLive: isLive, width: width, justKnown: justKnown, sort: sort, target: $target, onResolve: onResolve)
-                    .frame(height: HoldingsTable.height(rows: portfolio.listedPositions.count))
+            if shown.isEmpty, !navigation.holdingsQuery.isEmpty {
+                ContentUnavailableView.search(text: navigation.holdingsQuery)
+                    .frame(maxWidth: .infinity, minHeight: 180)
+            } else if width >= Self.tableWidth {
+                HoldingsTable(portfolio: portfolio, positions: shown, isLive: isLive, width: width, justKnown: justKnown, sort: sort, target: $navigation.target) { navigation.resolve($0) }
+                    .frame(height: HoldingsTable.height(rows: shown.count))
             } else {
                 rows
             }
@@ -546,15 +582,15 @@ private struct HoldingsSection: View {
 
     private var rows: some View {
         VStack(spacing: 0) {
-            ForEach(portfolio.listedPositions.sorted(using: store.holdingsSort)) { position in
-                Button { target = .asset(position.asset, .amount) } label: {
+            ForEach(shown.sorted(using: store.holdingsSort)) { position in
+                Button { navigation.target = .asset(position.asset, .amount) } label: {
                     CompactHolding(position: position, currency: portfolio.currency, isLive: isLive)
                         .padding(.horizontal, 4)
                         .justKnown(justKnown.contains(position.asset))
                 }
                 .buttonStyle(RowButtonStyle())
                 .contextMenu {
-                    HoldingActions(position: position, currency: portfolio.currency, onShow: { target = .asset(position.asset, .amount) }, onResolve: { onResolve(position.asset) })
+                    HoldingActions(position: position, currency: portfolio.currency, onShow: { navigation.target = .asset(position.asset, .amount) }, onResolve: { navigation.resolve(position.asset) })
                 }
                 Divider()
             }
@@ -627,6 +663,8 @@ private struct CompactHolding: View {
 /// Up and down move through positions and show each one's legs. Every number opens its own explanation.
 private struct HoldingsTable: View {
     let portfolio: Portfolio
+    /// The ones to list, which a search can narrow.
+    let positions: [Position]
     let isLive: Bool
     /// As much as there is, because a hidden column doesn't give its width to the others.
     let width: CGFloat
@@ -639,7 +677,7 @@ private struct HoldingsTable: View {
     @State private var columns = TableColumnCustomization<Position>()
     @Environment(\.walletNames) private var walletNames
 
-    private var rows: [Position] { portfolio.listedPositions.sorted(using: sort) }
+    private var rows: [Position] { positions.sorted(using: sort) }
 
     private var sortOrder: Binding<[HoldingsSort]> {
         Binding(get: { [sort] }, set: { if let first = $0.first { sort = first } })
@@ -782,7 +820,7 @@ private struct HoldingsTable: View {
             .disabledCustomizationBehavior(.all)
             TableColumn("Return", sortUsing: HoldingsSort(.return)) { position in
                 if position.isHeld {
-                    number(position, .return, returnText(position), tone: position.returnBps == nil ? .secondary : Tone(signed: position.returnBps))
+                    number(position, .return, position.returnText, tone: position.returnBps == nil ? .secondary : Tone(signed: position.returnBps))
                 } else {
                     dash
                 }
@@ -839,13 +877,6 @@ private struct HoldingsTable: View {
 
     private var dash: some View {
         Text("—").foregroundStyle(.tertiary).tableCell()
-    }
-
-    /// Unknown whenever its cost is, and never 0%. With a known cost of nothing, there's no share of it to show.
-    private func returnText(_ position: Position) -> String {
-        if let bps = position.returnBps { return Format.estimate(Format.percent(bps: bps), position.estimates.unrealized) }
-        if position.values.costMicros == nil { return Wording.unknown }
-        return position.values.valueMicros == nil ? "No price" : "—"
     }
 
     private func balanceCheck(_ position: Position) -> some View {
