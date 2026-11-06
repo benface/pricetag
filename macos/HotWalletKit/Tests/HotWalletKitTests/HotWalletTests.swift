@@ -32,8 +32,8 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
     @Test func aTokenSweepNeverSendsAnywhereButTheChosenWallet() async throws {
         let rig = await Rig(over)
         let second = EthereumAddress("0x3333333333333333333333333333333333333333")!
-        try rig.wallet.addColdWallet(address: second.lowercased, name: "Keystone")
-        rig.wallet.setSweepDestination(second)
+        try await rig.wallet.addColdWallet(address: second.lowercased, name: "Keystone")
+        await rig.wallet.setSweepDestination(second)
         await rig.wallet.tick()
         #expect(recipient(try #require(await rig.signer.signed.first)) == second)
     }
@@ -82,6 +82,15 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(await rig.signer.signed.isEmpty)
         #expect(rig.wallet.plan?.blockers == [.noDestination])
         #expect(rig.wallet.settings.capInDollars == 25)
+    }
+
+    @Test func itsValueCountsWhatsKeptForGasLikeEverywhereElse() async throws {
+        // 0.0000007 ETH, all of it kept for gas, so none of it counts toward the cap.
+        let rig = await Rig(snapshot(eth: 700_000_000_000))
+        await rig.wallet.tick()
+        #expect(rig.wallet.plan?.valueUsdMicros == 0)
+        let value = try #require(rig.wallet.valueUsdMicros)
+        #expect(rig.wallet.money(value) == "$0.0021")
     }
 
     @Test func refusesToSignOnAnotherChain() async throws {
@@ -441,7 +450,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         await rig.wallet.tick()
         let receipts = await rig.chain.receiptReads
 
-        rig.wallet.setRPC(URL(string: "https://example.com")!)
+        await rig.wallet.setRPC(URL(string: "https://example.com")!)
         await rig.wallet.lookBetweenTicks()
         #expect(await rig.chain.receiptReads == receipts, "a node no tick has read yet")
 
@@ -1578,7 +1587,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
 
     @Test func theCapCantPassItsCeilingAtAnyRate() async throws {
         let rig = await Rig(moneyDisplay: { MoneyDisplay(main: .CAD, rateMicros: "1400000") })
-        rig.wallet.setCap(dollars: 140)
+        await rig.wallet.setCap(dollars: 140)
         #expect(rig.wallet.settings.capUsdMicros == WalletSettings.capCeiling)
         #expect(rig.wallet.capText == "$140")
     }
@@ -1682,14 +1691,14 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
 @Suite struct ColdWalletTests {
     @Test func refusesWhatIsntAColdWallet() async throws {
         let rig = await Rig()
-        #expect(throws: HotWallet.ColdWalletProblem.notAnAddress) { try rig.wallet.addColdWallet(address: "nope", name: "") }
-        #expect(throws: HotWallet.ColdWalletProblem.isThisHotWallet) { try rig.wallet.addColdWallet(address: hotAddress.lowercased, name: "") }
-        #expect(throws: HotWallet.ColdWalletProblem.isZero) { try rig.wallet.addColdWallet(address: EthereumAddress.zero.lowercased, name: "") }
+        await #expect(throws: HotWallet.ColdWalletProblem.notAnAddress) { try await rig.wallet.addColdWallet(address: "nope", name: "") }
+        await #expect(throws: HotWallet.ColdWalletProblem.isThisHotWallet) { try await rig.wallet.addColdWallet(address: hotAddress.lowercased, name: "") }
+        await #expect(throws: HotWallet.ColdWalletProblem.isZero) { try await rig.wallet.addColdWallet(address: EthereumAddress.zero.lowercased, name: "") }
     }
 
     @Test func holdsSeveral() async throws {
         let rig = await Rig()
-        try rig.wallet.addColdWallet(address: "0x3333333333333333333333333333333333333333", name: " Keystone ")
+        try await rig.wallet.addColdWallet(address: "0x3333333333333333333333333333333333333333", name: " Keystone ")
         #expect(rig.wallet.settings.coldWallets.map(\.name) == ["Ledger", "Keystone"])
         #expect(rig.wallet.settings.sweepDestination == coldAddress, "adding one doesn't change where sweeps go")
     }
@@ -1709,7 +1718,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         let rig = await Rig()
         var published: [String] = []
         rig.wallet.onLinkedWalletsChange = { published = $0 }
-        try rig.wallet.addColdWallet(address: "0x3333333333333333333333333333333333333333", name: "Keystone")
+        try await rig.wallet.addColdWallet(address: "0x3333333333333333333333333333333333333333", name: "Keystone")
         #expect(Set(published) == [hotAddress.lowercased, coldAddress.lowercased, "0x3333333333333333333333333333333333333333"])
     }
 

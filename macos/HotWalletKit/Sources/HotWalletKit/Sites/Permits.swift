@@ -4,7 +4,7 @@ import KeyVault
 /// A permit in a common shape, read into what it allows. Anything that doesn't match one exactly, field for field and type for type,
 /// isn't read at all, and shows as the raw message it is.
 public struct PermitSummary: Equatable, Sendable {
-    public enum Kind: Equatable, Sendable {
+    public enum Kind: String, Codable, Equatable, Sendable {
         /// EIP-2612: an allowance set by signature, which never ends once it's used.
         case allowance
         /// Permit2's `PermitSingle`: an allowance on Permit2 that ends on a date.
@@ -26,6 +26,10 @@ public struct PermitSummary: Equatable, Sendable {
     public let allowedUntil: String?
     /// The last moment the signature itself can be used.
     public let mustBeUsedBy: String
+    /// The same moment in seconds, or nil when it never comes.
+    let deadline: UInt64?
+    /// As a 32-byte word. It's what the chain can later show has been spent.
+    let nonce: [UInt8]
 
     /// "Let Uniswap (0x6fF5…2a2a) spend all of your USDC", for a title and Touch ID. Nothing here comes from what a site named things.
     var headline: String {
@@ -49,12 +53,15 @@ public struct PermitSummary: Equatable, Sendable {
         let token: EthereumAddress
         let spender: EthereumAddress
         let amount: [UInt8]
+        let deadlineValue: JSONValue
+        let nonceValue: JSONValue?
         switch data.primaryType {
         case "Permit" where fields == ["address owner", "address spender", "uint256 value", "uint256 nonce", "uint256 deadline"]:
             guard let contract, let spenderAddress = address(message["spender"]), let value = message["value"], let deadline = message["deadline"],
                   let word = try? TypedData.integerWord(value, bits: 256, signed: false), let usedBy = Self.date(deadline, formatDate) else { return nil }
             kind = .allowance
             (token, spender, amount) = (contract, spenderAddress, word)
+            (deadlineValue, nonceValue) = (deadline, message["nonce"])
             allowedUntil = Self.noEnd
             mustBeUsedBy = usedBy
         case "PermitSingle" where contract == KnownContracts.permit2 && fields == ["PermitDetails details", "address spender", "uint256 sigDeadline"]
@@ -64,6 +71,7 @@ public struct PermitSummary: Equatable, Sendable {
                   let word = try? TypedData.integerWord(value, bits: 160, signed: false), let usedBy = Self.date(deadline, formatDate) else { return nil }
             kind = .permit2Allowance
             (token, spender, amount) = (tokenAddress, spenderAddress, word)
+            (deadlineValue, nonceValue) = (deadline, details?["nonce"])
             // Permit2 takes zero to mean the time of the block it's used in, and allows spending until that time has passed. So it
             // holds, up to the amount and as many times as that allows, for the couple of seconds Base takes for a block.
             guard let ends = try? TypedData.integerWord(expiration, bits: 48, signed: false) else { return nil }
@@ -76,19 +84,24 @@ public struct PermitSummary: Equatable, Sendable {
                   let word = try? TypedData.integerWord(value, bits: 256, signed: false), let usedBy = Self.date(deadline, formatDate) else { return nil }
             kind = .permit2Transfer
             (token, spender, amount) = (tokenAddress, spenderAddress, word)
+            (deadlineValue, nonceValue) = (deadline, message["nonce"])
             allowedUntil = nil
             mustBeUsedBy = usedBy
         default:
             return nil
         }
 
+        guard let nonceValue, let nonce = try? TypedData.integerWord(nonceValue, bits: 256, signed: false),
+              let deadlineWord = try? TypedData.integerWord(deadlineValue, bits: 256, signed: false) else { return nil }
+        self.nonce = nonce
+        deadline = Self.seconds(deadlineWord).flatMap { $0 <= Self.noEndAfter ? $0 : nil }
         self.token = token
         self.spender = spender
         let known = Base.tokens.first { $0.contract == token }
         tokenSymbol = known?.symbol
         let units = amount.prefix(16).allSatisfy { $0 == 0 } ? amount.suffix(16).reduce(UInt128(0)) { $0 << 8 | UInt128($1) } : nil
-        // Permit2's own maximum is 2^160 - 1, which this counts as unlimited too, as everything else here does from 2^96.
-        isUnlimited = units.map { $0 >= TransactionReview.unlimitedAt } ?? true
+        // Permit2's own maximum is 2^160 - 1, which doesn't fit in `units`, and this counts as unlimited too.
+        isUnlimited = TransactionReview.isUnlimited(units, of: known)
         isZero = units == 0
         if isUnlimited {
             self.amount = "Unlimited"

@@ -163,6 +163,14 @@ describe("portfolioOf", () => {
     assert.deepEqual(at(99), { started: false, behindBlocks: 101 })
   })
 
+  it("only calls it behind past 30 seconds, so one slow read at normal lag doesn't", () => {
+    const head = LAST_2S_BLOCK + 1000
+    const behindBy = (blocks: number) => portfolioOf(walletWith({ legs: [], coverage: { fromBlock: LAST_2S_BLOCK, toBlock: head - blocks }, latest: { blockNum: head, timestamp: DEMO_WALLET.latest.timestamp } }), "average").progress.behindBlocks
+    assert.equal(behindBy(86), 0, "17.2 s, the slowest read measured at normal lag")
+    assert.equal(behindBy(150), 0, "30 s")
+    assert.equal(behindBy(151), 151, "30.2 s")
+  })
+
   it("keeps a closed position's realized PnL, with nothing unrealized to add", () => {
     const eth = DEMO_WALLET.legs.filter((l) => l.asset === "ETH").slice(0, 1)
     const closing = { ...eth[0], id: "closing", delta: `-${eth[0]?.delta}`, kind: "transfer" as const } as (typeof eth)[number]
@@ -259,7 +267,7 @@ describe("portfolioOf", () => {
     assertMatchesFile("proof.json", proofOf(leg, DEMO_WALLET.legs, "USD", [dataset, { ...dataset, name: "a/b@1", hash: null }], null))
     assertMatchesFile("demo-proof.json", proofOf(leg, DEMO_WALLET.legs, "USD", [], "This is the demo wallet, so there's no real block to check."))
     const fixture = JSON.parse(readFileSync(new URL("./support/base-blocks.json", import.meta.url), "utf8"))
-    assertMatchesFile("verification.json", verificationOf({ ...leg, blockNum: 9200017, txHash: `0x${fixture.block.txs[1].tx_hash}`, parts: [] }, [], fixture.block, new Map(Object.entries(fixture.deposits))))
+    assertMatchesFile("verification.json", verificationOf({ ...leg, blockNum: 9200017, txHash: `0x${fixture.block.txs[1].tx_hash}`, parts: [] }, [], fixture.block, new Map(Object.entries(fixture.deposits)), null, fixture.block.block.hash))
     assertMatchesFile("verification-failed.json", verificationOf({ ...leg, blockNum: 9200017, parts: [] }, [], { ...fixture.block, logs: [] }, null))
   })
 })
@@ -705,6 +713,15 @@ describe("a chart's axes", () => {
   })
 })
 
+const FINISH_METERS = [
+  { open: 5, answered: 0, waiting: 0 },
+  { open: 2, answered: 3, waiting: 0 },
+  { open: 0, answered: 0, waiting: 1 },
+  { open: 0, answered: 3, waiting: 1 },
+  { open: 0, answered: 0, waiting: 0 },
+  { open: 0, answered: 3, waiting: 0 },
+]
+
 const UNSEEN_ETH_CASES = [
   [{ blockNum: 53517245, amount: "827782101642000000", txHashes: [`0xde3a${"0".repeat(60)}`] }],
   [{ blockNum: 1, amount: "5", txHashes: [`0xaaaa${"0".repeat(60)}`, `0xbbbb${"0".repeat(60)}`] }, ...[2, 3, 4, 5, 6].map((blockNum) => ({ blockNum, amount: "1000000000000000000", txHashes: [`0x${String(blockNum).repeat(64)}`] }))],
@@ -819,6 +836,7 @@ describe("wording", () => {
       nothingLeft: wording.NOTHING_LEFT,
       moneyUnaffected: wording.MONEY_UNAFFECTED,
     },
+    finishNotes: FINISH_METERS.map((meter) => ({ ...meter, text: wording.finishNote(meter) })),
     problems: READ_FAILURES.map((failure) => ({ ...failure, ...wording.feedProblem(failure, "https://prices.example.com") })),
     unseenEth: UNSEEN_ETH_CASES.map((unseen) => ({ unseen, text: wording.unseenEthCause(unseen) })),
     manifestHash: wording.shortManifestHash("bea12f7575e74575f2f0318213d61d421706eea0314e5d7116edebd4e77818a1"),
