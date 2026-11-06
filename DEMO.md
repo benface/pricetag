@@ -11,7 +11,7 @@ All times are Montréal. Numbers marked *measured* come from the real server aga
 **What we built.** Pricetag is one Amp derived dataset on Base, with no fork, validators or contracts. It reads Chainlink's own logs and each swap's implied rate, then puts a USD price on transfers of ETH and 9 other listed tokens. A token off the list shows up with no price, and it's never guessed. Patina is a self-custody Mac wallet built on those prices.
 
 **Why it needs Amp.** Three things are hard anywhere else:
-1. **The dataset is SQL over Base's raw data,** so there's no indexer of ours to run. It's 15 tables, about 1 GB, at most 6 s behind the chain (*measured*).
+1. **The dataset is SQL over Base's raw data,** so there's no indexer of ours to run. It's 16 tables, about 4 GB, at most 6 s behind the chain (*measured*).
 2. **Verify proves a price.** It recomputes the block's hashes from what Amp returned, and checks Chainlink's log behind the price.
 3. **A pricing rule is a dataset version.** Switching rules re-reads the wallet through another version, with no app code for any rule. Each one is pinned to its fingerprint.
 
@@ -112,7 +112,7 @@ A real card purchase on stage can fail, and a real delivery can take minutes, so
 | **Staging dataset behind** | The app says "Catching up", and the 8:00 health checks report it | A few seconds is fine: keep going, it's the honest behavior. If it's stuck, [restart its job](#if-the-dataset-is-stuck). If that doesn't clear it in a minute, use the recording. Don't run `pnpm amp:start`: it starts with empty history, so this wallet would have none |
 | **A dataset's job dies** (WORK-574) | Like being behind, but it doesn't move: reads still answer with the same newest block, so the numbers freeze and the app says "Catching up". Amp's status says `FATAL`, and bounded reads give no error. Stopping any job with JS on the same worker can cause it | The job watch restarts it within a minute, and it was back at head about 40 s after a restart (*measured*). Keep going, and check `~/Library/Logs/pricetag-job-watch.log` afterward. If the log shows no restart, `POST /controller/materialized-datasets/benface/<name>/versions/<version>` with `{}` by hand. A restart resumes the same job, so nothing's lost |
 | **Only the fork fails** | The rule switch or Compare errors | Stay on Market price and skip steps 7 and 8 |
-| **Admin token** expires Fri 12:46 | Only a write fails | Reads don't use it. The read token lasts until April 2027 (*checked*, not printed). So no `dataset/` merges after Thursday 18:00. A replacement, stopping the jobs, or the job watch restarting one after 12:46 needs a new token. The watch keeps checking and says so. Put the new one in `staging.jwt`, and it picks it up |
+| **Admin token** expires Fri 12:46 | Only a write fails | Reads don't use it. The read token lasts until April 2027 (*checked*, not printed). A replacement, stopping the jobs, or the job watch restarting one after 12:46 needs a new token. The watch keeps checking and says so. Put the new one in `staging.jwt`, and it picks it up |
 | **Slow reads** | A cold read took 13–17 s, and once 42 s, against 20–35 s before WORK-552. A warm read took 3–4 s (*measured*). They may grow by Friday, and the app's query timeout is 60 s. A read past 5 s shows how long it's been going | Don't restart the server on stage, since a restart means a cold read. Read the wallet before you go on. The health checks measure this |
 | **Wifi** | Everything real stops, with "Prices Aren't Available Right Now" (the web app still says "Couldn't read this wallet's data") | Phone hotspot, tested in rehearsal. If that fails, the demo wallet or the recording |
 | **Server on 8787 not running** | The app says "The Price Service Isn't Running" | In the repo: `pnpm start`, then wait for the first read. Keep it in its own terminal, not the one you'd close |
@@ -132,10 +132,10 @@ A real card purchase on stage can fail, and a real delivery can take minutes, so
 
 **Don't stop any staging job from Friday 8:00 until the demo's over.** Deploying is fine. Stopping a job that runs JS functions (`pricetag`, `pricetag_cautious`, `pricetag_control`, `pricetag_bloom`) can kill another such job on the same worker, including the one the app reads. That froze the app's dataset for 13 minutes on Thursday night (WORK-575). It's rare, one in 14 stops, but the job doesn't come back by itself.
 
-[The job watch](#the-job-watch) does this by itself within about 15 s. If the numbers stop moving anyway, restart it by hand. This is safe on a healthy job, which it leaves alone. A restart keeps the history and caught up 13 minutes in under a minute (*measured*). `pricetag_cautious` is a separate job, so if the fork is stuck too, run this again with its name. It needs the admin token, so it stops working Friday at 12:46. If `PRICETAG_DATASET` has moved past `0.2.0`, change the version at the end:
+[The job watch](#the-job-watch) does this by itself within about 15 s. If the numbers stop moving anyway, restart it by hand. This is safe on a healthy job, which it leaves alone. A restart keeps the history and caught up 13 minutes in under a minute (*measured*). `pricetag_cautious` is a separate job, so if the fork is stuck too, run this again with its name. It needs the admin token, so it stops working Friday at 12:46. If `PRICETAG_DATASET` has moved past `0.3.0`, change the version at the end:
 
 ```sh
-curl -sS -X POST -H @<(printf 'authorization: Bearer %s' "$(cat ~/.config/pricetag/staging.jwt)") -H 'content-type: application/json' -d '{}' https://gateway.amp.staging.edgeandnode.com/controller/materialized-datasets/benface/pricetag/versions/0.2.0
+curl -sS -X POST -H @<(printf 'authorization: Bearer %s' "$(cat ~/.config/pricetag/staging.jwt)") -H 'content-type: application/json' -d '{}' https://gateway.amp.staging.edgeandnode.com/controller/materialized-datasets/benface/pricetag/versions/0.3.0
 ```
 
 ### The job watch

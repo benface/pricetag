@@ -128,6 +128,7 @@ const toLegRow = (l: Row): LegRow => ({
   side: l.side as LegRow["side"],
   amount: l.amount == null ? "" : String(l.amount),
   kind: l.kind as LegRow["kind"],
+  ...(l.counterparty == null ? {} : { counterparty: prefixed(String(l.counterparty)) }),
 })
 
 const toPricedRow = (p: Row): PricedRow => ({
@@ -157,8 +158,9 @@ export const SWAP_TABLES = ["legs", "unlisted_legs", "priced_legs"]
 /** The tables a pricing rule decides. Everything else is what happened on the chain, whichever rule prices it. */
 const PRICE_TABLES = ["priced_legs", "reference_prices"]
 
-export function datasetReader(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined; startBlock?: number | null | undefined }) {
+export function datasetReader(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined; startBlock?: number | null | undefined; counterparties?: boolean | undefined }) {
   const ds = `"${config.dataset}"`
+  const walletLegColumns = config.counterparties ? `${LEG_COLUMNS}, counterparty` : LEG_COLUMNS
   // A fork of the pricing rule only needs the tables the rule reaches, so these can come from somewhere else.
   const prices = `"${config.priceDataset ?? config.dataset}"`
   const readOrEmpty = (sql: string) =>
@@ -171,7 +173,7 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
   async function readLegs(address: string, from: number, to: number) {
     const me = hexOf(address)
     const range = `block_num BETWEEN ${from} AND ${to}`
-    const legRows = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.legs WHERE ${range} AND account = X'${me}'`)
+    const legRows = await query<Row>(`SELECT ${walletLegColumns} FROM ${ds}.legs WHERE ${range} AND account = X'${me}'`)
     const unlistedRows = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.unlisted_legs WHERE ${range} AND account = X'${me}'`)
     const rows = legRows.map(toLegRow)
     return {

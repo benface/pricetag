@@ -114,10 +114,10 @@ Mainnet's RPC and blocks may differ. The previous dataset, which read prices wit
 A pricing rule is a dataset version, and the server picks one per request with Amp's `amp-alias` header. The SQL never changes, and the app has no code for any rule. Set these and both apps show a switch, in the Mac app's Settings and above the web app's numbers, with each rule's dataset and manifest hash, and a side-by-side comparison of a wallet. The comparison uses one set of facts at one block for both rules: the same transactions, balances, fees and exchange rates, with only prices from each. If it can't establish that, it says so and shows no numbers. Each rule's market prices are read at that block, and a token only one rule has a market price for is left out on both sides, so the two totals still add up the same things.
 
 ```sh
-PRICETAG_DATASET=benface/pricetag@0.2.0
-PRICETAG_DATASET_HASH=0aecd2c74b1d6d031f255c0048774a1b2d1911e8cc4d7e21ec2d3134469c0f1f
-PRICETAG_FORK_DATASET=benface/pricetag_cautious@0.2.0
-PRICETAG_FORK_HASH=aff88c5c18750e7fee2471ba5a4b551b3cccd771f80a7af7a72af2843d5df812
+PRICETAG_DATASET=benface/pricetag@0.3.0
+PRICETAG_DATASET_HASH=72a4cadfeaf0631b368a5b686c1b4883a71a0a40297a43675dfb81bd2863f30f
+PRICETAG_FORK_DATASET=benface/pricetag_cautious@0.3.0
+PRICETAG_FORK_HASH=639edea8dbc2b9a51f633af97a408c25f51a87a4e0a124065fcb46a56441d763
 ```
 
 Queries are pinned to those hashes, Proof's included, so a hash on screen is what was read, and a wrong one fails instead of showing other numbers. With no fork set, nothing changes: there's no switch and no header, and `PRICETAG_DATASET_HASH` isn't used.
@@ -127,15 +127,17 @@ The fork here is `dataset/cautious-eth.json`, from `cautiousEthTablesSql` in `da
 To change the rule, edit that function, then build, register and deploy it under a new tag, and update the hash:
 
 ```sh
-FORK_OF=benface/pricetag@0.2.0 AMP_ADMIN_URL=… AMP_ADMIN_TOKEN=… node dataset/build.ts --fork 53515446
-ampctl dataset register benface/pricetag_cautious dataset/cautious-eth.json --tag 0.2.1
+FORK_OF=benface/pricetag@0.3.0 AMP_ADMIN_URL=… AMP_ADMIN_TOKEN=… node dataset/build.ts --fork 53515446
+ampctl dataset register benface/pricetag_cautious dataset/cautious-eth.json --tag 0.3.1
 ```
 
-Deploy with `POST /controller/materialized-datasets/benface/pricetag_cautious/versions/0.2.1` and `{}`, because `ampctl dataset deploy` from v0.0.42 fails on staging. List the versions first and use a free tag, because registering a tag that exists moves it without saying so.
+Deploy with `POST /controller/materialized-datasets/benface/pricetag_cautious/versions/0.3.1` and `{}`, because `ampctl dataset deploy` from v0.0.42 fails on staging. List the versions first and use a free tag, because registering a tag that exists moves it without saying so.
 
 **Replacing the dataset it forks means replacing the fork too.** The fork reads the job of the version it names, so stopping that job stops the fork. Deploy a fork of the new version before stopping the old one, then change all four lines together.
 
 **Check the serving jobs right after stopping one.** Stopping a job with JS on a worker can panic the other jobs there and leave them `FATAL` (WORK-574), so a replacement can kill what's still serving. `scripts/job-watch.ts` restarts the versions `.env.local` names within about 15 s, but not a new version until it's named there.
+
+**The server needs a `legs` with `counterparty`,** which `benface/pricetag@0.3.0` is the first to have. An older version fails every wallet read.
 
 **A new dataset name needs a new manifest hash.** Amp finds a dataset's active tables by hash and table name, not by dataset name, so one manifest under two names can read and write the same tables. That's why staging's `benface/pricetag@0.0.1` was `dataset/pricetag.json` at this start block plus a one-line SQL comment. A manifest with new SQL already has its own hash.
 
