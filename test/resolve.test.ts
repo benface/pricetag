@@ -1132,6 +1132,20 @@ describe("each kind of sender", () => {
     assert.equal(position(wallet(A, send(10, "0x1", gate, A, 100n * E6)), [], emptyBook()).effects[0]?.leg.costLabel, "unknown")
   })
 
+  it("a bridge's question reads properly, whatever the bridge is called, once an answer makes it a question", () => {
+    const named = {
+      "0x4200000000000000000000000000000000000010": "From a Base bridge address",
+      "0x4200000000000000000000000000000000000007": "From a Base bridge address",
+      "0x09aea4b2242abc8bb4bb78d537a67a245a7bec64": "From an Across address",
+      "0xf70da97812cb96acdf810712aa562db8dfa3dbef": "From a Relay address",
+      "0x27a16dc786820b16e5c9028b75b99f6f604b5d26": "From a Stargate address",
+      "0x2cff890f0378a11913b6129b2e97417a2c302680": "From a NEAR Intents address",
+    }
+    for (const [bridge, line] of Object.entries(named)) {
+      assert.deepEqual(question(send(10, "0x1", bridge, A, 100n * E6), book({ [bridge]: { kind: "my-exchange" } })).map((q) => q.evidence), [[line]])
+    }
+  })
+
   it("a mint can't be anyone's wallet, so there's nothing to ask", () => {
     assert.deepEqual(question(send(10, "0x1", MINT, A, 100n * E6)), [])
   })
