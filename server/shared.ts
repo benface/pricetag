@@ -17,12 +17,18 @@ export function pathOf(req: IncomingMessage): string | null {
 /** A dataset that doesn't have this table, which says so in one of these ways. */
 export const isMissingTable = (error: unknown) => /table .*not found|not found.*table|does not exist|unknown table/i.test(describeError(error))
 
-/** One at a time per wallet, so a read that starts while another is running can use what that one found. A failure only reaches whoever asked for that read. */
+/** One at a time per wallet, so a read that starts while another is running can use what that one found. A failure only reaches whoever asked for that read. The queue keeps neither results nor failures, since a wallet's cache may have let go of its rows. */
 export function walletTurns() {
-  const turns = new Map<string, Promise<unknown>>()
+  const turns = new Map<string, Promise<void>>()
   return <T>(address: string, read: () => Promise<T>): Promise<T> => {
     const turn = (turns.get(address) ?? Promise.resolve()).then(read)
-    turns.set(address, turn.catch(() => {}))
+    turns.set(
+      address,
+      turn.then(
+        () => {},
+        () => {},
+      ),
+    )
     return turn
   }
 }
