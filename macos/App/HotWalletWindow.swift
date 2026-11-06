@@ -366,7 +366,7 @@ struct HotWalletDetails<Overview: View>: View {
                                 .secondaryText()
                                 .frame(minWidth: 72, alignment: .trailing)
                         } else {
-                            WarningText("No price")
+                            WarningText(Wording.noPrice)
                                 .font(.caption)
                                 .frame(minWidth: 72, alignment: .trailing)
                         }
@@ -391,17 +391,13 @@ struct HotWalletDetails<Overview: View>: View {
     }
 
     private var savings: some View {
-        DetailsSection("Savings", footer: wallet.settings.coldWallets.isEmpty ? nil : "Sweeps go to the checked one.") {
+        DetailsSection("Savings") {
             if wallet.settings.coldWallets.isEmpty {
                 Text("No savings wallet yet.")
                     .secondaryText()
             }
             ForEach(wallet.settings.coldWallets) { cold in
                 HStack {
-                    Image(systemName: cold.address == wallet.settings.sweepDestination ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(cold.address == wallet.settings.sweepDestination ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
-                        .contentTransition(.symbolEffect(.replace))
-                        .animation(Motion.state, value: wallet.settings.sweepDestination)
                     VStack(alignment: .leading) {
                         Text(cold.name)
                         AddressLine(cold.address.checksummed)
@@ -424,9 +420,16 @@ struct HotWalletDetails<Overview: View>: View {
                     .help("Remove from savings")
                     .disabled(wallet.isWorking)
                 }
-                .contentShape(Rectangle())
-                .onTapGesture { wallet.setSweepDestination(cold.address) }
-                .accessibilityAddTraits(cold.address == wallet.settings.sweepDestination ? .isSelected : [])
+            }
+            if !wallet.settings.coldWallets.isEmpty {
+                Picker("Sweeps go to", selection: Binding(get: { wallet.settings.sweepDestination }, set: { if let address = $0 { wallet.setSweepDestination(address) } })) {
+                    ForEach(wallet.settings.coldWallets) { cold in
+                        // Two can have the same name, and this decides where money goes.
+                        Text("\(cold.name) (\(Format.shortHash(cold.address.checksummed)))").tag(Optional(cold.address))
+                    }
+                }
+                .pickerStyle(.radioGroup)
+                .accessibilityLabel("Sweeps go to")
             }
             Button(HotWalletWording.addSavingsButton, systemImage: "plus") { isAddingCold = true }
         }
@@ -472,7 +475,7 @@ struct HotWalletDetails<Overview: View>: View {
         }
         .confirmationDialog("Replace this wallet's key?", isPresented: $isConfirmingRotation) {
             Button("Replace Key") { Task { await wallet.replaceKey() } }
-            if wallet.settings.sweepDestination != nil {
+            if wallet.settings.sweepDestination != nil, wallet.sweepPreview?.whyNothing == nil {
                 Button("Sweep Everything to Savings Instead") { isSweeping = true }
             }
         } message: {
@@ -503,8 +506,8 @@ struct HotWalletDetails<Overview: View>: View {
 
     private var sweep: some View {
         Button("Sweep Everything…") { isSweeping = true }
-            .disabled(wallet.settings.sweepDestination == nil || wallet.isWorking || wallet.isKeyMissing)
-            .help(wallet.settings.sweepDestination == nil ? "Add a savings wallet first" : "Move everything on this wallet to your savings. \(HotWalletWording.newDevice)")
+            .disabled(wallet.settings.sweepDestination == nil || wallet.isWorking || wallet.isKeyMissing || wallet.sweepPreview?.whyNothing != nil)
+            .help(wallet.settings.sweepDestination == nil ? "Add a savings wallet first" : wallet.sweepPreview?.whyNothing ?? "Move everything on this wallet to your savings. \(HotWalletWording.newDevice)")
     }
 
     private var replaceKey: some View {
@@ -740,7 +743,8 @@ struct TopUpSheet: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.top, 6)
                 }
-                if wallet.holdings.first(where: { $0.token.isNative })?.balance ?? 0 < SweepPlanner.minimumGasReserveWei {
+                // Nothing read yet means no holdings at all, which says nothing about its gas.
+                if let eth = wallet.holdings.first(where: { $0.token.isNative }), eth.balance < SweepPlanner.minimumGasReserveWei {
                     Notice(.warning, HotWalletWording.topUpNeedsGas(hasDestination: hasDestination))
                 }
             }

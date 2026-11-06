@@ -55,6 +55,13 @@ export function plainAmount(text: string): string | null {
   return clean.replaceAll(",", "")
 }
 
+/** A note's amount, for what can't be taken back: in USD, with every decimal it has, and cents always. */
+export function formatExactUsd(micros: string): string {
+  const padded = micros.padStart(7, "0")
+  const fraction = padded.slice(-6).replace(/0{1,4}$/, "")
+  return `$${BigInt(padded.slice(0, -6)).toLocaleString("en-US")}.${fraction}`
+}
+
 /** What was paid, beside amounts in another currency, so no kind of dollar is left bare. */
 export function formatPaid(micros: string, currency: CurrencyCode): string {
   const { symbol, label } = CURRENCIES[currency]
@@ -79,6 +86,9 @@ export function formatRate(rateMicros: string, currency: CurrencyCode): string {
   return `${symbol}${(Number(rateMicros) / 1e6).toLocaleString(locale, { minimumFractionDigits: 4, maximumFractionDigits: 4 })}`
 }
 
+/** One formatter for every amount, because a busy wallet's chart formats tens of thousands and making one each time is slow. */
+const WHOLE_TOKENS = new Intl.NumberFormat("en-US")
+
 /** Whole tokens from smallest units, cut to a readable length. Cuts instead of rounding, so it never shows more than there is. */
 export function formatAmount(units: string | bigint, decimals: number): string {
   const value = BigInt(units)
@@ -89,7 +99,7 @@ export function formatAmount(units: string | bigint, decimals: number): string {
   const leadingZeros = fraction.length - fraction.replace(/^0+/, "").length
   const shown = whole >= 1000n ? 2 : whole >= 1n ? 4 : leadingZeros + 3
   const cut = fraction.slice(0, shown).replace(/0+$/, "")
-  return `${value < 0n ? "-" : ""}${whole.toLocaleString("en-US")}${cut ? `.${cut}` : ""}`
+  return `${value < 0n ? "-" : ""}${WHOLE_TOKENS.format(whole)}${cut ? `.${cut}` : ""}`
 }
 
 export function formatSignedAmount(units: string, decimals: number): string {

@@ -1,9 +1,10 @@
 #!/bin/sh
 # `pnpm mac`: builds the app, opens it, and runs the server it reads from until you press Ctrl-C.
-# `pnpm mac:build` stops after the build.
+# `pnpm mac:build` stops after the build, and takes its turn with everything else that compiles Swift. `pnpm mac` doesn't wait for anyone.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
+if [ "${1:-}" = "--build-only" ] && [ -z "${SWIFT_QUEUE_TURN:-}" ]; then exec "$here/swift-queue.sh" "$0" "$@"; fi
 repo=$(dirname "$here")
 port=${PORT:-8787}
 build="$here/build"
