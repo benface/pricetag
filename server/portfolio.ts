@@ -137,7 +137,7 @@ export function explainPortfolio(wallet: WalletResponse, method: Method, target:
     value: explanation.value,
     sourceValue: explanation.sourceValue,
     lines: explanation.lines,
-    priceProof: explanation.priceAsset ? { asset: explanation.priceAsset, wallet: wallet.address } : null,
+    priceProof: explanation.priceProof ? { ...explanation.priceProof, wallet: wallet.address } : null,
     legCount: explanation.effects.length,
     legs: explanation.effects.slice(0, MAX_LEGS).map((effect) => legOf(effect, explanation.currency)),
   }

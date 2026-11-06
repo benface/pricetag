@@ -15,8 +15,13 @@ export type Explanation = {
   sourceValue: string | null
   lines: string[]
   effects: LegEffect[]
-  /** The asset whose current price this number rests on, when that price comes from Chainlink, so it has a proof of its own. */
-  priceAsset?: string
+  /** The asset and current USD price this number rests on, when that price comes from Chainlink, so it has a proof of its own. */
+  priceProof?: { asset: string; price: string }
+}
+
+/** A different one for anything a current price's proof or its result depends on, so neither outlives it. */
+export function priceProofKey(address: string, { currency, priceProof }: Explanation, rule: string | null): string {
+  return `${address}:${currency}:${rule}:${priceProof?.asset}:${priceProof?.price}`
 }
 
 const METRIC_TITLES: Record<Metric, string> = {
@@ -338,7 +343,7 @@ export function explainMetric(position: Position, metric: Metric, context: Expla
     sourceValue: usd && isMoney ? inUsd(explainMetric(usd, metric, USD_CONTEXT).value) : null,
     lines,
     effects: [...effects].reverse(),
-    ...(price?.source === "oracle" && (metric === "price" || metric === "value" || metric === "return" || metric === "unrealized") ? { priceAsset: asset } : {}),
+    ...(price?.source === "oracle" && (metric === "price" || metric === "value" || metric === "return" || metric === "unrealized") ? { priceProof: { asset, price: price.usdMicros ?? price.micros } } : {}),
   }
 }
 

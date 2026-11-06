@@ -8,7 +8,7 @@ import type { Query, Source } from "@pricetag/sdk/internal"
 import { feedUpdatesSql } from "../dataset/build.ts"
 import { createApi } from "../server/app.ts"
 import { warnOfNewTokenAggregators } from "../server/feeds.ts"
-import { createProofs, currentProofOf, currentVerificationOf, type BlockRead, type CurrentPriceBehind, type Proofs } from "../server/proof.ts"
+import { createProofs, currentProofOf, currentRevision, currentVerificationOf, type BlockRead, type CurrentPriceBehind, type Proofs } from "../server/proof.ts"
 import { latestFeedUpdates, updateFeedRounds, type FeedUpdate } from "../server/source.ts"
 import type { BlockRow, DepositDetails, LogRow, TxRow } from "../server/verify.ts"
 import type { ProofResponse, VerificationResponse } from "../src/core/api.ts"
@@ -265,7 +265,7 @@ describe("the proof and verify routes, for a current price", () => {
   const ME = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   const NOW = "2026-11-05T00:00:00.000Z"
   const AERO = "0x940181a94a35a4569e4529a3cdfb74e38fd98631"
-  const source: Source = {
+  const aeroSource: Source = {
     mode: "dataset",
     startBlock: BLOCK,
     historyFrom: null,
@@ -278,7 +278,7 @@ describe("the proof and verify routes, for a current price", () => {
     readEthBalances: async () => new Map(),
     readFeedRounds: async (assets, block) => Object.fromEntries(assets.map((asset) => [asset, { answer: "63000000", updatedAt: Date.parse(NOW) / 1000 - 60, blockNum: block, timestamp: NOW }])),
   }
-  async function serve(currentPriceBehind: Proofs["currentPriceBehind"]) {
+  async function serve(currentPriceBehind: Proofs["currentPriceBehind"], source = aeroSource) {
     const asked: string[] = []
     const blocksRead: number[] = []
     const proofs: Proofs = {
@@ -301,13 +301,16 @@ describe("the proof and verify routes, for a current price", () => {
       asked,
       blocksRead,
       close: () => server.close(),
-      get: async <T>(path: string, asset: string) => {
-        const response = await fetch(`${base}/api/portfolio/${ME}/${path}?asset=${asset}`)
+      /** A proof names the price on screen, and a check names the proof, as the apps do. */
+      get: async <T>(path: string, asset: string, named = path === "proof" ? "&price=630000" : `&revision=${REVISION}`) => {
+        const response = await fetch(`${base}/api/portfolio/${ME}/${path}?asset=${asset}${named}`)
         return { status: response.status, body: (await response.json()) as T }
       },
+      refresh: () => fetch(`${base}/api/portfolio/${ME}`).then((response) => response.json()),
     }
   }
   const behind: CurrentPriceBehind = { asset: "AERO", blockNum: BLOCK + 60, updates: [{ feed: aero, update: logged, agrees: "yes", byRule: false }] }
+  const REVISION = currentRevision(behind, { micros: "630000", source: "oracle", blockNum: BLOCK + 60 }, undefined, null)
 
   it("proves a held token's price from its update, and checks that block", async () => {
     const { get, asked, blocksRead, close } = await serve(async () => behind)
@@ -320,6 +323,81 @@ describe("the proof and verify routes, for a current price", () => {
     assert.equal(verification.body.status, "passed")
     assert.deepEqual(asked, ["AERO", "AERO"])
     assert.deepEqual(blocksRead, [BLOCK])
+  })
+
+  it("says a proof's revision", async () => {
+    const { get, close } = await serve(async () => behind)
+    const proof = await get<ProofResponse>("proof", "AERO")
+    close()
+    assert.equal(proof.body.revision, REVISION)
+  })
+
+  /** ETH's price moves to $3,100 when the test says, with a new update behind it, as a portfolio refresh would find it. */
+  function movingEth() {
+    let answer = "300000000000"
+    const moving: Source = {
+      ...aeroSource,
+      readLatestReference: async () => ({ blockNum: BLOCK + 60, ethUsd: answer, usdcUsd: "100000000" }),
+      head: async () => ({ blockNum: BLOCK + (answer === "300000000000" ? 60 : 260), timestamp: NOW }),
+    }
+    const behindEth: Proofs["currentPriceBehind"] = async (asset, price) => ({ asset, blockNum: price.blockNum, updates: [{ feed: PRICE_FEEDS[0], update: { ...logged, block_num: price.micros === "3000000000" ? 990 : 1190 }, agrees: "yes", byRule: false }] })
+    return { moving, behindEth, move: () => void (answer = "310000000000") }
+  }
+
+  it("won't check a newer update than the proof on screen, when the price moves between opening and Verify", async () => {
+    const { moving, behindEth, move } = movingEth()
+    const { get, refresh, blocksRead, close } = await serve(behindEth, moving)
+    await refresh()
+    const proof = await get<ProofResponse>("proof", "ETH", "&price=3000000000")
+    assert.equal(proof.body.blockNum, 990)
+    move()
+    await refresh()
+    const stale = await get<{ error: string }>("verify", "ETH", `&revision=${proof.body.revision}`)
+    assert.equal(stale.status, 412)
+    assert.deepEqual(blocksRead, [], "it reads no block for a check it won't make")
+    const fresh = await get<ProofResponse>("proof", "ETH", "&price=3100000000")
+    const checked = await get<VerificationResponse>("verify", "ETH", `&revision=${fresh.body.revision}`)
+    close()
+    assert.equal(fresh.body.blockNum, 1190)
+    assert.equal(checked.status, 200)
+    assert.deepEqual(blocksRead, [1190])
+  })
+
+  it("won't prove a different price than the one on screen", async () => {
+    const { moving, behindEth, move } = movingEth()
+    const { get, refresh, close } = await serve(behindEth, moving)
+    await refresh()
+    move()
+    await refresh()
+    const old = await get<{ error: string }>("proof", "ETH", "&price=3000000000")
+    const unnamed = await get<{ error: string }>("proof", "ETH", "")
+    close()
+    assert.equal(old.status, 412)
+    assert.equal(unnamed.status, 412)
+  })
+
+  it("won't recheck a passed result once the update has moved, even at the same price", async () => {
+    let update = logged
+    const { get, close } = await serve(async () => ({ ...behind, updates: [{ feed: aero, update, agrees: "yes", byRule: false }] }))
+    const proof = await get<ProofResponse>("proof", "AERO")
+    const named = `&revision=${proof.body.revision}`
+    assert.equal((await get<VerificationResponse>("verify", "AERO", named)).status, 200)
+    update = { ...logged, block_num: BLOCK + 5 }
+    const stale = await get<{ error: string }>("verify", "AERO", named)
+    close()
+    assert.equal(stale.status, 412)
+  })
+
+  it("names everything a proof depends on in its revision, and no more", () => {
+    const price = { micros: "4000000000", source: "oracle" as const, blockNum: 100 }
+    const ethPrice = { micros: "3000000000", source: "oracle" as const, blockNum: 100 }
+    const wsteth = (ethBlock: number): CurrentPriceBehind => ({ asset: "wstETH", blockNum: 100, updates: [{ feed: aero, update: logged, agrees: "yes", byRule: false }, { feed: PRICE_FEEDS[0], update: { ...logged, block_num: ethBlock }, agrees: "yes", byRule: false }] })
+    const original = currentRevision(wsteth(90), price, ethPrice, null)
+    assert.equal(currentRevision({ ...wsteth(90), blockNum: 200 }, { ...price, blockNum: 200 }, { ...ethPrice, blockNum: 200 }, null), original, "a new block isn't a new revision")
+    assert.notEqual(currentRevision(wsteth(90), { ...price, micros: "4100000000" }, ethPrice, null), original, "its price")
+    assert.notEqual(currentRevision(wsteth(90), price, { ...ethPrice, micros: "3100000000" }, null), original, "ETH's price")
+    assert.notEqual(currentRevision(wsteth(95), price, ethPrice, null), original, "ETH's update")
+    assert.notEqual(currentRevision(wsteth(90), price, ethPrice, "cautious"), original, "its rule")
   })
 
   it("answers without a block to check when no log is behind it", async () => {

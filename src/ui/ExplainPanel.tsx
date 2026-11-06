@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react"
 import { formatPrice, formatSignedAmount, formatTime, shortHash, type CurrencyCode, type LegEffect } from "@pricetag/sdk/core"
-import { describeConversion, describeEffect, describeNetting, type Explanation } from "../core/explain.ts"
+import { describeConversion, describeEffect, describeNetting, priceProofKey, type Explanation } from "../core/explain.ts"
 import { STARTING_BALANCE, actionLabel, activityTitle, costTag, pnlHelp, priceSourceLabel } from "../core/wording.ts"
 import { ProofPanel } from "./ProofPanel.tsx"
 
@@ -110,14 +110,14 @@ export function ExplainPanel({ explanation, address, rule, onClose }: { explanat
             {line}
           </p>
         ))}
-        {explanation.priceAsset ? (
+        {explanation.priceProof ? (
           <>
             <div className="leg-links small">
               <button type="button" className="link small" aria-expanded={showsPriceProof} onClick={() => setShowsPriceProof((shown) => !shown)}>
                 Proof of this price {showsPriceProof ? "▾" : "▸"}
               </button>
             </div>
-            {showsPriceProof ? <ProofPanel key={`${address}:${explanation.currency}:${rule}:${explanation.priceAsset}`} address={address} target={{ asset: explanation.priceAsset }} currency={explanation.currency} rule={rule} /> : null}
+            {showsPriceProof ? <ProofPanel key={priceProofKey(address, explanation, rule)} address={address} target={explanation.priceProof} currency={explanation.currency} rule={rule} /> : null}
           </>
         ) : null}
         <h3>{activityTitle(explanation.effects.length, Math.min(explanation.effects.length, MAX_LEGS_SHOWN))}</h3>

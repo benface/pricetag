@@ -508,7 +508,14 @@ public struct Explanation: Codable, Sendable, Equatable {
 
 public struct ExplanationPriceProof: Codable, Sendable, Equatable {
     public let asset: String
+    /// The price on screen, in USD micros, which its proof has to be about.
+    public let price: String
     public let wallet: String
+
+    /// A different one for anything a proof or its result depends on, so neither outlives it.
+    func panelID(currency: CurrencyCode, rule: String?) -> String {
+        "\(wallet):\(asset):\(price):\(currency.rawValue):\(rule ?? "")"
+    }
 }
 
 /// One wallet's side of a number shown across several.
@@ -549,6 +556,8 @@ public struct Proof: Codable, Sendable, Equatable {
     public let scope: [String]
     /// Why the block can't be checked. nil when it can.
     public let unavailable: String?
+    /// What a current price's proof describes, which checking it has to name. Only set when it has an update behind it.
+    public var revision: String? = nil
 }
 
 public enum CheckStatus: String, Codable, Sendable {

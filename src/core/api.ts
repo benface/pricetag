@@ -134,7 +134,7 @@ export type ExplanationResponse = {
   sourceValue: string | null
   lines: string[]
   /** Where to read the proof of the current price this number rests on, when that price comes from Chainlink. */
-  priceProof?: { asset: string; wallet: string } | null
+  priceProof?: { asset: string; price: string; wallet: string } | null
   /** All of them, which can be more than `legs` holds. */
   legCount: number
   legs: ExplanationLeg[]
@@ -239,6 +239,8 @@ export type ProofResponse = {
   scope: string[]
   /** Why the block can't be checked, or null when it can. */
   unavailable: string | null
+  /** What a current price's proof describes, which checking it has to name. Only set when it has an update behind it. */
+  revision?: string
 }
 
 export type CheckStatus = "passed" | "failed" | "unchecked"

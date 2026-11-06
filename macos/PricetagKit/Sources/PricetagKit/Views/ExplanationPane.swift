@@ -119,7 +119,7 @@ private struct PriceProofRow: View {
             .font(.caption)
             .accessibilityValue(isShowing ? "Showing" : "Hidden")
             if isShowing {
-                ProofPanel(asset: proof.asset, address: proof.wallet, store: store).id("\(proof.wallet):\(proof.asset)")
+                ProofPanel(asset: proof.asset, price: proof.price, address: proof.wallet, store: store).id(proof.panelID(currency: store.currency, rule: store.selectedRule))
             }
         }
     }

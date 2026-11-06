@@ -366,6 +366,15 @@ export type CurrentPriceBehind = { asset: string; blockNum: number; updates: Cur
 
 const hasLog = ({ update }: CurrentUpdate) => Boolean(update) && !isSeed(update)
 
+/**
+ * Names exactly what a current price's proof describes: its rule, the price, ETH's price if it's worked out from that, and each update.
+ * A block number isn't in it, because a price moves to a new block all the time without changing. Clients only send it back.
+ */
+export function currentRevision(behind: CurrentPriceBehind, price: LatestPrice, eth: LatestPrice | undefined, rule: string | null): string {
+  const updates = behind.updates.map(({ update }) => (update ? `${update.block_num}.${update.log_index}` : "none"))
+  return [rule ?? "", price.micros, TOKEN_FEEDS[behind.asset]?.answersInEth ? (eth?.micros ?? "") : "", ...updates].join(":")
+}
+
 /** What's behind what a token's worth now. `behind` is null when there's no log to point at: a contract call in the raw dataset, or with no feeds dataset. */
 export function currentProofOf(asset: string, blockNum: number, currency: CurrencyCode, datasets: ProofDataset[], unavailable: string | null, behind: CurrentPriceBehind | null, ruleNote: string | null = null): ProofResponse {
   const at = blockNum.toLocaleString("en-US")

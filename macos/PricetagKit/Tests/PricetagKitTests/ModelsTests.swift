@@ -66,9 +66,9 @@ import Testing
     }
 
     @Test func readsWhereAPriceIsProven() throws {
-        let body = #"{"currency":"USD","title":"AERO: Value","value":"$1.00","sourceValue":null,"lines":[],"priceProof":{"asset":"AERO","wallet":"0xabc"},"legCount":0,"legs":[]}"#
+        let body = #"{"currency":"USD","title":"AERO: Value","value":"$1.00","sourceValue":null,"lines":[],"priceProof":{"asset":"AERO","price":"1000000","wallet":"0xabc"},"legCount":0,"legs":[]}"#
         let explanation = try JSONDecoder().decode(Explanation.self, from: Data(body.utf8))
-        #expect(explanation.priceProof == ExplanationPriceProof(asset: "AERO", wallet: "0xabc"))
+        #expect(explanation.priceProof == ExplanationPriceProof(asset: "AERO", price: "1000000", wallet: "0xabc"))
         let none = #"{"currency":"USD","title":"AERO: Amount","value":"1","sourceValue":null,"lines":[],"priceProof":null,"legCount":0,"legs":[]}"#
         #expect(try JSONDecoder().decode(Explanation.self, from: Data(none.utf8)).priceProof == nil)
     }

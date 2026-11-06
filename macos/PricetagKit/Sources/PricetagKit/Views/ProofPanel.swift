@@ -10,16 +10,16 @@ struct ProofPanel: View {
         self.costNote = costNote
         _model = State(initialValue: ProofModel(
             fetch: { try await store.proof(leg: leg, address: address) },
-            verify: { try await store.verification(leg: leg, address: address) }
+            verify: { _ in try await store.verification(leg: leg, address: address) }
         ))
     }
 
     /// What's behind a current price, which has no transaction of its own.
-    init(asset: String, address: String, store: PortfolioStore) {
+    init(asset: String, price: String, address: String, store: PortfolioStore) {
         costNote = nil
         _model = State(initialValue: ProofModel(
-            fetch: { try await store.priceProof(asset: asset, address: address) },
-            verify: { try await store.priceVerification(asset: asset, address: address) }
+            fetch: { try await store.priceProof(asset: asset, price: price, address: address) },
+            verify: { try await store.priceVerification(asset: asset, revision: $0?.revision, address: address) }
         ))
     }
 

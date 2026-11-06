@@ -8,6 +8,7 @@
   ],
   "priceProof": {
     "asset": "ETH",
+    "price": "2640000000",
     "wallet": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   },
   "parts": [

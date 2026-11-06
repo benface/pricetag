@@ -5,41 +5,52 @@ import type { CheckStatus, ProofResponse, VerificationResponse } from "../core/a
 const MARKS: Record<CheckStatus, string> = { passed: "✓", failed: "✕", unchecked: "?" }
 const STATUS_LABELS: Record<CheckStatus, string> = { passed: "Passed", failed: "Failed", unchecked: "Not checked" }
 
+/** The server's price or update isn't the one this panel is about. */
+class PriceChanged extends Error {}
+
 async function read<T>(url: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(url, { signal })
   if (response.ok) return (await response.json()) as T
   const body = (await response.json().catch(() => null)) as { error?: string } | null
-  throw new Error(body?.error ?? "Couldn't reach the server.")
+  const message = body?.error ?? "Couldn't reach the server."
+  throw response.status === 412 ? new PriceChanged(message) : new Error(message)
 }
 
 /** Where a row's or a current price comes from, the datasets behind it, and a check of its block that says plainly what it doesn't cover. */
-export function ProofPanel({ address, target, currency, rule }: { address: string; target: { leg: string } | { asset: string }; currency: CurrencyCode; rule: string | null }) {
+export function ProofPanel({ address, target, currency, rule }: { address: string; target: { leg: string } | { asset: string; price: string }; currency: CurrencyCode; rule: string | null }) {
   const subject = "leg" in target ? `leg=${encodeURIComponent(target.leg)}` : `asset=${encodeURIComponent(target.asset)}`
   const query = `${subject}&currency=${currency}${rule ? `&rule=${encodeURIComponent(rule)}` : ""}`
+  const price = "price" in target ? `&price=${encodeURIComponent(target.price)}` : ""
   const [proof, setProof] = useState<ProofResponse | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
   const [verification, setVerification] = useState<VerificationResponse | null>(null)
   const [verifyFailure, setVerifyFailure] = useState<string | null>(null)
   const [verifying, setVerifying] = useState(false)
+  const [reads, setReads] = useState(0)
 
   useEffect(() => {
     const controller = new AbortController()
-    read<ProofResponse>(`/api/portfolio/${address}/proof?${query}`, controller.signal)
+    read<ProofResponse>(`/api/portfolio/${address}/proof?${query}${price}`, controller.signal)
       .then(setProof)
       .catch((error: unknown) => {
         if (!controller.signal.aborted) setFailure(error instanceof Error ? error.message : "Couldn't reach the server.")
       })
     return () => controller.abort()
-  }, [address, query])
+  }, [address, query, price, reads])
 
   async function verify() {
     setVerifying(true)
     try {
-      setVerification(await read<VerificationResponse>(`/api/portfolio/${address}/verify?${query}`))
+      const revision = proof?.revision ? `&revision=${encodeURIComponent(proof.revision)}` : ""
+      setVerification(await read<VerificationResponse>(`/api/portfolio/${address}/verify?${query}${revision}`))
       setVerifyFailure(null)
     } catch (error) {
       setVerification(null)
       setVerifyFailure(error instanceof Error ? error.message : "Couldn't reach the server.")
+      if (error instanceof PriceChanged) {
+        setProof(null)
+        setReads((count) => count + 1)
+      }
     } finally {
       setVerifying(false)
     }

@@ -19,7 +19,7 @@ import { ONRAMP_ASSETS, OnrampError, type FiatAmount, type Onramp } from "./onra
 import { createRates, readPaidRates } from "./rates.ts"
 import { createDepositReader } from "./block.ts"
 import { warnOfNewAggregators, warnOfNewRateAggregators, warnOfNewTokenAggregators } from "./feeds.ts"
-import { createManifestReader, createProofs, currentProofOf, currentVerificationOf, feedBehind, isSeed, proofOf, verificationOf, type BlockRead, type CheckedUpdate, type PriceBehind, type Proofs } from "./proof.ts"
+import { createManifestReader, createProofs, currentProofOf, currentRevision, currentVerificationOf, feedBehind, isSeed, proofOf, verificationOf, type BlockRead, type CheckedUpdate, type PriceBehind, type Proofs } from "./proof.ts"
 import { feedRounds, rawSource, resolvingSource, settledL1Fees, sharedReads, updateRounds, type SharedReads } from "./source.ts"
 import { createApprovals, demoApprovals, type Approvals } from "./approvals.ts"
 import { TAX_COUNTRIES, isTaxCountryCode, parseTaxYear, taxReportOf, type TaxScope } from "../src/core/tax.ts"
@@ -817,8 +817,14 @@ export function createApi(env: Env, created: Created | null = createSource(env),
         }
         try {
           const behind = proofs ? await proofs.currentPriceBehind(asset, price, wallet.prices.ETH, byRule) : null
+          const revision = behind && currentRevision(behind, price, wallet.prices.ETH, wallet.rule ?? null)
           if (proofMatch[2] === "proof") {
-            sendJson(res, 200, currentProofOf(asset, price.blockNum, currency, proofs ? await proofs.datasets(rule?.note ? rule.rule : null, asset) : [], proofs ? null : DEMO_UNVERIFIABLE, behind, wallet.ruleNote ?? null))
+            // A proof of any other price would sit beside the one on screen as if it were about that.
+            if (params.get("price") !== price.micros) {
+              sendJson(res, 412, { error: "This price has just changed. Its proof will show once the new price does." })
+              return true
+            }
+            sendJson(res, 200, { ...currentProofOf(asset, price.blockNum, currency, proofs ? await proofs.datasets(rule?.note ? rule.rule : null, asset) : [], proofs ? null : DEMO_UNVERIFIABLE, behind, wallet.ruleNote ?? null), ...(revision ? { revision } : {}) })
             return true
           }
           if (!proofs) {
@@ -827,6 +833,11 @@ export function createApi(env: Env, created: Created | null = createSource(env),
           }
           if (!behind) {
             sendJson(res, 404, { error: "A price read from a contract has no log to check, so there's no block to verify." })
+            return true
+          }
+          // Checking the newest update instead would pass or fail something other than what the proof on screen says.
+          if (params.get("revision") !== revision) {
+            sendJson(res, 412, { error: "The update behind this price has changed, so its proof was read again. Check the new one." })
             return true
           }
           const blocks = [...new Set(behind.updates.flatMap(({ update }) => (update && !isSeed(update) ? [update.block_num] : [])))]
