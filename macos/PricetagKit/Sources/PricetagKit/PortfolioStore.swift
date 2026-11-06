@@ -127,6 +127,10 @@ public final class PortfolioStore {
     public private(set) var invite: String?
     /// The server at `serverURL` answered that it needs an invite, and hasn't taken one since.
     public private(set) var needsInvite = false
+    /// They said not now, so nothing asks again until they give an invite or move to another server.
+    private var isInviteDeclined = false
+    /// Whether to ask for an invite now. Giving one stops asking until the server answers, and if it's refused, this asks again.
+    public var asksForInvite: Bool { needsInvite && !isInviteDeclined }
     /// What the user has said about where things came from. It stays on this device.
     private var answers: Book
     /// What each answer replaced, newest last, so Undo is always there. Accounts aren't in here, so it can't bring back one that's gone.
@@ -659,14 +663,16 @@ public final class PortfolioStore {
     /// Asks the server what rules it has. A rule it doesn't have would fail every read, so that choice goes.
     public func refreshRules() async {
         let asked = serverURL
+        let askedInvite = invite
         let next: [PricingRule]
         do {
             next = try await source.rules()
         } catch {
-            if asked == serverURL, case .needsInvite = error as? FetchError { needsInvite = true }
+            // A refusal of what was sent before an invite arrived says nothing about that invite.
+            if asked == serverURL, askedInvite == invite, case .needsInvite = error as? FetchError { needsInvite = true }
             return
         }
-        guard asked == serverURL else { return }
+        guard asked == serverURL, askedInvite == invite else { return }
         needsInvite = false
         rules = next
         if let chosen = selectedRule, !next.contains(where: { $0.id == chosen }) {
@@ -688,6 +694,7 @@ public final class PortfolioStore {
         defaults.set(url.absoluteString, forKey: Keys.server)
         invite = Self.invites(in: defaults)[Self.origin(of: url)]
         needsInvite = false
+        isInviteDeclined = false
         source = makeSource(url)
         rules = []
         // Another server's numbers can be different facts, so these aren't kept even for a moment. What's known is this server's own.
@@ -701,6 +708,7 @@ public final class PortfolioStore {
     public func setInvite(_ value: String?) {
         let value = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         let next = value?.isEmpty == false ? value : nil
+        isInviteDeclined = false
         guard next != invite else { return }
         invite = next
         needsInvite = false
@@ -710,6 +718,11 @@ public final class PortfolioStore {
         source = makeSource(serverURL)
         rules = []
         answersChanged()
+    }
+
+    /// Not now. It only answers the question being asked, so it can't silence one the server hasn't raised yet.
+    public func declineInvite() {
+        if needsInvite { isInviteDeclined = true }
     }
 
     /// Takes effect right away, and the numbers follow as soon as the server has folded them. Undo goes back to what this replaced,
@@ -911,6 +924,7 @@ public final class PortfolioStore {
             guard isCurrent() else { return .zero }
             portfolio = next
             updatedAt = now()
+            needsInvite = false
             cache.remember(next, of: address, on: serverURL, at: now())
             feed = state(of: next)
             expireLive()

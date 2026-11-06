@@ -1,7 +1,8 @@
 #!/bin/sh
 # `pnpm check:watch-only`: tests a built watch-only .dmg: that it has no way to hold a key, from its entitlements and its symbols, that the
 # Keychain is closed to what it's signed with, and that it launches from a clean folder and reads a server. It never opens a window or takes
-# focus. It only ever asks the Keychain whether an item's there. All it leaves behind is the sandbox folder macOS makes for this build.
+# focus. It only ever asks the Keychain whether an item's there. What it launches goes by its own test ID, so it never reads or changes what an
+# installed copy keeps in its sandbox. All it can leave behind is the sandbox folders macOS makes for those test IDs, if it won't let this remove them.
 #
 # Usage: watch-only-test.sh [path to the .dmg]. With none, it builds a --local one first.
 set -eu
@@ -10,6 +11,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 repo=$(dirname "$here")
 name=$(sed -n 's/^APP_NAME = //p' "$here/Config/App.xcconfig")
 bundle_id=$(sed -n 's/^APP_BUNDLE_ID = //p' "$here/Config/WatchOnly.xcconfig")
+test_id="$bundle_id.check"
+probe_id="$test_id.keychain"
 identity="Developer ID Application: Benface Inc. (R7TNNTC382)"
 lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 
@@ -25,12 +28,14 @@ mount="$work/mount"
 started=
 cleanup() {
   for pid in $started; do kill "$pid" 2>/dev/null || true; done
-  pkill -f "$work/clean/$name.app/Contents/MacOS/" 2>/dev/null || true
-  "$lsregister" -u "$work/clean/$name.app" 2>/dev/null || true
+  pkill -f "$work/launch/$name.app/Contents/MacOS/" 2>/dev/null || true
+  "$lsregister" -u "$work/launch/$name.app" 2>/dev/null || true
   hdiutil detach -quiet "$mount" 2>/dev/null || true
   rm -rf "$work"
-  # macOS guards a sandbox's folder, so this may not be allowed. It's only this build's, and holds no invite or wallet from this run.
-  rm -rf "$HOME/Library/Containers/$bundle_id" 2>/dev/null || echo "macOS wouldn't let this remove $HOME/Library/Containers/$bundle_id, which is left over from launching it."
+  # Only the test IDs' folders. The installed build's holds someone's wallets and invite. macOS guards these, so this may not be allowed.
+  for id in "$test_id" "$probe_id"; do
+    rm -rf "${HOME:?}/Library/Containers/$id" 2>/dev/null || echo "macOS wouldn't let this remove $HOME/Library/Containers/$id, which is left over from testing."
+  done
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
@@ -122,7 +127,7 @@ SWIFT
 probe="$work/probe.app"
 mkdir -p "$probe/Contents/MacOS"
 swiftc -O -o "$probe/Contents/MacOS/probe" "$work/probe.swift"
-/usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $bundle_id" -c "Add :CFBundleExecutable string probe" -c "Add :CFBundlePackageType string APPL" "$probe/Contents/Info.plist" >/dev/null
+/usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $probe_id" -c "Add :CFBundleExecutable string probe" -c "Add :CFBundlePackageType string APPL" "$probe/Contents/Info.plist" >/dev/null
 codesign --force --options runtime --timestamp --entitlements "$here/Config/WatchOnly.entitlements" --sign "$identity" "$probe" 2>/dev/null
 "$probe/Contents/MacOS/probe" >"$work/probe.out" 2>&1 || true
 # -34018 is errSecMissingEntitlement, the Keychain refusing. Asked without naming a group, it only searches groups this program has, of which there are none,
@@ -148,11 +153,11 @@ until curl -fs -o /dev/null --max-time 1 "http://127.0.0.1:$port/healthz" || [ "
   sleep 0.2
   tries=$((tries + 1))
 done
-none=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/api/rules")
+none=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/api/rules" || true)
 with=$(curl -s -o /dev/null -w '%{http_code}' -K - "http://127.0.0.1:$port/api/rules" <<CURL
 header = "Authorization: Bearer $invite"
 CURL
-)
+) || true
 if [ "$none" = 401 ]; then pass "with no invite, the server answers 401"; else fail "with no invite, the server answers $none"; fi
 if [ "$with" = 200 ]; then pass "with the invite, the server answers 200"; else fail "with the invite, the server answers $with"; fi
 
@@ -174,18 +179,30 @@ http.createServer((req, res) => {
 started="$started $!"
 sleep 0.5
 
+# Everything above tested the build itself. A sandboxed app's saved data goes by its bundle ID wherever it's launched from, so this one runs as another ID,
+# the only thing it changes, and signed again to match.
+launched="$work/launch/$name.app"
+mkdir -p "$work/launch"
+ditto "$app" "$launched"
+/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $test_id" "$launched/Contents/Info.plist"
+codesign --force --options runtime --timestamp=none --entitlements "$work/entitlements.plist" --sign "$identity" "$launched" 2>/dev/null
+installed="$HOME/Library/Containers/$bundle_id"
+installed_before=$(stat -f '%i %m' "$installed" 2>/dev/null || echo none)
+
 front_app() { lsappinfo info -only bundleID "$(lsappinfo front)" | sed -n 's/.*bundleID="\([^"]*\)".*/\1/p'; }
 front=$(front_app)
-open -g -j -n "$app" --args -serverURL "http://127.0.0.1:$proxy" -launchesQuietly YES
+open -g -j -n "$launched" --args -serverURL "http://127.0.0.1:$proxy" -launchesQuietly YES
 tries=0
 until grep -q 'GET /api/rules 401' "$log" || [ "$tries" -ge 100 ]; do
   sleep 0.2
   tries=$((tries + 1))
 done
 if grep -q 'GET /api/rules 401' "$log"; then pass "launched from a clean folder, reached the server, and got the 401 that opens the invite prompt"; else fail "never asked the server: $(cat "$log")"; fi
-if pgrep -f "$binary" >/dev/null; then pass "still running"; else fail "it quit"; fi
+if pgrep -f "$launched/Contents/MacOS/$name" >/dev/null; then pass "still running"; else fail "it quit"; fi
 after=$(front_app)
-if [ "$after" = "$bundle_id" ]; then fail "it took focus from $front"; else pass "left focus alone: ${after:-nothing} is in front, and ${front:-nothing} was before"; fi
+if [ "$after" = "$test_id" ]; then fail "it took focus from $front"; else pass "left focus alone: ${after:-nothing} is in front, and ${front:-nothing} was before"; fi
+
+if [ "$(stat -f '%i %m' "$installed" 2>/dev/null || echo none)" = "$installed_before" ]; then pass "left an installed copy's saved data alone"; else fail "touched $installed"; fi
 
 echo "Against the same server, the invite over a stand-in for HTTPS:"
 if PATINA_TEST_SERVER="http://127.0.0.1:$port" PATINA_TEST_INVITE="$invite" "$here/swift-queue.sh" swift test --package-path "$here/PricetagKit" --scratch-path "$here/.build" --filter HostedServerTests >"$work/tests" 2>&1; then pass "HostedServerTests, with the real server"; else cat "$work/tests" >&2; fail "HostedServerTests"; fi

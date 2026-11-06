@@ -32,7 +32,6 @@ struct MainWindow: View {
     @State private var width: CGFloat = 1120
     @State private var exporting = false
     /// Not Now on the invite prompt, until the next launch. Settings can still ask for one.
-    @State private var isInviteDeclined = false
     @State private var exportDocument: CSVDocument?
     @State private var exportError: String?
     /// Asked for from the details sheet, which closes first.
@@ -100,8 +99,9 @@ struct MainWindow: View {
                 ResolveFlow(store: store, firstAsset: navigation.resolvingAsset, noteWriter: hotWallet) { AnyView(PublishFromDeviceButton(link: $0, browsers: .real)) }
             }
         }
-        .sheet(isPresented: Binding(get: { Build.isWatchOnly && store.needsInvite && !isInviteDeclined }, set: { if !$0 { isInviteDeclined = true } })) {
-            InvitePrompt(store: store)
+        .sheet(isPresented: Binding(get: { Build.isWatchOnly && store.asksForInvite }, set: { if !$0 { store.declineInvite() } })) {
+            // The store closes this when an invite's given, and opens it again if the server refuses that one.
+            InvitePrompt(store: store, decline: store.declineInvite)
         }
         .sheet(isPresented: $navigation.isSettingUpSpendingMoney) {
             SpendingMoneySetup(wallet: hotWallet, store: store) { navigation.isSettingUpSpendingMoney = false }

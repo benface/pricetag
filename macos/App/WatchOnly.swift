@@ -18,10 +18,13 @@ struct WatchOnlyNotice: View {
 /// saved for this server alone, and only sent over HTTPS.
 struct InvitePrompt: View {
     let store: PortfolioStore
+    /// Not Now.
+    let decline: () -> Void
+    /// After an invite's saved.
+    var submitted: () -> Void = {}
     /// Stands in for a server that turned one down, in a test scene.
     var isRefused: Bool?
     @State private var invite = ""
-    @Environment(\.dismiss) private var dismiss
 
     private var wasRefused: Bool { isRefused ?? (store.needsInvite && store.invite != nil) }
 
@@ -41,7 +44,7 @@ struct InvitePrompt: View {
             }
             HStack {
                 Spacer()
-                Button("Not Now", role: .cancel) { dismiss() }
+                Button("Not Now", role: .cancel, action: decline)
                     .keyboardShortcut(.cancelAction)
                 Button("Continue", action: save)
                     .keyboardShortcut(.defaultAction)
@@ -55,6 +58,6 @@ struct InvitePrompt: View {
     private func save() {
         guard !invite.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         store.setInvite(invite)
-        dismiss()
+        submitted()
     }
 }

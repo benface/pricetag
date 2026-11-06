@@ -105,7 +105,7 @@ Don't do it yourself. Finish, and put a short checklist for benface in your hand
 
 ## The watch-only build
 
-`pnpm check:watch-only [dmg]` tests a built copy from a clean temporary folder, without opening a window or taking focus: its signature and entitlements, that the key code isn't in its binary, that the Keychain refuses what it's signed with, and that it reaches a local server in hosted mode and gets the 401 that opens the invite prompt. It can't check Gatekeeper on another Mac, or HTTPS to the real host. `PATINA_WATCH_ONLY=1 macos/shot.sh <scene> out.png` draws any scene as that build shows it, like `invite-prompt`.
+`pnpm check:watch-only [dmg]` tests a built copy from a clean temporary folder, without opening a window or taking focus: its signature and entitlements, that the key code isn't in its binary, that the Keychain refuses what it's signed with, and that it reaches a local server in hosted mode and gets the 401 that opens the invite prompt. It launches a copy under its own test ID, so an installed copy's saved data is never touched, which also means the installed ID itself first launches on someone's Mac. It can't check Gatekeeper on another Mac, or HTTPS to the real host. `PATINA_WATCH_ONLY=1 macos/shot.sh <scene> out.png` draws any scene as that build shows it, like `invite-prompt`.
 
 ## How it's kept apart from the real app
 

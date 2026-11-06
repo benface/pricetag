@@ -39,11 +39,15 @@ if [ -z "$host" ] && [ -z "$local_copy" ] && [ -z "$build_only" ]; then
   exit 1
 fi
 
+# In a file, because a setting on xcodebuild's command line loses to the same one in an -xcconfig file.
+mkdir -p "$products"
+printf '#include "%s"\nPATINA_SERVER_HOST = %s\n' "$config" "$host" >"$products/build.xcconfig"
+
 # Unsigned here, because Xcode would sign with what the project says. It's signed below, once, with one file saying what it may do.
 "$here/swift-queue.sh" xcodebuild -quiet \
-  -project "$here/App.xcodeproj" -scheme App -configuration Release -xcconfig "$config" \
+  -project "$here/App.xcodeproj" -scheme App -configuration Release -xcconfig "$products/build.xcconfig" \
   -derivedDataPath "$products" -destination 'platform=macOS' \
-  -onlyUsePackageVersionsFromResolvedFile PATINA_SERVER_HOST="$host" CODE_SIGNING_ALLOWED=NO DEAD_CODE_STRIPPING=YES build
+  -onlyUsePackageVersionsFromResolvedFile CODE_SIGNING_ALLOWED=NO DEAD_CODE_STRIPPING=YES build
 [ -z "$build_only" ] || { echo "Built the watch-only app."; exit 0; }
 
 stage="$products/stage"

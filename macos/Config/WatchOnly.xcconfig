@@ -10,5 +10,5 @@ APP_BUNDLE_ID = com.benface.pricetag.macos.watch
 APP_INFOPLIST = Config/WatchOnly-Info.plist
 INFOPLIST_KEY_NSCameraUsageDescription =
 
-// The hosted server, from App.xcconfig. macos/watch-only.sh --local empties it for a copy that reads this Mac's server, which it never notarizes.
+// The hosted server, from App.xcconfig. macos/watch-only.sh sets this over it for --local, which reads this Mac's server and is never notarized.
 PATINA_SERVER_HOST = $(PATINA_HOSTED_SERVER_HOST)

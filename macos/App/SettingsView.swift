@@ -52,7 +52,7 @@ struct SettingsView: View {
         .task { await notifications.refreshAuthorization() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in Task { await notifications.refreshAuthorization() } }
         .sheet(isPresented: $isComparing) { RuleComparisonSheet(store: store) }
-        .sheet(isPresented: $isChangingInvite) { InvitePrompt(store: store) }
+        .sheet(isPresented: $isChangingInvite) { InvitePrompt(store: store, decline: { isChangingInvite = false }, submitted: { isChangingInvite = false }) }
         // It read one wallet's numbers once, and replacing a key can change the wallet behind it.
         .onChange(of: store.address) { isComparing = false }
         // Opens at its size, and only moves after that.
@@ -110,6 +110,11 @@ struct SettingsView: View {
                 Section {
                     LabeledContent("Invite") {
                         Button(store.invite == nil ? "Enter Invite…" : "Change Invite…") { isChangingInvite = true }
+                    }
+                    // The main window asks again, but it may not be open.
+                    if store.needsInvite, store.invite != nil {
+                        WarningText("The server didn't accept that invite.")
+                            .font(.callout)
                     }
                 } footer: {
                     Text(Wording.watchOnlyNotice)
