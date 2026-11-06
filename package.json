@@ -21,6 +21,7 @@
     "check:keychain": "macos/keychain-test.sh",
     "check:extension": "macos/extension-test.sh",
     "check:tax-answer": "node scripts/tax-answer-e2e.ts",
+    "check:job-watch": "scripts/job-watch-local.sh",
     "amp:start": "scripts/amp start",
     "amp:stop": "scripts/amp stop",
     "example": "node --env-file-if-exists=.env.local packages/sdk/examples/portfolio.ts",

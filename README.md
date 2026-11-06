@@ -134,7 +134,7 @@ Deploy with `POST /controller/materialized-datasets/benface/pricetag_cautious/ve
 
 **Replacing the dataset it forks means replacing the fork too.** The fork reads the job of the version it names, so stopping that job stops the fork. Deploy a fork of the new version before stopping the old one, then change all four lines together.
 
-**Check the serving jobs right after stopping one.** Stopping a job with JS on a worker can panic the other jobs there and leave them `FATAL` (WORK-574), so a replacement can kill what's still serving. `scripts/job-watch.ts` restarts the versions `.env.local` names within a minute, but not a new version until it's named there.
+**Check the serving jobs right after stopping one.** Stopping a job with JS on a worker can panic the other jobs there and leave them `FATAL` (WORK-574), so a replacement can kill what's still serving. `scripts/job-watch.ts` restarts the versions `.env.local` names within about 15 s, but not a new version until it's named there.
 
 **A new dataset name needs a new manifest hash.** Amp finds a dataset's active tables by hash and table name, not by dataset name, so one manifest under two names can read and write the same tables. That's why `benface/pricetag@0.0.1` is `dataset/pricetag.json` at this start block plus a one-line SQL comment. A manifest with new SQL already has its own hash.
 

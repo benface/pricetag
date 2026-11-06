@@ -6,7 +6,7 @@
 // For the demo it runs from launchd as com.benface.pricetag-job-watch, from a copy in ~/.local/share/pricetag-job-watch. It logs to
 // ~/Library/Logs/pricetag-job-watch.log. To stop it: launchctl bootout gui/$(id -u)/com.benface.pricetag-job-watch
 //
-// Every 30 s it checks the versions .env.local names, read again each time, so it follows a replacement. Checking uses the read
+// Every 15 s it checks the versions .env.local names, read again each time, so it follows a replacement. Checking uses the read
 // token, so it outlives the admin token. Restarting reads the admin token from ~/.config/pricetag/staging.jwt when it's needed, so
 // dropping in a new one needs no restart here, and it's never an argument or logged. Only builtins, so it can run from a copy.
 
@@ -19,7 +19,7 @@ import { parseEnv } from "node:util"
 
 const CONTROLLER = "https://gateway.amp.staging.edgeandnode.com/controller"
 const DATASET_KEYS = ["PRICETAG_DATASET", "PRICETAG_FORK_DATASET", "PRICETAG_RATES_DATASET", "PRICETAG_FEEDS_DATASET"]
-const CHECK_EVERY_MS = 30_000
+export const CHECK_EVERY_MS = 15_000
 const TIMEOUT_MS = 20_000
 // An accepted restart that's still FATAL this much later gets another one. It may have died again between two checks.
 const RESTART_AGAIN_AFTER_MS = 5 * 60_000
@@ -128,7 +128,7 @@ export function createJobWatch(watcher: Watcher) {
       return
     }
     if (!response.ok) {
-      const line = `Couldn't restart ${ref}: ${response.status}. It tries again every 30 s.`
+      const line = `Couldn't restart ${ref}: ${response.status}. It tries again every ${CHECK_EVERY_MS / 1000} s.`
       if (entry.restartProblem !== line) alert(line)
       entry.restartProblem = line
       return
