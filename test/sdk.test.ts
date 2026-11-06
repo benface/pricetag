@@ -606,7 +606,7 @@ describe("getPortfolio", () => {
       const chain = { block, tables, queries: [] as string[] }
       const query: Query = async <T,>(sql: string) => {
         chain.queries.push(sql)
-        if (sql.includes(".blocks")) return [{ block_num: String(chain.block), timestamp: 1_800_000_000_000 }] as T[]
+        if (sql.includes(".blocks") && !sql.includes("AS round")) return [{ block_num: String(chain.block), timestamp: 1_800_000_000_000 }] as T[]
         return fakeAmp(chain.tables, chain.block).query<T>(sql)
       }
       const client = () => pricetagClient(query, { dataset: "benface/pricetag@0.0.1", startBlock: 50, readL1Fees })
@@ -644,6 +644,65 @@ describe("getPortfolio", () => {
       chain.queries.length = 0
       assert.equal((await summary(kept)).positions[0]![1], String(2n * E18))
       assert.ok(!chain.queries.some((q) => q.includes("eth_call") || q.includes(".legs")), chain.queries.join("; "))
+    })
+
+    describe("in another currency, with no transaction at that block", () => {
+      const tables = (rates: Record<string, bigint>) => ({ legs: [creditAt(100, E18)], reference_prices: [...refsThrough(100), ...refsThrough(190)], balances: { 49: {}, 190: { ETH: String(E18) } }, rates })
+      const rateReads = (queries: readonly string[]) => queries.filter((sql) => sql.includes("AS round"))
+      const read = (client: ReturnType<typeof pricetagClient>) => client.getPortfolio(ADDRESS, { currency: "CAD", to: 190 })
+
+      it("reads a rate a reorg changed, and matches a fresh client", async () => {
+        const { chain, client } = chainAt(200, tables({ 100: 80_000_000n, 190: 80_000_000n }))
+        const kept = client()
+        assert.equal((await read(kept)).latestRate?.rateMicros, "1250000")
+        chain.tables = tables({ 100: 80_000_000n, 190: 50_000_000n })
+        chain.block = 201
+        const after = await read(kept)
+        assert.deepEqual(after.latestRate, { rateMicros: "2000000", blockNum: 190 })
+        const fresh = await read(client())
+        assert.deepEqual(after.latestRate, fresh.latestRate)
+        assert.deepEqual(after.totals, fresh.totals)
+      })
+
+      it("has no current value when what replaced it has no usable rate, rather than the old rate", async () => {
+        const { chain, client } = chainAt(200, tables({ 100: 80_000_000n, 190: 80_000_000n }))
+        const kept = client()
+        assert.ok((await read(kept)).latestRate)
+        chain.tables = tables({ 100: 80_000_000n })
+        chain.block = 201
+        const after = await read(kept)
+        assert.equal(after.latestRate, null)
+        assert.equal(after.totals.valueMicros, null)
+        assert.match(after.missing.join(), /current exchange rate/)
+        assert.deepEqual(after.totals, (await read(client())).totals)
+
+        // It isn't stuck there. Under the same head it's asked again, as any block with no answer is.
+        chain.tables = tables({ 100: 80_000_000n, 190: 50_000_000n })
+        assert.equal((await read(kept)).latestRate?.rateMicros, "2000000")
+      })
+
+      it("doesn't read it again without a new block", async () => {
+        const { chain, client } = chainAt(200, tables({ 100: 80_000_000n, 190: 80_000_000n }))
+        const kept = client()
+        await read(kept)
+        chain.queries.length = 0
+        assert.equal((await read(kept)).latestRate?.rateMicros, "1250000")
+        assert.deepEqual(rateReads(chain.queries), [])
+      })
+
+      it("still catches a change on the read past the window, and then stops reading", async () => {
+        const { chain, client } = chainAt(200, tables({ 100: 80_000_000n, 190: 80_000_000n }))
+        const kept = client()
+        await read(kept)
+        chain.tables = tables({ 100: 80_000_000n, 190: 50_000_000n })
+        chain.block = 220
+        assert.equal((await read(kept)).latestRate?.rateMicros, "2000000")
+        chain.tables = tables({ 100: 80_000_000n, 190: 80_000_000n })
+        chain.block = 221
+        chain.queries.length = 0
+        assert.equal((await read(kept)).latestRate?.rateMicros, "2000000")
+        assert.deepEqual(rateReads(chain.queries), [])
+      })
     })
 
     it("doesn't read it again without a new block", async () => {

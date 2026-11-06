@@ -219,7 +219,7 @@ export function pricetagClient(query: Query, config: ClientConfig) {
     const read = await readWallet(account, from, to)
     const started = hasStarted(read)
     // A rate that can't be read throws, like any other read. This never falls back to USD.
-    const wallet = currency === "USD" ? read : { ...read, currency, rates: started ? await readRates(currency, read) : NO_RATES }
+    const wallet = currency === "USD" ? read : { ...read, currency, rates: started ? await readRates(currency, read, { chainHead: chainHead?.blockNum }) : NO_RATES }
     const { coverage, gasUnknownTxs, l1FeeUnknownTxs, openingUnread } = wallet
     const { view, ...folded } = foldWallet(wallet, method)
     return {

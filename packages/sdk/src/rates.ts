@@ -86,42 +86,50 @@ export function updateRounds(query: Query, dataset: string, exact: RoundReader):
   }
 }
 
-/** `held` also reads the block a wallet's history starts from, which only a cost stored for what it already held needs. */
-export type ReadRates = (currency: CurrencyCode, wallet: Pick<WalletData, "legs" | "latest">, options?: { held?: boolean }) => Promise<Rates | null>
+/**
+ * `held` also reads the block a wallet's history starts from, which only a cost stored for what it already held needs.
+ * `chainHead` is the chain's head, for a wallet read as of an earlier block, whose `latest` can't say what's settled. It defaults to `latest`.
+ */
+export type ReadRates = (currency: CurrencyCode, wallet: Pick<WalletData, "legs" | "latest">, options?: { held?: boolean; chainHead?: number | undefined }) => Promise<Rates | null>
 
 /** Reads rates, and forgets the ones from blocks a reorg replaced, when it can. */
 export type RatesReader = ReadRates & { rewind?(block: number): void }
 
 export function createRates(readRounds: RoundReader): RatesReader {
   const settled = new Map<CurrencyCode, Map<number, RateRound>>()
-  const newest = new Map<CurrencyCode, NonNullable<Rates["latest"]>>()
+  /** With the chain's head when it was read. Anything not yet settled could have changed once that moves. */
+  const newest = new Map<CurrencyCode, NonNullable<Rates["latest"]> & { readAt: number }>()
   /** How many reorgs have been told about. A read that crossed one can't say which chain it got, so it isn't kept. */
   let rewinds = 0
 
   /** A read that fails throws. A block the feed had no answer for is just left out, and isn't remembered, so it's tried again. */
-  const ratesFor: ReadRates = async (currency, wallet, { held = false } = {}) => {
+  const ratesFor: ReadRates = async (currency, wallet, { held = false, chainHead } = {}) => {
     if (!CURRENCIES[currency].feed) return null
     const known = settled.get(currency) ?? new Map<number, RateRound>()
     settled.set(currency, known)
-    const head = wallet.latest.blockNum
+    const asOf = wallet.latest.blockNum
+    const chain = chainHead ?? asOf
     const blocks = [...new Set(wallet.legs.filter((leg) => held || !leg.opening).map((leg) => leg.blockNum))]
     const current = newest.get(currency)
-    const wanted = blocks.filter((block) => !known.has(block))
-    if (current?.blockNum !== head) wanted.push(head)
+    const wanted = new Set(blocks.filter((block) => !known.has(block)))
+    if (!known.has(asOf) && (current?.blockNum !== asOf || current.readAt !== chain)) wanted.add(asOf)
     const startedAt = rewinds
-    const read = wanted.length > 0 ? await readRounds(currency, wanted) : new Map<number, RateRound>()
+    const read = wanted.size > 0 ? await readRounds(currency, [...wanted]) : new Map<number, RateRound>()
     const isSameChain = startedAt === rewinds
-    if (isSameChain) for (const [block, round] of read) if (block <= settledThrough(head)) known.set(block, round)
+    if (isSameChain) for (const [block, round] of read) if (block <= settledThrough(chain)) known.set(block, round)
 
     const byBlock: Rates["byBlock"] = {}
     for (const block of blocks) {
       const round = read.get(block) ?? known.get(block)
       if (round) byBlock[block] = round
     }
-    const headRound = read.get(head)
-    const latest = headRound ? { blockNum: head, round: headRound } : current?.blockNum === head ? current : null
-    if (latest && isSameChain) newest.set(currency, latest)
-    return { byBlock, latest }
+    // A read that found no answer means there's none now. An older one could be from a block a reorg replaced.
+    const round = wanted.has(asOf) ? read.get(asOf) : (known.get(asOf) ?? current?.round)
+    if (isSameChain) {
+      if (round) newest.set(currency, { blockNum: asOf, round, readAt: chain })
+      else newest.delete(currency)
+    }
+    return { byBlock, latest: round ? { blockNum: asOf, round } : null }
   }
 
   return Object.assign(ratesFor, {

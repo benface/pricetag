@@ -3,7 +3,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http"
 import { currentRateMicros, hasStarted, isAddress, isCurrencyCode, isMainCurrency, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
-import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createRangeStream, createRates, createWallets, describeError, feedRounds, followChain, followRawSql, followSql, readBlockHashes, readHeadMark, sharedMarket, updateRounds, type AmpQuery, type FollowConfig, type Source } from "@pricetag/sdk/internal"
+import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createRangeStream, createRates, createWallets, describeError, feedRounds, followChain, followRawSql, followSql, readBlockHashes, readHeadMark, sharedMarket, updateRounds, type AmpQuery, type FollowConfig, type ReadRates, type Source } from "@pricetag/sdk/internal"
 import type { Head, WalletResponse } from "../src/core/api.ts"
 import { emptyBook, linkedWallets, parseBook, walletsBehind, type Book } from "../src/core/book.ts"
 import { parseCoinbaseCsv } from "../src/core/exchange-import.ts"
@@ -295,10 +295,12 @@ export function createApi(env: Env, created: Created | null = createSource(env),
   /** A wallet with the rates to show it in `currency`. Never falls back to USD. Throws when they can't be read. */
   async function convert(wallet: WalletResponse, currency: CurrencyCode, books: readonly Book[] = [], paidIn: readonly CurrencyCode[] = []): Promise<WalletResponse> {
     const live = created && wallet.mode !== "demo" ? created : null
-    const paidRates = await readPaidRates(live ? live.readRates : async (other) => demoRates(other), wallet, currency, books, paidIn)
+    // A wallet can be as of an earlier block than the head, like one that's read at a block they've all reached.
+    const readRates: ReadRates = live ? (other, read, options) => live.readRates(other, read, { ...options, chainHead: head?.blockNum }) : async (other) => demoRates(other)
+    const paidRates = await readPaidRates(readRates, wallet, currency, books, paidIn)
     const paid = paidRates ? { ...wallet, paidRates } : wallet
     if (currency === "USD") return paid
-    return { ...paid, currency, rates: live ? await live.readRates(currency, wallet) : demoRates(currency) }
+    return { ...paid, currency, rates: await readRates(currency, wallet) }
   }
 
   /** A wallet with the rates to show it in `currency`, or answers the request with why it can't. Never falls back to USD. */

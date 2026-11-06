@@ -490,6 +490,24 @@ describe("reading rates", () => {
     assert.equal(second?.latest?.blockNum, 1000)
   })
 
+  it("goes by the chain's head for a wallet as of an earlier block", async () => {
+    const { asked, read } = scripted()
+    const ratesFor = createRates(read)
+    const wallet = walletAt(190, [100, 175])
+    await ratesFor("CAD", wallet, { chainHead: 200 })
+    assert.deepEqual(asked, [[100, 175, 190]])
+    await ratesFor("CAD", wallet, { chainHead: 200 })
+    assert.deepEqual(asked.at(-1), [175], "a recent transaction's block, as ever, but not 190 without a new block")
+    await ratesFor("CAD", wallet, { chainHead: 201 })
+    assert.deepEqual(asked.at(-1), [175, 190], "100 is settled, seen from the chain's head. The rest aren't yet.")
+    await ratesFor("CAD", wallet, { chainHead: 220 })
+    assert.deepEqual(asked.at(-1), [175, 190])
+    const settled = await ratesFor("CAD", wallet, { chainHead: 221 })
+    assert.equal(asked.length, 4, "past any reorg, so that read was the last")
+    assert.equal(settled?.latest?.blockNum, 190)
+    assert.deepEqual(Object.keys(settled?.latest ?? {}).sort(), ["blockNum", "round"])
+  })
+
   it("reads nothing for USD", async () => {
     const { asked, read } = scripted()
     assert.equal(await createRates(read)("USD", walletAt(1000, [100])), null)
