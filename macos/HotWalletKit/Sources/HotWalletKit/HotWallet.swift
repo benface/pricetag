@@ -989,6 +989,8 @@ public final class HotWallet {
         let time = now()
         let permits = state.signedPermits?[address] ?? []
         let open = permits.filter { !$0.hasExpired(at: time) }
+        // Settings can change the node while this waits, and only the node that said it's on Base gets to answer.
+        let chain = chain
         // A node on another chain could answer anything about these, so only Base's answers count.
         var isBase = false
         if open.contains(where: { $0.terms != nil }) { isBase = (try? await chain.read("eth_chainId", .array([])))?.isBaseChainID == true }

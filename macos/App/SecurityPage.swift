@@ -370,7 +370,8 @@ struct SecurityPage: View {
         for site in permits.map({ siteName($0.site) }) where !sites.contains(site) { sites.append(site) }
         let names = sites.formatted(.list(type: .and))
         let lead = permits.count == 1 ? "One signature, for \(names), looked like a permit but couldn't be read, so what it allows, and whether it's been used, isn't known." : "\(permits.count) signatures, for \(names), looked like permits but couldn't be read, so what they allow, and whether they've been used, isn't known."
-        return "\(lead) Moving your tokens to another of your wallets is the only sure way to stop them."
+        let staysValid = permits.count == 1 ? "doesn't cancel it: it stays valid" : "doesn't cancel them: they stay valid"
+        return "\(lead) Moving your tokens to another of your wallets protects what you move, but \(staysValid), so tokens that come back to this wallet could still be taken."
     }
 
     // MARK: - What no one can list
@@ -384,7 +385,7 @@ struct SecurityPage: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Label("Only sign permits on sites you trust. \(AppName.current) shows what one allows before you sign it.", systemImage: "signature")
                     Label("Revoking a token's approval for Permit2 stops any Permit2 signature from moving that token, but only while it stays revoked. Approving Permit2 again lets a signature that hasn't expired work again.", systemImage: "xmark.seal")
-                    Label("Moving the token to another of your wallets is the only sure way to stop a permit you signed.", systemImage: "arrow.right.circle")
+                    Label("Moving the token to another of your wallets is the only sure way to protect it from a permit you signed. It doesn't cancel the permit, so tokens that come back to that wallet could still be taken.", systemImage: "arrow.right.circle")
                 }
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -533,7 +534,7 @@ private struct ApprovalRow: View {
     }
 }
 
-/// One permit: what it allows, who for, when it ends, and how to stop it.
+/// One permit: what it allows, who for, when it ends, and what limits it.
 private struct SignedPermitRow: View {
     let permit: SignedPermit
     let terms: SignedPermit.Terms

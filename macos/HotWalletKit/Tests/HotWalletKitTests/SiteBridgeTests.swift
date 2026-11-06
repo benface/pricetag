@@ -1636,12 +1636,72 @@ private func paddedAddress(_ text: String) -> String { word(String(text.dropFirs
         #expect(try JSONDecoder().decode(DeviceWalletState.self, from: Data(old.utf8)).signedPermits == nil)
     }
 
-    @Test func howToStopEachKind() throws {
+    @Test func whatLimitsEachKind() throws {
         let usdc = try #require(EthereumAddress(usdcText))
         let spender = try #require(EthereumAddress(permitSpender))
         func stop(_ kind: PermitSummary.Kind) -> String { SignedPermit.Terms(kind: kind, token: usdc, tokenSymbol: "USDC", spender: spender, amount: "1 USDC", deadline: nil).howToStop }
-        #expect(stop(.allowance) == "The only way to stop this is to move USDC to another of your wallets.")
+        #expect(stop(.allowance) == "Moving USDC to another of your wallets protects what you move, but doesn't cancel this: it stays valid, so any of it that comes back to this wallet could still be taken.")
         #expect(stop(.permit2Allowance).hasPrefix("To stop this, revoke Permit2's approval for USDC"))
         #expect(stop(.permit2Transfer) == stop(.permit2Allowance))
+    }
+
+    @Test func changingTheNodeDuringACheckNeverUsesTheOneThatWasntChecked() async throws {
+        let base = HeldChainIDNode(isBase: true)
+        let other = HeldChainIDNode(isBase: false)
+        let otherURL = try #require(URL(string: "https://ethereum.example.invalid"))
+        let permit = SignedPermit(id: "pending", site: site, signedAt: .now, terms: .init(kind: .permit2Transfer, token: try #require(EthereumAddress(usdcText)), tokenSymbol: "USDC", spender: try #require(EthereumAddress(permitSpender)), amount: "1 USDC", deadline: nil))
+        let store = MemoryStateStore()
+        var state = DeviceWalletState()
+        state.active = hotAddress
+        state.signedPermits = [hotAddress: [permit]]
+        try store.save(state)
+        let portfolios = ScriptedPortfolios(.failure(.unreachable))
+        let wallet = HotWallet(signer: FakeSigner(keys: [hotAddress]), settingsStore: MemorySettingsStore(), stateStore: store, presence: FakePresence(allows: true), portfolioSource: { portfolios }, makeChain: { $0 == otherURL ? other : base })
+
+        let check = Task { await wallet.checkSignedPermits() }
+        for _ in 0..<10_000 {
+            if await base.isWaiting { break }
+            await Task.yield()
+        }
+        #expect(await base.isWaiting)
+        wallet.setRPC(otherURL)
+        await base.releaseChainID()
+        await check.value
+
+        #expect(wallet.signedPermits.map(\.id) == ["pending"])
+        #expect(wallet.permitChecks["pending"] == .notUsed)
+        #expect(try store.load().signedPermits?[hotAddress]?.map(\.id) == ["pending"])
+        #expect(await !other.reads.contains("eth_call"))
+    }
+}
+
+/// A node that holds Base's chain ID until told to answer, and says every nonce on any other chain is used.
+private actor HeldChainIDNode: ChainClient {
+    let isBase: Bool
+    private var waiter: CheckedContinuation<RPCAnswer, Never>?
+    private(set) var reads: [String] = []
+
+    init(isBase: Bool) { self.isBase = isBase }
+
+    var isWaiting: Bool { waiter != nil }
+
+    func releaseChainID() {
+        waiter?.resume(returning: .success(.string("0x2105")))
+        waiter = nil
+    }
+
+    func snapshot(of address: EthereumAddress) throws -> ChainSnapshot { throw ChainError.unreadable }
+    func estimateGas(from: EthereumAddress, to: EthereumAddress, value: UInt128, data: [UInt8]) throws -> UInt64 { throw ChainError.unreadable }
+    func send(_ transaction: SignedTransaction) throws { throw ChainError.unreadable }
+    func receipt(of hash: String) -> Receipt? { nil }
+    func l1Fee(ofPayload payload: [UInt8]) throws -> UInt128 { throw ChainError.unreadable }
+
+    func read(_ method: String, _ parameters: JSONValue) async -> RPCAnswer {
+        reads.append(method)
+        if method == "eth_chainId" {
+            if isBase { return await withCheckedContinuation { waiter = $0 } }
+            return .success(.string("0x1"))
+        }
+        return .success(.string("0x" + String(repeating: "0", count: 63) + (isBase ? "0" : "1")))
     }
 }

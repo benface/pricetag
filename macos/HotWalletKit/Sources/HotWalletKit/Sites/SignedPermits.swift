@@ -108,12 +108,13 @@ extension SignedPermit.Terms {
     /// Who could use it. Nothing here comes from what a site named things.
     public var who: String { SiteWording.who(spender) }
 
-    /// How to stop this one, in a sentence. Nothing else can: it's already signed, and whoever has it decides when to use it.
+    /// What limits this one. Nothing else can: it's already signed, and whoever has it decides when to use it. A token's own permit
+    /// doesn't need a balance to work, so moving the token only protects what's moved.
     public var howToStop: String {
         let asset = tokenSymbol ?? "this token"
         return switch kind {
         case .allowance:
-            "The only way to stop this is to move \(asset) to another of your wallets."
+            "Moving \(asset) to another of your wallets protects what you move, but doesn't cancel this: it stays valid, so any of it that comes back to this wallet could still be taken."
         case .permit2Allowance, .permit2Transfer:
             "To stop this, revoke Permit2's approval for \(asset) in \(HotWalletWording.title)'s Approvals. It only stays stopped while that's revoked: approving Permit2 again lets this work again."
         }
