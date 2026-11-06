@@ -13,6 +13,8 @@ public enum FetchError: Error, Equatable, Sendable {
     case noAmpConfigured(String)
     /// The server refused the request, or sent something this version can't read.
     case rejected(String)
+    /// The server only answers people it invited, and this request had no invite it takes.
+    case needsInvite(String)
 }
 
 public protocol PortfolioSource: Sendable {
@@ -234,6 +236,7 @@ public struct PricetagClient: PortfolioSource {
         switch status {
         case 502: throw FetchError.ampUnavailable(message)
         case 503: throw FetchError.noAmpConfigured(message)
+        case 401: throw FetchError.needsInvite(message)
         default: throw FetchError.rejected(message)
         }
     }

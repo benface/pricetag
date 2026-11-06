@@ -60,6 +60,7 @@ nonisolated enum HotWalletDebug {
     }
 
     static func runSelfTestIfAsked() {
+        #if !PATINA_WATCH_ONLY
         if let name = isolatedName, CommandLine.arguments.contains("--reset-isolated-wallet") {
             let store = KeychainSealedKeyStore(service: isolatedService(name))
             for address in (try? store.addresses()) ?? [] { try? store.delete(address) }
@@ -90,8 +91,10 @@ nonisolated enum HotWalletDebug {
             }
         }
         never.wait()
+        #endif
     }
 
+    #if !PATINA_WATCH_ONLY
     private static func selfTest() async throws {
         let store = KeychainSealedKeyStore(service: service)
         for address in try store.addresses() { try store.delete(address) }
@@ -113,6 +116,7 @@ nonisolated enum HotWalletDebug {
         guard try await !vault.hasKey(address) else { throw Problem("The key is still there") }
         print("Deleted it.")
     }
+    #endif
 
     private struct Problem: Error, CustomStringConvertible {
         let description: String

@@ -11,6 +11,28 @@ public protocol Signer: Sendable {
     func addresses() async throws -> [EthereumAddress]
 }
 
+/// What a watch-only build has in place of `KeyVault`, which isn't in that build at all. Nothing here can make, read or use a key.
+public struct WatchOnlySigner: Signer {
+    public init() {}
+
+    public func createKey() async throws -> EthereumAddress { throw KeychainSealedKeyStore.Failure.notProvisioned }
+    public func sign(_ transaction: UnsignedTransaction, from address: EthereumAddress) async throws -> SignedTransaction { throw KeychainSealedKeyStore.Failure.notProvisioned }
+    public func sign(_ message: SignableMessage, from address: EthereumAddress) async throws -> MessageSignature { throw KeychainSealedKeyStore.Failure.notProvisioned }
+    public func hasKey(_ address: EthereumAddress) async throws -> Bool { false }
+    public func deleteKey(_ address: EthereumAddress) async throws { throw KeychainSealedKeyStore.Failure.notProvisioned }
+    public func addresses() async throws -> [EthereumAddress] { [] }
+}
+
+/// What a wallet signs with unless it's told otherwise.
+public func defaultSigner() -> any Signer {
+    #if PATINA_WATCH_ONLY
+    WatchOnlySigner()
+    #else
+    KeyVault()
+    #endif
+}
+
+#if !PATINA_WATCH_ONLY
 public actor KeyVault: Signer {
     public enum Failure: Error, Equatable {
         case noSuchKey
@@ -94,3 +116,4 @@ public actor KeyVault: Signer {
         return key
     }
 }
+#endif

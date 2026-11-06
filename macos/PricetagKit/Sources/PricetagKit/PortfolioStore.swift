@@ -125,6 +125,8 @@ public final class PortfolioStore {
     /// What the server at `serverURL` knows this person by, or nil. Each invite belongs to the server it was given for, so it never
     /// follows the user to another one, and it's only sent over HTTPS.
     public private(set) var invite: String?
+    /// The server at `serverURL` answered that it needs an invite, and hasn't taken one since.
+    public private(set) var needsInvite = false
     /// What the user has said about where things came from. It stays on this device.
     private var answers: Book
     /// What each answer replaced, newest last, so Undo is always there. Accounts aren't in here, so it can't bring back one that's gone.
@@ -657,7 +659,15 @@ public final class PortfolioStore {
     /// Asks the server what rules it has. A rule it doesn't have would fail every read, so that choice goes.
     public func refreshRules() async {
         let asked = serverURL
-        guard let next = try? await source.rules(), asked == serverURL else { return }
+        let next: [PricingRule]
+        do {
+            next = try await source.rules()
+        } catch {
+            if asked == serverURL, case .needsInvite = error as? FetchError { needsInvite = true }
+            return
+        }
+        guard asked == serverURL else { return }
+        needsInvite = false
         rules = next
         if let chosen = selectedRule, !next.contains(where: { $0.id == chosen }) {
             selectedRule = nil
@@ -677,6 +687,7 @@ public final class PortfolioStore {
         serverURL = url
         defaults.set(url.absoluteString, forKey: Keys.server)
         invite = Self.invites(in: defaults)[Self.origin(of: url)]
+        needsInvite = false
         source = makeSource(url)
         rules = []
         // Another server's numbers can be different facts, so these aren't kept even for a moment. What's known is this server's own.
@@ -692,6 +703,7 @@ public final class PortfolioStore {
         let next = value?.isEmpty == false ? value : nil
         guard next != invite else { return }
         invite = next
+        needsInvite = false
         var invites = Self.invites(in: defaults)
         invites[Self.origin(of: serverURL)] = next
         defaults.set(invites, forKey: Keys.invites)
@@ -908,6 +920,7 @@ public final class PortfolioStore {
             // Numbers by another method or rule, or in another currency, are wrong now, not just old, and there's no way to get the right ones.
             if let portfolio, !isForCurrentSettings(portfolio) { self.portfolio = nil }
             feed = state(of: error)
+            if case .needsInvite = error as? FetchError { needsInvite = true }
             return feed == .serverUnreachable ? unreachableDelay : reachableDelay
         }
     }
@@ -968,7 +981,7 @@ public final class PortfolioStore {
         return switch error as? FetchError {
         case .ampUnavailable(let message): .ampUnavailable(message)
         case .noAmpConfigured(let message): .noAmpConfigured(message)
-        case .rejected(let message): .rejected(message)
+        case .rejected(let message), .needsInvite(let message): .rejected(message)
         case .unreachable, .timedOut, nil: .serverUnreachable
         }
     }
