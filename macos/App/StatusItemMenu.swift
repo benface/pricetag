@@ -67,8 +67,8 @@ final class StatusItemMenu: NSObject {
         menu.addItem(item("Quit \(AppName.current)", #selector(quitChosen), key: "q"))
         let button = NSApp.windows.lazy.compactMap { $0.contentView.flatMap(Self.statusButton) }.first
         button?.highlight(true)
-        // In screen coordinates, on whichever display was clicked: the item's left edge, directly under the menu bar, which is as tall as the item's window.
-        menu.popUp(positioning: nil, at: window.frame.origin, in: nil)
+        // In screen coordinates, on whichever display was clicked.
+        menu.popUp(positioning: nil, at: StatusItemMenuPlacement.origin(itemWindow: window.frame, screenVisibleFrame: window.screen?.visibleFrame), in: nil)
         button?.highlight(false)
     }
 

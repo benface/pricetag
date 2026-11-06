@@ -95,7 +95,7 @@ Don't do it yourself. Finish, and put a short checklist for benface in your hand
 - The green button enters full screen: at launch, after opening from the menu bar, and after closing the window and reopening it. Closing the last window still takes away the Dock icon.
 - Dragging the window down to its smallest size and back, with the details open.
 - The menu bar item's text, including its warning.
-- Right-clicking and Control-clicking the menu bar item opens its menu directly under the menu bar, including on a second display, and closes the panel if it's open. Open, Settings and Quit all work from it, with the app in the background and with its window closed. A plain click still opens the panel.
+- Right-clicking and Control-clicking the menu bar item opens its menu directly under the menu bar with every row showing and no scroll arrow, on a display with a notch, one without and a second display, and closes the panel if it's open. Open, Settings and Quit all work from it, with the app in the background and with its window closed. A plain click still opens the panel.
 - Settings' window grows and shrinks smoothly between tabs and when a warning appears, with its top edge staying put. Test scenes draw each tab at its final height, and Settings' own window can't be opened from the background.
 - The real popover under the menu bar, and that clicking outside it closes it.
 - Opening the window from the popover brings it to the front, and adds the Dock icon and menus. Closing it takes them away.
