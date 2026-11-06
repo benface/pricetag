@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
-import { ASSETS, CURRENCIES, CURRENCY_CODES, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, applyLeg, blockBefore, buildPricedLegs, chartMoneyTicks, derivePricedRows, emptyPosition, formatChartSpan, msBetweenBlocks, encodeNote, foldPositions, formatAmount, formatDuration, formatMoney, formatPaid, formatPrice, formatReturn, formatSignedAmount, formatSignedMoney, labelUsd, plainAmount, sumTotals, type LegRow, type Method, type PricedLeg } from "@pricetag/sdk/core"
+import { ASSETS, CURRENCIES, CURRENCY_CODES, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, applyLeg, blockBefore, buildPricedLegs, chartMoneyTicks, derivePricedRows, emptyPosition, formatChartSpan, msBetweenBlocks, encodeNote, foldPositions, pnlOverTime, referenceMarks, formatAmount, formatDuration, formatMoney, formatPaid, formatPrice, formatReturn, formatSignedAmount, formatSignedMoney, labelUsd, plainAmount, sumTotals, type LegRow, type Method, type PricedLeg } from "@pricetag/sdk/core"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { TICK_GAP, chartLeftMargin, placeChartTimes } from "../src/core/chart-times.ts"
 import { describeEffect, describeNetting, summarizeEffect } from "../src/core/explain.ts"
@@ -260,6 +260,50 @@ describe("portfolioOf", () => {
     const fixture = JSON.parse(readFileSync(new URL("./support/base-blocks.json", import.meta.url), "utf8"))
     assertMatchesFile("verification.json", verificationOf({ ...leg, blockNum: 9200017, txHash: `0x${fixture.block.txs[1].tx_hash}`, parts: [] }, [], fixture.block, new Map(Object.entries(fixture.deposits))))
     assertMatchesFile("verification-failed.json", verificationOf({ ...leg, blockNum: 9200017, parts: [] }, [], { ...fixture.block, logs: [] }, null))
+  })
+})
+
+describe("what the value chart can join", () => {
+  const ME = "0x00000000000000000000000000000000000000aa"
+  const minute = (m: number) => new Date(Date.UTC(2026, 10, 4, 0, m)).toISOString()
+  const move = (m: number, tx: string, token: string, amount: bigint, kind: LegRow["kind"] = token === ETH_ADDRESS ? "eth" : "erc20"): LegRow => ({ block_num: m, timestamp: minute(m), tx_hash: tx, tx_index: 1, log_index: 0, token, account: ME, side: "credit", amount: amount.toString(), kind })
+  const pointsOf = (rows: LegRow[], blocks: { blockNum: number; ethUsd: string | null; usdcUsd: string | null }[], last: number) => {
+    const references = blocks as Parameters<typeof buildPricedLegs>[0]["references"]
+    const legs = buildPricedLegs({ account: ME, rows, references, priced: derivePricedRows(rows, references) })
+    const prices = { ETH: { micros: "2000000000", source: "oracle" as const, blockNum: last }, USDC: { micros: "1000000", source: "oracle" as const, blockNum: last } }
+    return pnlOverTime(legs, "average", prices, referenceMarks(references), { blockNum: last, timestamp: minute(last) })
+  }
+  const ETH = 10n ** 18n
+  const DOLLAR = 10n ** 6n
+  const constant = (blockNum: number) => ({ blockNum, ethUsd: "200000000000", usdcUsd: "100000000" })
+
+  const unnamedEth = pointsOf(
+    [move(0, "0x1", ETH_ADDRESS, ETH), move(20, "0x2", USDC_ADDRESS, DOLLAR), move(60, "", ETH_ADDRESS, ETH, "unseen_eth"), move(120, "0x3", USDC_ADDRESS, DOLLAR)],
+    [0, 20, 60, 120].map(constant),
+    150,
+  )
+  // Each point leaves out one holding, and not the same one.
+  const differentOmissions = pointsOf(
+    [move(0, "0x1", ETH_ADDRESS, ETH), move(10, "0x2", USDC_ADDRESS, 100n * DOLLAR), move(20, "0x3", ETH_ADDRESS, ETH / 2n), move(30, "0x4", USDC_ADDRESS, DOLLAR)],
+    [constant(0), { ...constant(10), ethUsd: null }, { ...constant(20), usdcUsd: null }, constant(30)],
+    40,
+  )
+
+  it("doesn't join across ETH that arrived with no transaction, and adds no point for it, so PnL's stay as they were", () => {
+    assert.deepEqual(unnamedEth.map((p) => p.txHash), ["0x1", "0x2", "0x3", null])
+    assert.deepEqual(unnamedEth.map((p) => p.valueContinues), [false, true, false, true])
+    assert.equal(unnamedEth[2]!.valueBeforeMicros, "4001000000")
+    assert.equal(unnamedEth[1]!.valueMicros, "2001000000")
+  })
+
+  it("doesn't join points that leave out different holdings, even when it's as many of them", () => {
+    assert.deepEqual(differentOmissions.slice(1, 3).map((p) => [p.valueExcludedCount, p.valueMicros]), [[1, "100000000"], [1, "3000000000"]])
+    assert.equal(differentOmissions[2]!.valueBeforeMicros, "2000000000")
+    assert.deepEqual(differentOmissions.map((p) => p.valueContinues), [false, false, false, false, true])
+  })
+
+  it("matches the file the Swift package reads", () => {
+    assertMatchesFile("value-breaks.json", { unnamedEth, differentOmissions })
   })
 })
 

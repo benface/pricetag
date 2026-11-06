@@ -1,6 +1,6 @@
 // What a click on a number explains: a sentence for how it's worked out, and the legs behind it.
 
-import { CURRENCIES, TOKENS, TOKEN_FEEDS, foldPositions, formatAmount, formatMoney, formatPrice, formatRate, formatReturn, returnBps, orderMatters, formatSignedMoney, holdEffects, pnlOverTime, shortHash, sumTotals, tokenByAddress, unconfirmedAssets, unreadAssets, usdView, worth, type CostLabel, type CurrencyCode, type HoldComparison, type LegEffect, type Method, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { CURRENCIES, TOKENS, TOKEN_FEEDS, foldPositions, formatAmount, formatMoney, formatPaid, formatPrice, formatRate, formatReturn, returnBps, orderMatters, formatSignedMoney, holdEffects, pnlOverTime, shortHash, sumTotals, tokenByAddress, unconfirmedAssets, unreadAssets, usdView, worth, type CostLabel, type CurrencyCode, type HoldComparison, type LegEffect, type Method, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import type { WalletResponse } from "./api.ts"
 import { COST_WORDS, AVERAGE_PRICE_PAID, BALANCE_CHECK, CHECK_LABELS, HOLD_ETH, HOLD_PAST, METHOD_LABELS, NETWORK_FEES, currentPriceSource, holdCaveatSentence, holdDifferenceSentence, tokenLabel, unseenEthCause } from "./wording.ts"
 
@@ -61,7 +61,8 @@ const inUsd = (value: string | null | undefined) => (value ? `${value} USD` : nu
 
 /** What a leg was in USD and the rate that converted it, or null when it's in USD. */
 export function describeConversion(leg: PricedLeg, currency: CurrencyCode): string | null {
-  const { conversion } = leg
+  const { conversion, enteredAs } = leg
+  if (enteredAs) return `You entered ${formatPaid(enteredAs.micros, enteredAs.currency)}. The day you paid isn't known, so in ${currency} it uses the exchange rate from when this history starts, which makes it an estimate.`
   if (!conversion) return null
   const amounts = [
     conversion.priceUsdMicros !== null ? `${formatPrice(conversion.priceUsdMicros, "USD")} each` : null,
