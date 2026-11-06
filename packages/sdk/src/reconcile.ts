@@ -38,6 +38,11 @@ export type Reconciliation =
       actualQty: string
       /** Actual minus computed. Above 0: more is onchain than the legs explain. */
       differenceQty: string
+      /**
+       * How much of what the legs add up to has no transaction behind it, only a balance that rose. This part matches by
+       * construction, so a match says the balance is right, and doesn't confirm this amount.
+       */
+      unrecordedQty?: string
       /** On ETH that doesn't match: the transactions most likely behind it. */
       unseenEth?: readonly UnseenEth[]
     }
@@ -74,12 +79,14 @@ export function reconcile(asset: string, legs: readonly PricedLeg[], shortfall: 
   const difference = BigInt(actual) - computed
   // Units left that never arrived, so something is missing even if the end balance happens to match.
   const status = difference === 0n && shortfall === 0n ? "reconciled" : "incomplete"
+  const unrecorded = legs.filter((leg) => leg.parts.some((part) => part.kind === "unseen_eth")).reduce((sum, leg) => sum + BigInt(leg.delta), 0n)
   return {
     status,
     blockNum: balances.blockNum,
     computedQty: computed.toString(),
     actualQty: actual,
     differenceQty: difference.toString(),
+    ...(unrecorded > 0n ? { unrecordedQty: unrecorded.toString() } : {}),
     ...(asset === "ETH" && status === "incomplete" && unseenEth?.length ? { unseenEth } : {}),
   }
 }

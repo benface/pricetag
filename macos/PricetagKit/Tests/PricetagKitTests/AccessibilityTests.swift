@@ -20,6 +20,11 @@ struct SpokenTests {
         #expect(Spoken.number("Total PnL", nil, isPartial: true) == "Total PnL, unknown")
     }
 
+    @Test func anOtherTokenWithNothingWrongJustSaysWhichOneAndHowMuch() {
+        let token = OtherToken(token: "0x00000000000000000000000000000000000De302", kind: .token, name: nil, symbol: "PANDA", decimals: 0, balance: "9", state: .read, note: nil, tucked: nil)
+        #expect(Spoken.otherToken(token) == "PANDA, amount, 9, no price. Address 0x 0000 0000 0000 0000 0000 0000 0000 0000 000D e302.")
+    }
+
     @Test func anAddressIsReadInGroups() {
         #expect(Spoken.address("0x00000000000000000000000000000000000De302") == "0x 0000 0000 0000 0000 0000 0000 0000 0000 000D e302")
     }
@@ -99,6 +104,11 @@ struct AccessibilityTreeTests {
         #expect(!live.contains("Total PnL"))
         let old = try lines(PortfolioSummary(portfolio: portfolio, isLive: false, size: 30) { _ in }.padding())
         #expect(old.contains("Value, about $7,571.03, not updating"))
+    }
+
+    @Test func anOtherTokenSaysWhichOneItIsAndWhatsWrongWithIt() throws {
+        let token = OtherToken(token: "0x00000000000000000000000000000000000De302", kind: .token, name: "Jackfruit", symbol: "JACK", decimals: 18, balance: nil, state: .unreadable, note: "Its contract didn't answer.", tucked: "Its contract doesn't answer properly.")
+        #expect(try lines(OtherTokenRow(token: token)) == ["Jackfruit, JACK, amount, Unknown, no price. Address 0x 0000 0000 0000 0000 0000 0000 0000 0000 000D e302. Its contract doesn't answer properly. Its contract didn't answer."])
     }
 
     @Test func aHoldingSaysWhichNumberIsWhich() throws {

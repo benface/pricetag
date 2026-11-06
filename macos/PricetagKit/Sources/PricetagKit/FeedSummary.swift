@@ -35,6 +35,8 @@ public struct FeedSummary: Equatable, Sendable {
         case .ampUnavailable: (text, isWarning) = ("Prices offline", true)
         case .noAmpConfigured: (text, isWarning) = ("No prices", true)
         case .rejected: (text, isWarning) = ("Can't read", true)
+        case .tooBig: (text, isWarning) = ("Too much history", true)
+        case .rateLimited: (text, isWarning) = ("Slowed down", true)
         case .live:
             guard let portfolio else {
                 (text, isWarning) = ("Reading…", false)
@@ -43,6 +45,10 @@ public struct FeedSummary: Equatable, Sendable {
             let prefix = portfolio.mode == .demo ? "Demo " : ""
             if portfolio.isEmpty {
                 (text, isWarning) = ("\(prefix)No activity", false)
+                return
+            }
+            if portfolio.holdsOnlyOtherTokens {
+                (text, isWarning) = ("\(prefix)\(Wording.nothingPriced)", false)
                 return
             }
             switch shows {
@@ -127,6 +133,16 @@ extension FeedState {
             what = "The price service turned this request down."
             next = serverURL.isOnThisMac ? "Try again. If it keeps happening, restart the price service." : "Try again. If it keeps happening, let whoever runs the price service know."
             detail = "The price service said: \(message)"
+        case .tooBig(let message):
+            title = "Too Much History to Read"
+            what = "This is more history than the price service can hold at once, so there are no numbers to show rather than incomplete ones."
+            next = "Trying again won't change this."
+            detail = "The price service said: \(message)"
+        case .rateLimited(let message):
+            title = "Slowed Down for a Moment"
+            what = "The price service asked this app to slow down."
+            next = "Updates start again by themselves."
+            detail = "The price service said: \(message)"
         }
         let stale = portfolio.flatMap { $0.progress.started ? Wording.stale(lastUpdate: $0.latest.date.map(Format.time) ?? $0.latest.timestamp) : nil }
         return FeedProblem(title: title, message: [what, stale, Wording.moneyUnaffected, next].compactMap { $0 }.joined(separator: " "), detail: detail)
@@ -150,6 +166,8 @@ extension FeedState {
         case .ampUnavailable: "Prices unavailable for now"
         case .noAmpConfigured: "No price data set up"
         case .rejected: "Couldn't read this wallet"
+        case .tooBig: "Too much history to read"
+        case .rateLimited: "Slowed down for a moment"
         }
     }
 

@@ -158,6 +158,7 @@ import Testing
 @Test func anUnreadBalanceIsNotAnEmptyWallet() throws {
     let url = try #require(Bundle.module.url(forResource: "demo-portfolio", withExtension: "json", subdirectory: "Resources"))
     var json = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+    json["otherTokens"] = [Any]()
     json["positions"] = [Any]()
     json["unreadAssets"] = [String]()
     #expect(try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: json)).isEmpty)

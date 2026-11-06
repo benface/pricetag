@@ -268,6 +268,33 @@ private nonisolated final class SceneDefaults: UserDefaults, @unchecked Sendable
 
 enum TestScene: String, CaseIterable {
     case main
+    /// What a watch-only build asks when its server wants an invite.
+    case invitePrompt = "invite-prompt"
+    case invitePromptRefused = "invite-prompt-refused"
+    /// Someone new. With `PATINA_WATCH_ONLY=1`, what a tester gets.
+    case mainWelcome = "main-welcome"
+    case mainWelcomeSmallest = "main-welcome-smallest"
+    case mainWelcomeChecking = "main-welcome-checking"
+    case mainWelcomeInvite = "main-welcome-invite"
+    case mainWelcomeInviteRefused = "main-welcome-invite-refused"
+    case mainWelcomeServerDown = "main-welcome-server-down"
+    case mainWelcomeFirstRead = "main-welcome-first-read"
+    case mainWelcomeFirstReadStart = "main-welcome-first-read-start"
+    case mainWelcomeFirstReadSmallest = "main-welcome-first-read-smallest"
+    /// A server from before it could report how far a read has got.
+    case mainWelcomeFirstReadNoSteps = "main-welcome-first-read-no-steps"
+    case mainWelcomeFirstReadContract = "main-welcome-first-read-contract"
+    case mainWelcomeFirstReadTooSlow = "main-welcome-first-read-too-slow"
+    case mainWelcomeFirstReadDown = "main-welcome-first-read-down"
+    case mainWelcomeEmpty = "main-welcome-empty"
+    case mainWelcomeNumbers = "main-welcome-numbers"
+    /// What it says about a contract, arriving after its numbers. The first read is long gone by then.
+    case mainWelcomeNumbersContract = "main-welcome-numbers-contract"
+    /// Help > Welcome from another section, with no wallet. It has to stay open.
+    case mainWelcomeHelpFromTransactions = "main-welcome-help-from-transactions"
+    case mainWelcomeHelpFromTaxReport = "main-welcome-help-from-tax-report"
+    case resolveFirstQuestion = "resolve-first-question"
+    case welcomeAgain = "welcome-again"
     /// ⌘F on the overview, with what was typed, below the chart in a small window.
     case mainHoldingsSearch = "main-holdings-search"
     case mainHoldingsSearchSmall = "main-holdings-search-small"
@@ -639,7 +666,7 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .motionChartDraw, .motionChartRange, .motionChartMetric, .motionChartScrub, .motionSend, .motionPurchase, .chartHover, .chartGapsHover:
             .none
-        case .motionWalletUndo, .walletSwitcherNote, .walletSwitcherNewKey, .walletSwitcherAllYours, .spendingMoneySetupSheet, .taxReport, .taxReportAddedWallet, .taxReportOtherWallets, .taxReportLeftOver, .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .popoverLongName, .popoverLongNameReading, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolvePublishFromDevice, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverUpdating, .popoverServerDown, .popoverPricesDown, .popoverRetrying, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance, .menuBarLabel,
+        case .motionWalletUndo, .invitePrompt, .invitePromptRefused, .welcomeAgain, .resolveFirstQuestion, .walletSwitcherNote, .walletSwitcherNewKey, .walletSwitcherAllYours, .spendingMoneySetupSheet, .taxReport, .taxReportAddedWallet, .taxReportOtherWallets, .taxReportLeftOver, .walletSwitcher, .walletSwitcherFirstRun, .walletSwitcherRenaming, .walletSwitcherProblem, .walletSwitcherLong, .popoverLongName, .popoverLongNameReading, .holdComparison, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .resolve, .resolveCostWithheld, .resolvePublishFromDevice, .resolveAnsweredWallet, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverUpdating, .popoverServerDown, .popoverPricesDown, .popoverRetrying, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance, .menuBarLabel,
              .hotWalletAddSavings, .hotWalletAddSavingsFilled, .hotWalletAddSavingsFromDevice, .addSavingsLedgerPlugIn, .addSavingsLedgerPlugInTrouble, .addSavingsLedgerApp, .addSavingsLedgerQuit, .addSavingsLedgerQuitStillOpen, .addSavingsLedgerBrowser, .addSavingsLedgerBrowserSafari, .addSavingsLedgerBrowserNone, .addSavingsLedgerWaiting, .addSavingsLedgerPaste, .addSavingsLedgerCheckTrouble, .addSavingsKeystoneUnlock, .addSavingsKeystoneReceive, .addSavingsKeystoneReceiveTrouble, .addSavingsKeystoneScan, .addSavingsKeystoneScanDenied, .addSavingsKeystoneScanNoCamera, .addSavingsKeystoneType, .addSavingsKeystoneCheck, .addSavingsKeystoneWalked, .addSavingsOtherPaste, .addSavingsPicked, .addSavingsPickedCheck, .addSavingsCheckStartsSweeps, .addSavingsCheckBalanceUnread, .addSavingsCheckFirstWallet, .addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere, .receive, .receiveNoSavings, .receiveCAD, .receiveNotSetUp, .receiveAlarm, .buy, .buyCAD, .buyCADAboveRoom, .buyCADTooLittle, .buyNoRate, .buyAboveRoom, .buyLarge, .buyAtCap, .buyUSDCNoGas, .buyNoWallet, .buyTooLittle, .buyNegative, .buyNoSavings, .buyNoSavingsAboveRoom, .buyNoSavingsAtCap, .buyNoSavingsCAD, .buyFirstRead, .buyReading, .buyNoSavingsFirstRead, .buyNoSavingsAtCapFirstRead, .buyNotSetUp, .buyCantReachProvider, .buyRefused, .hotWalletTopUp, .hotWalletTopUpFirstRead, .hotWalletTopUpOneDollar, .hotWalletTopUpAtCap, .hotWalletTopUpNoSavings, .hotWalletTopUpNoSavingsAtCap, .hotWalletTopUpCAD, .hotWalletTopUpSafari, .hotWalletTopUpNoChromium,
              .publishFromDevice, .publishFromDeviceSafari, .publishFromDeviceNoChromium, .send, .sendCAD, .sendKnown, .sendPicking, .sendSearching, .sendPicked, .sendTypo, .sendShortened, .sendTyping, .sendWaiting, .sendReviewing, .sendGoing, .sendSent, .sendStopped, .sendMoney, .sendMoneyCAD, .sendLookalike, .sendLookalikeChecked, .sendRefused, .sweep, .sweepCAD, .sweepStopped, .revoke, .revokeOne, .siteSend, .siteSendToken, .siteLongAmount, .siteCall, .siteApprove, .siteUnlimited, .siteUnlimitedAcknowledged, .siteMessage, .siteMessageUnreadable, .siteStopped, .siteNext, .siteBehind, .siteRefocused, .siteSending, .siteSent, .siteSigning, .siteSigned, .siteFailure, .siteFailureMessage, .publishCost, .publishCAD, .publishWaiting, .ruleComparison, .ruleComparisonCAD:
             .none
@@ -653,7 +680,11 @@ enum TestScene: String, CaseIterable {
         switch self {
         case .popoverMissingPrice, .mainMissingPrice: .missingPrice
         case .popoverUnreadBalance: .unreadBalance
-        case .mainReading, .mainReadingStart, .popoverReading, .popoverLongNameReading: .neverAnswers
+        case .mainReading, .mainReadingStart, .popoverReading, .popoverLongNameReading, .mainWelcomeFirstRead, .mainWelcomeFirstReadStart, .mainWelcomeFirstReadSmallest, .mainWelcomeFirstReadNoSteps, .mainWelcomeFirstReadContract: .neverAnswers
+        case .mainWelcomeFirstReadTooSlow: .tooSlow
+        case .mainWelcomeFirstReadDown: .serverDown
+        case .mainWelcomeEmpty: .empty
+        case .mainWelcomeNumbersContract: .firstRun
         case .mainUpdating, .mainUpdatingNarrow, .mainUpdatingSmall, .mainUpdatingCAD, .mainTransactionsUpdating, .popoverUpdating: .updating
         case .mainServerDown, .mainSpendingMoneyServerDown, .popoverServerDown: .serverDown
         case .mainPricesDown, .popoverPricesDown: .pricesDown
@@ -683,16 +714,37 @@ enum TestScene: String, CaseIterable {
         }
     }
 
+    private var isAboutWelcome: Bool { rawValue.hasPrefix("main-welcome") || self == .resolveFirstQuestion }
+
+    private var rulesAnswer: FixtureSource.RulesAnswer {
+        switch self {
+        case .mainWelcomeChecking: .never
+        case .mainWelcomeInvite, .mainWelcomeInviteRefused: .needsInvite
+        case .mainWelcomeServerDown: .unreachable
+        default: .rules
+        }
+    }
+
+    private var readProgress: FirstReadProgress? {
+        switch self {
+        case .mainWelcomeFirstRead, .mainWelcomeFirstReadSmallest: FirstReadProgress(stage: .prices, transfers: 1284, isContract: false)
+        case .mainWelcomeFirstReadStart: FirstReadProgress(stage: .transfers)
+        case .mainWelcomeFirstReadContract, .mainWelcomeNumbersContract: FirstReadProgress(stage: .transfers, isContract: true)
+        case .mainWelcomeFirstReadTooSlow: FirstReadProgress(stage: .checking, transfers: 48210, isContract: false)
+        default: nil
+        }
+    }
+
     private var hasWallet: Bool {
         switch self {
-        case .mainNoWalletAfterDeleting, .mainNoWallet, .mainNoWalletSaved, .mainNoWalletSavedSmall, .mainNoWalletSmall, .mainNoWalletHasSpendingMoney, .mainNoWalletNotProvisioned, .popoverNoWallet, .routeAddWallet, .routeAddWalletOpen, .walletSwitcherFirstRun: false
+        case .mainWelcome, .mainWelcomeSmallest, .mainWelcomeChecking, .mainWelcomeInvite, .mainWelcomeInviteRefused, .mainWelcomeServerDown, .mainWelcomeHelpFromTransactions, .mainWelcomeHelpFromTaxReport, .mainNoWalletAfterDeleting, .mainNoWallet, .mainNoWalletSaved, .mainNoWalletSavedSmall, .mainNoWalletSmall, .mainNoWalletHasSpendingMoney, .mainNoWalletNotProvisioned, .popoverNoWallet, .routeAddWallet, .routeAddWalletOpen, .walletSwitcherFirstRun: false
         default: true
         }
     }
 
     private var usesDemoWallet: Bool {
         switch self {
-        case .mainEmpty, .mainEmptySmallest, .mainEmptyNotice, .popoverEmpty, .mainNotStarted, .mainNotStartedFailing, .popoverNotStarted, .mainFirstRun, .mainFirstRunSmallest, .mainFirstRunSmall, .mainFirstRunDetails, .popoverFirstRun: false
+        case .mainWelcomeFirstRead, .mainWelcomeFirstReadStart, .mainWelcomeFirstReadSmallest, .mainWelcomeFirstReadNoSteps, .mainWelcomeFirstReadContract, .mainWelcomeFirstReadTooSlow, .mainWelcomeFirstReadDown, .mainWelcomeEmpty, .mainWelcomeNumbersContract, .mainEmpty, .mainEmptySmallest, .mainEmptyNotice, .popoverEmpty, .mainNotStarted, .mainNotStartedFailing, .popoverNotStarted, .mainFirstRun, .mainFirstRunSmallest, .mainFirstRunSmall, .mainFirstRunDetails, .popoverFirstRun: false
         default: true
         }
     }
@@ -890,10 +942,11 @@ enum TestScene: String, CaseIterable {
         if isAllYours, let book = try? JSONEncoder().encode(Book().answering(TestScene.namedWallet, .mine, focus: nil)) { registered["answers"] = book }
         if self == .hotWalletPurchases || self == .hotWalletPurchaseShown || self == .hotWalletReplacedKeyShown || self == .hotWalletPurchasesCAD || self == .hotWalletPurchasesCantCheck, let saved = try? JSONEncoder().encode(self != .hotWalletPurchasesCantCheck ? TestScene.purchases(inCAD: self == .hotWalletPurchasesCAD) : Array(TestScene.purchases().suffix(3))) { registered["purchases"] = saved }
         defaults.register(defaults: registered)
+        if self == .mainWelcomeInviteRefused { defaults.register(defaults: ["serverInvites": [PortfolioStore.origin(of: PortfolioStore.defaultServerURL): "not-this-one"]]) }
         let cue = MotionCue()
-        let source: any PortfolioSource = TestMode.live.map { PricetagClient(serverURL: $0.server) } ?? FixtureSource(feed: feed, hasRate: !hasNoRate, rules: self == .settingsRules || self == .settingsSmallDisplay ? TestScene.twoRules : [])
+        let source: any PortfolioSource = TestMode.live.map { PricetagClient(serverURL: $0.server) } ?? FixtureSource(feed: feed, hasRate: !hasNoRate, rules: self == .settingsRules || self == .settingsSmallDisplay ? TestScene.twoRules : [], rulesAnswer: rulesAnswer, progress: readProgress, progressDelay: self == .mainWelcomeNumbersContract ? .seconds(1) : .zero)
         // A read that's been going a while, so these show how a long one looks. The store's clock is only behind for scenes that never finish a read.
-        let readStarted: TimeInterval = TestMode.live == nil && [.neverAnswers, .updating, .retrying, .retryingWithNumbers].contains(feed) && self != .mainReadingStart ? 72 : 0
+        let readStarted: TimeInterval = TestMode.live == nil && [.neverAnswers, .updating, .retrying, .retryingWithNumbers].contains(feed) && self != .mainReadingStart && self != .mainWelcomeFirstReadStart ? 72 : 0
         let store = PortfolioStore(defaults: defaults, makeSource: { _ in source }, now: { Date().addingTimeInterval(-readStarted) }, reachableDelay: TestMode.live == nil ? .milliseconds(50) : .seconds(30), unreachableDelay: .seconds(30))
         store.start()
         let hotWallet = hotWalletFixture.make(source: source, costMethod: { store.method }, moneyDisplay: { store.moneyDisplay }, confirmsAddingSavings: [.addSavingsFinished, .addSavingsFinishedSweeping, .addSavingsFinishedElsewhere].contains(self))
@@ -953,7 +1006,26 @@ enum TestScene: String, CaseIterable {
             case .stopsAnswering: store.feed == .serverUnreachable && store.portfolio != nil
             }
         }
+        // Someone who's never been here, and only in these scenes, so every other one looks as it would for anyone else.
+        let firstRun: FirstRun = isAboutWelcome ? FirstRun(defaults: defaults, isExistingInstall: false) : .finished
+        let appeared = Date.now
         switch self {
+        case .mainWelcomeHelpFromTransactions, .mainWelcomeHelpFromTaxReport:
+            firstRun.skip()
+            navigation.section = self == .mainWelcomeHelpFromTransactions ? .transactions : .taxReport
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { navigation.showWelcome(firstRun) }
+            // Long after Help, so a welcome that closes itself again fails this instead of being caught on its way out.
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases, firstRun: firstRun)), size: CGSize(width: 1120, height: 760), isReady: { Date.now > appeared.addingTimeInterval(1) && firstRun.isWelcoming && navigation.section == .overview })
+        case .mainWelcomeNumbersContract:
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases, firstRun: firstRun)), size: CGSize(width: 1120, height: 760), isReady: { isReady() && firstRun.warnsOfContract(store.address) })
+        case .mainWelcomeSmallest, .mainWelcomeFirstReadSmallest:
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases, firstRun: firstRun)), size: MainWindow.minimumSize, isReady: isReady)
+        case .mainWelcome, .mainWelcomeChecking, .mainWelcomeInvite, .mainWelcomeInviteRefused, .mainWelcomeServerDown, .mainWelcomeFirstRead, .mainWelcomeFirstReadStart, .mainWelcomeFirstReadNoSteps, .mainWelcomeFirstReadContract, .mainWelcomeFirstReadTooSlow, .mainWelcomeFirstReadDown, .mainWelcomeEmpty, .mainWelcomeNumbers:
+            return TestScreen(view: AnyView(MainWindow(store: store, navigation: navigation, hotWallet: hotWallet, siteBridge: SiteBridge(wallet: hotWallet), purchases: purchases, firstRun: firstRun)), size: CGSize(width: 1120, height: 760), isReady: isReady)
+        case .welcomeAgain:
+            return TestScreen(view: AnyView(WelcomeAgain()), isReady: isReady)
+        case .resolveFirstQuestion:
+            return TestScreen(view: AnyView(ResolveFlow(store: store, firstRun: firstRun)), size: CGSize(width: 520, height: 640), isReady: isReady)
         case .chartHover:
             cue.scrubbed = 6
             return TestScreen(view: AnyView(MotionChartScene(store: store, cue: cue)), isReady: isReady)
@@ -1153,6 +1225,8 @@ enum TestScene: String, CaseIterable {
             return TestScreen(view: AnyView(SpendingMoneySetup(wallet: hotWallet, store: store, onDone: {}).frame(width: 480, height: 400)), isReady: isReady)
         case .popoverLongName, .popoverLongNameReading, .popover, .popoverNoWallet, .popoverNotUpdating, .popoverNotStarted, .popoverFirstRun, .popoverCAD, .popoverHotWallet, .popoverHotWalletOverCap, .popoverHotWalletAlarm, .popoverHotWalletCAD, .popoverReading, .popoverUpdating, .popoverServerDown, .popoverPricesDown, .popoverRetrying, .popoverEmpty, .popoverHotWalletNoSavings, .popoverHotWalletKeyMissing, .popoverNotProvisioned, .popoverMissingPrice, .popoverUnreadBalance:
             return TestScreen(view: AnyView(PopoverView(store: store, hotWallet: hotWallet, navigation: navigation)), isReady: isReady)
+        case .invitePrompt, .invitePromptRefused:
+            return TestScreen(view: AnyView(InvitePrompt(store: store, decline: {}, isRefused: self == .invitePromptRefused)), isReady: isReady)
         case .menuBarLabel:
             return TestScreen(view: AnyView(MenuBarLabelScene(portfolio: { store.portfolio })), isReady: isReady)
         case .settings, .settingsRules, .settingsSmallDisplay, .settingsServer, .settingsServerProblem, .settingsCAD, .settingsAnswers, .settingsAnswersEmpty, .settingsNotificationsOff:
@@ -1515,14 +1589,35 @@ final class FixtureSource: PortfolioSource {
     private let feed: Feed
     private let hasRate: Bool
     private let pricingRules: [PricingRule]
+    enum RulesAnswer { case rules, never, needsInvite, unreachable }
+    private let rulesAnswer: RulesAnswer
+    private let progress: FirstReadProgress?
+    private let progressDelay: Duration
     private let reads = Mutex(0)
     /// For `motion-cost-known`: whether what you paid has come in yet.
     static let costIsKnown = Mutex(false)
 
-    func rules() async throws -> [PricingRule] { pricingRules }
+    func rules() async throws -> [PricingRule] {
+        switch rulesAnswer {
+        case .rules: return pricingRules
+        case .never:
+            try await Task.sleep(for: .seconds(600))
+            return pricingRules
+        case .needsInvite: throw FetchError.needsInvite("This server needs an invite.")
+        case .unreachable: throw FetchError.unreachable
+        }
+    }
 
-    init(feed: Feed, hasRate: Bool = true, rules: [PricingRule] = []) {
+    func readProgress(address: String) async throws -> FirstReadProgress? {
+        try await Task.sleep(for: progressDelay)
+        return progress
+    }
+
+    init(feed: Feed, hasRate: Bool = true, rules: [PricingRule] = [], rulesAnswer: RulesAnswer = .rules, progress: FirstReadProgress? = nil, progressDelay: Duration = .zero) {
+        self.progressDelay = progressDelay
         pricingRules = rules
+        self.rulesAnswer = rulesAnswer
+        self.progress = progress
         self.feed = feed
         self.hasRate = hasRate
     }

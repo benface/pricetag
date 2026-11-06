@@ -2,7 +2,7 @@
 // keep their own names, like `leg`, `oracle` and `fifo`: this is only what people read.
 // `Wording.swift` says the same on the Mac, and a test runs both on the same inputs.
 
-import { formatAmount, formatDuration, formatMoney, msBetweenBlocks, shortHash, worth, type CostLabel, type CurrencyCode, type FoldLeg, type HoldComparison, type Method, type PricedLeg, type PriceSource, type UnseenEth } from "@pricetag/sdk/core"
+import { formatAmount, formatDuration, formatMoney, msBetweenBlocks, shortHash, worth, type OtherToken, type CostLabel, type CurrencyCode, type FoldLeg, type HoldComparison, type Method, type PricedLeg, type PriceSource, type UnseenEth } from "@pricetag/sdk/core"
 import type { Mode } from "./api.ts"
 import type { ValueGaps } from "./attention.ts"
 import type { ReadFailure } from "./read-failure.ts"
@@ -63,12 +63,14 @@ export const ETH_NOTE = "incl. wrapped ETH"
 export const DEMO_NOTICE = "Demo data, not a real wallet."
 export const PNL_UNAVAILABLE = "PnL unavailable"
 export const UNKNOWN = "Unknown"
-export const NO_PRICE = "No price"
 export const UNAVAILABLE = "Unavailable"
 export const ABOUT_THIS_DATA = "What this covers"
 export const MARKET_ESTIMATES = "Some prices are estimates, from the market."
 export const PNL_INCOMPLETE = "PnL isn't complete"
 export const ALL_BALANCES_MATCH = "Every balance matches the chain."
+
+/** Said wherever a match is, because this part of it can't fail. */
+export const unrecordedSentence = (qty: string, decimals: number, asset: string) => `${formatAmount(qty, decimals)} ${asset} arrived with no transaction to show for it, so that part comes from the balance, and the match doesn't confirm it.`
 export const NOTHING_TO_CHART = "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't zero."
 export const UNPRICED_FEES = "Some network fees had no price at the time, and aren't in this total."
 export const READING = "Reading this wallet. The first read can take a minute."
@@ -209,11 +211,36 @@ export function leavesOutSentence({ unresolvedMicros, estimatedMicros }: { unres
 export const unreadBalancesSentence = (assets: readonly string[]) => `Couldn't read the ${assets.join(", ")} ${assets.length === 1 ? "balance" : "balances"}.`
 
 /** What isn't listed with the holdings, and why it doesn't matter to the numbers. null when there's nothing. */
-export function noMarketSentence(listed: readonly string[], unlisted: number): string | null {
-  const total = listed.length + unlisted
+export function noMarketSentence(listed: readonly string[], others: number): string | null {
+  const total = listed.length + others
   if (total === 0) return null
-  const off = unlisted > 0 ? `${listed.length > 0 ? ", plus " : ""}${unlisted} we don't track` : ""
-  return `${total} ${total === 1 ? "token" : "tokens"} with no market: ${listed.join(", ")}${off}. Often spam, and not counted in any total.`
+  const which = listed.length === 0 ? "" : `: ${listed.join(", ")}${others > 0 ? `, plus ${others} ${others === 1 ? "other" : "others"}` : ""}`
+  return `${total} ${total === 1 ? "token" : "tokens"} with no price${which}. Not counted in any total.`
+}
+
+/** The heading's line for tokens with a balance and no price. */
+export const OTHER_TOKENS_TITLE = "Other Tokens"
+export const NO_PRICE = "No price"
+export const POSSIBLE_SPAM_TITLE = "Possible Spam"
+/** The rule, for whoever wonders why something's tucked away. `tuckedReason` in the SDK is what applies it. */
+export const POSSIBLE_SPAM_RULE = "Tucked away if nothing you sent moved it, its name points to a website, it copies a token we know, or its contract doesn't answer properly. This can be wrong: some of these are real, and none of it says what one is worth."
+/** What's true of every one of them. */
+export const OTHER_TOKENS_NOTE = "These have no price, so they aren't in any total. Names are whatever the token's contract claims, so go by its address. This app never moves them."
+
+export function otherTokensLeftOutSentence(count: number): string | null {
+  return count > 0 ? `${count} more ${count === 1 ? "token" : "tokens"} moved through this wallet and weren't read. Only the most recent are.` : null
+}
+
+export function otherTokenName({ name, symbol }: Pick<OtherToken, "name" | "symbol">): string {
+  return name ?? symbol ?? "Unnamed token"
+}
+
+/** How much of it is held, never as $0 or 0 when that isn't known. */
+export function otherTokenAmount({ kind, balance, decimals, state }: Pick<OtherToken, "kind" | "balance" | "decimals" | "state">): string {
+  if (state === "reading") return "Reading…"
+  if (balance === null) return "Unknown"
+  if (kind === "collectible") return `${formatAmount(balance, 0)} ${balance === "1" ? "item" : "items"}`
+  return decimals === null ? `${formatAmount(balance, 0)} units` : formatAmount(balance, decimals)
 }
 
 /** What a total leaves out, or null when it leaves out nothing. */
@@ -258,6 +285,13 @@ export function coverageSentence(coverage: { fromBlock: number; toBlock: number 
 
 export function networkFeeUnknownSentence(count: number): string {
   return `Couldn't read the network fee of ${count} ${count === 1 ? "transaction" : "transactions"} yet, so fees paid are too low, and ETH's PnL is unavailable until they're read.`
+}
+
+/** What a Coinbase history had in it. Nothing changes when it had nothing usable, and that's worth saying. */
+export function importedSentence(found: number, skipped: number): string {
+  const withdrawals = (count: number) => (count === 1 ? "1 withdrawal" : `${count} withdrawals`)
+  if (found === 0) return skipped === 0 ? "That file has no withdrawals, so nothing changed." : `Found ${withdrawals(skipped)} with no usable cost, so nothing changed.`
+  return skipped === 0 ? `Found ${withdrawals(found)}.` : `Found ${withdrawals(found)}. ${skipped} more had no usable cost.`
 }
 
 export function linkedFailedSentence(count: number): string {
@@ -324,12 +358,14 @@ export function feedProblem(failure: ReadFailure, serverUrl: string, stale: stri
       return say("The price service has no data source, so only the demo wallet works.", onThisMachine ? "Set one up, then restart the price service." : "Whoever runs it needs to set one up.", onThisMachine ? `${SAID(failure.said)} Its data source goes in .env.local.` : SAID(failure.said))
     case "refused":
       return say("The price service turned this request down.", onThisMachine ? "Try again. If it keeps happening, restart the price service." : "Try again. If it keeps happening, let whoever runs the price service know.", SAID(failure.said))
+    case "slowedDown":
+      return say("The price service asked this app to slow down.", "Updates start again by themselves.", SAID(failure.said))
   }
 }
 
 /** A failure in a panel, which answers one question and doesn't update by itself. A refusal already says what about that question went wrong. */
 export function panelProblem(failure: ReadFailure, serverUrl: string): Problem {
-  if (failure.kind === "refused") return { message: failure.said, detail: null }
+  if (failure.kind === "refused" || failure.kind === "slowedDown") return { message: failure.said, detail: null }
   if (failure.kind === "unavailable") return { message: `The price service can't get its data right now. ${MONEY_UNAFFECTED} It usually clears up by itself, so try again in a moment.`, detail: SAID(failure.said) }
   return feedProblem(failure, serverUrl)
 }

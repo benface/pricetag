@@ -15,19 +15,31 @@ const copiedIcon = element("copied-icon")
 const receive = /** @type {HTMLButtonElement} */ (element("receive"))
 const topUp = /** @type {HTMLButtonElement} */ (element("top-up"))
 
-const port = chrome.runtime.connect({ name: "popup" })
 /** @type {Map<number, (message: any) => void>} */
 const waiting = new Map()
 let nextId = 1
+/** @type {chrome.runtime.Port | null} */
+let port = null
 
-port.onMessage.addListener((/** @type {any} */ message) => {
-  if (message.event === "last") {
-    show(message.result)
-    return
-  }
-  waiting.get(message.id)?.(message)
-  waiting.delete(message.id)
-})
+function connect() {
+  const opened = chrome.runtime.connect({ name: "popup" })
+  opened.onMessage.addListener((/** @type {any} */ message) => {
+    if (message.event === "last") {
+      show(message.result)
+      return
+    }
+    waiting.get(message.id)?.(message)
+    waiting.delete(message.id)
+  })
+  // The browser can stop the background page whenever it likes, and no answer comes after that. The next ask connects again.
+  opened.onDisconnect.addListener(() => {
+    port = null
+    const failed = [...waiting.values()]
+    waiting.clear()
+    for (const done of failed) done({ error: { message: "Can't reach Patina right now. Close this and open it again." } })
+  })
+  return opened
+}
 
 /**
  * @param {string} method
@@ -36,6 +48,7 @@ port.onMessage.addListener((/** @type {any} */ message) => {
 function ask(method, done) {
   const id = nextId++
   waiting.set(id, done)
+  port ??= connect()
   port.postMessage({ id, method })
 }
 

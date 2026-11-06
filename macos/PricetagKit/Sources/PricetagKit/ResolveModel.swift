@@ -43,8 +43,18 @@ public final class ResolveModel {
     /// Asking what they paid, because they said it's their exchange account.
     public private(set) var isAskingCost = false
     public var failure: String?
+    /// What the last import found. It's apart from `failure`, which goes with a card, because an import can answer the card it was made from.
+    public private(set) var lastImport: ExchangeImport?
     /// From the moment it's asked for until it's on its way or isn't going. It can't be called back in that time.
     public private(set) var isPublishing = false
+    /// Whether what each answer would do is waiting for the server to have room. It shows up by itself then.
+    public var previewsAreHeldBack: Bool { previewsWaiting > 0 }
+    /// The same for what the cost being typed would do.
+    public var costPreviewIsHeldBack: Bool { costPreviewsWaiting > 0 }
+    private var previewsWaiting = 0
+    private var costPreviewsWaiting = 0
+    /// When the server said it'd have room again. Nothing here asks before then, whatever gets typed or answered in the meantime.
+    private var heldUntil: ContinuousClock.Instant?
 
     public init(store: PortfolioStore, firstAsset: String? = nil, noteWriter: (any CostNoteWriter)? = nil) {
         self.store = store
@@ -85,6 +95,32 @@ public final class ResolveModel {
         }
     }
 
+    /// What these books would do, once the server has room. `waiting` counts this for as long as it's held back, and what `whileHeld`
+    /// clears would be about something else by then. nil when the question's moved on or the server can't say.
+    private func previews(of books: [Book], for question: Question, waiting: ReferenceWritableKeyPath<ResolveModel, Int>, whileHeld: () -> Void) async -> [BookPreview]? {
+        var isCounted = false
+        defer { if isCounted { self[keyPath: waiting] -= 1 } }
+        while !Task.isCancelled, question.id == current?.id {
+            if let heldUntil, heldUntil > .now {
+                if !isCounted {
+                    isCounted = true
+                    self[keyPath: waiting] += 1
+                    whileHeld()
+                }
+                try? await Task.sleep(until: heldUntil, clock: .continuous)
+                continue
+            }
+            do {
+                return try await store.previews(of: books)
+            } catch FetchError.rateLimited(_, let retryAfter) {
+                heldUntil = .now + .seconds(retryAfter)
+            } catch {
+                return nil
+            }
+        }
+        return nil
+    }
+
     /// Reads what each answer would do. A wallet that isn't read yet says so, and this asks again until it is.
     public func loadPreviews() async {
         guard let question = current, question.kind == .sender else {
@@ -93,7 +129,7 @@ public final class ResolveModel {
         }
         let options = self.options.filter { candidate($0, for: question) != nil }
         while !Task.isCancelled, question.id == current?.id {
-            guard let answers = try? await store.previews(of: options.compactMap { candidate($0, for: question) }), answers.count == options.count else { return }
+            guard let answers = await previews(of: options.compactMap { candidate($0, for: question) }, for: question, waiting: \.previewsWaiting, whileHeld: { previews = [:] }), answers.count == options.count else { return }
             guard !Task.isCancelled, question.id == current?.id else { return }
             previews = Dictionary(uniqueKeysWithValues: zip(options, answers))
             if !answers.contains(where: \.pending) { return }
@@ -143,7 +179,7 @@ public final class ResolveModel {
             costPreview = nil
             return
         }
-        guard let answer = try? await store.previews(of: [book]).first, !Task.isCancelled, question.id == current?.id else { return }
+        guard let answer = await previews(of: [book], for: question, waiting: \.costPreviewsWaiting, whileHeld: { costPreview = nil })?.first, !Task.isCancelled, question.id == current?.id else { return }
         costPreview = answer
     }
 
@@ -197,12 +233,14 @@ public final class ResolveModel {
     }
 
     public func importCoinbase(csv: String) async -> ExchangeImport? {
+        lastImport = nil
         do {
             let imported = try await store.importCoinbase(csv: csv)
-            failure = imported.skipped > 0 ? "Found \(imported.withdrawals.count) withdrawals. \(imported.skipped) had no usable cost." : nil
+            lastImport = imported
+            failure = nil
             advance()
             return imported
-        } catch FetchError.rejected(let message) {
+        } catch FetchError.rejected(let message), FetchError.rateLimited(let message, _) {
             failure = message
         } catch {
             failure = "Couldn't read that file. The price service may not be answering."
@@ -217,6 +255,7 @@ public final class ResolveModel {
     }
 
     public func undo() {
+        lastImport = nil
         store.undo()
         advance()
     }

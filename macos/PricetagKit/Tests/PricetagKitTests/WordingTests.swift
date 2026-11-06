@@ -28,6 +28,10 @@ struct WordingVectors: Decodable {
         let count: Int
         let text: String
     }
+    struct Imported: Decodable {
+        let found, skipped: Int
+        let text: String
+    }
     struct Behind: Decodable {
         let ms: Int
         let text: String
@@ -71,9 +75,11 @@ struct WordingVectors: Decodable {
     let behind: [Behind]
     let stale: String
     let unseenEth: [UnseenEthVector]
+    let unrecorded: String
     let feedDetail: [String]
     let pnlHelp: [PnlHelp]
     let linkedFailed: [FeesUnknown]
+    let imported: [Imported]
     let withheld: String
     let answerQuestions: [FeesUnknown]
     let sentences: Sentences
@@ -105,6 +111,7 @@ struct WordingVectors: Decodable {
         for vector in vectors.networkFeeUnknown { #expect(Wording.networkFeeUnknown(vector.count) == vector.text) }
         for status in [Reconciliation.Status.reconciled, .incomplete, .unchecked] { #expect(Wording.checkLabel(status) == vectors.checkLabels[status.rawValue]) }
         for vector in vectors.feesUnknown { #expect(Wording.feesUnknown(vector.count) == vector.text) }
+        for vector in vectors.imported { #expect(Wording.imported(found: vector.found, skipped: vector.skipped) == vector.text) }
         for vector in vectors.behind { #expect(Wording.behind(ms: vector.ms) == vector.text) }
         #expect(Wording.stale(lastUpdate: "Nov 4 at 5:40 AM") == vectors.stale)
         for vector in vectors.unseenEth { #expect(Wording.unseenEthCause(vector.unseen) == vector.text) }
@@ -303,6 +310,29 @@ struct HoldComparisonTests {
     @Test func aBalanceWithNoRowStaysOnScreen() throws {
         let attention = try #require(try onlyReconciledPlusUnread().attention)
         #expect(attention.details.contains("Couldn't read the USDC balance."))
+    }
+
+    /// One holding that matches, with this much of it from the balance alone.
+    private func matchingPortfolio(unrecorded: String?) throws -> Portfolio {
+        try changing { object in
+            let positions = object["positions"] as! [[String: Any]]
+            var position = positions.first { ($0["reconciliation"] as? [String: Any])?["status"] as? String == "reconciled" && $0["noMarket"] as? Bool == false }!
+            var check = position["reconciliation"] as! [String: Any]
+            position["asset"] = "ETH"
+            position["decimals"] = 18
+            check["unrecordedQty"] = unrecorded
+            position["reconciliation"] = check
+            object["positions"] = [position]
+            object["unreadAssets"] = [String]()
+        }
+    }
+
+    @Test func aMatchSaysWhatItCantConfirmLikeTheWebApp() throws {
+        let vectors = try resource("wording-vectors", as: WordingVectors.self)
+        #expect(Wording.allBalancesMatch(try matchingPortfolio(unrecorded: nil)) == "Every balance matches the chain.")
+        let portfolio = try matchingPortfolio(unrecorded: "2061830000000000")
+        #expect(Wording.allBalancesMatch(portfolio) == "Every balance matches the chain. \(vectors.unrecorded)")
+        #expect(Wording.check(portfolio.listedPositions[0]) == "Matches the actual balance exactly. \(vectors.unrecorded)")
     }
 
     @Test func onlySaysBalancesMatchWhenTheyAllDo() throws {
