@@ -683,7 +683,10 @@ describe("reading a wallet by two pricing rules", () => {
       const shared = sharedReads(query, cfg)
       const hand = { send: (_: StreamRange) => {} }
       const queued: StreamRange[] = []
+      let streaming = () => {}
+      const streamStarted = new Promise<void>((resolve) => (streaming = resolve))
       const stream: StreamRanges = async function* (_sql, _resume, signal) {
+        streaming()
         while (!signal.aborted) {
           const next = queued.shift()
           if (next) yield next
@@ -710,7 +713,7 @@ describe("reading a wallet by two pricing rules", () => {
       try {
         assert.equal(await paid(), "-1024")
         const events = (await fetch(`${base}/api/events`, { signal: t.signal })).body!.getReader()
-        await new Promise((resolve) => setTimeout(resolve, 20))
+        await streamStarted
         state = { amount: "2000", fee: 34 }
         hand.send({ start: 100, end: 200, hash: "0xnew", complete: true })
         for (let seen = ""; !seen.includes("event: head"); ) seen += new TextDecoder().decode((await events.read()).value)
@@ -860,11 +863,21 @@ describe("a dataset whose tables haven't started", () => {
 })
 
 describe("head reads that overlap", () => {
-  it("keeps the newer head when an older read finishes last", async () => {
+  it("keeps the newer head when an older read finishes last", { timeout: 10_000 }, async (t) => {
     const at = (blockNum: number) => ({ blockNum, timestamp: "2026-11-04T00:00:00.000Z" })
     let finishOlder = () => {}
     const older = new Promise<void>((resolve) => (finishOlder = resolve))
-    const heads = [() => older.then(() => at(1000)), async () => at(1010), async () => null]
+    t.after(() => finishOlder())
+    let reading = () => {}
+    const olderStarted = new Promise<void>((resolve) => (reading = resolve))
+    const heads = [
+      () => {
+        reading()
+        return older.then(() => at(1000))
+      },
+      async () => at(1010),
+      async () => null,
+    ]
     const source: Source = {
       mode: "raw",
       startBlock: null,
@@ -880,18 +893,18 @@ describe("head reads that overlap", () => {
     const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } }, null)
     const server = createServer((req, res) => void api(req, res))
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    t.after(() => {
+      server.closeAllConnections()
+      server.close()
+    })
     const read = async (wallet: string) => (await (await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/api/portfolio/0x${wallet.repeat(40)}`)).json()) as { latest: { blockNum: number } }
     const first = read("a")
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    await olderStarted
     assert.equal((await read("b")).latest.blockNum, 1010)
     finishOlder()
     await first
     assert.equal((await read("c")).latest.blockNum, 1010)
-    server.close()
   })
-
-  /** Long enough for a slow machine. A test that gets stuck fails instead of keeping the whole run from ending. */
-  const REORG_TEST = { timeout: 10_000 }
 
   /** An API following a chain the test controls, with one head read it can hold, and every head a request went on to use. Closes when the test ends, however it ends. */
   async function reorging(t: TestContext, shared?: SharedReads) {
@@ -999,7 +1012,7 @@ describe("head reads that overlap", () => {
     ["an approvals read", `/api/approvals/0x${"a".repeat(40)}`],
     ["an exchange rate read", "/api/rate?currency=EUR"],
   ] as const) {
-    it(`throws away the old chain's head when ${name} spans a reorg`, REORG_TEST, async (t) => {
+    it(`throws away the old chain's head when ${name} spans a reorg`, { timeout: 10_000 }, async (t) => {
       const chain = await reorging(t)
       assert.equal((await fetch(chain.base + path)).status, 200)
       assert.equal(chain.used.at(-1), 110)
@@ -1019,7 +1032,7 @@ describe("head reads that overlap", () => {
     })
   }
 
-  it("throws away the old chain's head when it lands while a reorg is still being applied", REORG_TEST, async (t) => {
+  it("throws away the old chain's head when it lands while a reorg is still being applied", { timeout: 10_000 }, async (t) => {
     let applied = () => {}
     const applying = new Promise<void>((resolve) => (applied = resolve))
     t.after(() => applied())
