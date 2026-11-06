@@ -10,6 +10,7 @@
     "build": "vite build",
     "start": "node --env-file-if-exists=.env.local server/index.ts",
     "invite": "node scripts/invite.ts",
+    "load:hosted": "node scripts/load-hosted.ts",
     "test": "node --test 'test/**/*.test.ts'",
     "typecheck": "tsc --noEmit",
     "check": "tsc --noEmit && node --test 'test/**/*.test.ts' && vite build",

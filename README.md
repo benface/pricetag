@@ -150,15 +150,29 @@ Deploy with `POST /controller/materialized-datasets/benface/pricetag_cautious/ve
 
 The Mac app reads from a server because the server holds what the app can't ship: the Amp token and the Coinbase key. Locally that's `pnpm mac`'s. A shared one is the same server with `PRICETAG_HOSTED=1`, which turns on everything it needs at once:
 
-- **Invites.** Every `/api/` request needs `Authorization: Bearer <invite>`. `pnpm invite <name>` makes one and prints the line for `PRICETAG_INVITES`, which holds only its SHA-256. Remove that line to take it back. It won't start without one.
-- **Limits.** Per invite: requests a minute, live streams at once, and Coinbase checkouts an hour. And checkouts a day for everyone together, so one invite can't use up the account. Past one, it answers 429 with `Retry-After`. One request can name at most 20 other wallets, counting its linked wallets, its answers and every preview, and it's refused before anything is read.
+- **Invites.** Every `/api/` request needs `Authorization: Bearer <invite>`. `pnpm invite <name>` makes one and prints the line for `PRICETAG_INVITES`, which holds only its SHA-256. Remove that line to take it back. It won't start without one, and neither will any server with a `HOST` other machines can reach.
+- **Limits.** Per invite: requests a minute, live streams at once, and Coinbase checkouts an hour. And checkouts a day for everyone together, so one invite can't use up the account. Past one, it answers 429 with `Retry-After`, and the apps wait that long, say so and carry on by themselves. A checkout only counts once it's valid and about to reach Coinbase. An ordinary session is one read a block, so about 30 requests a minute at most. One request can name at most 20 other wallets, counting its linked wallets, its answers and every preview, and it's refused before anything is read.
+- **Client address.** It won't start without `PRICETAG_CLIENT_IP_HEADER`, because Coinbase would otherwise be told the host's proxy's address.
+- **Amp queries take turns.** Each invite's run one at a time, `PRICETAG_AMP_LANES` of them at once, 3 by default, and the head's don't wait for them. So someone's very busy wallet only slows them down. A local server runs 3 queries at once, whoever they're for. `pnpm load:hosted` shows how this holds up with several Macs and one very busy wallet, with Amp replaced by recorded timings.
 - **Logs** are one JSON object a line, with addresses and transaction hashes (as `0x…`, as SQL's `X'…'`, or as any long run of hex), URLs, bearer tokens and the env's secrets taken out. It replaces `console` itself, so the SDK's lines go through it too. It logs no requests.
 - **`GET /healthz`** answers without an invite, with whether Amp and buying are set up and nothing else. It says 503 once a shutdown starts.
 - **SIGTERM** stops taking requests, ends the live streams so clients reconnect, and waits up to `PRICETAG_DRAIN_MS` for the rest.
 - **The client's address** goes to Coinbase only from the header in `PRICETAG_CLIENT_IP_HEADER`, which has to be one the host overwrites, like `fly-client-ip`. Without one it's the socket's. `x-forwarded-for` and the like stop the server from starting, because a client can write them. A private address, or a list, sends nothing, which beats a wrong address.
 - **API only.** It doesn't serve the web app, so Top Up and Publish from a device still need one on the Mac. `PRICETAG_SERVE_APP=1` serves it anyway.
 
-`Dockerfile` builds it, and `fly.toml` runs it on Fly.io, on **one machine**: the wallet reads, the limits and the day's checkouts are counted in its memory, so a second one would split them. Fly starts two on a first deploy unless told otherwise, so deploy with `fly deploy --ha=false`, then check that `fly machine list` shows one. The app reads it when its build names it: `PATINA_SERVER_HOST` in `macos/Config/App.xcconfig`, which is empty, so builds read the Mac's own server. Its invite goes in Settings. It's saved for that server alone, so it never goes to another one, and it's only sent over HTTPS. See `.env.example` for the rest.
+`Dockerfile` builds it, and `fly.toml` runs it on Fly.io, on **one machine**: the wallet reads, the limits and the day's checkouts are counted in its memory, so a second one would split them. Fly starts two on a first deploy unless told otherwise, so deploy with `fly deploy --ha=false`, then check that `fly machine list` shows one. It's live at `patina-server.fly.dev`, with the secrets in `fly secrets`. The app reads it when its build names it: `PATINA_SERVER_HOST` in `macos/Config/App.xcconfig`, which is empty, so `pnpm mac` reads the Mac's own server. The tester build sets it to `PATINA_HOSTED_SERVER_HOST`, next to it. Its invite goes in Settings. It's saved for that server alone, so it never goes to another one, and it's only sent over HTTPS. See `.env.example` for the rest.
+
+The invites live in `~/.config/pricetag/invites.txt`, mode 600, outside any repo, one a line: the name, the invite, and its `name:sha256`. The host only has the hashes, and `fly secrets` can't be read back, so that file is the list:
+
+- **To add one,** run `pnpm invite <name>`, add its line to the file, and push the list.
+- **To revoke one,** delete its line, and push the list.
+- **To push the list,** which replaces the whole of it, so it never drops the others:
+
+  ```sh
+  printf 'PRICETAG_INVITES=%s\n' "$(awk '!/^#/ && NF {print $3}' ~/.config/pricetag/invites.txt | paste -sd, -)" | fly secrets import -a patina-server
+  ```
+
+That restarts the machine, so wallet reads start over, the limits reset and the apps reconnect. Nothing else is lost, because it keeps nothing else. The dataset settings are secrets too, so when `.env.local` moves to a new version, set the same ones with `fly secrets import`, and only after that version reaches head. Code changes reach it with `fly deploy --ha=false`.
 
 ## How it's put together
 
