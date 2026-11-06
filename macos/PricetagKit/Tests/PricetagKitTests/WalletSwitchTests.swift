@@ -211,7 +211,11 @@ final class TestClock: @unchecked Sendable {
         await answer(store, source, walletA, with: average)
         store.setCurrency(.CAD)
         #expect(store.portfolio == average)
-        let cad = try numbers(walletA, currency: .CAD)
+        // The server's own CAD numbers, whose amounts differ from the USD ones under the same "$".
+        var cadObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(resource("demo-portfolio-cad", as: Portfolio.self))) as! [String: Any]
+        cadObject["address"] = walletA
+        cadObject["latest"] = (try JSONSerialization.jsonObject(with: JSONEncoder().encode(numbers(walletA))) as! [String: Any])["latest"]
+        let cad = try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: cadObject))
         await answer(store, source, walletA, with: cad)
         store.setCurrency(.USD)
         #expect(store.portfolio == average)
@@ -411,5 +415,52 @@ final class TestClock: @unchecked Sendable {
         _ = makeStore(HeldSource(), wallet: nil, directory: directory)
         try await waitForFile(in: directory)
         #expect(FileManager.default.fileExists(atPath: recent.path))
+    }
+
+    /// The transactions list rebuilds whenever this changes, so it has to change with every new portfolio, read fresh or not.
+    @Test func everyNewPortfolioHasItsOwnRevisionEvenWhenNoFreshReadArrives() async throws {
+        let source = HeldSource()
+        let store = makeStore(source, wallet: walletA)
+        store.start()
+        await answer(store, source, walletA, with: try numbers(walletA))
+        let read = store.updatedAt
+        let usd = store.portfolioRevision
+
+        // The server's last read in the new currency, at the same block and with the same transactions, then a fresh read that fails.
+        // The server's own CAD numbers, whose amounts differ from the USD ones under the same "$".
+        var cadObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(resource("demo-portfolio-cad", as: Portfolio.self))) as! [String: Any]
+        cadObject["address"] = walletA
+        cadObject["latest"] = (try JSONSerialization.jsonObject(with: JSONEncoder().encode(numbers(walletA))) as! [String: Any])["latest"]
+        let cad = try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: cadObject))
+        await source.setLastRead(cad, for: walletA)
+        store.setCurrency(.CAD)
+        await until(store.portfolio?.currency == .CAD)
+        #expect(store.portfolioRevision != usd)
+        #expect(store.updatedAt == read, "nothing was read fresh, so this can't tell the lists apart")
+        #expect(store.portfolio?.points.map(\.id) == (try numbers(walletA)).points.map(\.id))
+        let cadRevision = store.portfolioRevision
+        await fail(store, source, walletA)
+        #expect(store.portfolio == cad)
+        #expect(store.portfolioRevision == cadRevision, "a failure leaves the CAD numbers, so the list built from them stands")
+        let log = TransactionLog(points: cad.points, currency: cad.currency)
+        #expect(log.currency == .CAD)
+        // The amounts are CAD's, which aren't USD's, even though both say "$".
+        let receipt = try #require(log.items.last?.amount?.micros)
+        #expect(receipt != (try numbers(walletA)).points.first?.amount?.micros)
+        #expect(log.items.last?.amountText(log.currency) == "+\(Format.money(receipt, .CAD))")
+
+        // Same currency, same block and transactions, but an answer changed what something cost.
+        var changed = try JSONSerialization.jsonObject(with: JSONEncoder().encode(cad)) as! [String: Any]
+        var points = changed["points"] as! [[String: Any]]
+        let sale = try #require(points.firstIndex { $0["summary"] as? String == "Sold 0.5 ETH for 1,300 USDC" })
+        points[sale]["gain"] = ["micros": "1000000", "estimated": false]
+        changed["points"] = points
+        let answered = try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: changed))
+        await source.setLastRead(answered, for: walletA)
+        store.setBook(store.book.answering(walletB, .someoneElse, focus: nil))
+        await until(store.portfolio == answered)
+        #expect(store.portfolioRevision != cadRevision)
+        #expect(store.updatedAt == read)
+        await source.finish()
     }
 }

@@ -1,0 +1,105 @@
+{
+  "unnamedEth": [
+    {
+      "blockNum": 0,
+      "timestamp": "2026-11-04T00:00:00.000Z",
+      "txHash": "0x1",
+      "pnlMicros": null,
+      "excludedCount": 1,
+      "valueMicros": "2000000000",
+      "valueBeforeMicros": "0",
+      "valueExcludedCount": 0,
+      "valueContinues": false
+    },
+    {
+      "blockNum": 20,
+      "timestamp": "2026-11-04T00:20:00.000Z",
+      "txHash": "0x2",
+      "pnlMicros": null,
+      "excludedCount": 2,
+      "valueMicros": "2001000000",
+      "valueBeforeMicros": "2000000000",
+      "valueExcludedCount": 0,
+      "valueContinues": true
+    },
+    {
+      "blockNum": 120,
+      "timestamp": "2026-11-04T02:00:00.000Z",
+      "txHash": "0x3",
+      "pnlMicros": null,
+      "excludedCount": 2,
+      "valueMicros": "4002000000",
+      "valueBeforeMicros": "4001000000",
+      "valueExcludedCount": 0,
+      "valueContinues": false
+    },
+    {
+      "blockNum": 150,
+      "timestamp": "2026-11-04T02:30:00.000Z",
+      "txHash": null,
+      "pnlMicros": null,
+      "excludedCount": 2,
+      "valueMicros": "4002000000",
+      "valueBeforeMicros": "4002000000",
+      "valueExcludedCount": 0,
+      "valueContinues": true
+    }
+  ],
+  "differentOmissions": [
+    {
+      "blockNum": 0,
+      "timestamp": "2026-11-04T00:00:00.000Z",
+      "txHash": "0x1",
+      "pnlMicros": null,
+      "excludedCount": 1,
+      "valueMicros": "2000000000",
+      "valueBeforeMicros": "0",
+      "valueExcludedCount": 0,
+      "valueContinues": false
+    },
+    {
+      "blockNum": 10,
+      "timestamp": "2026-11-04T00:10:00.000Z",
+      "txHash": "0x2",
+      "pnlMicros": null,
+      "excludedCount": 2,
+      "valueMicros": "100000000",
+      "valueBeforeMicros": null,
+      "valueExcludedCount": 1,
+      "valueContinues": false
+    },
+    {
+      "blockNum": 20,
+      "timestamp": "2026-11-04T00:20:00.000Z",
+      "txHash": "0x3",
+      "pnlMicros": null,
+      "excludedCount": 2,
+      "valueMicros": "3000000000",
+      "valueBeforeMicros": "2000000000",
+      "valueExcludedCount": 1,
+      "valueContinues": false
+    },
+    {
+      "blockNum": 30,
+      "timestamp": "2026-11-04T00:30:00.000Z",
+      "txHash": "0x4",
+      "pnlMicros": null,
+      "excludedCount": 2,
+      "valueMicros": "3101000000",
+      "valueBeforeMicros": "3100000000",
+      "valueExcludedCount": 0,
+      "valueContinues": false
+    },
+    {
+      "blockNum": 40,
+      "timestamp": "2026-11-04T00:40:00.000Z",
+      "txHash": null,
+      "pnlMicros": null,
+      "excludedCount": 2,
+      "valueMicros": "3101000000",
+      "valueBeforeMicros": "3101000000",
+      "valueExcludedCount": 0,
+      "valueContinues": true
+    }
+  ]
+}

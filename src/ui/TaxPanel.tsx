@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { formatSignedMoney, shortHash, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import type { TaxReportResponse } from "../core/api.ts"
 import type { Book } from "../core/book.ts"
-import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, readOtherWallets, type TaxCountryCode, type TaxScope, type TaxYear } from "../core/tax.ts"
+import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, readOtherWallets, savedOtherWallets, type TaxCountryCode, type TaxScope, type TaxYear } from "../core/tax.ts"
 import { METHOD_LABELS, METHOD_NAME } from "../core/wording.ts"
 
 const COUNTRY_KEY = "pricetag.taxCountry"
@@ -30,6 +30,13 @@ const readScope = (): TaxScope | null => {
 function remember(key: string, value: string | null) {
   if (value === null) localStorage.removeItem(key)
   else localStorage.setItem(key, value)
+}
+
+/** Also clears anything else an earlier version saved here. */
+function readOthers(): string {
+  const saved = savedOtherWallets(localStorage.getItem(OTHERS_KEY) ?? "")
+  remember(OTHERS_KEY, saved || null)
+  return saved
 }
 
 /** A post, because answers don't belong in a URL, where they'd end up in logs. */
@@ -66,16 +73,18 @@ function unknownSentence({ unknownCount: count, soldCount, feeCount, sentCount }
   return `${n(count)} of these ${n(total)} ${count === 1 ? "has" : "have"} an unknown gain, in whole or in part. What's unknown is left out of the total.`
 }
 
-export function TaxPanel({ address, currency, book, year, onYear, overviewMethod, questionCount, onResolve, onClose }: {
+export function TaxPanel({ address, alongside, currency, book, year, onYear, overviewMethod, questionsIn, onResolve, onClose }: {
   address: string
+  /** Wallets the report always covers with this one, on top of any listed here. */
+  alongside: readonly string[]
   currency: CurrencyCode
   book: Book
   /** Held by the page, so it stays the same while the report closes to answer another wallet's questions. */
   year: TaxYear
   onYear: (year: TaxYear) => void
   overviewMethod: Method
-  /** The questions about the wallet showing. */
-  questionCount: number
+  /** How many questions each wallet showing has. A wallet that isn't here could have some, which opening it finds out. */
+  questionsIn: ReadonlyMap<string, number>
   /** Opens a wallet's questions, which can be one added here rather than the one showing. */
   onResolve: (wallet: string) => void
   onClose: () => void
@@ -87,7 +96,7 @@ export function TaxPanel({ address, currency, book, year, onYear, overviewMethod
   const [chosenMethod, setChosenMethod] = useState<Method | null>(readMethod)
   const [chosenScope, setChosenScope] = useState<TaxScope | null>(readScope)
   const [years, setYears] = useState<number[]>([])
-  const [othersText, setOthersText] = useState(() => localStorage.getItem(OTHERS_KEY) ?? "")
+  const [othersText, setOthersText] = useState(readOthers)
   const [report, setReport] = useState<TaxReportResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -116,7 +125,7 @@ export function TaxPanel({ address, currency, book, year, onYear, overviewMethod
     const controller = new AbortController()
     setLoading(true)
     setError(null)
-    fetchReport(address, { country, method, scope, year, currency, also: others, book }, controller.signal)
+    fetchReport(address, { country, method, scope, year, currency, also: [...new Set([...others, ...alongside])].filter((other) => other !== address.toLowerCase()), book }, controller.signal)
       .then((next) => {
         setYears(next.years)
         setReport(next)
@@ -130,7 +139,7 @@ export function TaxPanel({ address, currency, book, year, onYear, overviewMethod
         setLoading(false)
       })
     return () => controller.abort()
-  }, [address, country, method, scope, year, currency, others, badOther, book])
+  }, [address, alongside, country, method, scope, year, currency, others, badOther, book])
 
   const chooseMethod = (next: Method | null) => {
     remember(METHOD_KEY, next)
@@ -240,7 +249,7 @@ export function TaxPanel({ address, currency, book, year, onYear, overviewMethod
               placeholder="0x…"
               value={othersText}
               onChange={(e) => {
-                localStorage.setItem(OTHERS_KEY, e.target.value)
+                remember(OTHERS_KEY, savedOtherWallets(e.target.value) || null)
                 setOthersText(e.target.value)
               }}
             />
@@ -275,17 +284,15 @@ export function TaxPanel({ address, currency, book, year, onYear, overviewMethod
             {report.unresolvedCount > 0 ? (
               <p className="notice warn tax-unknown">
                 <span>⚠ {unknownSentence(report)}</span>
-                {report.unknownWallets.map((wallet) =>
-                  wallet !== address.toLowerCase() ? (
+                {report.unknownWallets.map((wallet) => {
+                  const count = questionsIn.get(wallet)
+                  if (count === 0) return null
+                  return (
                     <button key={wallet} type="button" className="resolve-button" onClick={() => onResolve(wallet)}>
-                      Answer for {shortHash(wallet)}
+                      {count === undefined || alongside.length > 0 ? `Answer for ${shortHash(wallet)}` : `Resolve ${count}`}
                     </button>
-                  ) : questionCount > 0 ? (
-                    <button key={wallet} type="button" className="resolve-button" onClick={() => onResolve(wallet)}>
-                      Resolve {questionCount}
-                    </button>
-                  ) : null,
-                )}
+                  )
+                })}
               </p>
             ) : null}
             {report.warnings.map((warning) => (

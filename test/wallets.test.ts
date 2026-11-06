@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { portfolioOf } from "../server/portfolio.ts"
+import { portfolioOf } from "../src/core/portfolio.ts"
 import { USD_CONTEXT, explainMetric } from "../src/core/explain.ts"
 import { createWallets, sharedMarket, type ReadL1Fees, type Source, type WindowRows } from "@pricetag/sdk/internal"
 import { ASSETS, ETH_ADDRESS, LAST_2S_BLOCK, USDC_ADDRESS, foldWallet, msBetweenBlocks, pnlOverTime, shortHash, usdView, type FeedRound, type LegRow, type Reference } from "@pricetag/sdk/core"

@@ -131,6 +131,52 @@ private final class AnswerClock: @unchecked Sendable {
         #expect(store.book.withdrawals.isEmpty)
     }
 
+    private func purchase(_ order: String) -> Purchase {
+        Purchase(provider: "coinbase", order: order, wallet: wallet, asset: "ETH", units: "1", txHash: "0x\(order)", blockNum: 1, cost: Money(micros: "5000000", currency: .USD), costUsdMicros: "5000000")
+    }
+
+    @Test func aPurchaseAloneIsNothingToForget() throws {
+        let (store, _) = try makeStore()
+        store.recordPurchase(purchase("1"))
+        #expect(store.answerEntries.isEmpty)
+        #expect(!store.hasAnswers)
+    }
+
+    @Test func forgettingAnswersKeepsPurchasesThroughUndoAndRelaunch() async throws {
+        let (store, defaults) = try makeStore()
+        store.recordPurchase(purchase("1"))
+        store.setBook(store.book.answering(sender, .someoneElse, focus: nil).enteringCost(costKey, Money(micros: "5000000", currency: .USD)))
+        _ = try await store.importCoinbase(csv: "")
+        #expect(store.hasAnswers)
+
+        store.setBook(Book(), action: "Forget All Answers")
+        #expect(store.answerEntries.isEmpty)
+        #expect(!store.hasAnswers)
+        #expect(store.book == Book(purchases: [purchase("1")]))
+        let source = BookSource([try demoPortfolio()])
+        let reopened = PortfolioStore(defaults: defaults, makeSource: { _ in source })
+        #expect(reopened.book == Book(purchases: [purchase("1")]), "an order that's finished isn't read again, so nothing would bring it back")
+        await _ = reopened.poll()
+        #expect(await source.books.last?.purchases == [purchase("1")], "so its cost and what it made are the same as before")
+
+        // One that arrives while the answers are gone is still there when they come back, and when they go again.
+        store.recordPurchase(purchase("2"))
+        store.undo()
+        #expect(store.book.senders[sender] == .someoneElse)
+        #expect(store.book.purchases == [purchase("1"), purchase("2")])
+        store.redo()
+        #expect(store.book == Book(purchases: [purchase("1"), purchase("2")]))
+    }
+
+    @Test func aBookFromBeforeAPurchaseDoesntLoseIt() throws {
+        let (store, _) = try makeStore()
+        let earlier = store.book.answering(sender, .someoneElse, focus: nil)
+        store.recordPurchase(purchase("1"))
+        store.setBook(earlier)
+        #expect(store.book.senders[sender] == .someoneElse)
+        #expect(store.book.purchases == [purchase("1")])
+    }
+
     @Test func answeringAQuestionSaysWhatItWasAbout() async throws {
         let (store, _) = try makeStore()
         await _ = store.poll()
