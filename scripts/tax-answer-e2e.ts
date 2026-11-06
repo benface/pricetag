@@ -1,4 +1,5 @@
 // `pnpm check:tax-answer`: a tax report's buttons open the questions of the wallet they name, and Done comes back to the report.
+// Then the hardware wallet's panel over a question: loading, failing or open, it can be reached, and keys pressed there leave the question alone.
 // Drives the real build and the real API in a headless Chromium, with wallets made up here, so nothing opens on screen and no data
 // source is needed. Set `CHROMIUM=…`, or it uses Playwright's.
 import { spawn, type ChildProcess } from "node:child_process"
@@ -22,13 +23,15 @@ const FROM_FIRST = "0xdddddddddddddddddddddddddddddddddddddddd"
 const FROM_SECOND = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 const FROM_ADDED = "0xffffffffffffffffffffffffffffffffffffffff"
 const SHOP = "0x1111111111111111111111111111111111111111"
+const CHECKED = "0x2222222222222222222222222222222222222222"
+const FROM_CHECKED = "0x3333333333333333333333333333333333333333"
 const ONE = 10n ** 18n
 
 /** Each gets a different amount from its own sender, so the card says whose question it is, and answering one leaves the others. */
 const moved = (block: number, side: LegRow["side"], account: string, amount: bigint, tx: string, counterparty: string): LegRow => ({ block_num: block, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: tx, tx_index: 0, log_index: 0, token: ETH_ADDRESS, account, side, amount: amount.toString(), counterparty, kind: "eth" })
 /** Gets some, then sends a little of it on, which is what puts an unknown gain in the report. */
 const history = (account: string, amount: bigint, from: string, n: number) => [moved(10, "credit", account, amount, `0x${n}1`, from), moved(11, "debit", account, ONE / 10n, `0x${n}2`, SHOP)]
-const rows: Record<string, LegRow[]> = { [FIRST]: history(FIRST, ONE, FROM_FIRST, 1), [SECOND]: history(SECOND, 2n * ONE, FROM_SECOND, 2), [ADDED]: history(ADDED, 3n * ONE, FROM_ADDED, 3) }
+const rows: Record<string, LegRow[]> = { [FIRST]: history(FIRST, ONE, FROM_FIRST, 1), [SECOND]: history(SECOND, 2n * ONE, FROM_SECOND, 2), [ADDED]: history(ADDED, 3n * ONE, FROM_ADDED, 3), [CHECKED]: [moved(10, "credit", CHECKED, 4n * ONE, `0x${"4".repeat(64)}`, FROM_CHECKED)] }
 
 const source: Source = {
   mode: "raw",
@@ -95,8 +98,10 @@ await new Promise((resolve, reject) => {
 })
 const waiting = new Map<number, (message: any) => void>()
 const pageErrors: string[] = []
+let heldChunk: string | null = null
 socket.addEventListener("message", (event) => {
   const message = JSON.parse(String(event.data))
+  if (message.method === "Fetch.requestPaused") heldChunk = message.params.requestId
   if (message.method === "Runtime.exceptionThrown") pageErrors.push(message.params.exceptionDetails.exception?.description ?? message.params.exceptionDetails.text)
   waiting.get(message.id)?.(message)
   waiting.delete(message.id)
@@ -193,5 +198,118 @@ await checkCameBack(ADDED)
 check("with nothing left to ask, there's no button", await until(`${TAX}?.innerText.includes("Download CSV") && !${TAX}.querySelector("button.resolve-button")`, "the button goes"))
 
 check("no page errors", pageErrors.length === 0, pageErrors)
+
+// The hardware wallet's panel, opened from the question that publishes a cost. Each of these starts from a fresh page, because a failed chunk stays failed.
+const KEYS = {
+  ArrowDown: { code: "ArrowDown", windowsVirtualKeyCode: 40 },
+  ArrowLeft: { code: "ArrowLeft", windowsVirtualKeyCode: 37 },
+  ArrowRight: { code: "ArrowRight", windowsVirtualKeyCode: 39 },
+  "1": { code: "Digit1", windowsVirtualKeyCode: 49 },
+  z: { code: "KeyZ", windowsVirtualKeyCode: 90 },
+  Enter: { code: "Enter", windowsVirtualKeyCode: 13, text: "\r" },
+  Escape: { code: "Escape", windowsVirtualKeyCode: 27 },
+} as const
+async function press(key: keyof typeof KEYS, modifiers = 0) {
+  const { text, ...rest } = KEYS[key] as { code: string; windowsVirtualKeyCode: number; text?: string }
+  await send("Input.dispatchKeyEvent", { type: text ? "keyDown" : "rawKeyDown", key, modifiers, text, ...rest })
+  await send("Input.dispatchKeyEvent", { type: "keyUp", key, modifiers, ...rest })
+}
+const PANEL = `document.querySelector("dialog.panel")`
+const COST_ASKED = `${QUESTIONS}?.querySelector(".cost-form")`
+const PUBLISH = `[...${QUESTIONS}.querySelectorAll("button")].find((b) => b.innerText.includes("Publish from your device"))`
+/** A real name in what assistive tech gets, which what's behind a modal doesn't have. */
+async function reachable(name: string): Promise<boolean> {
+  const tree = await send("Accessibility.getFullAXTree")
+  const named = (tree.result?.nodes ?? []).some((node: any) => node.role?.value === "button" && !node.ignored && String(node.name?.value ?? "").startsWith(name))
+  const focuses = await evaluate(`(() => { const button = [...${PANEL}.querySelectorAll("button")].find((b) => b.innerText.trim().startsWith(${JSON.stringify(name)})); button?.focus(); return !!button && document.activeElement === button })()`)
+  return named && focuses
+}
+async function openQuestion() {
+  await send("Page.navigate", { url: `${origin}/` })
+  await until(`document.readyState === "complete"`, "the page loads")
+  await evaluate(`localStorage.clear(); localStorage.setItem("patina.deviceAccounts", ${JSON.stringify(JSON.stringify([{ address: CHECKED, path: "m/44'/60'/0'/0/0", deviceName: "Test", kind: "ledger" }]))})`)
+  await send("Page.navigate", { url: `${origin}/?address=${CHECKED}` })
+  await until(`[...document.querySelectorAll("button")].some((b) => b.innerText.includes("Answer"))`, "the question's offered")
+  await evaluate(`[...document.querySelectorAll("button")].find((b) => b.innerText.includes("Answer")).click()`)
+  await until(QUESTIONS, "the question opens")
+  await click(QUESTIONS, "My exchange")
+  await until(COST_ASKED, "the cost is asked")
+  await until(PUBLISH, "publishing is offered")
+}
+/** A real key on the real button, so focus has somewhere to come back to. */
+async function openPanel() {
+  await evaluate(`${PUBLISH}.focus()`)
+  await press("Enter")
+  await until(PANEL, "the panel opens")
+}
+/** Every key the question listens for, and it's still asking the same thing, with nothing skipped or undone. */
+async function checkKeysStayHere(where: string) {
+  const before = await text(QUESTIONS)
+  for (const key of ["ArrowDown", "ArrowLeft", "ArrowRight", "1"] as const) await press(key)
+  await press("z", 4)
+  await press("z", 2)
+  await sleep(300)
+  check(`keys pressed in the ${where} leave the question`, (await text(QUESTIONS)) === before && !!(await evaluate(`!!${COST_ASKED}`)), await text(QUESTIONS))
+}
+
+await send("Accessibility.enable")
+await send("Emulation.setFocusEmulationEnabled", { enabled: true })
+await send("Fetch.enable", { patterns: [{ urlPattern: "*DevicePanel*", requestStage: "Request" }] })
+async function chunkAsked(): Promise<string> {
+  for (let tries = 0; tries < 100 && !heldChunk; tries++) await sleep(50)
+  if (!heldChunk) throw new Error("The panel's chunk was never asked for.")
+  const held = heldChunk
+  heldChunk = null
+  return held
+}
+
+// While it loads, and then when it can't.
+await openQuestion()
+await openPanel()
+const held = await chunkAsked()
+check("loading says so in a dialog over the question", (await text(PANEL)).includes("Loading"), await text(PANEL))
+check("  and Close can be reached from there", await reachable("Close"))
+await checkKeysStayHere("loading panel")
+await send("Fetch.failRequest", { requestId: held, errorReason: "Failed" })
+await until(`${PANEL}?.innerText.includes("didn't load")`, "the failure shows")
+check("a chunk that fails says so over the question", (await text(PANEL)).includes("Reload"), await text(PANEL))
+check("  Reload can be reached from there", await reachable("Reload"))
+check("  Close can too", await reachable("Close"))
+await checkKeysStayHere("failed panel")
+// A click on a panel's text leaves focus nowhere, which is still the panel's.
+await evaluate(`document.activeElement.blur()`)
+await checkKeysStayHere("failed panel with nothing focused")
+await press("Escape")
+await until(`!${PANEL}`, "Escape closes it")
+check("closing it comes back to the question, on its button", await evaluate(`document.activeElement === ${PUBLISH} && !!${COST_ASKED}`), await evaluate(`document.activeElement?.outerHTML.slice(0, 120)`))
+
+// From the header, with no question underneath.
+await send("Page.navigate", { url: `${origin}/?address=${CHECKED}` })
+await until(`[...document.querySelectorAll("button")].some((b) => b.innerText === "Hardware wallet")`, "the page shows")
+await evaluate(`[...document.querySelectorAll("button")].find((b) => b.innerText === "Hardware wallet").focus()`)
+await press("Enter")
+await until(PANEL, "the panel opens")
+await send("Fetch.failRequest", { requestId: await chunkAsked(), errorReason: "Failed" })
+await until(`${PANEL}?.innerText.includes("didn't load")`, "the failure shows")
+check("from the header, Reload can be reached", await reachable("Reload"))
+await click(PANEL, "Close")
+await until(`!${PANEL}`, "Close closes it")
+check("  and closing it comes back to the header's button", await evaluate(`document.activeElement?.innerText === "Hardware wallet"`), await evaluate(`document.activeElement?.outerHTML.slice(0, 120)`))
+
+// Once it's loaded, as the review found it, and the question's keys work again after.
+await openQuestion()
+await openPanel()
+await send("Fetch.continueRequest", { requestId: await chunkAsked() })
+await until(`${PANEL}?.innerText.includes("Publish this cost")`, "the panel loads")
+check("the loaded panel has focus on its Close", await evaluate(`document.activeElement?.innerText === "Close" && ${PANEL}.contains(document.activeElement)`))
+await checkKeysStayHere("loaded panel")
+await evaluate(`document.activeElement.blur()`)
+await checkKeysStayHere("loaded panel with nothing focused")
+await click(PANEL, "Close")
+await until(`!${PANEL}`, "Close closes it")
+check("closing it comes back to the question's button", await evaluate(`document.activeElement === ${PUBLISH}`), await evaluate(`document.activeElement?.outerHTML.slice(0, 120)`))
+await press("ArrowDown")
+check("the question's own keys work again", await until(`!${QUESTIONS}.querySelector(".who-card") && ${QUESTIONS}.innerText.includes("1 skipped")`, "the question's skipped"))
+check("no page errors after the panel either", pageErrors.filter((error) => !error.includes("dynamically imported module")).length === 0, pageErrors)
 
 process.exit(failures > 0 ? 1 : 0)

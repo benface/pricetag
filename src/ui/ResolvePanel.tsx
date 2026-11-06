@@ -146,6 +146,8 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // With a dialog open over this one, like the device's, keys are its business, wherever its focus has gone.
+      if (document.querySelector("dialog:modal:not(.resolve)")) return
       // Whatever's pressed in a field is the field's, including undoing what's been typed.
       if (e.target instanceof HTMLInputElement) return
       if ((e.metaKey || e.ctrlKey) && e.key === "z") {

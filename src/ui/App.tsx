@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useId, useMemo, useState, type FormEvent, type ReactNode } from "react"
+import { lazy, useCallback, useEffect, useId, useMemo, useState, type FormEvent, type ReactNode } from "react"
 import { CURRENCIES, MAIN_CURRENCY_CODES, TOKENS, formatAmount, formatMoney, formatPrice, formatReturn, formatSignedMoney, formatTime, isAddress, isMainCurrency, msBetweenBlocks, normalizeAddress, returnBps, shortHash, sumTotals, type CurrencyCode, type HoldComparison, type Method, type OtherToken, type Position } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type WalletResponse } from "../core/api.ts"
 import { ALL_YOURS, combinedPortfolioOf, explainAcross, exportCombined, type CombinedPosition, type PositionPart } from "../core/combined.ts"
@@ -14,7 +14,6 @@ import {
   ETH_NOTE,
   HOLD_PAST,
   HOLD_TITLE,
-  LOADING,
   METHOD_HELP,
   METHOD_LABELS,
   METHOD_NAME,
@@ -66,7 +65,7 @@ import { useRules } from "./useRules.ts"
 import type { TaxYear } from "../core/tax.ts"
 import { TaxPanel } from "./TaxPanel.tsx"
 import { useAllYours, useWallet } from "./useWallet.ts"
-import { LoadBoundary } from "./LoadBoundary.tsx"
+import { LazyPanel } from "./LoadBoundary.tsx"
 import { ProblemNotice } from "./ProblemNotice.tsx"
 import { currenciesIn, walletsBehind, walletsToRead, yourWallets } from "../core/book.ts"
 import { readCheckedAccounts } from "../core/device-accounts.ts"
@@ -601,41 +600,6 @@ export function App() {
       {notSaved ? <p className="notice warn" role="alert">⚠ {NOT_SAVED}</p> : null}
       {rules.length > 1 ? <RulesPanel rules={rules} chosen={chosenRule} choose={chooseRule} current={rule} address={isAll ? null : single} method={method} currency={currency} book={book} /> : null}
 
-      {buying ? (
-        <LoadBoundary onClose={() => setBuying(false)}>
-          <Suspense fallback={<p className="notice">{LOADING}</p>}>
-            <BuyPanel
-              currency={chosenCurrency}
-              onBegin={beginPurchase}
-              onView={(next) => {
-                setBuying(false)
-                if (next !== wallet?.address.toLowerCase()) go(next)
-              }}
-              onClose={() => setBuying(false)}
-            />
-          </Suspense>
-        </LoadBoundary>
-      ) : null}
-      {device ? (
-        <LoadBoundary onClose={closeDevice}>
-          <Suspense fallback={<p className="notice">{LOADING}</p>}>
-            <DevicePanel
-              link={device.link}
-              book={book}
-              currency={chosenCurrency}
-              allYours={isAll}
-              onLink={linkAccounts}
-              notSaved={notSaved}
-              onView={(next) => {
-                setDevice(null)
-                go(next)
-              }}
-              onClose={closeDevice}
-            />
-          </Suspense>
-        </LoadBoundary>
-      ) : null}
-
       <PurchaseList purchases={purchases} problem={purchasesProblem} matches={combined?.purchases ?? fold?.purchases ?? []} currency={chosenCurrency} showing={wallet?.address ?? null} onView={go} onDismiss={dismissPurchase} />
 
       {!single && !isAll ? (
@@ -758,6 +722,36 @@ export function App() {
       {explanation && showing ? <ExplainPanel explanation={explanation} address={showing.address} rule={rule} onClose={close} /> : null}
       {resolving && together ? <ResolvePanel wallet={together.read[0] as WalletResponse} others={together.read.slice(1)} all={together.unread} failed={together.unread.failed} onRetry={allRead.retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} notSaved={notSaved} onPublish={(link) => setDevice({ link })} onCurrentSender={setCardSender} onClose={closeResolve} /> : null}
       {resolving && !together && wallet ? <ResolvePanel wallet={wallet} others={others} failed={failed} onRetry={retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} notSaved={notSaved} onPublish={(link) => setDevice({ link })} onCurrentSender={setCardSender} onClose={closeResolve} /> : null}
+      {buying ? (
+        <LazyPanel label="Buy" onClose={() => setBuying(false)}>
+          <BuyPanel
+            currency={chosenCurrency}
+            onBegin={beginPurchase}
+            onView={(next) => {
+              setBuying(false)
+              if (next !== wallet?.address.toLowerCase()) go(next)
+            }}
+            onClose={() => setBuying(false)}
+          />
+        </LazyPanel>
+      ) : null}
+      {device ? (
+        <LazyPanel label="Hardware wallet" onClose={closeDevice}>
+          <DevicePanel
+            link={device.link}
+            book={book}
+            currency={chosenCurrency}
+            allYours={isAll}
+            onLink={linkAccounts}
+            notSaved={notSaved}
+            onView={(next) => {
+              setDevice(null)
+              go(next)
+            }}
+            onClose={closeDevice}
+          />
+        </LazyPanel>
+      ) : null}
       {taxOpen && (isAll || single) ? <TaxPanel
           // All of them is the first with the rest alongside, since a device account isn't always in the answers.
           address={isAll ? (yours[0] as string) : (single as string)}
