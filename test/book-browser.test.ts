@@ -23,7 +23,7 @@ const HARNESS = `
 import { createElement, useEffect } from "react"
 import { flushSync } from "react-dom"
 import { createRoot } from "react-dom/client"
-import { answerSender } from "/src/core/book.ts"
+import { answerSender, changeStoredBook, linkDeviceAccounts } from "/src/core/book.ts"
 import { shelf, useBook } from "/src/ui/useBook.ts"
 import { usePurchases } from "/src/ui/usePurchases.ts"
 function Harness() {
@@ -43,6 +43,7 @@ window.count = async (times) => {
   for (let i = 0; i < times; i++) await shelf.change("count", (latest) => String(Number(latest ?? 0) + 1))
 }
 window.counted = () => shelf.read("count")
+window.linkUnheard = (addresses) => changeStoredBook(shelf, (latest) => linkDeviceAccounts(latest, addresses))
 createRoot(document.getElementById("root")).render(createElement(Harness))
 `
 
@@ -328,6 +329,107 @@ describe("the book in two browser tabs", { skip: existsSync(CHROME) ? false : "C
     await until(() => evaluate(a, `hook.book.senders[${JSON.stringify(ME)}] === undefined`), "the latest answer to be taken back")
     assert.equal(await evaluate(a, "hook.canUndo"), true, "the first answer can still be taken back")
     assert.deepEqual((await bookIn(a)).senders[OTHER], { kind: "mine" })
+  })
+
+  const savedKind = (session: string, kind: string) => until(() => evaluate(session, `JSON.parse(localStorage.getItem("patina.book") ?? "{}").senders?.[${JSON.stringify(OTHER)}]?.kind === ${JSON.stringify(kind)}`), `${kind} to be saved`)
+
+  it("doesn't go further back when an undo fails with another waiting on it", async () => {
+    const [a] = (await tabs(1)) as [string]
+    await evaluate(a, `answer(${JSON.stringify(OTHER)}, "my-exchange")`)
+    await savedKind(a, "my-exchange")
+    await evaluate(a, `answer(${JSON.stringify(OTHER)}, "someone-else")`)
+    await savedKind(a, "someone-else")
+    await failNextSave(a)
+    await evaluate(a, "undo(); undo()")
+    await until(() => evaluate(a, "hook.notSaved && hook.canUndo"), "the failure to show")
+    await delay(100)
+    assert.equal((await bookIn(a)).senders[OTHER]?.kind, "someone-else")
+
+    await evaluate(a, "undo()")
+    await savedKind(a, "my-exchange")
+    await until(() => evaluate(a, `hook.book.senders[${JSON.stringify(OTHER)}]?.kind === "my-exchange"`), "the retry to show")
+    assert.equal(await evaluate(a, "hook.canUndo"), true, "the first answer can still be taken back")
+    await evaluate(a, "undo()")
+    await until(() => evaluate(a, "!hook.canUndo"), "the history to run out")
+    await reload(a)
+    assert.equal((await bookIn(a)).senders[OTHER], undefined)
+  })
+
+  it("never brings back an answer that failed, through a later one about the same sender", async () => {
+    const [a] = (await tabs(1)) as [string]
+    await failNextSave(a)
+    await evaluate(a, `answer(${JSON.stringify(OTHER)}, "my-exchange"); answer(${JSON.stringify(OTHER)}, "someone-else")`)
+    await savedKind(a, "someone-else")
+    await until(() => evaluate(a, "hook.notSaved && hook.canUndo"), "the failure and the saved answer to show")
+    assert.equal((await bookIn(a)).senders[OTHER]?.kind, "someone-else")
+    await evaluate(a, "undo()")
+    await until(() => evaluate(a, "!hook.canUndo"), "the history to run out")
+    await reload(a)
+    assert.equal((await bookIn(a)).senders[OTHER], undefined)
+  })
+
+  it("keeps the earlier answer when a later one about the same sender fails while it's saving", async () => {
+    const [a] = (await tabs(1)) as [string]
+    await evaluate(a, `answer(${JSON.stringify(OTHER)}, "my-exchange")
+      const put = IDBObjectStore.prototype.put
+      let puts = 0
+      IDBObjectStore.prototype.put = function (value, key) {
+        const request = put.call(this, value, key)
+        if (key === "patina.book" && ++puts === 2) {
+          IDBObjectStore.prototype.put = put
+          this.transaction.abort()
+        }
+        return request
+      }
+      answer(${JSON.stringify(OTHER)}, "someone-else")`)
+    await until(() => evaluate(a, "hook.notSaved"), "the failure to show")
+    await delay(100)
+    assert.equal((await bookIn(a)).senders[OTHER]?.kind, "my-exchange")
+    assert.equal(await evaluate(a, "hook.canUndo"), true)
+    await evaluate(a, "undo()")
+    await until(() => evaluate(a, "!hook.canUndo"), "the history to run out")
+    await reload(a)
+    assert.equal((await bookIn(a)).senders[OTHER], undefined)
+  })
+
+  it("doesn't take back an older answer for an undo of one that failed", async () => {
+    const [a] = (await tabs(1)) as [string]
+    await evaluate(a, `answer(${JSON.stringify(ME)}, "mine")`)
+    await until(() => evaluate(a, "hook.canUndo"), "the answer to be saved")
+    await failNextSave(a)
+    await evaluate(a, `answer(${JSON.stringify(OTHER)}, "mine"); undo()`)
+    await until(() => evaluate(a, "hook.notSaved"), "the failure to show")
+    await delay(100)
+    assert.deepEqual((await bookIn(a)).senders, { [ME]: { kind: "mine" } })
+    assert.equal(await evaluate(a, "hook.canUndo"), true)
+  })
+
+  it("takes an answer back to what was really stored, including a link it hadn't heard of", async () => {
+    const [a] = (await tabs(1)) as [string]
+    // Written by this page, so no event tells it, the way another tab's write hasn't reached it yet.
+    await evaluate(a, `linkUnheard([${JSON.stringify(OTHER)}])`)
+    assert.equal((await bookIn(a)).senders[OTHER], undefined)
+    await evaluate(a, `answer(${JSON.stringify(OTHER)}, "someone-else")`)
+    await savedKind(a, "someone-else")
+    await evaluate(a, "undo()")
+    await until(() => evaluate(a, "!hook.canUndo"), "the history to run out")
+    await reload(a)
+    assert.equal((await bookIn(a)).senders[OTHER]?.kind, "mine")
+  })
+
+  it("saves a link waiting behind an answer that failed, and adds nothing to undo for an answer that changes nothing", async () => {
+    const [a] = (await tabs(1)) as [string]
+    await failNextSave(a)
+    await evaluate(a, `answer(${JSON.stringify(ME)}, "someone-else"); link([${JSON.stringify(OTHER)}])`)
+    await savedKind(a, "mine")
+    await until(() => evaluate(a, "hook.notSaved"), "the failure to show")
+    await delay(100)
+    assert.deepEqual((await bookIn(a)).senders, { [OTHER]: { kind: "mine" } })
+    assert.equal(await evaluate(a, "hook.canUndo"), false)
+
+    await evaluate(a, `answer(${JSON.stringify(OTHER)}, "mine")`)
+    await delay(100)
+    assert.equal(await evaluate(a, "hook.canUndo"), false)
   })
 
   it("forgets an answer or a link that couldn't be saved, and says so", async () => {

@@ -34,9 +34,13 @@ function tab(storage: KeptIn) {
     },
     hear: () => void (book = storedBook(storage)),
     async change(next: (shown: Book) => Book) {
-      const [before, after] = [book, next(book)]
-      history.push({ before, after })
-      await save((latest) => applyAnswer(latest, before, after))
+      const [shown, answer] = [book, next(book)]
+      let before = shown
+      await save((latest) => {
+        before = latest
+        return applyAnswer(latest, shown, answer)
+      })
+      history.push({ before, after: book })
     },
     async undo() {
       const step = history.pop()

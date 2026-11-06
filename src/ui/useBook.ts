@@ -6,8 +6,8 @@ import { readKey, readsMatching } from "../core/resolve.ts"
 import { browserShelf } from "../core/shelf.ts"
 import { walletUrl } from "./useWallet.ts"
 
-/** `number` says where it goes, for an undo that couldn't be saved and has to go back. */
-type Step = { number: number; before: Book; after: Book }
+/** What the stored book said just before and just after an answer was saved, so only saved answers are ever in the history. */
+type Step = { before: Book; after: Book }
 
 /** Shared with `usePurchases`. */
 export const shelf = browserShelf()
@@ -15,11 +15,13 @@ export const shelf = browserShelf()
 /** The user's answers, kept in this browser and nowhere else. Undo goes back one of this tab's answers at a time, and leaves what other tabs have said. */
 export function useBook() {
   const [book, setBook] = useState(() => storedBook(localStorage))
-  // Not state, because a save can fail between renders, and an undo right then has to see the step that put back.
+  // Not state, because a save can finish between renders, and an undo right then has to see what that left.
   const history = useRef<Step[]>([])
   const [canUndo, setCanUndo] = useState(false)
   const [notSaved, setNotSaved] = useState(false)
-  const steps = useRef(0)
+  const turn = useRef(Promise.resolve())
+  const waiting = useRef(0)
+  const failures = useRef(0)
 
   const setHistory = useCallback((next: Step[]) => {
     history.current = next
@@ -42,17 +44,26 @@ export function useBook() {
     [show],
   )
 
-  // Something the user just did, so they're told if it didn't stick.
+  // Something the user just did, so they're told if it didn't stick. Each waits for the one before, because what it means can depend on how that went. What's on screen settles once the last has.
   const act = useCallback(
-    (update: (latest: Book) => Book, undone?: () => void) => {
+    (work: () => Promise<Book>) => {
       setNotSaved(false)
-      save(update).catch((error) => {
-        console.error(error)
-        setNotSaved(true)
-        undone?.()
-      })
+      waiting.current += 1
+      const settled = (latest: () => Book) => {
+        waiting.current -= 1
+        if (waiting.current === 0) show(latest())
+      }
+      turn.current = turn.current.then(work).then(
+        (latest) => settled(() => latest),
+        (error) => {
+          console.error(error)
+          failures.current += 1
+          setNotSaved(true)
+          settled(() => storedBook(localStorage))
+        },
+      )
     },
-    [save],
+    [show],
   )
 
   useEffect(() => {
@@ -67,28 +78,39 @@ export function useBook() {
 
   const change = useCallback(
     (next: Book) => {
-      const step = { number: ++steps.current, before: book, after: next }
-      setHistory([...history.current, step])
-      act(
-        (latest) => applyAnswer(latest, book, next),
-        () => setHistory(history.current.filter((other) => other !== step)),
-      )
+      const update = (latest: Book) => applyAnswer(latest, book, next)
+      setBook(update)
+      act(async () => {
+        let before = book
+        const after = await changeStoredBook(shelf, (latest) => {
+          before = latest
+          return update(latest)
+        })
+        if (!same(before, after)) setHistory([...history.current, { before, after }])
+        return after
+      })
     },
     [book, act, setHistory],
   )
+  // On screen once it's saved, since which answer it takes back isn't known until those before it have been. One waiting on something that failed had that in mind, so it doesn't go further back instead.
   const undo = useCallback(() => {
-    const step = history.current.at(-1)
-    if (!step) return
-    setHistory(history.current.slice(0, -1))
-    act(
-      (latest) => undoAnswer(latest, step.before, step.after),
-      () => setHistory([...history.current, step].sort((a, b) => a.number - b.number)),
-    )
+    const failuresSoFar = failures.current
+    act(async () => {
+      const step = history.current.at(-1)
+      if (!step || failures.current !== failuresSoFar) return readStoredBook(shelf)
+      const latest = await changeStoredBook(shelf, (latest) => undoAnswer(latest, step.before, step.after))
+      setHistory(history.current.slice(0, -1))
+      return latest
+    })
   }, [act, setHistory])
 
   // Not an answer, so undo doesn't take it back, whichever answers came before it.
   const linkAccounts = useCallback(
-    (addresses: readonly string[]) => act((latest) => linkDeviceAccounts(latest, addresses)),
+    (addresses: readonly string[]) => {
+      const update = (latest: Book) => linkDeviceAccounts(latest, addresses)
+      setBook(update)
+      act(() => changeStoredBook(shelf, update))
+    },
     [act],
   )
 
