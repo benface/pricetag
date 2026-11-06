@@ -162,6 +162,14 @@ describe("portfolioOf", () => {
     assert.deepEqual(at(99), { started: false, behindBlocks: 101 })
   })
 
+  it("only calls it behind past 30 seconds, so one slow read at normal lag doesn't", () => {
+    const head = LAST_2S_BLOCK + 1000
+    const behindBy = (blocks: number) => portfolioOf(walletWith({ legs: [], coverage: { fromBlock: LAST_2S_BLOCK, toBlock: head - blocks }, latest: { blockNum: head, timestamp: DEMO_WALLET.latest.timestamp } }), "average").progress.behindBlocks
+    assert.equal(behindBy(86), 0, "17.2 s, the slowest read measured at normal lag")
+    assert.equal(behindBy(150), 0, "30 s")
+    assert.equal(behindBy(151), 151, "30.2 s")
+  })
+
   it("keeps a closed position's realized PnL, with nothing unrealized to add", () => {
     const eth = DEMO_WALLET.legs.filter((l) => l.asset === "ETH").slice(0, 1)
     const closing = { ...eth[0], id: "closing", delta: `-${eth[0]?.delta}`, kind: "transfer" as const } as (typeof eth)[number]
