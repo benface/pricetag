@@ -12,8 +12,10 @@ MARKETING_VERSION = 0.1.0
 CURRENT_PROJECT_VERSION = 1
 
 // Patina's own server, by host name, which it always reaches over HTTPS. Empty reads the server `pnpm mac` runs on this Mac.
-// It stays empty until the hosted server is approved and deployed (WORK-528). Settings can still point the app elsewhere.
+// It stays empty here, so `pnpm mac` keeps the local server. Settings can still point the app elsewhere.
 PATINA_SERVER_HOST =
+// The hosted server. The tester build sets PATINA_SERVER_HOST to this, and no other build reads it.
+PATINA_HOSTED_SERVER_HOST = patina-server.fly.dev
 
 SDKROOT = macosx
 MACOSX_DEPLOYMENT_TARGET = 27.0

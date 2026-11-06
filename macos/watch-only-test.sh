@@ -64,6 +64,11 @@ if grep -q "^Authority=Developer ID Application: Benface Inc. (R7TNNTC382)" "$wo
 if grep -q "flags=.*runtime" "$work/signature"; then pass "hardened runtime"; else fail "no hardened runtime"; fi
 if grep -q "^Timestamp=" "$work/signature"; then pass "secure timestamp"; else fail "no secure timestamp"; fi
 if [ "$(read_info CFBundleIdentifier)" = "$bundle_id" ]; then pass "its own bundle ID, $bundle_id"; else fail "bundle ID is $(read_info CFBundleIdentifier)"; fi
+served=$(read_info PatinaServerHost || true)
+case $dmg in
+  *-local-test.dmg) if [ -z "$served" ]; then pass "reads this Mac's server, as a local test copy should"; else fail "a local test copy reads $served"; fi ;;
+  *) if [ "$served" = "$(sed -n 's/^PATINA_HOSTED_SERVER_HOST = *//p' "$here/Config/App.xcconfig")" ] && [ -n "$served" ]; then pass "reads the hosted server, $served"; else fail "reads \"$served\", not the hosted server"; fi ;;
+esac
 if [ "$(read_info LSMinimumSystemVersion)" = 27.0 ]; then pass "needs macOS 27.0"; else fail "minimum macOS is $(read_info LSMinimumSystemVersion)"; fi
 
 echo "What it's allowed to do:"
@@ -136,7 +141,7 @@ free_port() { node -e 'const s=require("node:net").createServer();s.listen(0,"12
 port=$(free_port)
 log="$work/requests"
 : >"$log"
-(cd "$repo" && PRICETAG_HOSTED=1 PRICETAG_INVITES="test:$hash" HOST=127.0.0.1 PORT=$port exec node server/index.ts) >"$work/server.log" 2>&1 &
+(cd "$repo" && PRICETAG_HOSTED=1 PRICETAG_INVITES="test:$hash" PRICETAG_CLIENT_IP_HEADER=x-test-client HOST=127.0.0.1 PORT=$port exec node server/index.ts) >"$work/server.log" 2>&1 &
 started="$started $!"
 tries=0
 until curl -fs -o /dev/null --max-time 1 "http://127.0.0.1:$port/healthz" || [ "$tries" -ge 50 ]; do

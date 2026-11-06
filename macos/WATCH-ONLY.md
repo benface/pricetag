@@ -8,13 +8,13 @@ Patina shows what a Base wallet is worth, what you paid for what's in it, and ho
 
 ## Installing it
 
-1. Open the `.dmg`.
+1. Download the `.dmg` from the Slack message it came in, and open it.
 2. Drag Patina to Applications.
 3. Open it from Applications. It lives in the menu bar, and its window opens too. If your menu bar is full, look under its "show hidden items" control.
 
 ## The invite
 
-Patina reads prices and history from its server, which only answers people it invited. The first time you open it, it asks for the invite you were sent. Paste it and press Continue. It's saved on this Mac, for that server alone. Please don't share it: it's yours, and it can be taken back. To change it later, go to Settings > General.
+Patina reads prices and history from its server, which only answers people it invited. The first time you open it, it asks for your invite, which comes separately, as a direct message on Slack. Paste it and press Continue. It's saved on this Mac, for that server alone. Please don't share it: it's yours, and it can be taken back. To change it later, go to Settings > General.
 
 ## What it can't do yet
 

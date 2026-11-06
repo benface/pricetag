@@ -158,7 +158,7 @@ The Mac app reads from a server because the server holds what the app can't ship
 
 ### The watch-only build
 
-`pnpm mac:watch-only` builds the copy colleagues can install: a Developer ID `.dmg` with no key code in it and its own bundle ID, which reads the host in `macos/Config/WatchOnly.xcconfig`, notarized and stapled. It tells you what to do if this Mac has no notarytool profile yet. `pnpm check:watch-only` checks a built one, and `macos/WATCH-ONLY.md` is what to send people. `pnpm mac` never uses any of this.
+`pnpm mac:watch-only` builds the copy colleagues can install: a Developer ID `.dmg` with no key code in it and its own bundle ID, which reads `PATINA_HOSTED_SERVER_HOST` in `macos/Config/App.xcconfig`, notarized and stapled. It tells you what to do if this Mac has no notarytool profile yet. `pnpm check:watch-only` checks a built one, and `macos/WATCH-ONLY.md` is what to send people. `pnpm mac` never uses any of this.
 
 ## How it's put together
 
