@@ -2,6 +2,7 @@
 // Pure, so it can be tested without Amp.
 
 import { ETH_ADDRESS, WETH_ADDRESS, normalizeAddress, tokenByAddress, type GasUnknownTx, type LegRow } from "@pricetag/sdk/core"
+import { DEPOSIT_TX_TYPE } from "./verify.ts"
 
 export const TRANSFER_TOPIC = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 export const DEPOSIT_TOPIC = "e1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c"
@@ -10,8 +11,8 @@ export const TRANSFER_SINGLE_TOPIC = "c3d58168c5ae7397731d063d5bbf3d657854427343
 export const TRANSFER_BATCH_TOPIC = "4a39dc06d4c0dbc64b70af90fd698a233a518aa5d07e595d983b8c0526c8f7fb"
 export const ANSWER_UPDATED_TOPIC = "0559884fd3a460db3073b7fc896cc77986f16e378210ded43186175bf646fc5f"
 
-/** OP Stack deposits are paid for on L1, so they cost no L2 gas. */
-const DEPOSIT_TX_TYPE = 126
+/** The amount in a transfer's or a withdrawal's log. */
+export const loggedAmount = (log: { data: string }) => BigInt(`0x${log.data.slice(0, 64) || "0"}`)
 
 export type RawTx = {
   block_num: number
@@ -88,6 +89,7 @@ export function legRowsFromRaw({ account, txs, logs, withdrawals, gas }: RawInpu
   for (const tx of txs) {
     const base = { block_num: tx.block_num, timestamp: tx.timestamp, tx_hash: normalizeAddress(tx.tx_hash), tx_index: tx.tx_index }
     const from = normalizeAddress(tx.from)
+    // OP Stack deposits are paid for on L1, so they cost no L2 gas.
     if (from === me && tx.type !== DEPOSIT_TX_TYPE) {
       const paid = gasPaid(tx, gas)
       if (paid === null) gasUnknown.push({ tx_hash: base.tx_hash, block_num: base.block_num })
@@ -112,7 +114,7 @@ export function legRowsFromRaw({ account, txs, logs, withdrawals, gas }: RawInpu
       log_index: log.log_index,
       token: address,
       account: me,
-      amount: BigInt(`0x${log.data.slice(0, 64) || "0"}`).toString(),
+      amount: loggedAmount(log).toString(),
     }
     if (log.topic0 === TRANSFER_TOPIC) {
       if (listed && log.topic3 !== null) continue
@@ -149,7 +151,7 @@ export function legRowsFromRaw({ account, txs, logs, withdrawals, gas }: RawInpu
       token: ETH_ADDRESS,
       account: me,
       side: "credit",
-      amount: BigInt(`0x${log.data.slice(0, 64) || "0"}`).toString(),
+      amount: loggedAmount(log).toString(),
       kind: "unwrap",
     })
   }

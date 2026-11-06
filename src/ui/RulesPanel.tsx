@@ -2,7 +2,7 @@ import { useEffect, useState, type KeyboardEvent } from "react"
 import { formatTime, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import type { Book } from "../core/book.ts"
 import { showRuleDifference, showRuleValue, type PricingRule, type RuleComparison } from "../core/rules.ts"
-import { failureOf, readResponse, type ReadFailure } from "../core/read-failure.ts"
+import { failureOf, jsonPost, readResponse, type ReadFailure } from "../core/read-failure.ts"
 import { panelProblem, RULES_HELP, RULES_TITLE, shortManifestHash } from "../core/wording.ts"
 import { ProblemNotice } from "./ProblemNotice.tsx"
 
@@ -13,7 +13,7 @@ function Comparison({ address, method, currency, book }: { address: string; meth
   useEffect(() => {
     const abort = new AbortController()
     setState((s) => ({ ...s, error: null, loading: true }))
-    fetch(`/api/portfolio/${address}/compare`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ method, currency, book }), signal: abort.signal })
+    fetch(`/api/portfolio/${address}/compare`, jsonPost({ method, currency, book }, abort.signal))
       .then((response) => readResponse<RuleComparison>(response))
       .then((body) => setState({ comparison: body, error: null, loading: false }))
       .catch((error: unknown) => {

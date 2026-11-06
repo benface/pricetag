@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react"
 import { formatAmount, formatMoney, formatSignedMoney, shortHash, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import type { BookPreview, WalletResponse } from "../core/api.ts"
 import { combinedPortfolioOf, previewCombined, type Unread } from "../core/combined.ts"
@@ -9,6 +9,7 @@ import { importStart, keepingImport, parseCoinbaseCsv, startsAfterImported, type
 import { answersOffered, foldBook, isBalanced, microsOf, previewBook, type Question } from "../core/resolve.ts"
 import { ALL_ANSWERED, ANSWERS_STAY, ANSWER_QUESTIONS, COST_QUESTION, COST_WHY, EXCHANGE_COST_WHY, NOT_SAVED, NOTHING_LEFT, SENDER_QUESTION, SENDER_WHY, finishNote, IMPORT_NOT_WHOLE, IMPORT_QUESTION, IMPORT_STARTS_LATE, importedSentence, importWhySentence, linkedFailedSentence } from "../core/wording.ts"
 import { linkByProof, type Ethereum } from "./link-proof.ts"
+import { useModal } from "./useModal.ts"
 
 type Ownership = "mine" | "my-exchange" | "someone-else"
 
@@ -80,15 +81,7 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
     if (pendingImport || importRefusal) importAsk.current?.scrollIntoView({ block: "nearest" })
   }, [pendingImport, importRefusal])
 
-  useLayoutEffect(() => {
-    const element = dialog.current
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    if (element && !element.open) element.showModal()
-    return () => {
-      element?.close()
-      opener?.focus()
-    }
-  }, [])
+  useModal(dialog)
 
   const fold = useMemo(() => {
     if (!all) {

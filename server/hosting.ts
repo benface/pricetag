@@ -5,10 +5,8 @@ import { createHash } from "node:crypto"
 import type { IncomingMessage, ServerResponse } from "node:http"
 import { BlockList, isIP } from "node:net"
 import { format } from "node:util"
-import { pathOf } from "./app.ts"
 import { inLane } from "./lanes.ts"
-
-type Env = Record<string, string | undefined>
+import { pathOf, type Env } from "./shared.ts"
 
 export type Hosting = {
   /** `PRICETAG_HOSTED=1`: invites, limits and redacted logs, all at once, so a deploy can't forget one. */

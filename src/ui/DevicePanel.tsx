@@ -1,5 +1,5 @@
-import { lazy, Suspense, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { ETH_ADDRESS, TOKENS, encodeNote, formatAmount, formatExactUsd, formatMoney, formatUsdIn, isAddress, labelUsd, normalizeAddress, shortHash, type CurrencyCode, type Token } from "@pricetag/sdk/core"
+import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState } from "react"
+import { ETH_ADDRESS, TOKENS, encodeNote, formatAmount, formatExactUsd, formatUsdIn, isAddress, labelUsd, normalizeAddress, shortHash, type CurrencyCode, type Token } from "@pricetag/sdk/core"
 import type { Hex, PublicClient } from "viem"
 import { linkedWallets, type Book } from "../core/book.ts"
 import { readColdRequest, transferRequest, type ColdAccount, type ColdRequest, type ColdSigner, type DevicePrompt } from "../core/cold.ts"
@@ -12,6 +12,7 @@ import type { BrowserWallet } from "./devices/browser.ts"
 import { realConnectors, type Connectors } from "./devices/connectors.ts"
 import type { ScannedCode } from "./devices/keystone.ts"
 import { useCurrentRate } from "./useCurrentRate.ts"
+import { useModal } from "./useModal.ts"
 
 const CodeScanner = lazy(() => import("./devices/KeystoneCodes.tsx").then((m) => ({ default: m.CodeScanner })))
 const CodeToSign = lazy(() => import("./devices/KeystoneCodes.tsx").then((m) => ({ default: m.CodeToSign })))
@@ -84,17 +85,7 @@ export function DevicePanel({ link, book, currency = "USD", allYours = false, on
   const client = useRef<PublicClient | null>(null)
   const clientOf = async () => (client.current ??= await connectors.client())
 
-  useLayoutEffect(() => {
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    const element = dialog.current
-    if (!element) return
-    if (!element.open) element.showModal()
-    closeButton.current?.focus()
-    return () => {
-      element.close()
-      opener?.focus()
-    }
-  }, [])
+  useModal(dialog, closeButton)
 
   useEffect(() => {
     if (connectors.canUseUsb()) connectors.preloadLedger()

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import type { WalletResponse } from "../core/api.ts"
 import { ALL_YOURS, holdLastRead, type AllYoursRead } from "../core/combined.ts"
 import type { CurrencyCode } from "@pricetag/sdk/core"
-import { failureOf, readResponse, type ReadFailure } from "../core/read-failure.ts"
+import { failureOf, jsonPost, readResponse, type ReadFailure } from "../core/read-failure.ts"
 
 export type WalletState = {
   wallet: WalletResponse | null
@@ -20,7 +20,7 @@ async function fetchWallet(address: string, currency: CurrencyCode, rule: string
 
 /** A post, so that which wallets are someone's doesn't end up in a URL, and so in logs. No answers go with it: they stay here. */
 async function fetchAllYours(addresses: readonly string[], currency: CurrencyCode, rule: string | null, paid: string, signal: AbortSignal): Promise<AllYoursRead> {
-  return readResponse<AllYoursRead>(await fetch(`/api/portfolio/${ALL_YOURS}/wallets`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ linked: addresses, currency, rule, paid }), signal }))
+  return readResponse<AllYoursRead>(await fetch(`/api/portfolio/${ALL_YOURS}/wallets`, jsonPost({ linked: addresses, currency, rule, paid }, signal)))
 }
 
 const RECONNECT_MS = 3000
@@ -137,6 +137,32 @@ export function followRead<T>(read: (signal: AbortSignal) => Promise<T>, { live,
     clearTimeout(retry)
     events.close()
     stop()
+  }
+}
+
+/**
+ * Reads several things side by side, each of them again whenever `start` names it, unless it's still being read. As with
+ * `followRead`, what arrives during a read waits for the next time. `stop` ends them all.
+ */
+export function readEach<T>(read: (key: string, signal: AbortSignal) => Promise<T>, onRead: (key: string, value: T) => void, onFail: (key: string) => void) {
+  const abort = new AbortController()
+  const busy = new Set<string>()
+  return {
+    start(keys: readonly string[]) {
+      for (const key of keys) {
+        if (busy.has(key)) continue
+        busy.add(key)
+        read(key, abort.signal)
+          .then(
+            (value) => onRead(key, value),
+            () => {
+              if (!abort.signal.aborted) onFail(key)
+            },
+          )
+          .finally(() => busy.delete(key))
+      }
+    },
+    stop: () => abort.abort(),
   }
 }
 
