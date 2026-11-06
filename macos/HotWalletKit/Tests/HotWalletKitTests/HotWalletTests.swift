@@ -1383,6 +1383,65 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(await signer.addresses() == [nextAddress])
     }
 
+    @Test func anAlarmThatCantBeSavedSaysSoAndKeepsTrying() async throws {
+        let rig = await Rig(portfolio: .success(portfolio(outgoing: [otherHash])))
+        rig.stateStore.failSaves(with: CocoaError(.fileWriteOutOfSpace))
+        await rig.wallet.readHistory()
+        #expect(rig.wallet.alarm != nil)
+        #expect(rig.stateStore.saved.alarm == nil)
+        #expect(rig.wallet.notices.contains { $0.text == HotWalletWording.cantSaveRecordsYet })
+
+        await rig.wallet.tick()
+        #expect(rig.wallet.hasUnsavedRecords, "still can't")
+
+        rig.stateStore.failSaves(with: nil)
+        await rig.wallet.tick()
+        #expect(rig.stateStore.saved.alarm != nil, "survives a restart after all")
+        #expect(!rig.wallet.hasUnsavedRecords)
+        #expect(!rig.wallet.notices.contains { $0.text == HotWalletWording.cantSaveRecordsYet })
+    }
+
+    @Test func aFailedSaveNeverShowsItsOwnWords() async throws {
+        let path = "/Users/someone/Library/secret-folder/state.json"
+        let failure = CocoaError(.fileWriteNoPermission, userInfo: [NSFilePathErrorKey: path])
+        #expect(failure.localizedDescription.contains("state") || failure.localizedDescription.contains("permission"), "what this is here to keep out")
+        let rig = await Rig(over)
+        rig.stateStore.failSaves(with: failure)
+        await rig.wallet.tick()
+        let problem = try #require(rig.wallet.sweepProblem)
+        #expect(!problem.contains("/"))
+        #expect(!problem.contains("secret"))
+        #expect(await rig.chain.sent.isEmpty, "nothing goes out that isn't on disk first")
+    }
+
+    @Test func anErrorFromElsewhereDoesntGetItsOwnWordsEither() {
+        struct Elsewhere: Error, CustomStringConvertible { var description: String { "/Users/someone/secret" } }
+        #expect(HotWalletWording.problem(Elsewhere()) == HotWalletWording.problemOnThisDevice)
+        #expect(HotWalletWording.problem(RecordsNotSaved()) == HotWalletWording.cantSaveRecords)
+    }
+
+    @Test func recordsThatCantBeReadDontSayWhere() throws {
+        struct Unreadable: DeviceStateStore {
+            func load() throws -> DeviceWalletState { throw CocoaError(.fileReadCorruptFile, userInfo: [NSFilePathErrorKey: "/Users/someone/secret/state.json"]) }
+            func save(_ state: DeviceWalletState) throws {}
+        }
+        let wallet = HotWallet(signer: FakeSigner(keys: [hotAddress], next: []), settingsStore: MemorySettingsStore(), stateStore: Unreadable(), portfolioSource: { ScriptedPortfolios(.failure(.unreachable)) }, makeChain: { _ in FakeChain(snapshot()) })
+        #expect(wallet.availability == .unavailable(HotWalletWording.cantReadRecords))
+    }
+
+    @Test func anAbsurdGasEstimateDoesntCrashASweep() async throws {
+        let rig = await Rig(over)
+        await rig.chain.setEstimate(.max)
+        await rig.wallet.tick()
+        #expect(rig.wallet.alarm == nil)
+    }
+
+    @Test func anAbsurdL1FeeStopsASweepLikeAnyOtherAbsurdFee() async throws {
+        let rig = await Rig(snapshot(eth: oneEth, tokens: [usdc: usdcUnits(500)], fees: FeeQuote(maxFeePerGas: 10_000_000, maxPriorityFeePerGas: 1_000_000, l1FeeWei: FeeQuote.highestPlausibleL1FeeWei + 1)))
+        await rig.wallet.tick()
+        #expect(await rig.chain.sent.isEmpty)
+    }
+
     @Test func aRotationThatFinishesByItselfWaitsForItsRetirementToBeWritten() async throws {
         struct DiskFull: Error {}
         let (wallet, signer, store) = try walletMidRotation(snapshot(eth: 0))

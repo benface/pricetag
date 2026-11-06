@@ -327,7 +327,8 @@ extension TransactionReview {
             }
         }
         if transaction.to == .zero { warnings.append(SiteWarning(SiteWording.burn, isStrong: true)) }
-        if transaction.value + quote.feeWei > quote.ethBalance { warnings.append(SiteWarning(SiteWording.notEnoughEth)) }
+        // A site chooses the value, and it can be as big as a UInt128 holds.
+        if quote.feeWei > quote.ethBalance || transaction.value > quote.ethBalance - quote.feeWei { warnings.append(SiteWarning(SiteWording.notEnoughEth)) }
 
         self.init(
             headline: headline ?? "",

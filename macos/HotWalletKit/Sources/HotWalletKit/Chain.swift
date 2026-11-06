@@ -39,8 +39,18 @@ public struct FeeQuote: Equatable, Sendable {
     /// Base charges a tiny fraction of this. A node quoting more is wrong or lying, and signing would burn what's here as fees.
     public static let highestPlausibleFeePerGas: UInt128 = 100_000_000_000
 
+    /// A hundredth of an ETH for one transaction's L1 data, which is far more than Base's ever charged for one.
+    public static let highestPlausibleL1FeeWei: UInt128 = 10_000_000_000_000_000
+
     public var isPlausible: Bool {
-        maxFeePerGas <= Self.highestPlausibleFeePerGas
+        maxFeePerGas <= Self.highestPlausibleFeePerGas && l1FeeWei <= Self.highestPlausibleL1FeeWei
+    }
+
+    /// The gas to sign for, given a node's estimate. A plain send to a plain address uses exactly what it's quoted, and anything else gets some room.
+    public static func gasLimit(estimate: UInt64, isPlainSend: Bool) -> UInt64 {
+        if isPlainSend, estimate == 21000 { return estimate }
+        let (limit, isTooBig) = estimate.addingReportingOverflow(estimate / 4)
+        return isTooBig ? .max : limit
     }
 
     public init(maxFeePerGas: UInt128, maxPriorityFeePerGas: UInt128, l1FeeWei: UInt128) {
@@ -165,15 +175,15 @@ public struct RPCChainClient: ChainClient {
         let answers = try await batch(calls)
 
         // A balance or fee that can't be read fails the whole read, so a failure can't look like an empty wallet.
-        let chainID = try Self.quantity(answers[0].get())
+        let chainID = try Self.count(answers[0].get())
         let blockTime = try Self.quantity(timestamp)
-        var balances: [Token: UInt128] = [Base.eth: try Self.quantity(answers[3].get())]
+        var balances: [Token: UInt128] = [Base.eth: try Self.amount(answers[3].get())]
         for (index, token) in tokens.enumerated() {
-            balances[token] = try Self.quantity(answers[8 + index].get())
+            balances[token] = try Self.amount(answers[8 + index].get())
         }
-        let priority = try Self.quantity(answers[4].get())
-        let base = try Self.quantity(baseFee)
-        let fees = FeeQuote(maxFeePerGas: 2 * base + priority, maxPriorityFeePerGas: priority, l1FeeWei: try Self.quantity(answers[7].get()))
+        let priority = try Self.quantity(answers[4].get(), upTo: Self.highestReadableFeePerGas)
+        let base = try Self.quantity(baseFee, upTo: Self.highestReadableFeePerGas)
+        let fees = FeeQuote(maxFeePerGas: 2 * base + priority, maxPriorityFeePerGas: priority, l1FeeWei: try Self.amount(answers[7].get()))
         let ethUsdMicros = Oracle.price(try? answers[5].get() as? String, feed: .eth, blockTime: blockTime)
 
         // Only what's held, because the public node limits calls and most wallets hold few of these. Still at the same block.
@@ -187,9 +197,9 @@ public struct RPCChainClient: ChainClient {
         }
 
         return ChainSnapshot(
-            chainID: UInt64(chainID),
-            blockNumber: UInt64(try Self.quantity(number)),
-            nonce: UInt64(try Self.quantity(answers[2].get())),
+            chainID: chainID,
+            blockNumber: try Self.count(number),
+            nonce: try Self.count(answers[2].get()),
             balances: balances,
             ethUsdMicros: ethUsdMicros,
             usdcUsdMicros: Oracle.price(try? answers[6].get() as? String, feed: .usdc, blockTime: blockTime),
@@ -200,7 +210,7 @@ public struct RPCChainClient: ChainClient {
 
     public func estimateGas(from: EthereumAddress, to: EthereumAddress, value: UInt128, data: [UInt8]) async throws -> UInt64 {
         let parameters: [String: Any] = ["from": from.lowercased, "to": to.lowercased, "value": "0x" + String(value, radix: 16), "data": "0x" + Hex.encode(data)]
-        return UInt64(try Self.quantity(try await single("eth_estimateGas", [parameters])))
+        return try Self.count(try await single("eth_estimateGas", [parameters]))
     }
 
     public func send(_ transaction: SignedTransaction) async throws {
@@ -216,12 +226,12 @@ public struct RPCChainClient: ChainClient {
         guard let receipt = try await single("eth_getTransactionReceipt", [hash]) as? [String: Any] else { return nil }
         // A node can say a transaction is in a block without having a block number for it yet, which isn't settled.
         guard let status = receipt["status"], let block = receipt["blockNumber"], !(block is NSNull) else { return nil }
-        return Receipt(succeeded: try Self.quantity(status) == 1, blockNumber: UInt64(try Self.quantity(block)))
+        return Receipt(succeeded: try Self.quantity(status) == 1, blockNumber: try Self.count(block))
     }
 
     public func l1Fee(ofPayload payload: [UInt8]) async throws -> UInt128 {
         let (method, parameters) = call(Base.gasPriceOracle, Calldata.l1Fee(ofPayload: payload), at: "latest")
-        return try Self.quantity(try await single(method, parameters))
+        return try Self.amount(try await single(method, parameters))
     }
 
     public func read(_ method: String, _ parameters: JSONValue) async throws -> RPCAnswer {
@@ -337,6 +347,28 @@ public struct RPCChainClient: ChainClient {
         if digits.isEmpty { return 0 }
         guard let number = UInt128(digits, radix: 16) else { throw ChainError.unreadable }
         return number
+    }
+
+    /// Each is far past anything real, and low enough that the sums and products made from them further on can't overflow.
+    /// The node's untrusted, and a number that would crash the app stops sweeps as surely as anything could.
+    static let highestReadableAmount: UInt128 = 1 << 100
+    static let highestReadableFeePerGas: UInt128 = 1 << 64
+    static let highestReadableCount: UInt128 = 1 << 48
+
+    static func quantity(_ value: Any?, upTo highest: UInt128) throws -> UInt128 {
+        let number = try quantity(value)
+        guard number <= highest else { throw ChainError.unreadable }
+        return number
+    }
+
+    /// A balance or a fee in wei.
+    static func amount(_ value: Any?) throws -> UInt128 {
+        try quantity(value, upTo: highestReadableAmount)
+    }
+
+    /// A chain ID, block number, nonce or amount of gas.
+    static func count(_ value: Any?) throws -> UInt64 {
+        UInt64(try quantity(value, upTo: highestReadableCount))
     }
 }
 

@@ -82,6 +82,7 @@ actor FakeChain: ChainClient {
         estimateFailureAfter = afterSends
     }
     func setReadFailure(_ failure: ChainError?) { readFailure = failure }
+    func setEstimate(_ gas: UInt64) { estimate = gas }
     func setSimulation(_ answer: RPCAnswer) { simulation = answer }
     func setFeedRound(_ answer: RPCAnswer) { feedRound = answer }
     func setChainID(_ answer: RPCAnswer) { chainIDAnswer = answer }

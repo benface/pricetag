@@ -4,6 +4,13 @@ import LocalAuthentication
 import Observation
 import os
 
+/// How often a site has been told no, or asked and gone away.
+private struct Refusals {
+    var times: [Date] = []
+    var cooldowns = 0
+    var cooldownUntil: Date?
+}
+
 /// One thing a site wants, waiting in the app for an answer. Nothing outside the app's own window can answer it: the bridge's
 /// wire protocol has no message for that, and pages only ever reach `handle`.
 public struct SiteApproval: Identifiable, Equatable, Sendable {
@@ -149,18 +156,26 @@ public final class SiteBridge {
     private let now: @Sendable () -> Date
     @ObservationIgnored private var waiting: [UUID: CheckedContinuation<Bool, Never>] = [:]
     @ObservationIgnored private var live: [LiveRequest] = []
-    @ObservationIgnored private var rejections: [String: [Date]] = [:]
-    @ObservationIgnored private var readsThisSecond: (second: Int, count: Int) = (0, 0)
+    @ObservationIgnored private var refusals: [String: Refusals] = [:]
+    @ObservationIgnored private var readsThisSecond: (second: Int, count: Int, byFamily: [String: Int]) = (0, 0, [:])
     @ObservationIgnored private var lastKnownAddress: EthereumAddress?
     @ObservationIgnored private var lastKnownSites: [String] = []
 
-    static let maxPending = 8
+    /// Only so that memory has a limit, since it takes a real domain to get anywhere near this.
+    static let maxPending = 32
+    /// All of these are per domain, as `family(of:)` counts them.
     static let maxPendingPerOrigin = 3
     /// Rejecting this many times in `rejectionWindow` stops a site asking for a while, so it can't wear someone down until they click yes.
+    /// A page that asks and then goes away counts too, or reloading would be a way to take focus forever.
     static let rejectionsBeforeCooldown = 3
     static let rejectionWindow: TimeInterval = 60
-    /// Reads share the node with the wallet's own, and the public node allows 25 a second per IP. See `NodePacer`.
-    nonisolated static let readsPerSecond = 10
+    /// Each cooldown in a row is twice the last, up to about an hour, and an hour after the last one ends it starts over.
+    static let longestCooldownDoubling = 6
+    static let cooldownsForgottenAfter: TimeInterval = 3600
+    /// Reads share the node with the wallet's own, and the public node allows 25 a second per IP. See `NodePacer`. This is for all sites
+    /// together, and one site's limit is less, so a single tab can't use up what the others get.
+    nonisolated static let readsPerSecond = 12
+    nonisolated static let readsPerSecondPerFamily = 8
 
     /// What a site can read from the node. Anything else that isn't handled here is refused, not passed along.
     static let reads: Set<String> = [
@@ -282,7 +297,7 @@ public final class SiteBridge {
 
     public func reject(_ id: UUID) {
         guard let approval = pending.first(where: { $0.id == id }) else { return }
-        rejections[approval.origin, default: []].append(now())
+        noteRefusal(by: approval.origin)
         wallet.noteAnswer()
         finish(id, approved: false)
     }
@@ -296,6 +311,7 @@ public final class SiteBridge {
         let requester = Requester(connection: connection, id: id)
         for request in live where request.requester == requester { request.cancel() }
         for approval in pending where approval.requester == requester {
+            noteRefusal(by: approval.origin)
             finish(approval.id, approved: false)
         }
     }
@@ -303,6 +319,7 @@ public final class SiteBridge {
     public func cancelAll(connection: UUID) {
         for request in live where request.requester.connection == connection { request.cancel() }
         for approval in pending where approval.requester.connection == connection {
+            noteRefusal(by: approval.origin)
             finish(approval.id, approved: false)
         }
     }
@@ -439,9 +456,11 @@ public final class SiteBridge {
 
     private func read(_ request: LiveRequest) async -> RPCAnswer {
         let second = Int(now().timeIntervalSince1970)
-        if readsThisSecond.second != second { readsThisSecond = (second, 0) }
-        guard readsThisSecond.count < Self.readsPerSecond else { return .failure(.readLimit) }
+        if readsThisSecond.second != second { readsThisSecond = (second, 0, [:]) }
+        let family = Self.family(of: request.origin)
+        guard readsThisSecond.count < Self.readsPerSecond, readsThisSecond.byFamily[family, default: 0] < Self.readsPerSecondPerFamily else { return .failure(.readLimit) }
         readsThisSecond.count += 1
+        readsThisSecond.byFamily[family, default: 0] += 1
         do {
             return try await wallet.readForSite(request.method, request.parameters ?? .array([]))
         } catch {
@@ -457,7 +476,7 @@ public final class SiteBridge {
         case ChainError.rateLimited: SiteError(code: -32005, message: HotWalletWording.networkBusy)
         case ChainError.unreachable: SiteError(code: 4900, message: HotWalletWording.cantReachChain)
         case ChainError.unreadable: SiteError(code: 4900, message: HotWalletWording.unreadableAnswer)
-        default: SiteError(code: -32603, message: "\(couldntSign): \(error).")
+        default: SiteError(code: -32603, message: "\(couldntSign): \(HotWalletWording.problem(error))")
         }
     }
 
@@ -509,11 +528,11 @@ public final class SiteBridge {
     private func ask(_ request: LiveRequest, _ action: SiteApproval.Action) async -> RPCAnswer {
         // Working out what to show takes a while, and the site may be gone by now.
         guard !request.isCancelled else { return .failure(.rejected) }
-        recentRejections(of: request.origin)
-        if (rejections[request.origin]?.count ?? 0) >= Self.rejectionsBeforeCooldown { return .failure(.rejected) }
-        let fromThisOrigin = pending.filter { $0.origin == request.origin }
-        guard pending.count < Self.maxPending, fromThisOrigin.count < Self.maxPendingPerOrigin else { return .failure(.tooManyRequests) }
-        if action == .connect, fromThisOrigin.contains(where: { $0.action == .connect }) { return .failure(.tooManyRequests) }
+        let family = Self.family(of: request.origin)
+        if let until = refusals[family]?.cooldownUntil, until > now() { return .failure(.rejected) }
+        let fromThisFamily = pending.filter { Self.family(of: $0.origin) == family }
+        guard pending.count < Self.maxPending, fromThisFamily.count < Self.maxPendingPerOrigin else { return .failure(.tooManyRequests) }
+        if action == .connect, fromThisFamily.contains(where: { $0.origin == request.origin && $0.action == .connect }) { return .failure(.tooManyRequests) }
 
         let approval = SiteApproval(id: UUID(), origin: request.origin, action: action, requester: request.requester)
         request.approvalID = approval.id
@@ -523,10 +542,33 @@ public final class SiteBridge {
         return approved && !request.isCancelled ? .success(.null) : .failure(.rejected)
     }
 
-    private func recentRejections(of origin: String) {
-        let cutoff = now().addingTimeInterval(-Self.rejectionWindow)
-        rejections[origin]?.removeAll { $0 < cutoff }
+    private func noteRefusal(by origin: String) {
+        let time = now()
+        let family = Self.family(of: origin)
+        var record = refusals[family, default: Refusals()]
+        record.times = record.times.filter { $0 >= time.addingTimeInterval(-Self.rejectionWindow) } + [time]
+        if record.times.count >= Self.rejectionsBeforeCooldown {
+            if let until = record.cooldownUntil, until.addingTimeInterval(Self.cooldownsForgottenAfter) < time { record.cooldowns = 0 }
+            let doublings = min(record.cooldowns, Self.longestCooldownDoubling)
+            record.cooldownUntil = time.addingTimeInterval(Self.rejectionWindow * Double(1 << doublings))
+            record.cooldowns += 1
+            record.times = []
+        }
+        refusals[family] = record
     }
+
+    /// What a site's limits count against: its domain, since subdomains cost nothing to make and would each get their own. Without the
+    /// public suffix list this only knows the usual shape of a country's second level, like `example.co.uk`. So sites on one shared host,
+    /// like `vercel.app`, count as one, which is the safe way to be wrong.
+    static func family(of origin: String) -> String {
+        guard let host = URLComponents(string: origin)?.host?.lowercased() else { return origin }
+        let labels = host.split(separator: ".")
+        guard labels.count > 2, let last = labels.last, last.contains(where: \.isLetter) else { return host }
+        let isCountrySecondLevel = last.count == 2 && secondLevels.contains(String(labels[labels.count - 2]))
+        return labels.suffix(isCountrySecondLevel ? 3 : 2).joined(separator: ".")
+    }
+
+    private static let secondLevels: Set<String> = ["ac", "co", "com", "edu", "gov", "ne", "net", "or", "org"]
 
     private func finish(_ id: UUID, approved: Bool) {
         pending.removeAll { $0.id == id }
