@@ -115,6 +115,8 @@ public struct Position: Codable, Sendable, Equatable, Identifiable {
     public let estimates: Estimates
     /// Its cost is unknown, and answering a question could change that.
     public let resolvable: Bool
+    /// Each wallet's share, when several are shown as one.
+    public var wallets: [PositionPart]? = nil
 
     public var id: String { asset }
     public var isHeld: Bool { isPositive(values.qty) }
@@ -136,9 +138,37 @@ public struct Position: Codable, Sendable, Equatable, Identifiable {
     public var isIncomplete: Bool { reconciliation?.status == .incomplete }
 }
 
+/// One wallet's share of a holding shown across several, so an unknown can say where it is.
+public struct PositionPart: Codable, Sendable, Equatable, Identifiable {
+    public let wallet: String
+    public let qty: String
+    public let unknownCostQty: String
+    public let costMicros: String?
+    public let valueMicros: String?
+    public let pnlMicros: String?
+    public let resolvable: Bool
+    public let reconciliation: Reconciliation.Status?
+
+    public var id: String { wallet }
+    public var isHeld: Bool { isPositive(qty) }
+    public var hasUnknownCost: Bool { isPositive(unknownCostQty) }
+}
+
+/// How far one wallet's read has got, when several are shown as one.
+public struct CombinedWallet: Codable, Sendable, Equatable {
+    public enum State: String, Codable, Sendable {
+        case read, reading, failed
+    }
+
+    public let address: String
+    public let state: State
+}
+
 public struct Exclusion: Codable, Sendable, Equatable {
     public let asset: String
     public let reason: String
+    /// Which of the user's wallets it's in, when several are shown as one.
+    public var wallet: String? = nil
 }
 
 public struct SumCoverage: Codable, Sendable, Equatable {
@@ -208,6 +238,8 @@ public struct PnlPoint: Codable, Sendable, Equatable, Identifiable {
     public var gain: TransactionGain? = nil
     /// What arrived with a cost nobody can work out yet.
     public var unknownCost: [String] = []
+    /// Which of the user's wallets its transaction is in, when several are shown as one.
+    public var wallets: [String]? = nil
 
     public var id: String { "\(blockNum):\(txHash ?? "latest")" }
     public var date: Date? { parseTimestamp(timestamp) }
@@ -215,7 +247,7 @@ public struct PnlPoint: Codable, Sendable, Equatable, Identifiable {
 
 extension PnlPoint {
     private enum CodingKeys: String, CodingKey {
-        case blockNum, timestamp, txHash, pnlMicros, excludedCount, summary, assets, counterparty, amount, gain, unknownCost
+        case blockNum, timestamp, txHash, pnlMicros, excludedCount, summary, assets, counterparty, amount, gain, unknownCost, wallets
     }
 
     /// A server from before a transaction had facts still sends the rest.
@@ -232,6 +264,7 @@ extension PnlPoint {
         amount = try container.decodeIfPresent(TransactionAmount.self, forKey: .amount)
         gain = try container.decodeIfPresent(TransactionGain.self, forKey: .gain)
         unknownCost = try container.decodeIfPresent([String].self, forKey: .unknownCost) ?? []
+        wallets = try container.decodeIfPresent([String].self, forKey: .wallets)
     }
 }
 
@@ -368,6 +401,11 @@ public struct Portfolio: Codable, Sendable, Equatable {
     /// What became of each purchase in the book, among the wallets read.
     public let purchases: [PurchaseMatch]?
     public let marketChecked: Bool
+    /// Every wallet in it and how far each one's read has got, when it's all of the user's wallets as one.
+    public var wallets: [CombinedWallet]? = nil
+
+    /// All of the user's wallets as one, rather than one wallet.
+    public var isAllYours: Bool { WalletAddress.isAllYours(address) }
 
     /// What the holdings table lists. Tokens with no market go in a group of their own, so real warnings stay noticeable.
     public var listedPositions: [Position] { positions.filter { !$0.noMarket } }
@@ -413,10 +451,21 @@ public struct ExplanationLeg: Codable, Sendable, Equatable, Identifiable {
     public let txHash: String
     /// What the wallet already held before the first block read, which isn't a transaction.
     public let opening: Bool
+    /// What it did, in one plain sentence led by its amount in money.
+    public let summary: String
+    /// What about it isn't known, in words. nil when nothing is.
+    public let unknown: String?
+    /// Answering a question about this asset could fix what isn't known.
+    public let answerable: Bool
     public let effect: String
     public let netting: String?
     /// What this leg was in USD and the rate that converted it, in words. nil when it's in USD.
     public let conversion: String?
+    /// Which of the user's wallets it's in, when several are shown as one.
+    public var wallet: String? = nil
+
+    /// A move between two of the user's wallets is the same leg in each, so a list of both tells them apart by wallet.
+    public var rowID: String { wallet.map { "\($0):\(id)" } ?? id }
 
     public var isIncoming: Bool { !delta.hasPrefix("-") }
     public var date: Date? { parseTimestamp(timestamp) }
@@ -432,8 +481,19 @@ public struct Explanation: Codable, Sendable, Equatable {
     /// The same number in USD, when that isn't what `value` is in.
     public let sourceValue: String?
     public let lines: [String]
+    /// Each wallet's side of the number, when several are shown as one.
+    public var parts: [ExplanationPart]? = nil
     public let legCount: Int
     public let legs: [ExplanationLeg]
+}
+
+/// One wallet's side of a number shown across several.
+public struct ExplanationPart: Codable, Sendable, Equatable, Identifiable {
+    public let wallet: String
+    public let value: String?
+    public let lines: [String]
+
+    public var id: String { wallet }
 }
 
 /// A dataset behind a number. `hash` is nil when it couldn't be read, and it's never guessed.
@@ -793,6 +853,12 @@ extension ExchangeWithdrawal: Hashable {}
 public enum WalletAddress {
     /// What the server accepts in place of an address, to read its fixtures.
     public static let demo = "demo"
+    /// What the server accepts in place of an address, for all of the user's wallets at once. It's never anyone's address.
+    public static let allYours = "all"
+
+    public static func isAllYours(_ value: String?) -> Bool {
+        value == allYours
+    }
 
     /// Whether the server reads this from its fixtures, which it also does for the fixtures' own addresses.
     public static func isDemo(_ value: String) -> Bool {

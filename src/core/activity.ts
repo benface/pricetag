@@ -72,13 +72,13 @@ function proceedsOf(sales: readonly PricedLeg[]): string | null {
   return sum.toString()
 }
 
-function counterpartyOf(legs: readonly PricedLeg[], wallet: string): string | null {
+function counterpartyOf(legs: readonly PricedLeg[], wallets: ReadonlySet<string>): string | null {
   const others = new Set<string>()
   for (const leg of legs) {
     if (leg.kind === "gas") continue
     for (const part of leg.parts) if (part.counterparty) others.add(normalizeAddress(part.counterparty))
   }
-  others.delete(wallet)
+  for (const wallet of wallets) others.delete(wallet)
   return others.size === 1 ? ([...others][0] as string) : null
 }
 
@@ -137,7 +137,7 @@ export function legsByTransaction(legs: readonly PricedLeg[]): Map<string, Price
 export function transactionFacts(byTx: ReadonlyMap<string, readonly PricedLeg[]>, positions: readonly Position[], method: Method, wallet: string, unconfirmed: ReadonlySet<string> = new Set()): Map<string, TransactionFacts> {
   const effects = new Map<string, LegEffect>()
   for (const position of positions) for (const effect of position.effects) effects.set(effect.leg.id, effect)
-  const me = normalizeAddress(wallet)
+  const me = new Set([normalizeAddress(wallet)])
   const facts = new Map<string, TransactionFacts>()
   for (const [txHash, txLegs] of byTx) {
     const moved = txLegs.filter((leg) => leg.kind !== "gas" && BigInt(leg.delta) !== 0n)
@@ -150,4 +150,26 @@ export function transactionFacts(byTx: ReadonlyMap<string, readonly PricedLeg[]>
     })
   }
   return facts
+}
+
+/** Several wallets' gains from one transaction. Unknown if any of them is, and nil if none of them sold anything. */
+function sumGains(gains: readonly (TransactionGain | null)[]): TransactionGain | null {
+  const sold = gains.filter((gain) => gain !== null)
+  if (sold.length === 0) return null
+  if (sold.some((gain) => gain.micros === null)) return { micros: null, estimated: false }
+  return { micros: sold.reduce((sum, gain) => sum + BigInt(gain.micros as string), 0n).toString(), estimated: sold.some((gain) => gain.estimated) }
+}
+
+/**
+ * What one transaction did across several of a user's wallets, from what it did in each. `legs` are all of theirs in it, so
+ * a move between them went both ways and has nobody on the other side, and gains are each wallet's own, added up.
+ */
+export function combinedFacts(legs: readonly PricedLeg[], each: readonly TransactionFacts[], wallets: ReadonlySet<string>): TransactionFacts {
+  return {
+    assets: [...new Set(each.flatMap((facts) => facts.assets))],
+    counterparty: counterpartyOf(legs, wallets),
+    amount: amountOf(legs),
+    gain: sumGains(each.map((facts) => facts.gain)),
+    unknownCost: [...new Set(each.flatMap((facts) => facts.unknownCost))],
+  }
 }

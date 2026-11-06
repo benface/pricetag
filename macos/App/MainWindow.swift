@@ -33,6 +33,8 @@ struct MainWindow: View {
     @State private var exporting = false
     @State private var exportDocument: CSVDocument?
     @State private var exportError: String?
+    /// Asked for from the details sheet, which closes first.
+    @State private var resolvingAfterDetails: String?
 
     /// How small the window can get, with the sidebar closed. It closes by itself below `sidebarWidth`.
     static let minimumSize = CGSize(width: 480, height: 400)
@@ -59,6 +61,8 @@ struct MainWindow: View {
                 .inspector(isPresented: inspectorBinding) { inspector }
         }
         .frame(minWidth: Self.minimumSize.width, minHeight: Self.minimumSize.height)
+        // What each wallet is called, wherever All Yours says which wallet something is in.
+        .environment(\.walletNames, store.walletList(hotWallet: hotWallet).names)
         // Only for the details opening and closing. It doesn't reach anything else that changes at another moment.
         .motion(Motion.panel, value: navigation.target == nil)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { newWidth in
@@ -67,7 +71,12 @@ struct MainWindow: View {
             width = newWidth
             if wasWide != isWide { columns = isWide ? .all : .detailOnly }
         }
-        .sheet(isPresented: detailsSheetBinding) { detailsSheet }
+        .sheet(isPresented: detailsSheetBinding, onDismiss: {
+            if let asset = resolvingAfterDetails {
+                resolvingAfterDetails = nil
+                navigation.resolve(asset)
+            }
+        }) { detailsSheet }
         // Coming back from the provider's page is when there's news, whichever section this is on.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await purchases.check() }
@@ -178,7 +187,8 @@ struct MainWindow: View {
                 Button("Buy", systemImage: "plus") { navigation.isBuying = true }
                     // A plus on its own could mean adding anything.
                     .labelStyle(.titleAndIcon)
-                    .help("Buy crypto")
+                    // With every wallet showing, it says which one it's for.
+                    .help(WalletAddress.isAllYours(store.address) ? "Buy crypto for \(HotWalletWording.title)" : "Buy crypto")
             }
         }
     }
@@ -186,7 +196,7 @@ struct MainWindow: View {
     @ViewBuilder
     private var inspector: some View {
         if let target = navigation.target {
-            ExplanationPane(target: target, store: store)
+            ExplanationPane(target: target, store: store) { navigation.resolve($0) }
                 .safeAreaBar(edge: .top) { metricPicker(target) }
                 .inspectorColumnWidth(min: 300, ideal: 330, max: 520)
                 .toolbar {
@@ -211,7 +221,11 @@ struct MainWindow: View {
                 }
                 .padding(12)
                 Divider()
-                ExplanationPane(target: target, store: store)
+                // Questions open in a sheet of their own, so they wait for this one to close.
+                ExplanationPane(target: target, store: store) { asset in
+                    resolvingAfterDetails = asset
+                    navigation.target = nil
+                }
             }
             .frame(minWidth: 320, idealWidth: 420, minHeight: 320, idealHeight: 520)
         }
@@ -221,12 +235,16 @@ struct MainWindow: View {
     @ViewBuilder
     private func metricPicker(_ target: ExplainTarget) -> some View {
         if case .asset(let asset, let metric) = target, let position = portfolio?.positions.first(where: { $0.asset == asset }) {
-            Picker("Show", selection: Binding(get: { metric }, set: { navigation.target = .asset(asset, $0) })) {
-                ForEach(position.explainableMetrics, id: \.self) { Text($0.title).tag($0) }
+            // The pane has no title of its own for these, so this names both the asset and the number.
+            HStack(spacing: 8) {
+                Text(asset).font(.headline)
+                Picker("Show", selection: Binding(get: { metric }, set: { navigation.target = .asset(asset, $0) })) {
+                    ForEach(position.explainableMetrics, id: \.self) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .fixedSize()
             }
-            .pickerStyle(.menu)
-            .labelsHidden()
-            .fixedSize()
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16)
             .padding(.vertical, 6)
@@ -253,6 +271,8 @@ struct MainWindow: View {
             } else {
                 TaxReportView(store: store, wallets: store.walletList(hotWallet: hotWallet).pickable, readAddress: AddressText.readAnywhere, onResolve: { navigation.resolve(in: $0) }, onOpen: { navigation.explain($0) })
             }
+        case .security:
+            SecurityPage(store: store, hotWallet: hotWallet, navigation: navigation)
         }
     }
 
@@ -388,6 +408,32 @@ struct MainWindow: View {
         if portfolio.mode == .demo {
             Notice(.info, Wording.demo)
         }
+        if portfolio.isAllYours {
+            allYoursNotices(portfolio)
+        } else {
+            linkedNotices(portfolio)
+        }
+    }
+
+    /// Wallets that aren't in All Yours' numbers yet, by name, since the numbers are only theirs once they are.
+    @ViewBuilder
+    private func allYoursNotices(_ portfolio: Portfolio) -> some View {
+        let names = store.walletList(hotWallet: hotWallet).names
+        if !portfolio.linkedFailed.isEmpty {
+            HStack(spacing: 8) {
+                Notice(.warning, Wording.allYoursFailed(portfolio.linkedFailed.map(names.walletName)))
+                Button("Try Again") { store.refresh() }
+            }
+            .arrives()
+        }
+        if !portfolio.linkedReading.isEmpty {
+            Notice(.info, Wording.allYoursReading(portfolio.linkedReading.map(names.walletName)))
+                .arrives()
+        }
+    }
+
+    @ViewBuilder
+    private func linkedNotices(_ portfolio: Portfolio) -> some View {
         if !portfolio.linkedFailed.isEmpty {
             HStack(spacing: 8) {
                 Notice(.warning, Wording.linkedFailed(portfolio.linkedFailed.count))
@@ -591,6 +637,7 @@ private struct HoldingsTable: View {
     let onResolve: (String) -> Void
     @State private var selection: Position.ID?
     @State private var columns = TableColumnCustomization<Position>()
+    @Environment(\.walletNames) private var walletNames
 
     private var rows: [Position] { portfolio.listedPositions.sorted(using: sort) }
 
@@ -661,6 +708,7 @@ private struct HoldingsTable: View {
                     balanceCheck(position)
                 }
                 .opacity(position.isHeld ? 1 : 0.6)
+                .help(breakdown(position) ?? "")
                 .tableCell()
             }
             .width(min: Column.asset, ideal: Column.assetRoom, max: limit(Column.assetRoom))
@@ -809,6 +857,22 @@ private struct HoldingsTable: View {
         .buttonStyle(NumberButtonStyle())
     }
 
+    /// Where each wallet's share is, for All Yours, so nothing that's unknown hides inside a total.
+    private func breakdown(_ position: Position) -> String? {
+        guard let parts = position.wallets, !parts.isEmpty else { return nil }
+        return parts.map { part in
+            let unknown = part.hasUnknownCost ? ", \(Format.amount(part.unknownCostQty, decimals: position.decimals)) at an unknown cost" : ""
+            return "\(walletNames.walletName(part.wallet)): \(Format.amount(part.qty, decimals: position.decimals)) \(position.asset)\(unknown)"
+        }.joined(separator: "\n")
+    }
+
+    /// Which wallets an unknown cost is in, for All Yours.
+    private func unknownIn(_ position: Position) -> String? {
+        let parts = (position.wallets ?? []).filter(\.hasUnknownCost)
+        guard !parts.isEmpty else { return nil }
+        return "Unknown cost in \(parts.map { walletNames.walletName($0.wallet) }.formatted(.list(type: .and)))"
+    }
+
     private func number(_ position: Position, _ metric: AssetMetric, _ text: String, tone: Tone) -> some View {
         Button {
             target = .asset(position.asset, metric)
@@ -821,7 +885,7 @@ private struct HoldingsTable: View {
                 .justKnown(justKnown.contains(position.asset) && (metric == .average || metric == .unrealized || metric == .return))
         }
         .buttonStyle(NumberButtonStyle())
-        .help(metric.help ?? "")
+        .help((text == Wording.unknown ? unknownIn(position) : nil) ?? metric.help ?? "")
         .accessibilityLabel("\(position.asset) \(metric.label), \(text)")
         .tableCell()
     }
@@ -902,7 +966,7 @@ private struct NoActivity<Notices: View>: View {
             // Never shown here: what holds the key is the only place to trust it, since a tampered page could show another.
             Text("To receive here, copy the address from the device or app that holds its key, and check it there.")
         } else {
-            Text("Nothing has moved for this wallet in \(Format.duration(ms: BlockTime.msBetween(portfolio.coverage.fromBlock, portfolio.coverage.toBlock))).")
+            Text("Nothing has moved \(portfolio.isAllYours ? "in any of your wallets" : "for this wallet") in \(Format.duration(ms: BlockTime.msBetween(portfolio.coverage.fromBlock, portfolio.coverage.toBlock))).")
                 .help(Wording.coverage(portfolio))
         }
     }

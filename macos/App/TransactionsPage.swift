@@ -55,7 +55,7 @@ struct TransactionsPage<Notices: View>: View {
                     filterBar(log)
                     Divider()
                     // In the list's own currency, which is the one its amounts were read in, until the new list is ready.
-                    TransactionsTable(days: days, currency: log.currency, portfolio: portfolio, isLive: isLive, target: $navigation.target) { navigation.resolve($0) }
+                    TransactionsTable(days: days, currency: log.currency, portfolio: portfolio, isLive: isLive, showsWallets: portfolio.isAllYours, target: $navigation.target) { navigation.resolve($0) }
                         .overlay {
                             if days.isEmpty { ContentUnavailableView.search(text: query) }
                         }
@@ -139,9 +139,10 @@ extension SentTransaction {
         case .sent: "Send \(amount)"
         case .site: record.amount == "0" ? "Transaction for \(record.site.map(siteName) ?? "a site")" : "Send \(amount) for \(record.site.map(siteName) ?? "a site")"
         case .note: "Publish what you paid for \(record.symbol)"
+        case .revoke: "Revoke an approval for \(record.symbol)"
         case .aboveCap, .manual, .rotation: "Move \(amount) to savings"
         }
-        self.init(txHash: record.hash, date: record.createdAt, summary: summary, to: record.to.lowercased, asset: record.reason == .note ? nil : record.symbol, status: status)
+        self.init(txHash: record.hash, date: record.createdAt, summary: summary, to: record.to.lowercased, asset: record.reason == .note || record.reason == .revoke ? nil : record.symbol, status: status)
     }
 }
 
@@ -153,16 +154,20 @@ private struct TransactionsTable: View {
     /// Only for what can be answered, which is about the numbers now.
     let portfolio: Portfolio
     let isLive: Bool
+    /// Which wallet each one is in, for All Yours.
+    let showsWallets: Bool
     @Binding var target: ExplainTarget?
     let onResolve: (String) -> Void
+    @Environment(\.walletNames) private var walletNames
     @State private var selection: TransactionItem.ID?
     @State private var width: CGFloat = 800
     @State private var columns = TableColumnCustomization<TransactionItem>()
     @FocusState private var isFocused: Bool
 
-    /// Below this, who it was with gives way. It's still in the details, and still searchable.
+    /// Below this, who it was with and which wallet give way. They're still in the details, and still searchable.
     private static let counterpartyWidth: CGFloat = 620
     private static let counterpartyID = "counterparty"
+    private static let walletID = "wallet"
 
     private var targetHash: String? {
         if case .transaction(let hash) = target { hash } else { nil }
@@ -208,6 +213,18 @@ private struct TransactionsTable: View {
             .width(min: 90, ideal: 150, max: 220)
             .customizationID(Self.counterpartyID)
             .disabledCustomizationBehavior(.all)
+            TableColumn("Wallet") { item in
+                let names = item.wallets.map(walletNames.walletName).formatted(.list(type: .and))
+                Text(names)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(names)
+                    .tableCell()
+            }
+            .width(min: 90, ideal: 110, max: 220)
+            .customizationID(Self.walletID)
+            .disabledCustomizationBehavior(.all)
             TableColumn("Amount") { item in
                 if let amount = item.amountText(currency) {
                     LiveNumber(amount, tone: item.amount?.micros == nil ? .secondary : .neutral)
@@ -251,6 +268,10 @@ private struct TransactionsTable: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .onChange(of: isNarrow, initial: true) {
             columns[visibility: Self.counterpartyID] = isNarrow ? .hidden : .visible
+        }
+        // Not `if` around the column, for the same reason as the holdings' columns.
+        .onChange(of: showsWallets && !isNarrow, initial: true) { _, shows in
+            columns[visibility: Self.walletID] = shows ? .visible : .hidden
         }
         .onChange(of: selection) { _, id in
             // What the server hasn't read has nothing to explain yet.
@@ -312,8 +333,8 @@ private struct TransactionsTable: View {
     private func unknownCost(_ item: TransactionItem) -> some View {
         if !item.unknownCost.isEmpty {
             let fixable = item.answerableAsset(in: portfolio.questions)
-            // In a narrow window, what happened needs the room more, and the button's tooltip still says it.
-            if !isNarrow || fixable == nil {
+            // In a narrow window, or beside the wallets, what happened needs the room more, and the button's tooltip still says it.
+            if !(isNarrow || showsWallets) || fixable == nil {
                 Text("Cost unknown")
                     .font(.caption)
                     .foregroundStyle(.secondary)

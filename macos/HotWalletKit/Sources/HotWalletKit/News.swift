@@ -29,8 +29,8 @@ extension HotWalletWording {
                 case .aboveCap, .manual: swept.append(record)
                 case .rotation: moved.append(record)
                 case .sent: notices.append(notice(record, "Sent", "\(amount(record)) went to \(recipient(record, savingsName))."))
-                // The site shows what became of it, and a published cost is in the app the moment it lands.
-                case .site, .note: break
+                // The site shows what became of it, and a published cost or a revoked approval is in the app the moment it lands.
+                case .site, .note, .revoke: break
                 }
             case .settled(let record):
                 notices.append(notice(record, failedTitle(record), failedOnchainText(record)))
@@ -42,6 +42,7 @@ extension HotWalletWording {
                 case .sent: notices.append(notice(record, "Send Not Confirmed Yet", "\(amount(record)) to \(recipient(record, savingsName)) \(waited), so check Spending Money before sending it again."))
                 case .site: notices.append(notice(record, "Transaction Not Confirmed Yet", "A transaction for \(record.site.map(siteName) ?? "a site") \(waited), so check before trying it again."))
                 case .note: notices.append(notice(record, "Cost Not Published Yet", "Publishing the cost of \(record.symbol) \(waited), so check before publishing it again."))
+                case .revoke: notices.append(notice(record, "Revoke Not Confirmed Yet", "Revoking an approval for \(record.symbol) \(waited), so check before revoking it again."))
                 }
             case .landedLate(let record):
                 switch record.reason {
@@ -50,6 +51,7 @@ extension HotWalletWording {
                 case .sent: notices.append(notice(record, "Sent", "\(amount(record)) went to \(recipient(record, savingsName)) after all."))
                 case .site: notices.append(notice(record, "Transaction Confirmed", "The transaction for \(record.site.map(siteName) ?? "a site") landed after all."))
                 case .note: notices.append(notice(record, "Cost Published", "The cost of \(record.symbol) was published after all."))
+                case .revoke: notices.append(notice(record, "Approval Revoked", "The approval for \(record.symbol) was revoked after all."))
                 }
             case .sweepDidntGoOut(let message):
                 notices.append(MoneyNotice(id: MoneyNotice.sweepProblemRow, title: "Sweep Didn't Go Out", body: "\(message) It tries again in a few minutes.", row: MoneyNotice.sweepProblemRow))
@@ -83,13 +85,14 @@ extension HotWalletWording {
         case .sent: "Send Failed"
         case .site: "Transaction Failed"
         case .note: "Cost Not Published"
+        case .revoke: "Revoke Failed"
         }
     }
 
     private static func failedOnchainText(_ record: SignedRecord) -> String {
         switch record.reason {
         case .aboveCap, .manual, .rotation: "A sweep of \(record.symbol) failed onchain. Nothing moved, but its gas was spent."
-        case .sent, .note: failedOnchain(record)
+        case .sent, .note, .revoke: failedOnchain(record)
         case .site: "A transaction for \(record.site.map(siteName) ?? "a site") failed onchain. Nothing moved, but its gas was spent."
         }
     }

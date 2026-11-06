@@ -36,6 +36,8 @@ public struct TransactionItem: Identifiable, Equatable, Sendable {
     public let amount: TransactionAmount?
     public let gain: TransactionGain?
     public let unknownCost: [String]
+    /// Which of the user's wallets it's in, when several are shown as one.
+    public let wallets: [String]
     public let status: Status
     /// The server has it, so its details can be explained.
     public let isRead: Bool
@@ -62,10 +64,11 @@ public struct TransactionItem: Identifiable, Equatable, Sendable {
         amount = point.amount
         gain = point.gain
         unknownCost = point.unknownCost
+        wallets = point.wallets ?? []
         self.status = status
         isRead = true
         day = date.map(calendar.startOfDay)
-        searchText = Self.searchText([point.summary, point.assets.joined(separator: " "), point.counterparty, name, txHash])
+        searchText = Self.searchText([point.summary, point.assets.joined(separator: " "), point.counterparty, name, txHash] + wallets.flatMap { [$0, names[$0]] })
     }
 
     init(signed: SentTransaction, names: [String: String], calendar: Calendar) {
@@ -79,6 +82,7 @@ public struct TransactionItem: Identifiable, Equatable, Sendable {
         amount = nil
         gain = nil
         unknownCost = []
+        wallets = []
         status = signed.status == .pending ? .pending : .failed
         isRead = false
         day = calendar.startOfDay(for: signed.date)

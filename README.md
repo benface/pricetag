@@ -27,11 +27,13 @@ pnpm check:extension # the browser extension on a real site, through to a local 
 pnpm mac:shot    # screenshots from fixtures that never open a window you'd see or take focus. See macos/TESTING.md
 ```
 
-It reads from the server on http://127.0.0.1:8787, set in Settings, so it runs on whatever the server runs on: with no `.env.local`, that's the demo wallet. It remembers the wallet, method and currency across restarts.
+It reads from the server on http://127.0.0.1:8787, set in Settings, so it runs on whatever the server runs on: with no `.env.local`, that's the demo wallet. A build can read a [hosted one](#hosting) instead. It remembers the wallet, method and currency across restarts.
 
 If the menu bar is full, macOS hides new items. Look under the menu bar's "show hidden items" control, or in System Settings > Menu Bar, and drag it out. The window opens at launch either way.
 
-The app never does PnL math and never holds an Amp token. `GET /api/portfolio/<address>?method=average|fifo&currency=USD|CAD|…` returns the portfolio the fold computed, `GET /api/portfolio/<address>/explain?metric=…&asset=…` or `?tx=…` returns what's behind one number (`metric=hold` for the comparison with holding ETH), and `GET /api/portfolio/<address>/proof?leg=…` and `/verify?leg=…` return what's behind one price and the check of its block. With a [forked pricing rule](#forking-a-pricing-rule), `GET /api/rules` lists the rules, `&rule=<id>` picks one, and `GET /api/portfolio/<address>/compare` returns a wallet by both. `test/portfolio.test.ts` writes what they send to files the Swift tests read, so the two can't drift apart without a failure: when a change is on purpose, run it with `UPDATE_FIXTURES=1`.
+With two or more wallets of yours, **All Yours** at the top of the wallet button adds them up: value, PnL, holdings, the chart and transactions, saying which wallet each transaction and each unknown is in. Moves between your wallets aren't gains, losses or money put in, and their costs carry over as `inherited`, while their network fees still count. Watched wallets are never in it. A wallet that's slow to read, or whose read fails, doesn't hold up the rest, and its last balance isn't counted, since it could be from before a move: it's listed as still reading or failed, with the numbers marked as updating, until it's in. Every wallet is read at the same block, so a move is never counted in both.
+
+The app never does PnL math and never holds an Amp token. `GET /api/portfolio/<address>?method=average|fifo&currency=USD|CAD|…` returns the portfolio the fold computed, `GET /api/portfolio/<address>/explain?metric=…&asset=…` or `?tx=…` returns what's behind one number (`metric=hold` for the comparison with holding ETH), `POST /api/portfolio/all` with `linked` set to every wallet of yours returns them as one (its `/explain`, `/preview`, `/export` and `/last` work the same way), and `GET /api/portfolio/<address>/proof?leg=…` and `/verify?leg=…` return what's behind one price and the check of its block. With a [forked pricing rule](#forking-a-pricing-rule), `GET /api/rules` lists the rules, `&rule=<id>` picks one, and `GET /api/portfolio/<address>/compare` returns a wallet by both. `test/portfolio.test.ts` writes what they send to files the Swift tests read, so the two can't drift apart without a failure: when a change is on purpose, run it with `UPDATE_FIXTURES=1`.
 
 The numbers move on their own: `GET /api/events` says when there's a new block, and the app and the web page read again when it does. It comes from Amp's stream, so a reorg is seen when it happens, and the server polls Amp when the stream isn't working. The Mac app also polls every 2 s when it can't reach the events, and every 15 s even when it can, in case they've quietly stopped.
 
@@ -103,6 +105,8 @@ Mainnet's RPC and blocks may differ. The previous dataset, which read prices wit
 
 **A local Amp's first prices come from `eth_call`.** It only has logs from its start block, and USDC/USD's last update can be up to a day older. So `amp:start` reads each feed's latest round from its contract at the start block (`dataset/local.ts`), and those stand in as updates, with an all-zero transaction, for as long as the real ones would have lasted. If that read fails, `amp:start` stops before the backfill. Proof says a price came from the contract, and Verify doesn't claim to cover it. It covers the price from the first real log onward.
 
+**To test reorgs,** `scripts/reorg-local.sh [depth...]` runs Amp on an Anvil fork of Base instead, with a block every 200 ms. For each depth, it puts a transfer to a watched wallet on the chain, then replaces at least that many blocks with a longer chain that has another transfer. It times how long Amp's tables, its stream and two SDK wallets, one streaming and one polling, take to match the new chain, and logs one JSON line per event. Anvil signs with its own accounts, so no key is involved. It uses its own ports and a temporary folder, and removes everything when it exits, so it can run beside `amp:start`. Results from November 5 are in [AMP-ASSESSMENT.md](AMP-ASSESSMENT.md).
+
 ## Forking a pricing rule
 
 A pricing rule is a dataset version, and the server picks one per request with Amp's `amp-alias` header. The SQL never changes, and the app has no code for any rule. Set these and both apps show a switch, in the Mac app's Settings and above the web app's numbers, with each rule's dataset and manifest hash, and a side-by-side comparison of a wallet. The comparison uses one set of facts at one block for both rules: the same transactions, balances, fees and exchange rates, with only prices from each. If it can't establish that, it says so and shows no numbers. Each rule's market prices are read at that block, and a token only one rule has a market price for is left out on both sides, so the two totals still add up the same things.
@@ -132,6 +136,19 @@ Deploy with `POST /controller/materialized-datasets/benface/pricetag_cautious/ve
 **A new dataset name needs a new manifest hash.** Amp finds a dataset's active tables by hash and table name, not by dataset name, so one manifest under two names can read and write the same tables. That's why `benface/pricetag@0.0.1` is `dataset/pricetag.json` at this start block plus a one-line SQL comment. A manifest with new SQL already has its own hash.
 
 `pnpm amp:start` turns the fork off while it runs, because it isn't registered on a local Amp. Hot wallet decisions and tax reports always read by the default rule, whatever the switch says.
+
+## Hosting
+
+The Mac app reads from a server because the server holds what the app can't ship: the Amp token and the Coinbase key. Locally that's `pnpm mac`'s. A shared one is the same server with `PRICETAG_HOSTED=1`, which turns on everything it needs at once:
+
+- **Invites.** Every `/api/` request needs `Authorization: Bearer <invite>`. `pnpm invite <name>` makes one and prints the line for `PRICETAG_INVITES`, which holds only its SHA-256. Remove that line to take it back. It won't start without one.
+- **Limits.** Per invite: requests a minute, live streams at once, and Coinbase checkouts an hour. And checkouts a day for everyone together, so one invite can't use up the account. Past one, it answers 429 with `Retry-After`. One request can name at most 20 other wallets, counting its linked wallets, its answers and every preview, and it's refused before anything is read.
+- **Logs** are one JSON object a line, with addresses and transaction hashes (as `0x…`, as SQL's `X'…'`, or as any long run of hex), URLs, bearer tokens and the env's secrets taken out. It replaces `console` itself, so the SDK's lines go through it too. It logs no requests.
+- **`GET /healthz`** answers without an invite, with whether Amp and buying are set up and nothing else. It says 503 once a shutdown starts.
+- **SIGTERM** stops taking requests, ends the live streams so clients reconnect, and waits up to `PRICETAG_DRAIN_MS` for the rest.
+- **API only.** It doesn't serve the web app, so Top Up and Publish from a device still need one on the Mac. `PRICETAG_SERVE_APP=1` serves it anyway.
+
+`Dockerfile` builds it, and `fly.toml` runs it on Fly.io, on **one machine**: the wallet reads, the limits and the day's checkouts are counted in its memory, so a second one would split them. Fly starts two on a first deploy unless told otherwise, so deploy with `fly deploy --ha=false`, then check that `fly machine list` shows one. The app reads it when its build names it: `PATINA_SERVER_HOST` in `macos/Config/App.xcconfig`, which is empty, so builds read the Mac's own server. Its invite goes in Settings. It's saved for that server alone, so it never goes to another one, and it's only sent over HTTPS. See `.env.example` for the rest.
 
 ## How it's put together
 
@@ -281,6 +298,16 @@ What a pass doesn't show, which the interface also says:
 - That a transaction's `from` is right. Signatures are in the commitment, but aren't recovered to compare them with the stored sender, so a row that takes its account from the sender (fees, ETH sent, unwrapped ETH received) says so.
 
 `server/verify.ts` is the pure part, tested on real rows and on tampered ones. Keccak comes from `@noble/hashes`, since whether Node has it depends on its build. `server/block.ts` reads a block and `server/proof.ts` puts it into words. It's valid for blocks since Canyon (January 2024), because older deposits' receipts are encoded differently.
+
+## Security
+
+The Mac app's Security page (⌘5) has a short checklist, each item checked where the app can know it, and every token approval the wallet showing has given, with a way to revoke them.
+
+- **Finding them.** `GET /api/approvals/<address>` reads every approval event the wallet gave: ERC-20 `Approval`, NFT `ApprovalForAll`, and Permit2's `Approval` and `Permit`. They come from the dataset's `approvals` table, which holds all of them from its start block, so one wallet's are one quick read. A dataset version without that table, or no dataset at all, reads the same logs from the raw Base dataset, which took about 25 s for a day of blocks on staging, and what's been read is kept so the next read only reads new blocks.
+- **What each still allows** is read from its contract at the head through Amp's `eth_call`, because spending and revoking change it. Tracked tokens and Permit2 share one `aggregate3`. Any other contract gets an `eth_call` of its own, because Multicall3 runs each call with CALL, so a hostile one in the batch could change what a later one answers. One that doesn't answer is counted, and "no unlimited approvals" stays unchecked until there are none, as it does when a refresh fails and an older list is showing. Only what still allows something is listed. Every tracked token is also checked with well-known apps (Uniswap's routers and Permit2, Aerodrome, 0x, 1inch, Odos, CoW Swap), so an approval to one of them shows however old it is. An approval to another app from before the history starts isn't found, and the page says so.
+- **What can't be listed.** A signed permit nobody has used yet isn't onchain. The page says that, and how to limit it: revoking Permit2's approval for a token only stops its signatures while it stays revoked, and moving the token is the only sure way.
+- **Revoking** is only for Spending Money, through the same review and Touch ID as any send, with its fee read first. Each token is one transaction (`approve(spender, 0)`), and everything Permit2 holds is one `lockdown`, up to 20 at once. Only a tracked token or Permit2 is ever called, so an untracked token's or an NFT collection's approval is listed with a pointer to revoke it elsewhere. A savings wallet's approvals are from before Patina, because its flow only signs plain transfers, so the page points to revoking them with the device in a browser wallet. A watched wallet's are only shown.
+- **This Mac.** A login password is what `LAContext` says, and FileVault is what `fdesetup isactive` says. When it can't run, which the sandbox may prevent, it says it couldn't check, never that it's on.
 
 ## Known gaps
 
