@@ -7,7 +7,7 @@ import { readCheckedAccounts } from "../core/device-accounts.ts"
 import { noteLinkFor, type DeviceLink } from "../core/device-link.ts"
 import { mergeWithdrawals, parseCoinbaseCsv, type ExchangeImport } from "../core/exchange-import.ts"
 import { foldBook, isBalanced, microsOf, previewBook, type Question } from "../core/resolve.ts"
-import { ALL_ANSWERED, ANSWER_QUESTIONS, COST_QUESTION, COST_WHY, EXCHANGE_COST_WHY, NOT_SAVED, NOTHING_LEFT, SENDER_QUESTION, SENDER_WHY, finishNote, importedSentence, linkedFailedSentence } from "../core/wording.ts"
+import { ALL_ANSWERED, ANSWERS_STAY, ANSWER_QUESTIONS, COST_QUESTION, COST_WHY, EXCHANGE_COST_WHY, NOT_SAVED, NOTHING_LEFT, SENDER_QUESTION, SENDER_WHY, finishNote, importedSentence, linkedFailedSentence } from "../core/wording.ts"
 import { linkByProof, type Ethereum } from "./link-proof.ts"
 
 type Ownership = "mine" | "my-exchange" | "someone-else"
@@ -146,12 +146,15 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Whatever's pressed in a field is the field's, including undoing what's been typed.
+      if (e.target instanceof HTMLInputElement) return
       if ((e.metaKey || e.ctrlKey) && e.key === "z") {
         e.preventDefault()
         undo()
         return
       }
-      if (e.target instanceof HTMLInputElement || !current) return
+      // With a modifier it's someone else's shortcut, like Alt+Left for Back. Holding a key down is one answer, not one per card.
+      if (!current || e.repeat || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return
       if (e.key === "ArrowDown") return skip()
       if (takingCost) return
       const kind = options[Number(e.key) - 1]?.kind ?? ({ ArrowRight: "mine", ArrowUp: "my-exchange", ArrowLeft: "someone-else" } as Record<string, Ownership>)[e.key]
@@ -207,7 +210,7 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
       <div className="meter" role="progressbar" aria-label="Questions left" aria-valuenow={Math.round(progress * 100)}>
         <div className={balanced ? "meter-fill done" : "meter-fill"} style={{ width: `${progress * 100}%` }} />
       </div>
-      <p className="small">
+      <p className="small" role="status">
         <span className="muted">Now </span>
         {pnlWords(fold.totals.pnlMicros, fold.totals.estimatedMicros, fold.totals.unresolvedMicros, currency)}
         {BigInt(fold.totals.estimatedMicros) > 0n ? ` · ${formatMoney(fold.totals.estimatedMicros, currency)} estimated` : ""}
@@ -225,6 +228,10 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
           }}
           onPointerMove={(e) => start.current && setDrag({ x: e.clientX - start.current.x, y: e.clientY - start.current.y })}
           onPointerUp={onPointerUp}
+          onPointerCancel={() => {
+            start.current = null
+            setDrag(null)
+          }}
         >
           {current.arrivals.map((arrival) => (
             <strong key={arrival.asset} className="arrived">
@@ -255,7 +262,7 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
                 </label>
               ))}
               {costBook ? <p className="small">That would make it {consequence(previewOf(costBook), currency)}</p> : null}
-              {current.arrivals.length === 1 && looksOff(microsOf(costs[(current.arrivals[0] as { asset: string }).asset] ?? "", currency), current.valueMicros) ? <p className="small warn-text">⚠ That's far from what it was worth when it arrived, about {formatMoney(current.valueMicros as string, currency)}. Double-check it.</p> : null}
+              {current.arrivals.length === 1 && looksOff(microsOf(costs[(current.arrivals[0] as { asset: string }).asset] ?? "", currency), current.valueMicros) ? <p className="small warn-text" role="status">⚠ That's far from what it was worth when it arrived, about {formatMoney(current.valueMicros as string, currency)}. Double-check it.</p> : null}
               <div className="cost-actions">
                 <button type="button" onClick={saveCost}>
                   Save
@@ -264,7 +271,7 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
                   <>
                     <label className="file-button">
                       Import Coinbase history
-                      <input type="file" accept=".csv,text/csv" hidden onChange={(e) => void importFile(e.target.files?.[0])} />
+                      <input type="file" accept=".csv,text/csv" className="visually-hidden" onChange={(e) => void importFile(e.target.files?.[0])} />
                     </label>
                     <button type="button" title="An estimate, and it's always shown as one" onClick={() => choose("someone-else")}>
                       Use the price when it arrived
@@ -277,7 +284,7 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
                   </button>
                 ) : null}
               </div>
-              <p className="small muted">This stays in this browser. Publishing a cost onchain would tie your wallets together in public, so that's never done without asking.</p>
+              <p className="small muted">{ANSWERS_STAY}</p>
             </div>
           ) : (
             <div className="answers">
@@ -292,14 +299,14 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
               ))}
             </div>
           )}
-          {message ? <p className="small warn-text">{message}</p> : null}
+          {message ? <p className="small warn-text" role="alert">{message}</p> : null}
         </div>
       ) : (
         <div className="finish">
-          <div className={balanced ? "seal done" : "seal"}>{balanced ? "✓" : "…"}</div>
+          <div className={balanced ? "seal done" : "seal"} aria-hidden="true">{balanced ? "✓" : "…"}</div>
           {linkedFailed.length > 0 ? (
             <>
-              <p className="small warn-text">⚠ {linkedFailedSentence(linkedFailed.length)}</p>
+              <p className="small warn-text" role="alert">⚠ {linkedFailedSentence(linkedFailed.length)}</p>
               <button type="button" onClick={onRetry}>
                 Try again
               </button>
@@ -362,7 +369,7 @@ function LinkByProof({ current, book, onChange }: { current: string; book: Book;
       <button type="button" className="link" onClick={() => void prove()}>
         Link this browser's wallet by signing
       </button>{" "}
-      It can't move funds, and it's for hot wallets only. {status}
+      It can't move funds, and it's for hot wallets only. <span role="status">{status}</span>
     </p>
   )
 }

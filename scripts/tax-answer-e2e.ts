@@ -183,8 +183,8 @@ check("only the wallet still asking has a button", JSON.stringify(await buttonsI
 
 // One wallet on its own, which is the same way back.
 await openReport(ADDED, emptyBook())
-check("the wallet showing says how many it has", JSON.stringify(await buttonsIn(TAX)) === JSON.stringify(["Resolve 1"]), await buttonsIn(TAX))
-await click(TAX, "Resolve 1")
+check("the wallet showing says how many it has", JSON.stringify(await buttonsIn(TAX)) === JSON.stringify(["Answer 1 Question"]), await buttonsIn(TAX))
+await click(TAX, "Answer 1 Question")
 await until(QUESTIONS, "its questions open")
 check("its question opens", (await text(QUESTIONS)).includes("3 ETH"), await text(QUESTIONS))
 await click(QUESTIONS, "Someone else")

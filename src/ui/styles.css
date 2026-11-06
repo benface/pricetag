@@ -8,6 +8,8 @@
   --text-primary: #0b0b0b;
   --text-secondary: #52514e;
   --series: #2a78d6;
+  --link: #1d66bd;
+  --control-border: #85847e;
   --gain: #006300;
   --loss: #b42323;
   --warn-ink: #7a4f00;
@@ -24,6 +26,8 @@
     --text-primary: #f0efec;
     --text-secondary: #c3c2b7;
     --series: #3987e5;
+    --link: #5a9fee;
+    --control-border: #77766f;
     --gain: #5cc75c;
     --loss: #ef7d7d;
     --warn-ink: #fac75a;
@@ -43,9 +47,10 @@ h1 { font-size: 28px; margin: 0 0 8px; letter-spacing: -0.01em; }
 h2 { font-size: 15px; margin: 0; }
 h3 { font-size: 13px; margin: 20px 0 8px; color: var(--text-secondary); font-weight: 600; }
 p { margin: 0; }
-a { color: var(--series); }
+a { color: var(--link); }
 code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
 .muted { color: var(--text-secondary); }
+.visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; user-select: none; }
 .small { font-size: 13px; }
 .page { max-width: 1040px; margin: 0 auto; padding: 16px 20px 64px; }
 .top { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
@@ -56,7 +61,7 @@ input {
   min-width: 0;
   font: 13px ui-monospace, Menlo, monospace;
   padding: 8px 10px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 8px;
   background: var(--surface-1);
   color: inherit;
@@ -70,7 +75,7 @@ button { font: inherit; cursor: pointer; color: inherit; }
   font-weight: 600;
 }
 .currency { display: flex; align-items: center; gap: 8px; }
-.currency select { font: inherit; font-size: 13px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-1); color: inherit; }
+.currency select { font: inherit; font-size: 13px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--control-border); background: var(--surface-1); color: inherit; }
 .badge { font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-1); white-space: nowrap; }
 .badge.live::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--gain); margin-right: 6px; }
 .badge.updating::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--text-secondary); margin-right: 6px; vertical-align: -1px; animation: spin 0.9s linear infinite; }
@@ -125,8 +130,9 @@ button { font: inherit; cursor: pointer; color: inherit; }
 .card-head { display: flex; justify-content: space-between; align-items: center; }
 .card h2 { margin-bottom: 4px; }
 .card > .muted { margin-bottom: 8px; }
-.link { background: none; border: 0; padding: 0; color: var(--series); font-size: 13px; }
-.chart { position: relative; width: 100%; cursor: crosshair; touch-action: none; }
+.card > .muted:empty { margin-bottom: 0; }
+.link { background: none; border: 0; padding: 0; color: var(--link); font-size: 13px; }
+.chart { position: relative; width: 100%; cursor: crosshair; touch-action: pan-y; }
 .chart[hidden] { display: none; }
 .chart svg { display: block; }
 .grid { stroke: var(--grid); stroke-width: 1; }
@@ -148,7 +154,7 @@ button { font: inherit; cursor: pointer; color: inherit; }
 .closed td { color: var(--text-secondary); }
 .num-button { background: none; border: 0; padding: 2px 4px; margin: -2px -4px; border-radius: 6px; font: inherit; color: inherit; text-decoration: underline dotted var(--axis) 1px; text-underline-offset: 3px; }
 .num-button:hover { background: var(--grid); }
-.num-button:focus-visible, .link:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--series); outline-offset: 1px; }
+.num-button:focus-visible, .link:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, .file-button:has(input:focus-visible) { outline: 2px solid var(--series); outline-offset: 1px; }
 .num-button.gain { color: var(--gain); }
 .num-button.loss { color: var(--loss); }
 .num-button.quiet { color: var(--text-secondary); }
@@ -215,10 +221,11 @@ button { font: inherit; cursor: pointer; color: inherit; }
 .hold-line > span:nth-child(2) { margin-left: auto; text-align: right; }
 .hold-line:hover > span:first-child { text-decoration: underline; }
 .exports { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 0 2px; }
+.exports-note { margin: 4px 2px 0; }
 .tax { display: flex; flex-direction: column; gap: 12px; }
 .tax .notice { margin: 0; }
 .field { display: flex; flex-direction: column; gap: 4px; }
-.field select, .field textarea { font: inherit; font-size: 13px; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-1); color: inherit; }
+.field select, .field textarea { font: inherit; font-size: 13px; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--control-border); background: var(--surface-1); color: inherit; }
 .field textarea { font-family: ui-monospace, Menlo, monospace; resize: vertical; }
 .tax-counts { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 0; }
 .tax-counts dd { margin: 0; font-size: 17px; font-weight: 600; }
@@ -245,7 +252,7 @@ button { font: inherit; cursor: pointer; color: inherit; }
 .check-row { display: flex; gap: 8px; align-items: baseline; }
 .check-row input { flex: none; }
 .device-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.device .field input { font: inherit; font-size: 13px; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-1); color: inherit; }
+.device .field input { font: inherit; font-size: 13px; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--control-border); background: var(--surface-1); color: inherit; }
 .send-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
 .button-link, .device-actions button:not(.primary) { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); color: inherit; text-decoration: none; font-size: 13px; }
 .device-actions button:not(.primary) { background: none; }

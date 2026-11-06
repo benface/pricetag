@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react"
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react"
 import { ETH_ADDRESS, TOKENS, isAddress, normalizeAddress, type CurrencyCode, type Token } from "@pricetag/sdk/core"
 import type { PublicClient } from "viem"
 import type { Money } from "../core/book.ts"
@@ -40,6 +40,7 @@ export function BuyPanel({ currency, onBegin, onView, onClose }: Props) {
   // A browser that blocked the new tab: the purchase is being followed, and this is the way to its page.
   const [blockedPage, setBlockedPage] = useState<string | null>(null)
   const rateMicros = useCurrentRate(currency)
+  const amountError = useId()
 
   useLayoutEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
@@ -131,7 +132,7 @@ export function BuyPanel({ currency, onBegin, onView, onClose }: Props) {
         {!connected ? (
           <>
             <p className="muted small">What you buy lands in the wallet you connect here. A hardware wallet never connects to a site, so this isn't for one.</p>
-            {wallets === null ? <p className="muted small">Looking for a wallet in this browser…</p> : null}
+            {wallets === null ? <p className="muted small" role="status">Looking for a wallet in this browser…</p> : null}
             {wallets?.length === 0 ? <p className="notice">There's no wallet in this browser, so there's nowhere for a purchase to land.</p> : null}
             {wallets?.map((wallet) => (
               <button key={wallet.rdns} type="button" className="route" disabled={busy} onClick={() => void connect(wallet)}>
@@ -177,7 +178,7 @@ export function BuyPanel({ currency, onBegin, onView, onClose }: Props) {
             <div className="send-row">
               <label className="field">
                 <span className="small muted">Amount in {typedIn}</span>
-                <input inputMode="decimal" autoComplete="off" value={text} onChange={(e) => setText(e.target.value)} />
+                <input inputMode="decimal" autoComplete="off" value={text} aria-invalid={text !== "" && amount === null} aria-describedby={text && amount === null ? amountError : undefined} onChange={(e) => setText(e.target.value)} />
               </label>
               <label className="field">
                 <span className="small muted">Token</span>
@@ -190,13 +191,13 @@ export function BuyPanel({ currency, onBegin, onView, onClose }: Props) {
                 </select>
               </label>
             </div>
-            {text && amount === null ? <p className="warn-text small">⚠ That isn't an amount.</p> : null}
-            {noPrice ? <p className="warn-text small">⚠ ETH's price can't be read right now, so it can't start from this amount.</p> : null}
+            {text && amount === null ? <p id={amountError} className="warn-text small">⚠ That isn't an amount.</p> : null}
+            {noPrice ? <p className="warn-text small" role="alert">⚠ ETH's price can't be read right now, so it can't start from this amount.</p> : null}
             <p className="muted small">
               {cryptoAmount ? `About ${cryptoAmount} ${token.symbol}. ` : ""}
               {checkoutNote(typedIn, currency)}
             </p>
-            {failure ? <p className="warn-text small">⚠ {failure}</p> : null}
+            {failure ? <p className="warn-text small" role="alert">⚠ {failure}</p> : null}
             <div className="device-actions">
               <button type="submit" className="primary" disabled={busy || !cryptoAmount}>
                 {busy ? "Starting…" : `Continue on ${PROVIDER}`}
@@ -204,7 +205,7 @@ export function BuyPanel({ currency, onBegin, onView, onClose }: Props) {
             </div>
           </form>
         )}
-        {!connected && failure ? <p className="warn-text small">⚠ {failure}</p> : null}
+        {!connected && failure ? <p className="warn-text small" role="alert">⚠ {failure}</p> : null}
       </div>
     </dialog>
   )

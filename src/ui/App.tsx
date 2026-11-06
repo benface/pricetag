@@ -14,6 +14,7 @@ import {
   ETH_NOTE,
   HOLD_PAST,
   HOLD_TITLE,
+  LOADING,
   METHOD_HELP,
   METHOD_LABELS,
   METHOD_NAME,
@@ -39,6 +40,7 @@ import {
   answerQuestionsLabel,
   behindSentence,
   coverageSentence,
+  exportLeavesOutSentence,
   feedDetail,
   holdCaveatSentence,
   feedProblem,
@@ -64,6 +66,7 @@ import { useRules } from "./useRules.ts"
 import type { TaxYear } from "../core/tax.ts"
 import { TaxPanel } from "./TaxPanel.tsx"
 import { useAllYours, useWallet } from "./useWallet.ts"
+import { LoadBoundary } from "./LoadBoundary.tsx"
 import { ProblemNotice } from "./ProblemNotice.tsx"
 import { currenciesIn, walletsBehind, walletsToRead, yourWallets } from "../core/book.ts"
 import { readCheckedAccounts } from "../core/device-accounts.ts"
@@ -94,8 +97,10 @@ function readCurrency(): CurrencyCode {
 }
 
 function Num({ onClick, label, children, tone }: { onClick: () => void; label: string; children: ReactNode; tone?: "gain" | "loss" | "quiet" | null }) {
+  // In the text rather than an `aria-label`, which would take the place of the number.
   return (
-    <button type="button" className={`num-button ${tone ?? ""}`} onClick={onClick} aria-label={label}>
+    <button type="button" className={`num-button ${tone ?? ""}`} onClick={onClick}>
+      <span className="visually-hidden">{label}: </span>
       {children}
     </button>
   )
@@ -367,6 +372,8 @@ export function App() {
   const [address, setAddress] = useState(readAddress)
   const [input, setInput] = useState(() => (isAddress(readAddress() ?? "") ? (readAddress() as string) : ""))
   const [inputError, setInputError] = useState<string | null>(null)
+  const inputErrorId = useId()
+  const exportNoteId = useId()
   const [method, setMethod] = useState<Method>("average")
   const [target, setTarget] = useState<ExplainTarget | null>(null)
   const [taxOpen, setTaxOpen] = useState(false)
@@ -489,11 +496,12 @@ export function App() {
   /** How many questions each wallet on screen has. A wallet that isn't read yet isn't here, since that isn't known. */
   const questionsIn = useMemo(() => {
     const counts = new Map<string, number>()
-    if (!together) return single ? counts.set(single.toLowerCase(), questions.length) : counts
+    // By its address, as a tax report names it, which isn't how the demo wallet is asked for.
+    if (!together) return wallet ? counts.set(wallet.address.toLowerCase(), questions.length) : counts
     for (const { address: one } of together.read) counts.set(one.toLowerCase(), 0)
     for (const { wallet: where } of questions) counts.set(where, (counts.get(where) ?? 0) + 1)
     return counts
-  }, [together, single, questions])
+  }, [together, wallet, questions])
   const listed = positions.filter((p) => !p.noMarket)
   const attention = showing && pnlStatus ? attentionOf({ positions, unread, totals, pnlStatus, gasUnknownTxs: showing.gasUnknownTxs, l1FeeUnknownTxs: showing.l1FeeUnknownTxs, withheld, currency, missingRateTxs, hasCurrentRate: !noCurrentRate }) : null
   const pastCosts = pastCostsNote(attention, questions.length)
@@ -524,6 +532,15 @@ export function App() {
     </button>
   )
   const openTotal = (metric: TotalMetric) => setTarget({ kind: "total", metric })
+  const closeDevice = () => {
+    // A link has done its job, and reloading shouldn't start it over.
+    if (parseDeviceLink(window.location.search)) window.history.replaceState(null, "", window.location.pathname)
+    setDevice(null)
+  }
+  const showingTitle = !showing ? null : isAll ? ALL_YOURS_TITLE : showing.mode === "demo" ? "Demo wallet" : `Wallet ${shortHash(showing.address)}`
+  // Still or finished reading, for whoever can't see the page change. It's always here, because that's how a change in it gets read out.
+  const readingStatus = loading ? (isAll ? READING_ALL : READING) : showingTitle ? `${showingTitle} is ready.` : ""
+  const leftOfExport = [...(combined?.linkedReading ?? []), ...(combined?.linkedFailed ?? [])]
 
   return (
     <div className="page">
@@ -534,6 +551,8 @@ export function App() {
         <form className="address" onSubmit={submit}>
           <input
             aria-label="Base address"
+            aria-invalid={inputError !== null}
+            aria-describedby={inputError ? inputErrorId : undefined}
             placeholder="Paste any Base address, 0x…"
             value={input}
             spellCheck={false}
@@ -577,9 +596,45 @@ export function App() {
         </button>
         {showing ? <LiveBadge wallet={showing} stale={error !== null} updating={(combined?.linkedReading.length ?? 0) > 0} /> : null}
       </header>
-      {inputError ? <p className="notice warn">⚠ {inputError}</p> : null}
+      {inputError ? <p id={inputErrorId} className="notice warn" role="alert">⚠ {inputError}</p> : null}
+      <p className="visually-hidden" role="status">{readingStatus}</p>
       {notSaved ? <p className="notice warn" role="alert">⚠ {NOT_SAVED}</p> : null}
       {rules.length > 1 ? <RulesPanel rules={rules} chosen={chosenRule} choose={chooseRule} current={rule} address={isAll ? null : single} method={method} currency={currency} book={book} /> : null}
+
+      {buying ? (
+        <LoadBoundary onClose={() => setBuying(false)}>
+          <Suspense fallback={<p className="notice">{LOADING}</p>}>
+            <BuyPanel
+              currency={chosenCurrency}
+              onBegin={beginPurchase}
+              onView={(next) => {
+                setBuying(false)
+                if (next !== wallet?.address.toLowerCase()) go(next)
+              }}
+              onClose={() => setBuying(false)}
+            />
+          </Suspense>
+        </LoadBoundary>
+      ) : null}
+      {device ? (
+        <LoadBoundary onClose={closeDevice}>
+          <Suspense fallback={<p className="notice">{LOADING}</p>}>
+            <DevicePanel
+              link={device.link}
+              book={book}
+              currency={chosenCurrency}
+              allYours={isAll}
+              onLink={linkAccounts}
+              notSaved={notSaved}
+              onView={(next) => {
+                setDevice(null)
+                go(next)
+              }}
+              onClose={closeDevice}
+            />
+          </Suspense>
+        </LoadBoundary>
+      ) : null}
 
       <PurchaseList purchases={purchases} problem={purchasesProblem} matches={combined?.purchases ?? fold?.purchases ?? []} currency={chosenCurrency} showing={wallet?.address ?? null} onView={go} onDismiss={dismissPurchase} />
 
@@ -603,10 +658,11 @@ export function App() {
 
       {showing ? (
         <main>
+          <h1 className="visually-hidden">{showingTitle}</h1>
           {error ? <ProblemNotice problem={feedProblem(error, location.origin, started ? staleSentence(formatTime(showing.latest.timestamp)) : null)} action={tryRead} /> : null}
           {combined && combined.linkedReading.length > 0 ? <p className="notice">{allYoursReadingSentence(combined.linkedReading)}</p> : null}
           {combined && combined.linkedFailed.length > 0 ? (
-            <p className="notice warn">
+            <p className="notice warn" role="alert">
               ⚠ {allYoursFailedSentence(combined.linkedFailed)}{" "}
               <button type="button" className="link" onClick={allRead.retry}>
                 Try again
@@ -618,7 +674,7 @@ export function App() {
           ) : null}
           {showing.mode === "demo" ? <p className="notice">{DEMO_NOTICE}</p> : null}
           {linkedFailed.length > 0 ? (
-            <p className="notice warn">
+            <p className="notice warn" role="alert">
               ⚠ {linkedFailedSentence(linkedFailed.length)}{" "}
               <button type="button" className="link" onClick={retry}>
                 Try again
@@ -679,7 +735,7 @@ export function App() {
               <OtherTokens tokens={showing?.otherTokens ?? []} leftOut={showing?.otherTokensLeftOut ?? 0} />
               {holdComparison ? <HoldLine comparison={holdComparison} combined={isAll} currency={currency} onOpen={() => setTarget({ kind: "hold" })} /> : null}
               <p className="exports">
-                <button type="button" className="link" onClick={download}>
+                <button type="button" className="link" aria-describedby={leftOfExport.length > 0 ? exportNoteId : undefined} onClick={download}>
                   Export as CSV
                 </button>
                 <button
@@ -693,6 +749,7 @@ export function App() {
                   Export a tax report…
                 </button>
               </p>
+              {leftOfExport.length > 0 ? <p id={exportNoteId} className="small warn-text exports-note">⚠ {exportLeavesOutSentence(leftOfExport)}</p> : null}
             </>
           )}
         </main>
@@ -701,40 +758,6 @@ export function App() {
       {explanation && showing ? <ExplainPanel explanation={explanation} address={showing.address} rule={rule} onClose={close} /> : null}
       {resolving && together ? <ResolvePanel wallet={together.read[0] as WalletResponse} others={together.read.slice(1)} all={together.unread} failed={together.unread.failed} onRetry={allRead.retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} notSaved={notSaved} onPublish={(link) => setDevice({ link })} onCurrentSender={setCardSender} onClose={closeResolve} /> : null}
       {resolving && !together && wallet ? <ResolvePanel wallet={wallet} others={others} failed={failed} onRetry={retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} notSaved={notSaved} onPublish={(link) => setDevice({ link })} onCurrentSender={setCardSender} onClose={closeResolve} /> : null}
-      {buying ? (
-        <Suspense fallback={null}>
-          <BuyPanel
-            currency={chosenCurrency}
-            onBegin={beginPurchase}
-            onView={(next) => {
-              setBuying(false)
-              if (next !== wallet?.address.toLowerCase()) go(next)
-            }}
-            onClose={() => setBuying(false)}
-          />
-        </Suspense>
-      ) : null}
-      {device ? (
-        <Suspense fallback={null}>
-          <DevicePanel
-            link={device.link}
-            book={book}
-            currency={chosenCurrency}
-            allYours={isAll}
-            onLink={linkAccounts}
-            notSaved={notSaved}
-            onView={(next) => {
-              setDevice(null)
-              go(next)
-            }}
-            onClose={() => {
-              // A link has done its job, and reloading shouldn't start it over.
-              if (parseDeviceLink(window.location.search)) window.history.replaceState(null, "", window.location.pathname)
-              setDevice(null)
-            }}
-          />
-        </Suspense>
-      ) : null}
       {taxOpen && (isAll || single) ? <TaxPanel
           // All of them is the first with the rest alongside, since a device account isn't always in the answers.
           address={isAll ? (yours[0] as string) : (single as string)}

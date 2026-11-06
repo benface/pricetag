@@ -1527,6 +1527,16 @@ describe("what the UI gets", () => {
     assert.ok(lines.slice(1).every((l) => /,(exact|estimated|unknown|no market)$/.test(l)))
   })
 
+  it("exports words people read rather than the code's", () => {
+    const { positions } = foldBook(DEMO_WALLET, [], "average", emptyBook())
+    const rows = exportCsv(positions, "USD").trim().split("\n").slice(1).map((l) => l.split(","))
+    const cells = (column: number) => new Set(rows.map((c) => c[column]))
+    assert.ok([...cells(5)].every((kind) => ["starting balance", "bought", "sold", "received", "sent", "network fee"].includes(kind as string)), `kinds: ${[...cells(5)]}`)
+    assert.ok(cells(8).has("market price feed"))
+    for (const raw of ["oracle", "swap", "market", "gas", "transfer"]) assert.ok(!cells(5).has(raw) && !cells(8).has(raw), raw)
+    for (const raw of ["paid", "inherited", "received at market", "self-reported", "unknown"]) assert.ok(!cells(10).has(raw), raw)
+  })
+
   it("asks about what's unresolved upstream too", () => {
     const answered = answerSender(emptyBook(), DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, { kind: "mine" })
     const portfolio = portfolioOf(DEMO_WALLET, "average", [DEMO_SAVINGS_WALLET], answered)

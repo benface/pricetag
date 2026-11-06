@@ -19,7 +19,7 @@ export function PurchaseList({ purchases, problem, matches, currency, showing, o
   return (
     <section className="card purchases" aria-label="Purchases">
       <h2>Purchases</h2>
-      {problem ? <p className="warn-text small">⚠ {problem} It'll try again, and nothing's lost.</p> : null}
+      {problem ? <p className="warn-text small" role="alert">⚠ {problem} It'll try again, and nothing's lost.</p> : null}
       <ul>
         {[...purchases].reverse().map((purchase) => {
           const { order } = purchase
