@@ -105,7 +105,7 @@ Don't do it yourself. Finish, and put a short checklist for benface in your hand
 
 ## The hosted build
 
-`pnpm check:hosted [--no-launch] [dmg]` tests the full build colleagues get. It reads the signature, profile, entitlements and what's in the image. Without `--no-launch` it also launches a release copy against a local server in hosted mode, and a debug copy signed the same way that makes a key in the real Keychain, sweeps and approves a site's transaction on a local fork. `PATINA_TEST_ENV_FILE=<a .env.local>` adds a first read and a question with real data.
+`pnpm check:hosted [--no-launch] [dmg]` tests the full build colleagues get. It reads the signature, profile, entitlements and what's in the image. Without `--no-launch` it also launches a release copy against a local server in hosted mode, and a debug copy signed the same way that makes a key in the real Keychain, sweeps and approves a site's transaction on a local fork. `PATINA_TEST_ENV_FILE=<a .env.local>` adds a first read and a question with real data. `PATINA_HOSTED=1 macos/shot.sh <scene> out.png` draws any scene as this build shows it, like `main-welcome-checking`, which a normal build never shows.
 
 Nothing takes focus, but each launch puts an icon in the menu bar for a moment, so use `--no-launch` while someone's presenting from this Mac.
 

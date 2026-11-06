@@ -6,6 +6,7 @@ set -eu
 usage() {
   cat >&2 <<USAGE
 PATINA_WATCH_ONLY=1 in the environment draws what a watch-only build shows, from fixtures like everything else.
+PATINA_HOSTED=1 draws what the hosted build shows, the same way.
 
 Usage:
   shot.sh <scene> <output.png> [--dark] [--window]
@@ -93,6 +94,10 @@ products="$here/build/test-mode"
 if [ "${PATINA_WATCH_ONLY:-}" = 1 ]; then
   products="$here/build/test-mode-watch-only"
   set -- -xcconfig "$here/Config/WatchOnly.xcconfig"
+elif [ "${PATINA_HOSTED:-}" = 1 ]; then
+  products="$here/build/test-mode-hosted"
+  bundle_id=$(sed -n 's/^APP_DEBUG_BUNDLE_ID = //p' "$here/Config/Hosted.xcconfig")
+  set -- -xcconfig "$here/Config/Hosted.xcconfig"
 else
   set --
 fi

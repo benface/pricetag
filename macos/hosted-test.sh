@@ -39,7 +39,8 @@ else
 fi
 [ -f "$dmg" ] || { echo "No .dmg at $dmg" >&2; exit 1; }
 
-work=$(mktemp -d "${TMPDIR:-/tmp}/patina-hosted.XXXXXX")
+# Resolved, because the app reports where it is that way, and a manifest has to match it.
+work=$(cd "$(mktemp -d "${TMPDIR:-/tmp}/patina-hosted.XXXXXX")" && pwd -P)
 mount="$work/mount"
 started=
 new_manifests=
@@ -50,8 +51,8 @@ cleanup() {
   pkill -f "$work/" 2>/dev/null
   [ -x "$work/debug/$name.app/Contents/MacOS/$name" ] && "$work/debug/$name.app/Contents/MacOS/$name" --isolated hosted-test --reset-isolated-wallet >/dev/null 2>&1
   # Only what this test's launch added. A manifest that was already there was never changed.
-  printf '%s' "$new_manifests" | while IFS= read -r file; do [ -z "$file" ] || rm -f "$file"; done
-  printf '%s' "$new_folders" | while IFS= read -r folder; do [ -z "$folder" ] || rmdir "$folder" 2>/dev/null; done
+  printf '%s\n' "$new_manifests" | while IFS= read -r file; do [ -z "$file" ] || rm -f "$file"; done
+  printf '%s\n' "$new_folders" | while IFS= read -r folder; do [ -z "$folder" ] || rmdir "$folder" 2>/dev/null; done
   for app in "$work/release/$name.app" "$work/debug/$name.app"; do "$lsregister" -u "$app" 2>/dev/null; done
   hdiutil detach -quiet "$mount" 2>/dev/null
   rm -rf "$work"
@@ -229,8 +230,8 @@ snapshot() {
   done
 }
 snapshot >"$work/manifests-before"
-new_manifests=$(sed -n 's/^none //p' "$work/manifests-before" | while IFS= read -r browser; do [ -d "$support/$browser" ] && printf '%s\n' "$support/$browser/NativeMessagingHosts/com.benface.patina.json"; done)
-new_folders=$(sed -n 's/^none //p' "$work/manifests-before" | while IFS= read -r browser; do [ -d "$support/$browser" ] && [ ! -d "$support/$browser/NativeMessagingHosts" ] && printf '%s\n' "$support/$browser/NativeMessagingHosts"; done)
+new_manifests=$(sed -n 's/^none //p' "$work/manifests-before" | while IFS= read -r browser; do if [ -d "$support/$browser" ]; then printf '%s\n' "$support/$browser/NativeMessagingHosts/com.benface.patina.json"; fi; done)
+new_folders=$(sed -n 's/^none //p' "$work/manifests-before" | while IFS= read -r browser; do if [ -d "$support/$browser" ] && [ ! -d "$support/$browser/NativeMessagingHosts" ]; then printf '%s\n' "$support/$browser/NativeMessagingHosts"; fi; done)
 
 front_app() { lsappinfo info -only bundleID "$(lsappinfo front)" | sed -n 's/.*bundleID="\([^"]*\)".*/\1/p'; }
 front=$(front_app)
