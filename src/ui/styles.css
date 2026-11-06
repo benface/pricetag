@@ -73,6 +73,9 @@ button { font: inherit; cursor: pointer; color: inherit; }
 .currency select { font: inherit; font-size: 13px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-1); color: inherit; }
 .badge { font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-1); white-space: nowrap; }
 .badge.live::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--gain); margin-right: 6px; }
+.badge.updating::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--text-secondary); margin-right: 6px; vertical-align: -1px; animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .badge.updating::before { animation: none; } }
 .badge.warn { background: var(--warn-fill); border-color: var(--warn-border); color: var(--warn-ink); }
 .notice { font-size: 13px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-1); color: var(--text-secondary); margin-bottom: 10px; }
 .notice.warn { background: var(--warn-fill); border-color: var(--warn-border); color: var(--warn-ink); }
@@ -242,3 +245,5 @@ button { font: inherit; cursor: pointer; color: inherit; }
 .sort-button:hover { color: var(--text-primary); }
 .sort-button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; border-radius: 3px; }
 .sort-mark { display: inline-block; min-width: 1ch; }
+.holding-wallets { display: block; font-weight: 400; white-space: normal; min-width: 26ch; }
+.wallet-parts { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 8px; }

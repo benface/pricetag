@@ -307,7 +307,8 @@ function headAsOf(head: Head, to: number | undefined): Head {
 
 const keyOf = (address: string, { from, to }: WalletRange) => `${address.toLowerCase()}:${from ?? ""}:${to ?? ""}`
 
-export function createWallets(source: Source, currentHead: () => Promise<Head>, readL1Fees: ReadL1Fees, logger: Logger = console) {
+/** `maxWallets`: how many reads to keep, the oldest going first. A server that many people share wants more than one Mac does. */
+export function createWallets(source: Source, currentHead: () => Promise<Head>, readL1Fees: ReadL1Fees, logger: Logger = console, { maxWallets = MAX_WALLETS }: { maxWallets?: number | undefined } = {}) {
   const wallets = new Map<string, Cached>()
   const inflight = new Map<string, Promise<Cached>>()
   const reorgs: Reorg[] = []
@@ -708,7 +709,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     await findUnseenEth(address, next, MAX_ETH_BALANCES_PER_READ - unreadEth.length - sendBlocks.length)
     wallets.delete(key)
     wallets.set(key, next)
-    if (wallets.size > MAX_WALLETS) wallets.delete(wallets.keys().next().value as string)
+    if (wallets.size > maxWallets) wallets.delete(wallets.keys().next().value as string)
     return next
   }
 

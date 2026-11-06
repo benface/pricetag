@@ -54,6 +54,7 @@ final class Navigation {
         didSet { if section != oldValue { forgetDetails() } }
     }
     var chartRange: ChartRange = .all
+    var chartMetric: ChartMetric = .pnl
     /// The number being explained in the details.
     var target: ExplainTarget? {
         didSet { if target == nil, let oldValue { closedTarget = oldValue } }
@@ -82,7 +83,10 @@ final class Navigation {
     /// The web app sent over an account from a device. Spending Money's page asks the person to check it.
     var addingSavings: AddSavingsLink?
     /// There's no Spending Money to show yet, or it can't be opened. This says what it is, and is the only place that makes a key.
-    var isSettingUpSpendingMoney = false
+    var isSettingUpSpendingMoney = false {
+        // Here and not in a view, for the same reason as the wallet list. Cancelled, there's no page to take what was asked for.
+        didSet { if oldValue, !isSettingUpSpendingMoney, hotWallet.address == nil { forgetSpendingMoneyRequests() } }
+    }
     /// Asked for from a row in the wallet list, which closes first. So it's the window that holds this.
     var removingFromSavings: WalletEntry?
     /// Which pane Settings opens on, for what points there from elsewhere.
@@ -95,6 +99,10 @@ final class Navigation {
     /// Where to go back to once those questions close.
     private(set) var returnWallet: String?
     var isExporting = false
+    /// ⌘F was pressed. The search field of the section showing takes it from here.
+    var wantsSearch = false
+    /// What's being searched for in the holdings, until they're left. It's here so a test scene can set it.
+    var holdingsQuery = ""
     /// A notification was clicked. Spending Money scrolls to its row and lights it up, and the window opens if it's closed.
     var shownRow: String?
 
@@ -157,6 +165,23 @@ final class Navigation {
         wantsAddSavings = true
     }
 
+    /// What ⌘F searches: the holdings on the overview. The other sections have no search of their own, so it goes to the transactions.
+    var findTitle: String {
+        section == .overview ? "Find Holdings…" : "Find Transactions…"
+    }
+
+    /// A wallet with nothing to show has neither, and no field to take it.
+    var canFind: Bool {
+        guard let portfolio = store.portfolio else { return false }
+        return portfolio.progress.started && !portfolio.isEmpty
+    }
+
+    /// Puts the cursor in the holdings' search field on the overview. From anywhere else, goes to the transactions and puts it in theirs.
+    func find() {
+        if section != .overview { section = .transactions }
+        wantsSearch = true
+    }
+
     /// Goes to spending money and shows one of its rows, which it scrolls to once the page is on screen.
     func show(row: String) {
         showSpendingMoney()
@@ -201,6 +226,15 @@ final class Navigation {
         guard resolvingWallet == nil, let returnWallet else { return }
         self.returnWallet = nil
         store.setWallet(returnWallet)
+    }
+
+    /// Left waiting, these would open by surprise once there's a page, and the ones already set couldn't be asked for again.
+    private func forgetSpendingMoneyRequests() {
+        wantsTopUp = false
+        wantsSend = false
+        wantsAddSavings = false
+        addingSavings = nil
+        shownRow = nil
     }
 
     private func forgetPendingQuestions() {

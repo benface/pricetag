@@ -6,7 +6,7 @@ import { readColdRequest, transferRequest, type ColdAccount, type ColdRequest, t
 import { accountsToLink, isFresh, readCheckedAccounts, rememberCheckedAccount, selectedAccount, type AccountActivity, type CheckedAccount, type SeenAccount } from "../core/device-accounts.ts"
 import { addToMacLink, usdMicrosOf, type DeviceLink } from "../core/device-link.ts"
 import { amountForUsd, checkSend, parseAmount, readActivity, readEthPriceMicros, type SendCheck } from "../core/device-read.ts"
-import { CHECK_ADDRESS_WARNING, KEYSTONE_CONNECT, KEYSTONE_LOOK, LEDGER_HANDED_OFF, LEDGER_HAND_OFF, LEDGER_NEEDS_CHROMIUM, LEDGER_READY, LEDGER_VERIFY, LOOK_HANDED_OFF, NEVER_ASKED, PROMPTS, PUBLISH_DETAIL, PUBLISH_DEVICE_NOTE, PUBLISH_WARNING, WRONG_PUBLISHER, groupAddress } from "../core/device-wording.ts"
+import { ALL_YOURS_DEVICE, CHECK_ADDRESS_WARNING, KEYSTONE_CONNECT, KEYSTONE_LOOK, LEDGER_HANDED_OFF, LEDGER_HAND_OFF, LEDGER_NEEDS_CHROMIUM, LEDGER_READY, LEDGER_VERIFY, LOOK_HANDED_OFF, NEVER_ASKED, PROMPTS, PUBLISH_DETAIL, PUBLISH_DEVICE_NOTE, PUBLISH_WARNING, WRONG_PUBLISHER, groupAddress } from "../core/device-wording.ts"
 import type { BrowserWallet } from "./devices/browser.ts"
 import { realConnectors, type Connectors } from "./devices/connectors.ts"
 import type { ScannedCode } from "./devices/keystone.ts"
@@ -38,6 +38,8 @@ type Props = {
   book: Book
   /** What amounts read in. A note's still published in USD. */
   currency?: CurrencyCode
+  /** All the user's wallets are showing, so nothing here says which one this acts on until an account's chosen. */
+  allYours?: boolean
   /** Accounts from a device are the user's, with no question. */
   onLink: (addresses: readonly string[]) => void
   /** Opens a wallet in the main view. */
@@ -49,7 +51,7 @@ type Props = {
 }
 
 /** The one place the web app reaches a hardware wallet. Keys stay on the device: this only ever sees addresses and signatures. */
-export function DevicePanel({ link, book, currency = "USD", onLink, onView, onClose, connectors = realConnectors, start }: Props) {
+export function DevicePanel({ link, book, currency = "USD", allYours = false, onLink, onView, onClose, connectors = realConnectors, start }: Props) {
   const dialog = useRef<HTMLDialogElement>(null)
   const closeButton = useRef<HTMLButtonElement>(null)
   const [step, setStep] = useState<Step>(start?.step ?? (link?.kind === "add-savings" && link.device === "ledger" && connectors.canUseUsb() ? "ledger" : "route"))
@@ -214,6 +216,7 @@ export function DevicePanel({ link, book, currency = "USD", onLink, onView, onCl
         {step === "route" ? (
           <>
             <p className="muted small">Your device holds the keys and signs everything. {NEVER_ASKED}</p>
+            {allYours && !link ? <p className="small">{ALL_YOURS_DEVICE}</p> : null}
             <button type="button" className="route" disabled={busy || !connectors.canUseUsb()} onClick={() => setStep("ledger")}>
               <strong>Ledger</strong>
               <span className="muted small">{connectors.canUseUsb() ? "With its USB cable" : LEDGER_NEEDS_CHROMIUM}</span>

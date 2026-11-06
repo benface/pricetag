@@ -156,7 +156,21 @@
       "txHash": "0x1",
       "pnlMicros": "-3000000",
       "excludedCount": 0,
+      "valueMicros": "5997000000",
+      "valueBeforeMicros": "0",
+      "valueExcludedCount": 0,
+      "valueContinues": false,
       "summary": "Received 2 ETH",
+      "assets": [
+        "ETH"
+      ],
+      "counterparty": "0xdddddddddddddddddddddddddddddddddddddddd",
+      "amount": {
+        "direction": "in",
+        "micros": "6000000000"
+      },
+      "gain": null,
+      "unknownCost": [],
       "wallets": [
         "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
       ]
@@ -167,7 +181,21 @@
       "txHash": "0x2",
       "pnlMicros": "-6000000",
       "excludedCount": 0,
+      "valueMicros": "5994000000",
+      "valueBeforeMicros": "5997000000",
+      "valueExcludedCount": 0,
+      "valueContinues": true,
       "summary": "Moved 1 ETH between your wallets",
+      "assets": [
+        "ETH"
+      ],
+      "counterparty": null,
+      "amount": {
+        "direction": "trade",
+        "micros": "3000000000"
+      },
+      "gain": null,
+      "unknownCost": [],
       "wallets": [
         "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -179,7 +207,21 @@
       "txHash": "0x3",
       "pnlMicros": "-9000000",
       "excludedCount": 0,
+      "valueMicros": "4491000000",
+      "valueBeforeMicros": "5994000000",
+      "valueExcludedCount": 0,
+      "valueContinues": true,
       "summary": "Sent 0.5 ETH",
+      "assets": [
+        "ETH"
+      ],
+      "counterparty": "0xdddddddddddddddddddddddddddddddddddddddd",
+      "amount": {
+        "direction": "out",
+        "micros": "1500000000"
+      },
+      "gain": null,
+      "unknownCost": [],
       "wallets": [
         "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
       ]
@@ -190,7 +232,23 @@
       "txHash": "0x4",
       "pnlMicros": "-9000000",
       "excludedCount": 1,
+      "valueMicros": "7491000000",
+      "valueBeforeMicros": "4491000000",
+      "valueExcludedCount": 0,
+      "valueContinues": true,
       "summary": "Received 1 ETH",
+      "assets": [
+        "ETH"
+      ],
+      "counterparty": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "amount": {
+        "direction": "in",
+        "micros": "3000000000"
+      },
+      "gain": null,
+      "unknownCost": [
+        "ETH"
+      ],
       "wallets": [
         "0xcccccccccccccccccccccccccccccccccccccccc"
       ]
@@ -201,7 +259,16 @@
       "txHash": null,
       "pnlMicros": "-547920000",
       "excludedCount": 1,
+      "valueMicros": "6592080000",
+      "valueBeforeMicros": "6592080000",
+      "valueExcludedCount": 0,
+      "valueContinues": true,
       "summary": null,
+      "assets": [],
+      "counterparty": null,
+      "amount": null,
+      "gain": null,
+      "unknownCost": [],
       "wallets": []
     }
   ],

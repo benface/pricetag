@@ -3,6 +3,7 @@ import type { CurrencyCode } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../core/api.ts"
 import { emptyBook, linkDeviceAccounts, parseBook, type Book } from "../core/book.ts"
 import { readKey, readsMatching } from "../core/resolve.ts"
+import { walletUrl } from "./useWallet.ts"
 
 const KEY = "patina.book"
 
@@ -52,7 +53,7 @@ export function useBook() {
  * Linked wallets, read by `rule` in `currency`. `shown` is how the numbers on screen were read, which for a moment after a
  * change isn't that: they go with the wallets read the same way, and a newer read waits until they've changed too.
  */
-export function useOtherWallets(addresses: readonly string[], currency: CurrencyCode, rule: string | null, block: number | null, shown: Pick<WalletResponse, "rule" | "currency"> | null) {
+export function useOtherWallets(addresses: readonly string[], currency: CurrencyCode, rule: string | null, paid: string, block: number | null, shown: Pick<WalletResponse, "rule" | "currency"> | null) {
   const [wallets, setWallets] = useState<Record<string, WalletResponse>>({})
   const [failures, setFailures] = useState<ReadonlySet<string>>(new Set())
   const [attempt, setAttempt] = useState(0)
@@ -63,7 +64,7 @@ export function useOtherWallets(addresses: readonly string[], currency: Currency
     const abort = new AbortController()
     const fail = (address: string) => setFailures((f) => new Set([...f, address]))
     for (const address of key.split(",")) {
-      fetch(`/api/wallet/${address}?currency=${currency}${rule ? `&rule=${encodeURIComponent(rule)}` : ""}`, { signal: abort.signal })
+      fetch(walletUrl(address, currency, rule, paid), { signal: abort.signal })
         .then((response) => (response.ok ? (response.json() as Promise<WalletResponse>) : null))
         .then((wallet) => {
           if (!wallet) return fail(address)
@@ -75,7 +76,7 @@ export function useOtherWallets(addresses: readonly string[], currency: Currency
         })
     }
     return () => abort.abort()
-  }, [key, currency, rule, block, attempt])
+  }, [key, currency, rule, paid, block, attempt])
 
   return {
     others: useMemo(() => readsMatching(wallets, key ? key.split(",") : [], shown), [wallets, key, shown?.rule, shown?.currency]),
