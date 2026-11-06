@@ -575,6 +575,18 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(!touched.contains(spam))
     }
 
+    @Test func anOtherTokenNeverCountsTowardTheCapAndIsNeverSwept() async throws {
+        // A fortune in something calling itself USDC, on a wallet well under its cap.
+        let token = "0x00000000000000000000000000000000000000f1"
+        let copy = #"{ "token": "\#(token)", "kind": "token", "name": "USD Coin", "symbol": "USDC", "decimals": 6, "balance": "99999999999999", "state": "read", "note": null, "tucked": "It calls itself USDC, and it isn't the USDC we know." }"#
+        let rig = await Rig(snapshot(eth: oneEth / 10_000), portfolio: .success(portfolio(otherTokens: [copy])))
+        await rig.wallet.readHistory()
+        await rig.wallet.tick()
+        #expect(rig.wallet.portfolio?.otherTokens?.map(\.token) == [token])
+        #expect(await rig.signer.signed.isEmpty)
+        #expect(!rig.wallet.holdings.contains { $0.token.contract?.lowercased == token })
+    }
+
     @Test func nothingOffTheAllowlistIsEverCalled() async throws {
         let rig = await Rig(snapshot(eth: oneEth, tokens: [usdc: usdcUnits(500), dai: oneEth, weth: oneEth]))
         await rig.wallet.sweepEverything()

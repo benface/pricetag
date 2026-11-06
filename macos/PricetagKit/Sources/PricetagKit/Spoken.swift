@@ -31,6 +31,14 @@ public enum Spoken {
         Format.addressGroups(address).joined(separator: " ")
     }
 
+    /// A token off the allowlist: which one it is, since two can share a name, what's held, then anything said about it.
+    /// `amount` says which number is which, because "PANDA, 9" doesn't.
+    public static func otherToken(_ token: OtherToken) -> String {
+        let name = [Wording.otherTokenName(token), token.name == nil ? nil : token.symbol].compactMap(\.self).joined(separator: ", ")
+        let about = [token.tucked, token.note].compactMap(\.self).joined(separator: " ")
+        return "\(name), amount, \(Wording.otherTokenAmount(token)), no price. Address \(address(token.token)).\(about.isEmpty ? "" : " \(about)")"
+    }
+
     /// The chart in a sentence: how long it covers, where it started and ended, and how high and low it went.
     /// What it can't know is said, never left out: an end that's unknown is "unknown", an amount that leaves something out is "partial", and one worked out between prices is "about".
     static func chartSummary(_ series: PnlSeries, _ currency: CurrencyCode, isLive: Bool) -> String {

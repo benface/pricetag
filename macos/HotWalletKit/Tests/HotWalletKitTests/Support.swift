@@ -283,7 +283,7 @@ actor ScriptedPortfolios: PortfolioSource {
 }
 
 /// A portfolio as the server would send it, from JSON, so the test uses the same decoding as the app.
-func portfolio(address: EthereumAddress = hotAddress, toBlock: UInt64 = 1000, outgoing: [String] = [], realized: String? = "0", realizedMissing: Int = 0, estimatedRealized: Bool = false, linkedFailed: [String] = [], positions: [String] = [], unlisted: [String] = [], started: Bool = true) -> Portfolio {
+func portfolio(address: EthereumAddress = hotAddress, toBlock: UInt64 = 1000, outgoing: [String] = [], realized: String? = "0", realizedMissing: Int = 0, estimatedRealized: Bool = false, linkedFailed: [String] = [], positions: [String] = [], otherTokens: [String] = [], unlisted: [String] = [], started: Bool = true) -> Portfolio {
     let realizedText = realized.map { "\"\($0)\"" } ?? "null"
     let json = """
     {
@@ -293,6 +293,7 @@ func portfolio(address: EthereumAddress = hotAddress, toBlock: UInt64 = 1000, ou
       "progress": { "started": \(started), "behindBlocks": 0 },
       "gasUnknownTxs": [], "l1FeeUnknownTxs": [], "openingUnread": [], "unreadAssets": [], "outgoingTxs": [\(outgoing.map { "\"\($0)\"" }.joined(separator: ","))],
       "unlisted": [\(unlisted.map { "{ \"token\": \"\($0)\", \"transfers\": 1 }" }.joined(separator: ","))],
+      "otherTokens": [\(otherTokens.joined(separator: ","))],
       "positions": [\(positions.joined(separator: ","))],
       "totals": {
         "valueMicros": null, "realizedMicros": \(realizedText), "unrealizedMicros": null, "gasMicros": null, "pnlMicros": null,
