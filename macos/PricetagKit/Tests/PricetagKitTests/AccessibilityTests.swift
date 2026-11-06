@@ -93,6 +93,49 @@ struct AccessibilityTreeTests {
         try AccessibilityTree.elements(of: view.frame(width: 640), settle: 0.05).map { [$0.label, $0.value].filter { !$0.isEmpty }.joined(separator: ", ") }
     }
 
+    /// What's approved before signing: the address and nothing else is said a character at a time, however far in it's nested.
+    @Test func onlyTheAddressIsSpelledOut() throws {
+        let address = "0x00000000000000000000000000000000000De302"
+        let spoken = Spoken.address(address)
+        let row = Spoken.address(address, after: "To, Ledger, ")
+        let approving = Text("\(Text("Ready")): \(Text("\(Text("1 ETH")). \(row)"))")
+        let view = VStack {
+            Color.clear.frame(height: 1).accessibilityElement(children: .ignore).accessibilityLabel(row)
+            Button("Sign") {}.accessibilityLabel(approving)
+        }
+        let elements = try AccessibilityTree.elements(of: view.frame(width: 640), settle: 0.05)
+        let found = try #require(elements.first { $0.label == "To, Ledger, \(spoken)" }, "\(elements)")
+        #expect(found.spelledOut == [spoken])
+        let button = try #require(elements.first { $0.label == "Ready: 1 ETH. To, Ledger, \(spoken)" }, "\(elements)")
+        #expect(button.spelledOut == [spoken])
+    }
+
+    /// Combining text into one element makes it static text, which keeps its marks somewhere else than the label.
+    @Test func anAddressCombinedIntoStaticTextIsSpelledOut() throws {
+        let address = "0x00000000000000000000000000000000000De302"
+        let view = VStack {
+            Text("0x00")
+            Text("De302")
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Spoken.address(address, after: "This wallet's address, "))
+        let elements = try AccessibilityTree.elements(of: view.frame(width: 640), settle: 0.05)
+        let found = try #require(elements.first { $0.value == "This wallet's address, \(Spoken.address(address))" }, "\(elements)")
+        #expect(found.role == "StaticText")
+        #expect(found.spelledOut == [Spoken.address(address)])
+    }
+
+    /// A name can be anything, so nothing in one is read as a format or as Markdown.
+    @Test func whatComesBeforeAnAddressIsSaidAsWritten() throws {
+        let address = "0x00000000000000000000000000000000000De302"
+        for lead in ["100% %@ %d, ", "**Bold** [link](https://example.com) `code`, "] {
+            let view = Color.clear.frame(height: 1).accessibilityElement(children: .ignore).accessibilityLabel(Spoken.address(address, after: lead))
+            let elements = try AccessibilityTree.elements(of: view.frame(width: 640), settle: 0.05)
+            let found = try #require(elements.first { $0.spelledOut == [Spoken.address(address)] }, "\(elements)")
+            #expect(found.label == lead + Spoken.address(address))
+        }
+    }
+
     @Test func numbersSayWhatTheyAreAndWhenTheyStoppedUpdating() throws {
         let portfolio = try demoPortfolio()
         let live = try lines(PortfolioSummary(portfolio: portfolio, isLive: true, size: 30) { _ in }.padding())

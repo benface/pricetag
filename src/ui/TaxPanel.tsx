@@ -1,10 +1,10 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { formatSignedMoney, shortHash, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import type { TaxReportResponse } from "../core/api.ts"
 import { failureOf, readResponse, type ReadFailure } from "../core/read-failure.ts"
 import type { Book } from "../core/book.ts"
 import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, readOtherWallets, savedOtherWallets, type TaxCountryCode, type TaxScope, type TaxYear } from "../core/tax.ts"
-import { METHOD_LABELS, METHOD_NAME, est, panelProblem } from "../core/wording.ts"
+import { METHOD_LABELS, METHOD_NAME, answerQuestionsLabel, est, panelProblem } from "../core/wording.ts"
 import { ProblemNotice } from "./ProblemNotice.tsx"
 
 const COUNTRY_KEY = "pricetag.taxCountry"
@@ -89,6 +89,7 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
   onClose: () => void
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
+  const othersError = useId()
   const close = useRef<HTMLButtonElement>(null)
   const [country, setCountry] = useState(() => readCountry(currency))
   // Nothing chosen means whatever the country calls for. Choosing another country goes back to that.
@@ -248,6 +249,8 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
               autoComplete="off"
               placeholder="0x…"
               value={othersText}
+              aria-invalid={badOther !== null}
+              aria-describedby={badOther ? othersError : undefined}
               onChange={(e) => {
                 remember(OTHERS_KEY, savedOtherWallets(e.target.value) || null)
                 setOthersText(e.target.value)
@@ -255,7 +258,7 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
             />
           </label>
         )}
-        {badOther ? <p className="notice warn">⚠ {badOther} isn't a Base address.</p> : null}
+        {badOther ? <p id={othersError} className="notice warn" role="alert">⚠ {badOther} isn't a Base address.</p> : null}
         {error ? (
           <ProblemNotice
             problem={panelProblem(error, location.origin)}
@@ -298,7 +301,7 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
                   if (count === 0) return null
                   return (
                     <button key={wallet} type="button" className="resolve-button" onClick={() => onResolve(wallet)}>
-                      {count === undefined || alongside.length > 0 ? `Answer for ${shortHash(wallet)}` : `Resolve ${count}`}
+                      {count === undefined || alongside.length > 0 ? `Answer for ${shortHash(wallet)}` : answerQuestionsLabel(count)}
                     </button>
                   )
                 })}
@@ -312,6 +315,7 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
           </>
         ) : null}
 
+        <p className="visually-hidden" role="status">{loading && !badOther ? "Working it out…" : ready ? "The report is ready." : ""}</p>
         <button type="button" className="primary" disabled={!ready} onClick={() => report && download(report)}>
           {loading && !badOther ? "Working it out…" : "Download CSV"}
         </button>

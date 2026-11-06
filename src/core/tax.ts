@@ -432,8 +432,8 @@ function walletWarnings(source: Source, named: boolean): string[] {
   const who = named ? `${shortHash(wallet.address)}: ` : ""
   const lines: string[] = []
   if (wallet.mode === "demo") lines.push("Demo data, not a real wallet.")
-  if (!hasStarted(wallet)) lines.push(`${who}The dataset hasn't reached this wallet's first block yet, so nothing from it is here.`)
-  else if (isBehind(wallet)) lines.push(`${who}The dataset is ${plural(wallet.latest.blockNum - wallet.coverage.toBlock, "block")} behind the chain, so the newest transactions aren't here yet.`)
+  if (!hasStarted(wallet)) lines.push(`${who}The data hasn't reached this wallet's first block yet, so nothing from it is here.`)
+  else if (isBehind(wallet)) lines.push(`${who}The data is ${plural(wallet.latest.blockNum - wallet.coverage.toBlock, "block")} behind the chain, so the newest transactions aren't here yet.`)
   if (wallet.gasUnknownTxs.length > 0) lines.push(`${who}Network fees couldn't be worked out for ${plural(wallet.gasUnknownTxs.length, "transaction")}, so they aren't here.`)
   if (wallet.l1FeeUnknownTxs.length > 0) lines.push(`${who}Part of the network fee couldn't be read yet for ${plural(wallet.l1FeeUnknownTxs.length, "transaction")}, so those fees are low.`)
   if (wallet.openingUnread.length > 0) lines.push(`${who}What the wallet already held couldn't all be read yet (${wallet.openingUnread.join(", ")}).`)

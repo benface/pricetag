@@ -14,7 +14,7 @@ struct WatchOnlyNotice: View {
     }
 }
 
-/// What a watch-only build asks when its server wants to know who's asking. The invite goes in the same place a typed one always has,
+/// What a build for other people asks when its server wants to know who's asking. The invite goes in the same place a typed one always has,
 /// saved for this server alone, and only sent over HTTPS.
 struct InvitePrompt: View {
     let store: PortfolioStore

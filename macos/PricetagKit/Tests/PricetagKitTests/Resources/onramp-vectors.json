@@ -1,0 +1,85 @@
+{
+  "checkout": {
+    "url": "https://pay.coinbase.com/buy/select-asset?sessionToken=session-token&defaultNetwork=base&defaultAsset=ETH&presetCryptoAmount=0.01&partnerUserRef=0123456789abcdef0123456789abcdef",
+    "ref": "0123456789abcdef0123456789abcdef"
+  },
+  "orders": [
+    {
+      "provider": "coinbase",
+      "id": "delivered",
+      "status": "succeeded",
+      "failure": null,
+      "asset": "USDC",
+      "units": "5000000",
+      "wallet": "0x3762620fbcb400b0f98365da4aad7d2a250e5d89",
+      "network": "base",
+      "txHash": "0xabababababababababababababababababababababababababababababababab",
+      "blockNum": 50,
+      "cost": {
+        "micros": "5070000",
+        "currency": "USD"
+      },
+      "costUsdMicros": "5070000",
+      "paidIn": null
+    },
+    {
+      "provider": "coinbase",
+      "id": "no-rate",
+      "status": "succeeded",
+      "failure": null,
+      "asset": "USDC",
+      "units": "5000000",
+      "wallet": "0x3762620fbcb400b0f98365da4aad7d2a250e5d89",
+      "network": "base",
+      "txHash": "0xabababababababababababababababababababababababababababababababab",
+      "blockNum": 50,
+      "cost": null,
+      "costUsdMicros": null,
+      "paidIn": "SEK"
+    },
+    {
+      "provider": "coinbase",
+      "id": "pending",
+      "status": "pending",
+      "failure": null,
+      "asset": "USDC",
+      "units": "5000000",
+      "wallet": "0x3762620fbcb400b0f98365da4aad7d2a250e5d89",
+      "network": "base",
+      "txHash": null,
+      "blockNum": null,
+      "cost": null,
+      "costUsdMicros": null,
+      "paidIn": null
+    },
+    {
+      "provider": "coinbase",
+      "id": "failed",
+      "status": "failed",
+      "failure": "delivery",
+      "asset": "USDC",
+      "units": "5000000",
+      "wallet": "0x3762620fbcb400b0f98365da4aad7d2a250e5d89",
+      "network": "base",
+      "txHash": null,
+      "blockNum": null,
+      "cost": null,
+      "costUsdMicros": null,
+      "paidIn": null
+    }
+  ],
+  "matches": [
+    {
+      "order": "order-1",
+      "state": "recorded"
+    },
+    {
+      "order": "order-2",
+      "state": "unmatched"
+    },
+    {
+      "order": "order-3",
+      "state": "waiting"
+    }
+  ]
+}

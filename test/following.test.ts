@@ -38,6 +38,8 @@ function handStream() {
   return {
     stream,
     resumes,
+    /** Everything sent so far has been read. */
+    drained: () => queued.length === 0,
     send(...ranges: (StreamRange | Error)[]) {
       queued.push(...ranges)
       wake()
@@ -65,7 +67,7 @@ describe("following the chain", FOLLOWING, () => {
     const hand = handStream()
     const chain = following(t, { stream: hand.stream })
     const first = chain.next()
-    await new Promise((resolve) => setTimeout(resolve, 5))
+    await until(t, () => hand.resumes.length > 0)
     hand.send(dataOf(101), blockOf(101))
     assert.deepEqual(await first, { kind: "block", blockNum: 101, reorgFrom: null, via: "stream" })
     assert.deepEqual(hand.resumes, [MARK])
@@ -75,7 +77,7 @@ describe("following the chain", FOLLOWING, () => {
     const hand = handStream()
     const chain = following(t, { stream: hand.stream })
     const first = chain.next()
-    await new Promise((resolve) => setTimeout(resolve, 5))
+    await until(t, () => hand.resumes.length > 0)
     hand.send(blockOf(101), blockOf(102))
     await first
     // A same-height replacement, then blocks after it that aren't one.
@@ -91,11 +93,11 @@ describe("following the chain", FOLLOWING, () => {
     const hand = handStream()
     const chain = following(t, { stream: hand.stream })
     const first = chain.next()
-    await new Promise((resolve) => setTimeout(resolve, 5))
+    await until(t, () => hand.resumes.length > 0)
     hand.send(blockOf(101))
     await first
     hand.send(blockOf(102), blockOf(101, 101, "0xnew"), blockOf(102, 102, "0xnew2"), blockOf(103))
-    await new Promise((resolve) => setTimeout(resolve, 5))
+    await until(t, hand.drained)
     assert.deepEqual(await chain.next(), { kind: "block", blockNum: 103, reorgFrom: 101, via: "stream" })
   })
 
@@ -104,7 +106,7 @@ describe("following the chain", FOLLOWING, () => {
     let mark = MARK
     const chain = following(t, { stream: hand.stream, readMark: async () => mark, retryMs: 60_000 })
     const first = chain.next()
-    await new Promise((resolve) => setTimeout(resolve, 2))
+    await until(t, () => hand.resumes.length > 0)
     mark = { blockNum: 101, hash: "0xnew101" }
     hand.send(dataOf(101, 90, "0xnew101"), new Error("gone before the block was complete"))
     assert.deepEqual(await first, { kind: "block", blockNum: 101, reorgFrom: 90, via: "polling" })
@@ -118,7 +120,7 @@ describe("following the chain", FOLLOWING, () => {
     let mark = MARK
     const chain = following(t, { stream: hand.stream, readMark: async (after) => (asked.push(after), mark), retryMs: 60_000 })
     const first = chain.next()
-    await new Promise((resolve) => setTimeout(resolve, 2))
+    await until(t, () => hand.resumes.length > 0)
     mark = { blockNum: 95, hash: "0xnew95" }
     hand.send(dataOf(95, 90, "0xnew95"), new Error("gone before the block was complete"))
     assert.deepEqual(await first, { kind: "block", blockNum: 95, reorgFrom: 90, via: "polling" })
@@ -129,7 +131,7 @@ describe("following the chain", FOLLOWING, () => {
     const hand = handStream()
     const chain = following(t, { stream: hand.stream, readMark: async () => MARK, retryMs: 5 })
     const first = chain.next()
-    await new Promise((resolve) => setTimeout(resolve, 2))
+    await until(t, () => hand.resumes.length > 0)
     hand.send(dataOf(100, 90, "0xnew100"), new Error("gone before the block was complete"))
     await until(t, () => hand.resumes.length >= 2)
     hand.send(blockOf(100, 95, "0xnew100"))
@@ -141,7 +143,7 @@ describe("following the chain", FOLLOWING, () => {
     let mark = MARK
     const chain = following(t, { stream: hand.stream, readMark: async () => mark, retryMs: 20 })
     const first = chain.next()
-    await new Promise((resolve) => setTimeout(resolve, 2))
+    await until(t, () => hand.resumes.length > 0)
     mark = { blockNum: 102, hash: "0x102" }
     hand.send(new Error("no stream here"))
     assert.deepEqual(await first, { kind: "block", blockNum: 102, reorgFrom: null, via: "polling" })
@@ -157,7 +159,7 @@ describe("following the chain", FOLLOWING, () => {
     const hand = handStream()
     const chain = following(t, { stream: hand.stream, readMark: async () => ({ blockNum: 101, hash: "0x101" }), retryMs: 5 })
     const first = chain.next()
-    await new Promise((resolve) => setTimeout(resolve, 2))
+    await until(t, () => hand.resumes.length > 0)
     hand.send(blockOf(102), new Error("connection lost"))
     assert.deepEqual(await first, { kind: "block", blockNum: 102, reorgFrom: null, via: "stream" })
     await until(t, () => hand.resumes.length >= 2)
@@ -171,7 +173,7 @@ describe("following the chain", FOLLOWING, () => {
     let mark = MARK
     const chain = following(t, { stream: hand.stream, readMark: async () => mark, stallMs: 5, retryMs: 20 })
     const first = chain.next()
-    await new Promise((resolve) => setTimeout(resolve, 2))
+    await until(t, () => hand.resumes.length > 0)
     hand.send(blockOf(101))
     assert.deepEqual(await first, { kind: "block", blockNum: 101, reorgFrom: null, via: "stream" })
     // The stream goes quiet, and polling only sees a higher head, which is on the new chain.
@@ -248,7 +250,8 @@ describe("following the chain", FOLLOWING, () => {
       await follow.next()
       chain.reorg(150, 180)
       const next = follow.next()
-      await new Promise((resolve) => setTimeout(resolve, 10))
+      const asked = chain.asked.length
+      await until(t, () => chain.asked.length > asked)
       // The last block is gone rather than different, which a read that's behind looks like too.
       chain.reorg(181, 200)
       assert.deepEqual(await next, { kind: "block", blockNum: 200, reorgFrom: 101, via: "polling" })
@@ -259,7 +262,7 @@ describe("following the chain", FOLLOWING, () => {
       const chain = polledChain(100)
       const follow = following(t, { ...chain.config, stream: hand.stream, retryMs: 60_000 })
       const first = follow.next()
-      await new Promise((resolve) => setTimeout(resolve, 2))
+      await until(t, () => hand.resumes.length > 0)
       chain.extend(110)
       hand.send(blockOf(110, 101, chain.blocks.get(110)!))
       assert.deepEqual(await first, { kind: "block", blockNum: 110, reorgFrom: null, via: "stream" })
@@ -352,7 +355,7 @@ describe("following the chain", FOLLOWING, () => {
     let mark = MARK
     const chain = following(t, { stream: hand.stream, readMark: async () => mark, retryMs: 20 })
     const first = chain.next()
-    await new Promise((resolve) => setTimeout(resolve, 2))
+    await until(t, () => hand.resumes.length > 0)
     hand.send(blockOf(101))
     assert.deepEqual(await first, { kind: "block", blockNum: 101, reorgFrom: null, via: "stream" })
     mark = { blockNum: 500, hash: "0x500" }
@@ -369,7 +372,7 @@ describe("following the chain", FOLLOWING, () => {
     let mark = MARK
     const chain = following(t, { stream: hand.stream, readMark: async () => mark, retryMs: 20 })
     const first = chain.next()
-    await new Promise((resolve) => setTimeout(resolve, 2))
+    await until(t, () => hand.resumes.length > 0)
     hand.send(blockOf(101))
     await first
     mark = { blockNum: 500, hash: "0xold500" }
@@ -388,7 +391,7 @@ describe("following the chain", FOLLOWING, () => {
     let mark = MARK
     const chain = following(t, { stream: hand.stream, readMark: async () => mark, retryMs: 20 })
     const first = chain.next()
-    await new Promise((resolve) => setTimeout(resolve, 2))
+    await until(t, () => hand.resumes.length > 0)
     hand.send(blockOf(101))
     await first
     mark = { blockNum: 500, hash: "0xold500" }
@@ -407,7 +410,7 @@ describe("following the chain", FOLLOWING, () => {
     let mark = MARK
     const chain = following(t, { stream: hand.stream, readMark: async () => mark, stallMs: 5, retryMs: 60_000 })
     const first = chain.next()
-    await new Promise((resolve) => setTimeout(resolve, 2))
+    await until(t, () => hand.resumes.length > 0)
     mark = { blockNum: 101, hash: "0x101" }
     assert.deepEqual(await first, { kind: "block", blockNum: 101, reorgFrom: null, via: "polling" })
   })
@@ -418,7 +421,7 @@ describe("following the chain", FOLLOWING, () => {
     let mark = { blockNum: 5000, hash: "0x5000" }
     const chain = following(t, { stream: hand.stream, readMark: async () => mark, retryMs: 60_000, logger: { warn: (message) => warnings.push(message) } })
     const first = chain.next()
-    await new Promise((resolve) => setTimeout(resolve, 2))
+    await until(t, () => hand.resumes.length > 0)
     mark = { blockNum: 5001, hash: "0x5001" }
     hand.send(blockOf(1000, 0))
     assert.deepEqual(await first, { kind: "block", blockNum: 5001, reorgFrom: null, via: "polling" })
@@ -429,7 +432,7 @@ describe("following the chain", FOLLOWING, () => {
     const hand = handStream()
     const chain = following(t, { stream: hand.stream, tickMs: 200 })
     const first = chain.next()
-    await new Promise((resolve) => setTimeout(resolve, 2))
+    await until(t, () => hand.resumes.length > 0)
     // From before the first tick, since the wait counts from there: a stall after it would shorten what's left to wait.
     const started = Date.now()
     hand.send(blockOf(101))

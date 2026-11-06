@@ -61,6 +61,19 @@ public struct ResolveFlow: View {
                     Text(sentence).font(.callout).secondaryText()
                 }
             }
+            if let refusal = model.importRefusal {
+                WarningText(refusal).font(.callout).fixedSize(horizontal: false, vertical: true)
+            }
+            if let startsAt = model.pendingImport?.startsAt {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(Wording.importQuestion).font(.callout.weight(.semibold))
+                    Text(Wording.importWhy(startsAt: startsAt)).font(.callout).secondaryText().fixedSize(horizontal: false, vertical: true)
+                    HStack {
+                        Button("Yes, Use It") { model.keepImport() }
+                        Button("No, Don't Use It") { model.declineImport() }
+                    }
+                }
+            }
             footer
         }
         // One question to the next, and the last to the finish, fade rather than swap.
@@ -121,7 +134,7 @@ public struct ResolveFlow: View {
     }
 
     private func swipeKey(_ ownership: Ownership) -> KeyPress.Result {
-        guard let question = model.current, question.kind == .sender, !isTakingCost(question) else { return .ignored }
+        guard let question = model.current, question.kind == .sender, !isTakingCost(question), model.options.contains(ownership) else { return .ignored }
         model.answer(ownership)
         return .handled
     }
@@ -148,7 +161,7 @@ public struct ResolveFlow: View {
             // At the end, the number takes the middle of the sheet instead.
             if model.current != nil {
                 HStack(spacing: 6) {
-                    Text("Now").foregroundStyle(.secondary)
+                    Text("Now").secondaryText()
                     if let portfolio = store.portfolio {
                         LiveNumber(nowText(portfolio))
                     }
@@ -249,7 +262,7 @@ public struct ResolveFlow: View {
     }
 
     private var dragged: String? {
-        if drag.width > 40 { return Ownership.mine.title }
+        if drag.width > 40, model.options.contains(.mine) { return Ownership.mine.title }
         if drag.width < -40 { return Ownership.someoneElse.title }
         if drag.height < -40, model.options.contains(.myExchange) { return Ownership.myExchange.title }
         if drag.height > 40 { return "Skip" }
@@ -332,7 +345,7 @@ public struct ResolveFlow: View {
             }
             Text("This stays on this Mac.")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .help("Publishing a cost onchain would tie your wallets together in public, so that's never done without asking.")
             if let failure = model.failure { WarningText(failure).font(.callout) }
         }

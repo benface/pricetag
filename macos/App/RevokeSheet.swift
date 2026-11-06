@@ -41,7 +41,7 @@ struct RevokeSheet: View {
                         }
                     } else {
                         ProgressView().controlSize(.large)
-                        Text("Working out the fee…").foregroundStyle(.secondary)
+                        Text("Working out the fee…").secondaryText()
                         Button("Cancel") { close(false) }
                             .keyboardShortcut(.cancelAction)
                     }

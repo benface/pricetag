@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 /// What VoiceOver says for what's on screen, where reading it as drawn would be wrong or leave something out.
 /// A number always says what it is and what it's worth, then anything that changes what it means: unknown, partial, or not updating.
@@ -29,6 +30,11 @@ public enum Spoken {
     /// Spoken as a word, an address can sound like one, or like a number.
     public static func address(_ address: String) -> String {
         Format.addressGroups(address).joined(separator: " ")
+    }
+
+    /// What it's called, read as usual, then an address with only that part marked to be said a character at a time.
+    public static func address(_ address: String, after lead: String) -> Text {
+        Text("\(Text(lead))\(Text(self.address(address)).speechSpellsOutCharacters())")
     }
 
     /// A token off the allowlist: which one it is, since two can share a name, what's held, then anything said about it.

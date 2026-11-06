@@ -23,9 +23,9 @@ struct AnswersList: View {
         } header: {
             Text("Your Answers")
         } footer: {
-            Text(Build.isWatchOnly ? "They stay on this Mac. They're only sent to \(AppName.current)'s server to work out your numbers, and it keeps nothing." : "They stay on this Mac. They're only sent to your price service to work out your numbers, and it doesn't keep them.")
+            Text(Build.isForOtherPeople ? "They stay on this Mac. They're only sent to \(AppName.current)'s server to work out your numbers, and it keeps nothing." : "They stay on this Mac. They're only sent to your price service to work out your numbers, and it doesn't keep them.")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .secondaryText()
         }
         Section {
             Button("Forget All My Answers…", role: .destructive) { isConfirmingForget = true }

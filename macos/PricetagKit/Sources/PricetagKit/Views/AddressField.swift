@@ -112,7 +112,7 @@ public struct AddressField<Focus: Hashable>: View {
         case .typing(let digits) where suggestions.isEmpty:
             Text("\(digits) of 40 characters")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .monospacedDigit()
         default:
             EmptyView()

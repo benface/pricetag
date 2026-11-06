@@ -51,7 +51,7 @@ private struct SendForm: View {
                         .disabled(model.maximum == 0)
                     if let available = model.availableText {
                         Text("\(available) available")
-                            .foregroundStyle(.secondary)
+                            .secondaryText()
                             .monospacedDigit()
                     }
                 }
@@ -76,7 +76,7 @@ private struct SendForm: View {
             HStack {
                 Text("A send can't be undone.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                 Spacer()
                 Button("Cancel", role: .cancel, action: dismiss)
                     .keyboardShortcut(.cancelAction)
@@ -117,7 +117,7 @@ private struct SendForm: View {
                 // The symbol sits just before the centered digits: a hidden copy of them on each side keeps them where the field draws them.
                 if model.unit == .money {
                     HStack(spacing: 0) {
-                        Text(model.moneySymbol).foregroundStyle(.secondary)
+                        Text(model.moneySymbol).secondaryText()
                         Text(model.amountText.isEmpty ? "0" : model.amountText).hidden()
                         Text(model.moneySymbol).hidden()
                     }
@@ -168,7 +168,7 @@ private struct SendForm: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(Text("Sending to, ") + Text(Spoken.address(address.checksummed)).speechSpellsOutCharacters())
+                    .accessibilityLabel(Spoken.address(address.checksummed, after: "Sending to, "))
             }
             Spacer(minLength: 0)
             Button("Change Address", systemImage: "xmark.circle.fill") {
@@ -195,7 +195,7 @@ private struct SendForm: View {
             } else if let known = model.knownAs {
                 Label(known.title, systemImage: known == .someoneElse ? "person" : "checkmark.circle")
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
             } else if model.asksIfItsYours {
                 isThisYours
             }
@@ -241,7 +241,7 @@ private struct SendForm: View {
             .pickerStyle(.segmented)
             Text("Saying whose it is keeps your costs right later, and it stays on this Mac. You can leave it for now.")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(12)

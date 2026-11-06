@@ -125,7 +125,7 @@ private final class AnswerClock: @unchecked Sendable {
 
     @Test func anImportIsOneAnswer() async throws {
         let (store, _) = try makeStore()
-        _ = try await store.importCoinbase(csv: "")
+        store.keepImport(try await store.readCoinbase(csv: ""))
         let imported = try entry(store, AnswerEntry.importedID)
         store.removeAnswer(imported)
         #expect(store.book.withdrawals.isEmpty)
@@ -146,7 +146,7 @@ private final class AnswerClock: @unchecked Sendable {
         let (store, defaults) = try makeStore()
         store.recordPurchase(purchase("1"))
         store.setBook(store.book.answering(sender, .someoneElse, focus: nil).enteringCost(costKey, Money(micros: "5000000", currency: .USD)))
-        _ = try await store.importCoinbase(csv: "")
+        store.keepImport(try await store.readCoinbase(csv: ""))
         #expect(store.hasAnswers)
 
         store.setBook(Book(), action: "Forget All Answers")

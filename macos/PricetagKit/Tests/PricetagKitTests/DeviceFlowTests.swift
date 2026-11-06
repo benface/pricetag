@@ -87,6 +87,44 @@ import Testing
         #expect(DeviceFlow.publish(server: server, draft: draft, usd: "250")?.absoluteString == "http://127.0.0.1:8787?publish=\(tx)&wallet=\(cold)&asset=USDC&units=1500000&decimals=6&usd=250")
     }
 
+    /// `test/cold.test.ts` writes these from what the web app reads and writes.
+    private struct LinkVectors: Decodable {
+        struct Name: Decodable {
+            let name: String
+            let link: String
+        }
+
+        struct Amount: Decodable {
+            let typed: String
+            let usd: String
+            let usdMicros: String
+        }
+
+        let names: [Name]
+        let amounts: [Amount]
+        let notAmounts: [String]
+    }
+
+    @Test func readsTheNameThePageWrites() throws {
+        let vectors = try resource("device-link-vectors", as: LinkVectors.self)
+        for vector in vectors.names {
+            #expect(try #require(AddSavingsLink(url: URL(string: vector.link)!)).name == vector.name)
+        }
+    }
+
+    @Test func writesEveryAmountItReadsSoThePageCanReadIt() throws {
+        let vectors = try resource("device-link-vectors", as: LinkVectors.self)
+        let draft = CostNoteDraft(wallet: cold, txHash: tx, asset: "USDC", decimals: 6, units: "1500000")
+        let usd = { (typed: String) in
+            DeviceFlow.publish(server: server, draft: draft, usd: typed).flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "usd" }?.value }
+        }
+        for vector in vectors.amounts {
+            #expect(usd(vector.typed) == vector.usd, "\(vector.typed)")
+            #expect(Format.micros(fromDollars: vector.typed) == vector.usdMicros, "\(vector.typed)")
+        }
+        for typed in vectors.notAmounts { #expect(usd(typed) == nil, "\(typed)") }
+    }
+
     @Test func aPublishLinkLeavesOutWhatIsntAnAmount() {
         let draft = CostNoteDraft(wallet: cold, txHash: tx, asset: "USDC", decimals: 6, units: "1500000")
         #expect(DeviceFlow.publish(server: server, draft: draft, usd: "lots")?.absoluteString.contains("usd") == false)

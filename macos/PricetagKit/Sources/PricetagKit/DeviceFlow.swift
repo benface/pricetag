@@ -9,7 +9,8 @@ public enum DeviceFlow {
         link(server, [URLQueryItem(name: "topup", value: address), URLQueryItem(name: "usd", value: String(dollars))])
     }
 
-    /// The page that publishes a cost from the wallet it arrived in. `usd` is as typed, if anything was.
+    /// The page that publishes a cost from the wallet it arrived in. `usd` is as typed, if anything was, and goes in plain digits,
+    /// because this app reads more ways of writing an amount than the page does, and one it couldn't read would leave its form blank.
     public static func publish(server: URL, draft: CostNoteDraft, usd: String?) -> URL? {
         var items = [
             URLQueryItem(name: "publish", value: draft.txHash),
@@ -18,13 +19,19 @@ public enum DeviceFlow {
             URLQueryItem(name: "units", value: draft.units),
             URLQueryItem(name: "decimals", value: String(draft.decimals)),
         ]
-        if let usd, Format.micros(fromDollars: usd) != nil { items.append(URLQueryItem(name: "usd", value: usd)) }
+        if let usd, let micros = Format.micros(fromDollars: usd), micros != "0" { items.append(URLQueryItem(name: "usd", value: plainDollars(micros))) }
         return link(server, items)
     }
 
     /// The page that gets an address from a Ledger and sends it back here in an `AddSavingsLink`.
     public static func addSavingsFromLedger(server: URL) -> URL? {
         link(server, [URLQueryItem(name: "addsavings", value: "ledger")])
+    }
+
+    private static func plainDollars(_ micros: String) -> String {
+        let digits = String(repeating: "0", count: max(0, 7 - micros.count)) + micros
+        let fraction = digits.suffix(6).replacing(/0+$/, with: "")
+        return digits.dropLast(6) + (fraction.isEmpty ? "" : ".\(fraction)")
     }
 
     /// A server on this Mac serves these pages itself, and any other only answers the API, so the app has to.
@@ -59,7 +66,10 @@ public struct AddSavingsLink: Equatable, Identifiable, Sendable {
     public static let scheme = "patina"
 
     public init?(url: URL) {
-        guard url.scheme == Self.scheme, url.host() == "add-savings", let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems else { return nil }
+        guard url.scheme == Self.scheme, url.host() == "add-savings", var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        // The page writes a space as "+", and this would keep it as one. A real plus comes as "%2B".
+        parts.percentEncodedQuery = parts.percentEncodedQuery?.replacing("+", with: "%20")
+        guard let items = parts.queryItems else { return nil }
         let value = { (name: String) in items.first { $0.name == name }?.value }
         guard let address = value("address"), Self.isAddress(address) else { return nil }
         self.address = address

@@ -392,6 +392,7 @@ private func plan(_ holdings: [Holding], cap: UInt128 = cap, fees: FeeQuote = ch
         let ethUsdFeed: String
         let usdcUsdFeed: String
         let feeds: [String: TokenFeed]
+        let contracts: [String: String]
     }
 
     private struct Sanity: Decodable {
@@ -408,6 +409,7 @@ private func plan(_ holdings: [Holding], cap: UInt128 = cap, fees: FeeQuote = ch
             #expect(entry.decimals == token.decimals)
             #expect(entry.asset == token.asset)
         }
+        #expect(fixture.contracts == Dictionary(uniqueKeysWithValues: KnownContracts.names.map { ($0.key.lowercased, $0.value) }))
         #expect(fixture.ethUsdFeed == Base.ethUsdFeed.lowercased)
         #expect(fixture.usdcUsdFeed == Base.usdcUsdFeed.lowercased)
     }

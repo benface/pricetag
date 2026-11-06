@@ -2,7 +2,7 @@
 // keep their own names, like `leg`, `oracle` and `fifo`: this is only what people read.
 // `Wording.swift` says the same on the Mac, and a test runs both on the same inputs.
 
-import { formatAmount, formatDuration, formatMoney, msBetweenBlocks, shortHash, worth, type OtherToken, type CostLabel, type CurrencyCode, type FoldLeg, type HoldComparison, type Method, type PricedLeg, type PriceSource, type UnseenEth } from "@pricetag/sdk/core"
+import { formatAmount, formatDuration, formatMoney, formatSignedMoney, msBetweenBlocks, shortHash, worth, type OtherToken, type CostLabel, type CurrencyCode, type FoldLeg, type HoldComparison, type Method, type PricedLeg, type PriceSource, type UnseenEth } from "@pricetag/sdk/core"
 import type { Mode } from "./api.ts"
 import type { ValueGaps } from "./attention.ts"
 import type { ReadFailure } from "./read-failure.ts"
@@ -81,6 +81,11 @@ export const READING = "Reading this wallet. The first read can take a minute."
 export const READING_ALL = "Reading your wallets. The first read can take a minute."
 export const ALL_YOURS_TITLE = "All Yours"
 export const IN_EACH_WALLET = "In Each Wallet"
+/** A piece of the page that couldn't load or crashed. The likeliest reason is a new version replacing the old one's files. */
+export const LOAD_FAILED = "This part of the page didn't load, which can happen right after an update. Reloading usually fixes it."
+export const LOADING = "Loading…"
+/** Where answers go. They only leave this browser for a moment, for the sums that run on the server. */
+export const ANSWERS_STAY = "Your answers are saved in this browser. A tax report or a comparison sends them to the server to work out its numbers, and the server doesn't keep them. Publishing a cost onchain would tie your wallets together in public, so that's never done without asking."
 export const NOT_AN_ADDRESS = "That isn't a Base address. It should start with 0x, then 40 letters and numbers."
 
 export const RULES_TITLE = "Pricing rule"
@@ -270,8 +275,11 @@ export function holdDifferenceSentence(micros: string, currency: CurrencyCode, e
 }
 
 /** The comparison in a few words, for the line that opens the whole of it. */
-export function holdSummarySentence({ status, differenceMicros, walletEstimated, estimated }: Pick<HoldComparison, "status" | "differenceMicros" | "walletEstimated" | "estimated">, currency: CurrencyCode): string {
-  if (status === "partial") return "Not comparable yet"
+export function holdSummarySentence({ status, differenceMicros, holdMicros, unknownAmounts, walletEstimated, estimated }: Pick<HoldComparison, "status" | "differenceMicros" | "holdMicros" | "unknownAmounts" | "walletEstimated" | "estimated">, currency: CurrencyCode): string {
+  if (status === "partial" && holdMicros !== null) {
+    const leavesOut = unknownAmounts === 0 ? "and the total PnL leaves some things out" : unknownAmounts === 1 ? "leaving out 1 amount" : `leaving out ${unknownAmounts.toLocaleString("en-US")} amounts`
+    return `Partial: ${estimated ? "about " : ""}${formatSignedMoney(holdMicros, currency)} holding ETH, ${leavesOut}`
+  }
   return status === "complete" && differenceMicros !== null ? holdDifferenceSentence(differenceMicros, currency, walletEstimated || estimated) : "Not available yet"
 }
 
@@ -304,6 +312,18 @@ export function importedSentence(found: number, skipped: number): string {
   return skipped === 0 ? `Found ${withdrawals(found)}.` : `Found ${withdrawals(found)}. ${skipped} more had no usable cost.`
 }
 
+export const IMPORT_QUESTION = "Does this file have your whole Coinbase history?"
+export const IMPORT_NOT_WHOLE = "Nothing changed. These costs need your whole history, so download it from Coinbase going back to the start, and import that."
+export const IMPORT_STARTS_LATE = "This file starts after a withdrawal you've already imported, so part of your history is missing. Nothing changed. Download your whole history from Coinbase, and import that."
+
+const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+/** Takes the date as the file has it, in UTC, so the Mac and the web say the same day. */
+export function importWhySentence(startsAt: string): string {
+  const [year, month, day] = startsAt.slice(0, 10).split("-").map(Number) as [number, number, number]
+  return `It starts on ${SHORT_MONTHS[month - 1]} ${day}, ${year}. What you bought before then changes what these cost, so if anything's missing, they'd be wrong.`
+}
+
 export function linkedFailedSentence(count: number): string {
   return count === 1 ? "Couldn't read your other wallet, so what came from it may show an unknown cost." : `Couldn't read ${count} of your other wallets, so what came from them may show an unknown cost.`
 }
@@ -323,6 +343,15 @@ export const allYoursReadingSentence = (wallets: readonly string[]) => `Still re
 
 /** Wallets in All Yours whose read failed, which aren't in its numbers. */
 export const allYoursFailedSentence = (wallets: readonly string[]) => `Couldn't read ${walletList(wallets)}, so ${wallets.length === 1 ? "it isn't" : "they aren't"} in these numbers.`
+
+/** Wallets in All Yours that an export can't include, because they aren't read. */
+export const exportLeavesOutSentence = (wallets: readonly string[]) => `This export leaves out ${walletList(wallets)}, because ${wallets.length === 1 ? "it isn't" : "they aren't"} read yet.`
+
+/** Wallets in All Yours being read again, whose last read is what these numbers use. */
+export const allYoursUpdatingSentence = (wallets: readonly string[]) => `Updating ${walletList(wallets)}. These numbers use ${wallets.length === 1 ? "its" : "their"} last read until then.`
+
+/** Wallets in All Yours whose latest read failed, whose last good read is what these numbers use. */
+export const allYoursOutdatedSentence = (wallets: readonly string[]) => `Couldn't update ${walletList(wallets)}, so these numbers use ${wallets.length === 1 ? "its" : "their"} last read.`
 
 /** A wallet's history that doesn't add up, or can't be checked, and what that does to what it sent. */
 export function withheldSentence(wallet: string, asset: string): string {

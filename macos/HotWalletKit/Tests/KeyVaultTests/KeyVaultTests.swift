@@ -146,7 +146,7 @@ enum RLPDecoder {
 
     @Test func secretBytesCanBeWiped() {
         let secret = SecretBytes(count: 32)
-        secret.withMutableBytes { $0.initializeMemory(as: UInt8.self, repeating: 7) }
+        _ = secret.withMutableBytes { $0.initializeMemory(as: UInt8.self, repeating: 7) }
         #expect(secret.withBytes { $0.allSatisfy { $0 == 7 } })
     }
 }

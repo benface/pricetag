@@ -2,7 +2,8 @@
 # `pnpm check:extension`: the whole path for real, with no real funds. A headless Chromium loads the extension and opens a real site, and
 # its requests go through the native host and the socket to a debug build of the app, whose isolated wallet has a throwaway key and only
 # holds anything on a local fork of Base. The test's local server stands in for the person at the approval window. Needs Foundry and a Chromium that can
-# load unpacked extensions (`CHROMIUM=…`, or Playwright's). Nothing opens on screen.
+# load unpacked extensions (`CHROMIUM=…`, or Playwright's). Nothing opens on screen. `PATINA_TEST_APP=…` tests a debug build that's already
+# signed instead of building one, which is how macos/hosted-test.sh tests the Developer ID one.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -16,7 +17,7 @@ command -v anvil >/dev/null || { echo "This needs Foundry's anvil: https://getfo
 chromium=${CHROMIUM:-$(ls -d "$HOME"/Library/Caches/ms-playwright/chromium-*/*/*.app/Contents/MacOS/* 2>/dev/null | tail -n 1)}
 [ -x "$chromium" ] || { echo "No Chromium. Set CHROMIUM to one that can load unpacked extensions: branded Chrome can't." >&2; exit 1; }
 
-CONFIGURATION=Debug "$here/run.sh" --build-only
+[ -n "${PATINA_TEST_APP:-}" ] || CONFIGURATION=Debug "$here/run.sh" --build-only
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/patina-extension.XXXX")
 answers_port=${ANSWERS_PORT:-18547}
@@ -48,7 +49,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-ditto "$here/build/Build/Products/Debug/$name.app" "$work/$name.app"
+ditto "${PATINA_TEST_APP:-$here/build/Build/Products/Debug/$name.app}" "$work/$name.app"
 
 anvil --fork-url "$fork_url" --port "$port" --silent >"$work/anvil.log" 2>&1 &
 anvil_pid=$!

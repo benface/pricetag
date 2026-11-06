@@ -6,7 +6,7 @@ import { after, before, describe, it } from "node:test"
 import { ASSETS, ETH_ADDRESS, PRICE_FEEDS, USDC_ADDRESS, type LegRow, type PriceFeed } from "@pricetag/sdk/core"
 import type { BookPreview, PortfolioResponse, ProofResponse, VerificationResponse, WalletResponse } from "../src/core/api.ts"
 import { costKey, emptyBook } from "../src/core/book.ts"
-import { CAUTIOUS_RULE_ID, MARKET_RULE_ID, RULE_TEXT, readRules, ruleNote, type PricingRule, type RuleComparison } from "../src/core/rules.ts"
+import { CAUTIOUS_RULE_ID, MARKET_RULE_ID, RULE_TEXT, fetchRules, readRules, ruleNote, type PricingRule, type RuleComparison } from "../src/core/rules.ts"
 import { createApi } from "../server/app.ts"
 import type { BlockData } from "../server/block.ts"
 import { createProofs, type Proofs } from "../server/proof.ts"
@@ -583,7 +583,11 @@ describe("reading the list of rules", () => {
     await assert.rejects(readRules(answer(200, JSON.stringify({ error: "No rules." }))))
   })
 
-  it("is how the app reads them", () => {
-    assert.match(readFileSync(new URL("../src/ui/useRules.ts", import.meta.url), "utf8"), /\.then\(readRules\)/)
+  it("is how the app asks for them", async () => {
+    const asked: string[] = []
+    const send = (async (url: string) => (asked.push(url), answer(200, JSON.stringify({ rules: [rule] })))) as unknown as typeof fetch
+    assert.deepEqual(await fetchRules(new AbortController().signal, send), [rule])
+    assert.deepEqual(asked, ["/api/rules"])
+    await assert.rejects(fetchRules(new AbortController().signal, (async () => answer(401, "{}")) as unknown as typeof fetch))
   })
 })

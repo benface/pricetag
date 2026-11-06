@@ -12,10 +12,10 @@ import { describeConversion } from "../src/core/explain.ts"
 import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import { foldBook } from "../src/core/resolve.ts"
 import { walletUrl } from "../src/ui/useWallet.ts"
+import { E6 } from "./support/units.ts"
 
 const addr = (n: number) => `0x${n.toString(16).padStart(40, "0")}`
 const [ME, SAVINGS, EXCHANGE] = [addr(0xa1), addr(0xb1), addr(0xd1)] as [string, string, string]
-const E6 = 10n ** 6n
 const START = Date.UTC(2026, 10, 4)
 const timeOf = (block: number) => new Date(START + block * 1000).toISOString()
 
@@ -62,7 +62,7 @@ const received = move(10, "0x1", ME, "credit", EXCHANGE)
 const legId = wallet(ME, [received]).legs[0]!.id
 const CAD_90: Money = { micros: "90000000", currency: "CAD" }
 const receipt = { wallet: ME, legId, asset: "USDC", units: (100n * E6).toString() }
-const withdrawal = (cost: Money): ExchangeWithdrawal => ({ exchange: "Coinbase", asset: "USDC", units: (100n * E6).toString(), at: timeOf(10), cost, toAddress: null })
+const withdrawal = (cost: Money): ExchangeWithdrawal => ({ exchange: "Coinbase", asset: "USDC", units: (100n * E6).toString(), at: timeOf(10), cost, fifoCostMicros: null, toAddress: null })
 
 /** The three ways a cost is stored besides a purchase, which has its own tests. */
 const BOOKS: [string, (cost: Money) => Book][] = [

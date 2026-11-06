@@ -34,7 +34,7 @@ struct ReceiveSheet: View {
                 .font(.title3.monospaced())
                 .accessibilityElement(children: .combine)
                 // A character at a time, as it's checked against what the sender pasted.
-                .accessibilityLabel(Text("This wallet's address, ") + Text(Spoken.address(address.checksummed)).speechSpellsOutCharacters())
+                .accessibilityLabel(Spoken.address(address.checksummed, after: "This wallet's address, "))
                 .contextMenu { AddressActions(address: address.checksummed) }
                 Text(HotWalletWording.receiveNote(cap: wallet.capText, hasDestination: wallet.settings.sweepDestination != nil))
                     .font(.callout)
