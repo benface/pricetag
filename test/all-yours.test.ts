@@ -1,5 +1,4 @@
 import assert from "node:assert/strict"
-import { readFileSync, writeFileSync } from "node:fs"
 import { after, before, describe, it } from "node:test"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
@@ -14,6 +13,7 @@ import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, answerSender, emptyBook, yourWallet
 import { sortHoldings } from "../src/core/holdings.ts"
 import { allYoursFailedSentence, allYoursReadingSentence, coverageSentence, excludedSentence, holdCaveatSentence } from "../src/core/wording.ts"
 import { DEMO_WALLET, demoWallet } from "../src/core/fixtures.ts"
+import { assertMatchesFixture } from "./support/fixtures.ts"
 
 const HOT = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 const COLD = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -75,22 +75,14 @@ const linking = (wallets: readonly WalletResponse[]): Book => ({ ...emptyBook(),
 const alone = (wallets: readonly WalletResponse[], method: Method) => wallets.map((wallet) => portfolioOf(wallet, method, wallets.filter((w) => w !== wallet), linking(wallets)))
 const added = (portfolios: readonly PortfolioResponse[], pick: (p: PortfolioResponse) => string | null) => portfolios.reduce((sum, p) => sum + BigInt(pick(p) ?? "0"), 0n).toString()
 
-/** The Swift package's tests read these, so a change to what the server sends fails on both sides. */
-function assertMatchesFile(name: string, actual: unknown) {
-  const url = new URL(`../macos/PricetagKit/Tests/PricetagKitTests/Resources/${name}`, import.meta.url)
-  const text = `${JSON.stringify(actual, null, 2)}\n`
-  if (process.env.UPDATE_FIXTURES) writeFileSync(url, text)
-  assert.equal(readFileSync(url, "utf8"), text, `${name} is out of date. Run with UPDATE_FIXTURES=1 if the change is on purpose.`)
-}
-
 describe("all your wallets as one", () => {
   it("sends what the Mac app reads", () => {
-    assertMatchesFile("all-yours-portfolio.json", combinedPortfolioOf([hot, cold, third], "average", emptyBook(), { reading: [SHOP], failed: [] }))
-    assertMatchesFile("all-yours-explanation.json", explainCombined([hot, cold, third], "average", { kind: "asset", asset: "ETH", metric: "unrealized" }, emptyBook()))
+    assertMatchesFixture("all-yours-portfolio.json", combinedPortfolioOf([hot, cold, third], "average", emptyBook(), { reading: [SHOP], failed: [] }))
+    assertMatchesFixture("all-yours-explanation.json", explainCombined([hot, cold, third], "average", { kind: "asset", asset: "ETH", metric: "unrealized" }, emptyBook()))
     // The demo's two wallets, which move money between them, for the Mac app's scenes.
     const savings = demoWallet(DEMO_SAVINGS_ADDRESS) as WalletResponse
-    assertMatchesFile("all-yours-demo-portfolio.json", combinedPortfolioOf([DEMO_WALLET, savings], "average", emptyBook()))
-    assertMatchesFile("all-yours-demo-explanation.json", explainCombined([DEMO_WALLET, savings], "average", { kind: "total", metric: "pnl" }, emptyBook()))
+    assertMatchesFixture("all-yours-demo-portfolio.json", combinedPortfolioOf([DEMO_WALLET, savings], "average", emptyBook()))
+    assertMatchesFixture("all-yours-demo-explanation.json", explainCombined([DEMO_WALLET, savings], "average", { kind: "total", metric: "pnl" }, emptyBook()))
   })
 
   for (const method of ["average", "fifo"] as const) {
@@ -390,7 +382,8 @@ describe("all your wallets, when one of them can't keep up", () => {
       if (state.troubled) await trouble.rates?.(wallet.legs.some((leg) => leg.txHash === "0x1") ? COLD : wallet.legs.some((leg) => leg.txHash === "0x2") ? HOT : THIRD, wallet.latest.blockNum)
       return { byBlock: {}, latest: null }
     }
-    const api = createApi({}, { source, readRates, proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } })
+    // Long enough for a wallet with nothing wrong, and short enough not to spend seconds on each one with a stuck read.
+    const api = createApi({}, { source, readRates, proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } }, undefined, { allYoursWaitMs: 500 })
     const server = createServer((req, res) => void api(req, res))
     const ready = new Promise<string>((resolve) => server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server.address() as AddressInfo).port}`)))
     const post = async (path: string, body: unknown) => (await fetch(`${await ready}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json() as Promise<CombinedPortfolioResponse>
@@ -532,9 +525,9 @@ describe("all your wallets, when one of them can't keep up", () => {
     const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
     const api = await behindTheMove(
       {
-        // The third wallet is what's being taken back to block 10, for as long as spending money's rates are still coming.
-        reference: async () => (armed ? wait(700) : undefined),
-        rates: async (address) => (armed && address === HOT ? wait(2_700) : undefined),
+        // The third wallet is what's being taken back to block 10, for as long as spending money's rates are still coming, which outlasts the read's wait.
+        reference: async () => (armed ? wait(400) : undefined),
+        rates: async (address) => (armed && address === HOT ? wait(700) : undefined),
       },
       [THIRD],
       () => (armed = true),

@@ -1,0 +1,63 @@
+{
+  "names": [
+    {
+      "name": "Ledger",
+      "link": "patina://add-savings?address=0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&name=Ledger&linked=0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    {
+      "name": "Rabby Wallet",
+      "link": "patina://add-savings?address=0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&name=Rabby+Wallet&linked=0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    {
+      "name": "A+B & C",
+      "link": "patina://add-savings?address=0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&name=A%2BB+%26+C&linked=0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    {
+      "name": "Écran 1",
+      "link": "patina://add-savings?address=0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&name=%C3%89cran+1&linked=0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ],
+  "amounts": [
+    {
+      "typed": "250",
+      "usd": "250",
+      "usdMicros": "250000000"
+    },
+    {
+      "typed": "US$46",
+      "usd": "46",
+      "usdMicros": "46000000"
+    },
+    {
+      "typed": "46 USD",
+      "usd": "46",
+      "usdMicros": "46000000"
+    },
+    {
+      "typed": "$1,234.50",
+      "usd": "1234.5",
+      "usdMicros": "1234500000"
+    },
+    {
+      "typed": "46,20",
+      "usd": "46.2",
+      "usdMicros": "46200000"
+    },
+    {
+      "typed": ".5",
+      "usd": "0.5",
+      "usdMicros": "500000"
+    },
+    {
+      "typed": "1 234,50 $",
+      "usd": "1234.5",
+      "usdMicros": "1234500000"
+    }
+  ],
+  "notAmounts": [
+    "lots",
+    "€46",
+    "0",
+    "-5"
+  ]
+}

@@ -407,7 +407,7 @@ actor BookSource: PortfolioSource {
         let text = String(decoding: try encoder.encode(book), as: UTF8.self) + "\n"
         let url = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "Resources/mac-book.json")
         if ProcessInfo.processInfo.environment["UPDATE_FIXTURES"] != nil { try text.write(to: url, atomically: true, encoding: .utf8) }
-        #expect(try String(contentsOf: url, encoding: .utf8) == text, "mac-book.json is out of date. Run with UPDATE_FIXTURES=1 if the change is on purpose.")
+        #expect(try String(contentsOf: url, encoding: .utf8) == text, "mac-book.json is out of date. Run with UPDATE_FIXTURES=1 if the change is on purpose, and run `pnpm check`.")
     }
 
     @Test func aWalletThatsNoLongerYoursStaysListed() throws {

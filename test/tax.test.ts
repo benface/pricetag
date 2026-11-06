@@ -1,5 +1,4 @@
 import assert from "node:assert/strict"
-import { readFileSync, writeFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
@@ -11,8 +10,9 @@ import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_WALLET, demoRates } from "../s
 import { foldBook } from "../src/core/resolve.ts"
 import { TAX_COUNTRIES, parseTaxYear, readOtherWallets, savedOtherWallets, taxReportOf, taxRows, type TaxYear } from "../src/core/tax.ts"
 import { createApi } from "../server/app.ts"
+import { assertMatchesFixture } from "./support/fixtures.ts"
+import { E18 } from "./support/units.ts"
 
-const E18 = 10n ** 18n
 const A = `0x${"a".repeat(40)}`
 const B = `0x${"b".repeat(40)}`
 const usd = (amount: number) => (BigInt(amount) * 1_000_000n).toString()
@@ -522,11 +522,8 @@ describe("taxReportOf", () => {
   })
 
   it("matches what the Swift tests read", () => {
-    const url = new URL("../macos/PricetagKit/Tests/PricetagKitTests/Resources/demo-tax-report.json", import.meta.url)
     // The newest year, as the app asks for it.
-    const text = `${JSON.stringify(taxReportOf([{ ...DEMO_WALLET, currency: "CAD", rates: demoRates("CAD") }], { country: "CA", method: "average", scope: "pooled", year: "latest" }), null, 2)}\n`
-    if (process.env.UPDATE_FIXTURES) writeFileSync(url, text)
-    assert.equal(readFileSync(url, "utf8"), text, "demo-tax-report.json is out of date. Run with UPDATE_FIXTURES=1 if the change is on purpose.")
+    assertMatchesFixture("demo-tax-report.json", taxReportOf([{ ...DEMO_WALLET, currency: "CAD", rates: demoRates("CAD") }], { country: "CA", method: "average", scope: "pooled", year: "latest" }))
   })
 })
 

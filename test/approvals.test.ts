@@ -1,11 +1,11 @@
 import assert from "node:assert/strict"
-import { readFileSync, writeFileSync } from "node:fs"
 import { describe, it } from "node:test"
 import { decodeFunctionData, encodeAbiParameters, encodeFunctionResult, parseAbi, type Hex } from "viem"
 import { APPROVAL_FOR_ALL_TOPIC, APPROVAL_TOPIC, PERMIT2, PERMIT2_APPROVAL_TOPIC, PERMIT2_PERMIT_TOPIC, USDC_ADDRESS, WETH_ADDRESS, candidatesFromLogs, isActive, knownSpenderCandidates, mergeCandidates, type ApprovalLog, type Candidate } from "@pricetag/sdk/core"
 import { callResult, createApprovals, decodeChecks, demoApprovals, encodeChecks, expiryOf, isTrustedCheck, sortViews, viewOf } from "../server/approvals.ts"
 import { tablesSql } from "../dataset/build.ts"
 import { DEMO_SAVINGS_WALLET, DEMO_WALLET } from "../src/core/fixtures.ts"
+import { assertMatchesFixture } from "./support/fixtures.ts"
 
 const ME = "0x00000000000000000000000000000000000a11ce"
 const OTHER = "0x0000000000000000000000000000000000000b0b"
@@ -280,9 +280,6 @@ describe("the demo's approvals", () => {
   })
 
   it("is what the Swift tests read", () => {
-    const url = new URL("../macos/PricetagKit/Tests/PricetagKitTests/Resources/demo-approvals.json", import.meta.url)
-    const text = `${JSON.stringify(demoApprovals(DEMO_WALLET), null, 2)}\n`
-    if (process.env.UPDATE_FIXTURES) writeFileSync(url, text)
-    assert.equal(readFileSync(url, "utf8"), text, "demo-approvals.json is out of date. Run with UPDATE_FIXTURES=1 if the change is on purpose.")
+    assertMatchesFixture("demo-approvals.json", demoApprovals(DEMO_WALLET))
   })
 })

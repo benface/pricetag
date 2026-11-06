@@ -1,0 +1,49 @@
+[
+  {
+    "status": "reconciled",
+    "blockNum": 200,
+    "computedQty": "100000000000000000",
+    "actualQty": "100000000000000000",
+    "differenceQty": "0"
+  },
+  {
+    "status": "incomplete",
+    "blockNum": 200,
+    "computedQty": "100000000000000000",
+    "actualQty": "100000000000000005",
+    "differenceQty": "5",
+    "unseenEth": [
+      {
+        "blockNum": 100,
+        "amount": "5",
+        "txHashes": [
+          "0xswap"
+        ]
+      }
+    ]
+  },
+  {
+    "status": "unchecked",
+    "reason": "The wallet's actual balance couldn't be read.",
+    "heldQty": "100000000000000007",
+    "heldIsCurrent": false
+  },
+  {
+    "status": "unchecked",
+    "reason": "The wallet's actual balance couldn't be read.",
+    "heldQty": null,
+    "heldIsCurrent": false
+  },
+  {
+    "status": "unchecked",
+    "reason": "What this wallet held before the first block read couldn't be read.",
+    "heldQty": "5",
+    "heldIsCurrent": true
+  },
+  {
+    "status": "unchecked",
+    "reason": "The network fee of 1 transaction couldn't be read yet.",
+    "heldQty": "100000000000000000",
+    "heldIsCurrent": true
+  }
+]

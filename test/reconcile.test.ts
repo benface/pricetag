@@ -4,11 +4,11 @@ import { balancesByAsset, decodeBalanceResults, encodeBalanceCalls, MULTICALL3 }
 import { USD_CONTEXT, explainMetric, explainTotal, mismatchCause } from "../src/core/explain.ts"
 import { DEMO_WALLET } from "../src/core/fixtures.ts"
 import { feesUnknownSentence } from "../src/core/wording.ts"
-import { ETH_ADDRESS, TOKENS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, foldPositions, openingLegs, pnlOverTime, referenceMarks, sumTotals, unconfirmedAssets, unreadAssets, type LegRow, type Onchain, type Reference } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, TOKENS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, foldPositions, openingLegs, pnlOverTime, reconcile, referenceMarks, sumTotals, unconfirmedAssets, unreadAssets, type LegRow, type Onchain, type Reference } from "@pricetag/sdk/core"
+import { E18, E6 } from "./support/units.ts"
+import { assertMatchesFixture } from "./support/fixtures.ts"
 
 const ME = "0x00000000000000000000000000000000000000aa"
-const E18 = 10n ** 18n
-const E6 = 10n ** 6n
 const REF: Reference = { blockNum: 100, ethUsd: "300000000000", usdcUsd: "100000000" }
 const PRICES = { ETH: { micros: "3000000000", source: "oracle" as const, blockNum: 200 } }
 
@@ -466,5 +466,22 @@ describe("a network fee that couldn't be worked out", () => {
     assert.equal(eth.reconciliation?.status, "unchecked")
     assert.match(explainMetric(eth, "amount", USD_CONTEXT).lines.join(" "), /last balance read/)
     assert.equal(feesUnknownSentence(1), "Network fees couldn't be worked out for 1 transaction, so the network fees shown are too low.")
+  })
+})
+
+describe("a reconciliation", () => {
+  it("is what the Swift tests read, whatever it says", () => {
+    const legs = legsOf([row(ETH_ADDRESS, "credit", FUNDING)])
+    const unseenEth = [{ blockNum: 100, amount: "5", txHashes: ["0xswap"] }]
+    const vectors = [
+      reconcile("ETH", legs, 0n, onchain({ ETH: FUNDING })),
+      reconcile("ETH", legs, 0n, { ...onchain({ ETH: FUNDING + 5n }), unseenEth }),
+      reconcile("ETH", legs, 0n, { balances: null, l1FeeUnknownTxs: [], lastBalances: { ETH: { blockNum: 50, amount: "7" } } }),
+      reconcile("ETH", legs, 0n, { balances: null, l1FeeUnknownTxs: [] }),
+      reconcile("USDC", [], 0n, { ...onchain({ USDC: 5n }), openingUnread: ["USDC"] }),
+      reconcile("ETH", legs, 0n, onchain({ ETH: FUNDING }, ["0x1"])),
+    ]
+    assert.deepEqual(new Set(vectors.map((v) => v.status)), new Set(["reconciled", "incomplete", "unchecked"]))
+    assertMatchesFixture("reconciliation-vectors.json", vectors)
   })
 })

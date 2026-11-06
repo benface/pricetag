@@ -9,6 +9,7 @@ import { foldBook } from "../src/core/resolve.ts"
 import { knownSender } from "../src/core/senders.ts"
 import { taxReportOf, taxRows } from "../src/core/tax.ts"
 import type { WalletResponse } from "../src/core/api.ts"
+import { E18 } from "./support/units.ts"
 
 // The real wallet and payout behind WORK-424: a contract paid it 0.00206183 ETH, and the transaction doesn't name it as `to`.
 const ME = "0x3762620fbcb400b0f98365da4aad7d2a250e5d89"
@@ -435,7 +436,6 @@ function blockOf({ account = ME, rows, before, after, payer, opening = 0n, amoun
   } as unknown as WalletResponse
 }
 
-const E18 = 10n ** 18n
 const at500 = (tx: string, token: string, side: LegRow["side"], amount: bigint, kind: LegRow["kind"], counterparty?: string): LegRow => ({ ...row(500, tx, token, side, amount, kind), ...(counterparty ? { counterparty } : {}) })
 const UNSEEN = "unseen:500:ETH"
 const usd = (micros: string) => ({ micros, currency: "USD" as const })

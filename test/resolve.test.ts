@@ -12,6 +12,8 @@ import { exportCsv } from "../src/core/export.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_SAVINGS_WALLET, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import { linkByProof } from "../src/ui/link-proof.ts"
 import { allocateTaken, foldBook, isBalanced, microsOf, missingWallets, previewBook, readKey, readsMatching } from "../src/core/resolve.ts"
+import { E18, E6 } from "./support/units.ts"
+import { assertMatchesFixture } from "./support/fixtures.ts"
 
 const addr = (n: number) => `0x${n.toString(16).padStart(40, "0")}`
 const [A, B, C, STRANGER] = [addr(0xa1), addr(0xb1), addr(0xc1), addr(0xd1)] as [string, string, string, string]
@@ -19,8 +21,6 @@ const AERO = "0x940181a94a35a4569e4529a3cdfb74e38fd98631"
 const COINBASE = "0x71660c4005ba85c37ccec55d0c4493e66fe775d3"
 const ACROSS = "0x09aea4b2242abc8bb4bb78d537a67a245a7bec64"
 const MINT = "0x0000000000000000000000000000000000000000"
-const E18 = 10n ** 18n
-const E6 = 10n ** 6n
 
 const references = (blocks: number[]): Reference[] => blocks.map((blockNum) => ({ blockNum, ethUsd: "200000000000", usdcUsd: "100000000" }))
 
@@ -138,6 +138,7 @@ describe("the cost of an incoming leg", () => {
       it("says the same in both apps", () => {
         const response = portfolioOf(wallet(B, rows), "average", [mismatched()], linked)
         assert.deepEqual(response.withheld, [{ wallet: A, asset: "USDC" }])
+        assertMatchesFixture("withheld-vectors.json", response.withheld)
         assert.equal(response.positions[0]?.values.costMicros, null)
       })
 
@@ -1295,6 +1296,10 @@ Timestamp,Transaction Type,Asset,Quantity Transacted,Spot Price Currency,Spot Pr
 2026-11-04T03:00:00Z,Send,AERO,10,EUR,$1.80,$18,$18,$0,Sent 10 AERO
 `
 
+  it("is what the Swift tests read", () => {
+    assertMatchesFixture("exchange-import-vectors.json", parseCoinbaseCsv(CSV))
+  })
+
   it("works out each withdrawal's cost from what was bought before it, fees included", () => {
     const { withdrawals, skipped } = parseCoinbaseCsv(CSV)!
     // 2 ETH cost $4,240, so half an ETH costs $1,060.
@@ -1457,6 +1462,13 @@ Timestamp,Transaction Type,Asset,Quantity Transacted,Spot Price Currency,Spot Pr
 })
 
 describe("what the UI gets", () => {
+  it("in a preview, is what the Swift tests read", () => {
+    const answered = { ...emptyBook(), senders: { [DEMO_SAVINGS_ADDRESS]: { kind: "mine" as const } } }
+    const previews = [previewBook(DEMO_WALLET, [], "average", emptyBook()), previewBook(DEMO_WALLET, [], "average", answered), previewBook(DEMO_WALLET, [], "average", answered, [DEMO_SAVINGS_ADDRESS])]
+    assert.deepEqual(previews.map(({ pending, failed }) => [pending, failed]), [[false, false], [true, false], [true, true]])
+    assertMatchesFixture("book-preview-vectors.json", previews)
+  })
+
   it("groups a token with no market apart, counts it, and keeps it out of PnL", () => {
     const rows = [...buy(5, "0x0", A, 100n), ...send(10, "0x1", STRANGER, A, E18, AERO)]
     const { totals, positions, pnlStatus } = foldBook(wallet(A, rows), [], "average", emptyBook())
