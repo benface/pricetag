@@ -81,7 +81,7 @@ describe("comparing a token priced by its feed", () => {
       readBalances: async (_, block) => ({ blockNum: block, amounts: Object.fromEntries(ASSETS.map((asset) => [asset, asset === "DAI" && block >= 5 ? ONE : "0"])) }),
       marketReady: async () => true,
       readMarketTrades: async () => [],
-      readFeedRounds: async (assets, block) => Object.fromEntries(assets.map((asset) => [asset, { answer: "100000000", updatedAt: Date.parse(NOW) / 1000 - 60, blockNum: block, timestamp: NOW }])),
+      readFeedRounds: async (assets, blocks) => new Map(blocks.map((block) => [block, Object.fromEntries(assets.map((asset) => [asset, { answer: "100000000", updatedAt: Date.parse(NOW) / 1000 - 60, blockNum: block, timestamp: NOW }]))])),
       ...changes,
     }
   }
@@ -115,9 +115,9 @@ describe("comparing a token priced by its feed", () => {
   it("says the value leaves it out, rather than $0, when the feed read fails during the comparison", async () => {
     let reads = 0
     const failsAfterTheRefresh: Partial<Source> = {
-      readFeedRounds: async (assets, block) => {
+      readFeedRounds: async (assets, blocks) => {
         if (++reads > 1) throw new Error("boom")
-        return Object.fromEntries(assets.map((asset) => [asset, { answer: "100000000", updatedAt: Date.parse(NOW) / 1000 - 60, blockNum: block, timestamp: NOW }]))
+        return new Map(blocks.map((block) => [block, Object.fromEntries(assets.map((asset) => [asset, { answer: "100000000", updatedAt: Date.parse(NOW) / 1000 - 60, blockNum: block, timestamp: NOW }]))]))
       },
     }
     const { status, normal, comparison } = await valueRow(daiSource(31, failsAfterTheRefresh), daiSource(29))
@@ -239,7 +239,7 @@ describe("the update behind a price, by a pricing rule", () => {
   const tx = data.txs.find((candidate) => candidate.tx_index === log.tx_index)!
   const feed: PriceFeed = { ...PRICE_FEEDS[0], aggregators: [`0x${log.address}`] }
   const update = { block_num: Number(data.block.block_num), tx_hash: `0x${tx.tx_hash}`, log_index: 2, answer: BigInt(`0x${log.topics[1]}`).toString() }
-  const proofs: Proofs = { datasets: async () => [], priceBehind: async () => ({ feed, update }), readBlock: async () => ({ data, deposits: new Map(Object.entries(deposits)) }) }
+  const proofs: Proofs = { datasets: async () => [], priceBehind: async () => ({ feed, update }), readBlock: async () => ({ data, deposits: new Map(Object.entries(deposits)), nodeHash: data.block.hash }) }
   const cautious = `&rule=${CAUTIOUS_RULE_ID}`
   let server: Server
   let base: string
@@ -272,8 +272,8 @@ describe("proof by a pricing rule", () => {
   const { block } = JSON.parse(readFileSync(new URL("./support/base-blocks.json", import.meta.url), "utf8")) as { block: BlockData }
   const MAIN_HASH = "c".repeat(64)
   const proofs: Proofs = {
-    ...createProofs((async () => []) as never, { baseDataset: "a/base@0.0.1", dataset: { name: `a/${MARKET_RULE_ID}@0.0.1`, reference: `a/${MARKET_RULE_ID}@0.0.1`, hash: null }, readDeposits: async () => new Map(), readManifestHash: async () => MAIN_HASH }),
-    readBlock: async () => ({ data: block, deposits: null }),
+    ...createProofs((async () => []) as never, { baseDataset: "a/base@0.0.1", dataset: { name: `a/${MARKET_RULE_ID}@0.0.1`, reference: `a/${MARKET_RULE_ID}@0.0.1`, hash: null }, readDeposits: async () => new Map(), readBlockHash: async () => null, readManifestHash: async () => MAIN_HASH }),
+    readBlock: async () => ({ data: block, deposits: null, nodeHash: null }),
   }
   const NOTE = ruleNote(RULE_TEXT[CAUTIOUS_RULE_ID]!)
   let server: Server

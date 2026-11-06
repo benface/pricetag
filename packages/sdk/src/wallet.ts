@@ -63,6 +63,11 @@ export type WalletData = {
   marketChecked: boolean
   /** What this wallet's tokens the dataset has no oracle reads for were worth at the blocks of its transactions, by their feed or else their market, for a chart. Some can still be unread. */
   marketMarks: MarketMarks
+  /**
+   * Oracle reads at evenly spread blocks with no transaction in them, for a chart. A block whose read hasn't worked yet has
+   * empty answers, because it's still somewhere a chart needs a price. Left out when nobody asked for them.
+   */
+  priceSamples?: Reference[]
 }
 
 export const hasStarted = ({ coverage }: Pick<WalletData, "coverage">) => coverage.toBlock >= coverage.fromBlock
@@ -97,7 +102,7 @@ export function foldWallet(wallet: WalletData, method: Method, view: WalletView 
     unreadAssets: unread,
     totals,
     pnlStatus: status,
-    points: pnlOverTime(view.legs, method, view.prices, view.markPrice, wallet.latest, unconfirmedAssets(positions, unread), new Set(totals.noMarket)),
+    points: pnlOverTime(view.legs, method, view.prices, view.markPrice, wallet.latest, unconfirmedAssets(positions, unread), new Set(totals.noMarket), wallet.priceSamples?.map((sample) => sample.blockNum)),
     holdComparison: compareWithHoldingEth(positions, totals, status, view.prices, view.markPrice),
   }
 }

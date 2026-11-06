@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from "react"
 import { formatPrice, formatSignedAmount, formatTime, shortHash, type CurrencyCode, type LegEffect } from "@pricetag/sdk/core"
 import type { CombinedExplanation } from "../core/combined.ts"
 import { describeConversion, describeEffect, describeNetting, type Explanation } from "../core/explain.ts"
-import { IN_EACH_WALLET, STARTING_BALANCE, actionLabel, activityTitle, costTag, pnlHelp, priceSourceLabel } from "../core/wording.ts"
+import { IN_EACH_WALLET, STARTING_BALANCE, actionLabel, activityTitle, costProof, costTag, pnlHelp, priceSourceLabel } from "../core/wording.ts"
 import { ProofPanel } from "./ProofPanel.tsx"
 
 /** A busy wallet has thousands of legs, and the newest are the ones anyone reads. */
@@ -62,7 +62,7 @@ function LegRow({ effect, currency, address, wallet, rule }: { effect: LegEffect
           </button>
         </div>
       )}
-      {showsProof && !leg.opening && leg.txHash ? <ProofPanel key={`${wallet ?? address}:${currency}:${rule}`} address={wallet ?? address} legId={leg.id} currency={currency} rule={rule} /> : null}
+      {showsProof && !leg.opening && leg.txHash ? <ProofPanel key={`${wallet ?? address}:${currency}:${rule}`} address={wallet ?? address} legId={leg.id} currency={currency} rule={rule} costNote={leg.purchaseSource ? costProof(leg.purchaseSource, leg.costLabel) : null} /> : null}
     </li>
   )
 }

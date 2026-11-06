@@ -85,11 +85,13 @@ struct AddColdWalletSheet: View {
         HStack {
             if model.canGoBack {
                 Button("Back") { model.back() }
+                    .disabled(model.isAdding)
             }
             Spacer()
             if model.step != .finished {
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
+                    .disabled(model.isAdding)
             }
             switch model.step {
             case .pick, .keystoneScan: EmptyView()
@@ -101,10 +103,10 @@ struct AddColdWalletSheet: View {
             case .check:
                 Button("Add Wallet") {
                     // Everything that can stop this is already shown on the page.
-                    try? model.add()
+                    Task { try? await model.add() }
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(!model.canAdd)
+                .disabled(!model.canAdd || model.isAdding)
             case .finished:
                 if model.canSendTest, let added = model.added {
                     Button("Send a Small Test…") {
@@ -466,6 +468,9 @@ private struct CheckStep: View {
                 if let notice = model.sweepNotice {
                     Notice(model.wouldStartSweeps ? .warning : .info, notice)
                 }
+                if let problem = model.addProblem {
+                    WarningText(problem).font(.callout)
+                }
                 Toggle(AddSavingsWording.matches, isOn: $model.matches)
                 // Outside a form, a text field doesn't show its label.
                 LabeledContent("Name") {
@@ -529,7 +534,7 @@ private struct FinishedStep: View {
             } else {
                 Label("Money above your cap still goes to \(model.sweepDestinationName ?? "your other savings wallet").", systemImage: "arrow.down.to.line")
                     .fixedSize(horizontal: false, vertical: true)
-                Button("Send It Here Instead") { model.sweepHere() }
+                Button("Send It Here Instead") { Task { await model.sweepHere() } }
             }
             Label(model.mayBeSweeping ? AddSavingsWording.testAfterSweep : AddSavingsWording.testFirst, systemImage: "testtube.2")
                 .fixedSize(horizontal: false, vertical: true)

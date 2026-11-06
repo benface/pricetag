@@ -308,6 +308,35 @@ struct WalletListTests {
         #expect(store.book.senders[a] == nil, "and undoing it doesn't bring back the move, which was undone too")
     }
 
+    @Test func aChangeIsLatestUntilEditUndoTakesItBackAndAgainAfterRedo() {
+        let (store, _) = makeStore()
+        let move = store.changeWallet(a, name: "Move to Yours") { store.moveToYours(a) }
+        #expect(store.isLatestChange(move))
+        store.undo()
+        #expect(!store.isLatestChange(move), "it's been taken back, so there's nothing to say about it")
+        store.redo()
+        #expect(store.isLatestChange(move), "the same change as before")
+        store.restore(move)
+        #expect(!store.isLatestChange(move))
+    }
+
+    @Test func aChangeIsNotLatestOnceSomethingCameAfterItEvenIfThatWasUndone() {
+        let (store, _) = makeStore()
+        let move = store.changeWallet(a, name: "Move to Yours") { store.moveToYours(a) }
+        store.setBook(store.book.answering(b, .someoneElse, focus: nil))
+        #expect(!store.isLatestChange(move))
+        store.undo()
+        #expect(store.undoNames == ["Move to Yours"], "it's the last step again")
+        #expect(store.redoNames == ["Answer"])
+        #expect(!store.isLatestChange(move), "but taking it back from the list would lose what Redo holds")
+        store.redo()
+        #expect(!store.isLatestChange(move))
+
+        let removal = store.changeWallet(b, name: "Remove from List") { store.removeWallet(b, showing: nil) }
+        #expect(!store.isLatestChange(move))
+        #expect(store.isLatestChange(removal))
+    }
+
     @Test func aKeySpendingMoneyIsMovingToCantBeMovedOrRemoved() throws {
         let list = WalletList(spending: NamedWallet(address: a, name: "Spending Money"), savings: [], linked: [a, b], newKey: b, saved: [], current: a)
         let new = try #require(list.entry(for: b))

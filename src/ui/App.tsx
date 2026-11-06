@@ -37,9 +37,11 @@ import {
   coverageSentence,
   feedDetail,
   holdCaveatSentence,
+  feedProblem,
   holdSummarySentence,
   inWallets,
   linkedFailedSentence,
+  NOT_SAVED,
   noMarketSentence,
   pnlHelp,
   staleSentence,
@@ -55,14 +57,18 @@ import { useRules } from "./useRules.ts"
 import type { TaxYear } from "../core/tax.ts"
 import { TaxPanel } from "./TaxPanel.tsx"
 import { useAllYours, useWallet } from "./useWallet.ts"
+import { ProblemNotice } from "./ProblemNotice.tsx"
 import { currenciesIn, walletsBehind, walletsToRead, yourWallets } from "../core/book.ts"
 import { readCheckedAccounts } from "../core/device-accounts.ts"
 import { parseDeviceLink, type DeviceLink } from "../core/device-link.ts"
 import { exportCsv } from "../core/export.ts"
 import { foldBook, type Question } from "../core/resolve.ts"
+import { PurchaseList } from "./PurchaseList.tsx"
+import { usePurchases } from "./usePurchases.ts"
 
 // Only loads when someone asks for it, so looking at a wallet never pulls in any device code.
 const DevicePanel = lazy(() => import("./DevicePanel.tsx").then((m) => ({ default: m.DevicePanel })))
+const BuyPanel = lazy(() => import("./BuyPanel.tsx").then((m) => ({ default: m.BuyPanel })))
 
 function readAddress(): string | null {
   const value = new URLSearchParams(window.location.search).get("address")
@@ -307,7 +313,9 @@ export function App() {
   const [taxYear, setTaxYear] = useState<TaxYear>("latest")
   const [chosenCurrency, setChosenCurrency] = useState<CurrencyCode>(readCurrency)
   const { rules, chosen: chosenRule, choose: chooseRule } = useRules()
-  const { book, change, undo, canUndo, linkAccounts } = useBook()
+  const { book, change, undo, canUndo, notSaved, linkAccounts, addPurchase } = useBook()
+  const { purchases, problem: purchasesProblem, begin: beginPurchase, dismiss: dismissPurchase } = usePurchases(addPurchase)
+  const [buying, setBuying] = useState(false)
   const paidIn = currenciesIn(book).join(",")
   const [device, setDevice] = useState<{ link: DeviceLink | null } | null>(() => {
     const link = parseDeviceLink(window.location.search)
@@ -321,7 +329,7 @@ export function App() {
   const singleRead = useWallet(single, chosenCurrency, chosenRule, paidIn)
   const allRead = useAllYours(isAll ? yours : null, chosenCurrency, chosenRule, paidIn)
   const { wallet } = singleRead
-  const { error } = isAll ? allRead : singleRead
+  const { error, retry: retryRead } = isAll ? allRead : singleRead
   // A read that came back with none of them yet has nothing to show, and it's still reading until one does.
   const loading = isAll ? allRead.loading || (allRead.read !== null && allRead.read.wallets.length === 0 && allRead.read.unread.reading.length > 0) : singleRead.loading
   const together = useMemo(() => (isAll && allRead.read && allRead.read.wallets.length > 0 ? { read: allRead.read.wallets, unread: allRead.read.unread } : null), [isAll, allRead.read])
@@ -449,6 +457,11 @@ export function App() {
     return explainTarget(target, fold, { view: fold.view, ruleNote: wallet.ruleNote ?? null, source: usd && { positions: usd.positions, totals: usd.totals, points: usd.points, holdComparison: usd.holdComparison } })
   }, [target, together, fold, wallet, others, method, book])
   const close = useCallback(() => setTarget(null), [])
+  const tryRead = (
+    <button type="button" className="link" onClick={retryRead}>
+      Try again
+    </button>
+  )
   const openTotal = (metric: TotalMetric) => setTarget({ kind: "total", metric })
 
   return (
@@ -498,10 +511,16 @@ export function App() {
         <button type="button" onClick={() => setDevice({ link: null })}>
           Hardware wallet
         </button>
+        <button type="button" onClick={() => setBuying(true)}>
+          Buy
+        </button>
         {showing ? <LiveBadge wallet={showing} stale={error !== null} updating={(combined?.linkedReading.length ?? 0) > 0} /> : null}
       </header>
       {inputError ? <p className="notice warn">⚠ {inputError}</p> : null}
+      {notSaved ? <p className="notice warn" role="alert">⚠ {NOT_SAVED}</p> : null}
       {rules.length > 1 ? <RulesPanel rules={rules} chosen={chosenRule} choose={chooseRule} current={rule} address={isAll ? null : single} method={method} currency={currency} book={book} /> : null}
+
+      <PurchaseList purchases={purchases} problem={purchasesProblem} matches={combined?.purchases ?? fold?.purchases ?? []} currency={chosenCurrency} showing={wallet?.address ?? null} onView={go} onDismiss={dismissPurchase} />
 
       {!single && !isAll ? (
         <section className="empty">
@@ -519,11 +538,11 @@ export function App() {
         </section>
       ) : null}
 
-      {!showing && error ? <p className="notice warn">⚠ {error}</p> : null}
+      {!showing && error ? <ProblemNotice problem={feedProblem(error, location.origin)} action={tryRead} /> : null}
 
       {showing ? (
         <main>
-          {error ? <p className="notice warn">⚠ {error} {staleSentence(formatTime(showing.latest.timestamp))}</p> : null}
+          {error ? <ProblemNotice problem={feedProblem(error, location.origin, started ? staleSentence(formatTime(showing.latest.timestamp)) : null)} action={tryRead} /> : null}
           {combined && combined.linkedReading.length > 0 ? <p className="notice">{allYoursReadingSentence(combined.linkedReading)}</p> : null}
           {combined && combined.linkedFailed.length > 0 ? (
             <p className="notice warn">
@@ -612,8 +631,21 @@ export function App() {
       ) : null}
 
       {explanation && showing ? <ExplainPanel explanation={explanation} address={showing.address} rule={rule} onClose={close} /> : null}
-      {resolving && together ? <ResolvePanel wallet={together.read[0] as WalletResponse} others={together.read.slice(1)} all={together.unread} failed={together.unread.failed} onRetry={allRead.retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} onPublish={(link) => setDevice({ link })} onCurrentSender={setCardSender} onClose={closeResolve} /> : null}
-      {resolving && !together && wallet ? <ResolvePanel wallet={wallet} others={others} failed={failed} onRetry={retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} onPublish={(link) => setDevice({ link })} onCurrentSender={setCardSender} onClose={closeResolve} /> : null}
+      {resolving && together ? <ResolvePanel wallet={together.read[0] as WalletResponse} others={together.read.slice(1)} all={together.unread} failed={together.unread.failed} onRetry={allRead.retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} notSaved={notSaved} onPublish={(link) => setDevice({ link })} onCurrentSender={setCardSender} onClose={closeResolve} /> : null}
+      {resolving && !together && wallet ? <ResolvePanel wallet={wallet} others={others} failed={failed} onRetry={retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} notSaved={notSaved} onPublish={(link) => setDevice({ link })} onCurrentSender={setCardSender} onClose={closeResolve} /> : null}
+      {buying ? (
+        <Suspense fallback={null}>
+          <BuyPanel
+            currency={chosenCurrency}
+            onBegin={beginPurchase}
+            onView={(next) => {
+              setBuying(false)
+              if (next !== wallet?.address.toLowerCase()) go(next)
+            }}
+            onClose={() => setBuying(false)}
+          />
+        </Suspense>
+      ) : null}
       {device ? (
         <Suspense fallback={null}>
           <DevicePanel
@@ -622,6 +654,7 @@ export function App() {
             currency={chosenCurrency}
             allYours={isAll}
             onLink={linkAccounts}
+            notSaved={notSaved}
             onView={(next) => {
               setDevice(null)
               go(next)

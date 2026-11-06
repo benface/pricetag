@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { LAST_2S_BLOCK as LAST, blockBefore, msBetweenBlocks, timestampOfBlock } from "@pricetag/sdk/core"
+import { LAST_2S_BLOCK as LAST, blockBefore, msBetweenBlocks, priceSampleBlocks, timestampOfBlock } from "@pricetag/sdk/core"
 import type { Query } from "@pricetag/sdk/internal"
 import { rawSource } from "../server/source.ts"
 
@@ -77,5 +77,44 @@ describe("Base's block times", () => {
     assert.equal(source(null).historyFrom?.(5000), 3200)
     assert.equal(source(null).historyFrom?.(LAST + 20_000), LAST + 2000)
     assert.equal(source(300).historyFrom?.(LAST + 20_000), LAST + 19_700)
+  })
+})
+
+describe("where a chart reads prices between transactions", () => {
+  const HOUR = 1800
+  const DAY = 24 * HOUR
+
+  it("reads more often the more recent it is", () => {
+    const head = 100 * DAY
+    const blocks = priceSampleBlocks(0, head)
+    const within = (ms: number) => blocks.filter((block) => msBetweenBlocks(block, head) <= ms)
+    assert.equal(within(3_600_000).length, 13, "every 5 minutes for the past hour")
+    assert.ok(within(86_400_000).length <= 13 + 24, "every hour for the past day")
+    assert.ok(blocks.length < 13 + 24 + 28 + 30 + 15, "and it's only a handful")
+    assert.deepEqual(blocks, [...blocks].sort((a, b) => a - b))
+  })
+
+  it("comes back to the same blocks as the head moves, so each is only read once", () => {
+    const blocks = priceSampleBlocks(0, 50 * DAY)
+    const later = new Set(priceSampleBlocks(0, 50 * DAY + 10))
+    assert.ok(blocks.filter((block) => !later.has(block)).length <= 1, "ten blocks later, at most the oldest of the finest step has gone")
+    const hourLater = priceSampleBlocks(0, 50 * DAY + HOUR)
+    assert.ok(hourLater.filter((block) => !blocks.includes(block)).length <= 13)
+  })
+
+  it("stays inside what it's asked for", () => {
+    assert.deepEqual(priceSampleBlocks(1000, 900), [])
+    const blocks = priceSampleBlocks(151, 449)
+    assert.deepEqual(blocks, [300])
+  })
+
+  it("keeps a step's length in time across the upgrade, where blocks come ten times as often", () => {
+    const blocks = priceSampleBlocks(LAST - 450, LAST + 4500)
+    assert.ok(blocks.length > 0)
+    for (const [i, block] of blocks.entries()) {
+      if (i === 0) continue
+      const gap = msBetweenBlocks(blocks[i - 1] as number, block)
+      assert.ok(gap > 0 && gap <= 600_000, `${gap} ms before block ${block}`)
+    }
   })
 })

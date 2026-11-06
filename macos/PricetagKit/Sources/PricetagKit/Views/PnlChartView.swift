@@ -1,7 +1,7 @@
 import Charts
 import SwiftUI
 
-/// Total PnL after each transaction, or what was held then. PnL holds still between transactions, so it's drawn as steps. Value is only known at them, so it's dashed in between (see `ValueSeries`).
+/// Total PnL after each transaction, or what was held then. PnL holds still between transactions, so it's drawn as steps. Value is known at them, and in between only where prices were read, so it's dashed elsewhere (see `ValueSeries`).
 /// Point at it or drag across it for a value that follows, and click a step for its transaction.
 /// The line stops where nothing is known. VoiceOver reads it as a summary, and the arrow keys, or VoiceOver's own, step through its transactions.
 /// The same transactions are in `TransactionsTable` too.
@@ -67,7 +67,7 @@ public struct PnlChartView: View {
                     .accessibilityHidden(true)
             }
             if metric == .value {
-                valueMarks(drawnValues, hovered: hovered, showsEveryDot: values.plotted.count <= 60)
+                valueMarks(drawnValues, hovered: hovered, showsEveryDot: values.plotted.count { $0.point.txHash != nil } <= 60)
             } else {
                 pnlMarks(drawn, hovered: hovered)
             }
@@ -207,9 +207,9 @@ public struct PnlChartView: View {
                     .accessibilityHidden(true)
             }
         }
-        // Each place it's known, so a line between two of them doesn't read as known too. With many in view they'd be a thick line, so then only where now is, and what nothing else shows.
+        // Each transaction, so a dashed line between two of them doesn't read as known too. With many in view they'd be a thick line, so then only where now is, and what nothing else shows.
         let isNow = { (item: PnlSeries.Plotted) in item.date == drawn.plotted.last?.date }
-        ForEach(drawn.plotted.filter { $0.value != nil && (showsEveryDot || isNow($0) || drawn.isolated.contains($0.id)) }) { item in
+        ForEach(drawn.plotted.filter { $0.value != nil && ((showsEveryDot && $0.point.txHash != nil) || isNow($0) || drawn.isolated.contains($0.id)) }) { item in
             PointMark(x: .value("Time", item.date), y: .value("Value", item.value ?? 0))
                 .symbolSize(isNow(item) && hovered == nil ? 40 : 14)
                 .foregroundStyle(lineColor)
@@ -504,7 +504,7 @@ private struct DrawnPnlChart: View {
 }
 #endif
 
-/// The chart for VoiceOver's own chart tools, like Audio Graph: one value after each transaction, over time. Unknown stretches have no points, as the line has none.
+/// The chart for VoiceOver's own chart tools, like Audio Graph: the values the line goes through, over time, so Value's are from before each transaction too. Unknown stretches have no points, as the line has none.
 private struct PnlChartDescriptor: AXChartDescriptorRepresentable {
     let series: any PlottedSeries
     let metric: ChartMetric
@@ -512,9 +512,9 @@ private struct PnlChartDescriptor: AXChartDescriptorRepresentable {
     let summary: String
 
     func makeChartDescriptor() -> AXChartDescriptor {
-        let known = series.plotted.filter { $0.value != nil }
+        let known = series.spokenPoints(currency)
         let times = known.map { $0.date.timeIntervalSince1970 }
-        let values = known.compactMap(\.value)
+        let values = known.map(\.value)
         let x = AXNumericDataAxisDescriptor(
             title: "Time",
             range: (times.min() ?? 0)...(max(times.max() ?? 1, (times.min() ?? 0) + 1)),
@@ -531,9 +531,7 @@ private struct PnlChartDescriptor: AXChartDescriptorRepresentable {
             let micros = String(Int(($0 * 1_000_000).rounded()))
             return metric == .value ? Format.money(micros, currency) : Format.signedMoney(micros, currency)
         }
-        let points = known.map { plotted in
-            AXDataPoint(x: plotted.date.timeIntervalSince1970, y: plotted.value ?? 0, label: Spoken.chartStep(plotted, currency, metric: metric))
-        }
+        let points = known.map { AXDataPoint(x: $0.date.timeIntervalSince1970, y: $0.value, label: $0.label) }
         return AXChartDescriptor(
             title: "\(name) over time",
             summary: summary,

@@ -4,25 +4,9 @@
 import { asNumber, isNotStarted, type Query } from "./amp.ts"
 import { blockBefore } from "./chain.ts"
 import { CURRENCIES, MAX_ROUND_AGE_SECONDS, type CurrencyCode, type Rates, type RateRound } from "./currency.ts"
-import { blockFilters, type Row } from "./dataset.ts"
+import { blockFilters, decodeRound, type Row } from "./dataset.ts"
 import type { WalletData } from "./wallet.ts"
 import { settledThrough } from "./wallets.ts"
-
-/** The `answer` word of a `latestRoundData()` result, or "" when the read failed. */
-export function decodeRoundAnswer(data: string | null | undefined): string {
-  const word = data?.slice(64, 128)
-  if (!word || word.length !== 64) return ""
-  const answer = BigInt(`0x${word}`)
-  return answer >> 255n === 1n ? "" : answer.toString()
-}
-
-/** A `latestRoundData()` result's answer and when it last updated, or null when the read failed or it isn't a positive answer. */
-export function decodeRound(data: string | null | undefined): RateRound | null {
-  const answer = decodeRoundAnswer(data)
-  const updatedAt = data?.slice(192, 256)
-  if (!answer || answer === "0" || !updatedAt || updatedAt.length !== 64) return null
-  return { answer, updatedAt: Number(BigInt(`0x${updatedAt}`)) }
-}
 
 /** A currency's answer at each block, leaving out blocks where the read failed. */
 export type RoundReader = (currency: CurrencyCode, blocks: readonly number[]) => Promise<Map<number, RateRound>>
@@ -90,7 +74,7 @@ export function updateRounds(query: Query, dataset: string, exact: RoundReader):
  * `held` also reads the block a wallet's history starts from, which only a cost stored for what it already held needs.
  * `chainHead` is the chain's head, for a wallet read as of an earlier block, whose `latest` can't say what's settled. It defaults to `latest`.
  */
-export type ReadRates = (currency: CurrencyCode, wallet: Pick<WalletData, "legs" | "latest">, options?: { held?: boolean; chainHead?: number | undefined }) => Promise<Rates | null>
+export type ReadRates = (currency: CurrencyCode, wallet: Pick<WalletData, "legs" | "latest" | "priceSamples">, options?: { held?: boolean; chainHead?: number | undefined }) => Promise<Rates | null>
 
 /** Reads rates, and forgets the ones from blocks a reorg replaced, when it can. */
 export type RatesReader = ReadRates & { rewind?(block: number): void }
@@ -109,7 +93,7 @@ export function createRates(readRounds: RoundReader): RatesReader {
     settled.set(currency, known)
     const asOf = wallet.latest.blockNum
     const chain = chainHead ?? asOf
-    const blocks = [...new Set(wallet.legs.filter((leg) => held || !leg.opening).map((leg) => leg.blockNum))]
+    const blocks = [...new Set([...wallet.legs.filter((leg) => held || !leg.opening).map((leg) => leg.blockNum), ...(wallet.priceSamples ?? []).map((sample) => sample.blockNum)])]
     const current = newest.get(currency)
     const wanted = new Set(blocks.filter((block) => !known.has(block)))
     if (!known.has(asOf) && (current?.blockNum !== asOf || current.readAt !== chain)) wanted.add(asOf)
