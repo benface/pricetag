@@ -13,6 +13,8 @@ import type { Source } from "./wallets.ts"
 export type Row = Record<string, unknown>
 
 const BLOCKS_PER_QUERY = 200
+/** `reference_prices` has one small row per block. 20,000 of them took 1 s on staging, against 0.3 s for 200 named blocks. */
+const REFERENCE_SPAN = 20_000
 
 /**
  * WHERE clauses for a list of blocks, split so no query names too many.
@@ -24,6 +26,27 @@ export function blockFilters(blocks: readonly number[]): { filter: string; count
   for (let i = 0; i < sorted.length; i += BLOCKS_PER_QUERY) {
     const part = sorted.slice(i, i + BLOCKS_PER_QUERY)
     result.push({ filter: `block_num BETWEEN ${part[0]} AND ${part[part.length - 1]} AND block_num IN (${part.join(", ")})`, count: part.length })
+  }
+  return result
+}
+
+/** How far apart blocks can be, on average, for a range to be the cheaper way to read them. */
+const MAX_AVERAGE_GAP = 20
+
+/**
+ * WHERE clauses for a list of blocks, for reads that can ignore whatever else is in the range. Naming blocks takes a query
+ * per 200, however close together they are, so a busy wallet's blocks are read as ranges of up to `span` blocks instead.
+ */
+export function blockRanges(blocks: readonly number[], span: number): string[] {
+  const sorted = [...new Set(blocks)].sort((a, b) => a - b)
+  const [first, last] = [sorted[0] ?? 0, sorted.at(-1) ?? 0]
+  if (sorted.length <= BLOCKS_PER_QUERY || last - first > sorted.length * MAX_AVERAGE_GAP) return blockFilters(sorted).map(({ filter }) => filter)
+  const result: string[] = []
+  for (let i = 0; i < sorted.length; ) {
+    const from = sorted[i] as number
+    let to = from
+    for (; i < sorted.length && (sorted[i] as number) < from + span; i++) to = sorted[i] as number
+    result.push(`block_num BETWEEN ${from} AND ${to}`)
   }
   return result
 }
@@ -53,6 +76,16 @@ export async function readHeadMark(query: Query, dataset: string, after: number 
   const rows = await query<Row>(`SELECT block_num, hash FROM "${dataset}".blocks ${where} ORDER BY block_num DESC LIMIT 1`, 15_000)
   const row = rows[0]
   return row ? { blockNum: asNumber(row.block_num), hash: prefixed(hexOf(String(row.hash))) } : null
+}
+
+/** The hash the chain has at each of these blocks, leaving out any it doesn't have. */
+export async function readBlockHashes(query: Query, dataset: string, blocks: readonly number[]): Promise<Map<number, string>> {
+  const hashes = new Map<number, string>()
+  for (const { filter } of blockFilters(blocks)) {
+    const rows = await query<Row>(`SELECT block_num, hash FROM "${dataset}".blocks WHERE ${filter}`, 15_000)
+    for (const row of rows) hashes.set(asNumber(row.block_num), prefixed(hexOf(String(row.hash))))
+  }
+  return hashes
 }
 
 /**
@@ -178,10 +211,11 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
     },
 
     async readReferences(blocks: readonly number[]): Promise<Reference[]> {
+      const wanted = new Set(blocks)
       const result: Reference[] = []
-      for (const { filter } of blockFilters(blocks)) {
+      for (const filter of blockRanges(blocks, REFERENCE_SPAN)) {
         const rows = await query<Row>(`SELECT ${REFERENCE_COLUMNS} FROM ${prices}.reference_prices WHERE ${filter}`)
-        result.push(...rows.map(toReference))
+        for (const row of rows) if (wanted.has(asNumber(row.block_num))) result.push(toReference(row))
       }
       return result
     },

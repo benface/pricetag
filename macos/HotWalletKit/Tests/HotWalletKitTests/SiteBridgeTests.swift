@@ -1503,11 +1503,11 @@ private func paddedAddress(_ text: String) -> String { word(String(text.dropFirs
     @Test func theSiteGetsNothingWhenTheNoteCantBeSaved() async {
         let rig = SiteRig()
         await rig.connect()
-        rig.stateStore.failsSaves = true
+        rig.stateStore.failSaves(with: CocoaError(.fileWriteUnknown))
         let (task, approval) = await rig.start("eth_signTypedData_v4", .array([.string(hot), eip2612()]))
         await rig.bridge.approve(approval.id, acknowledged: true)
         guard case .failure = await task.value else { Issue.record("The site got a signature with no record of it."); return }
-        rig.stateStore.failsSaves = false
+        rig.stateStore.failSaves(with: nil)
         #expect(rig.wallet.signedPermits.isEmpty)
     }
 

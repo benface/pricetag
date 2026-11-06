@@ -13,11 +13,14 @@ export const HOLDINGS_COLUMNS: readonly HoldingsColumn[] = ["asset", "amount", "
 /** Numbers start with the largest, and names with A. */
 export const firstSort = (column: HoldingsColumn): HoldingsSort => ({ column, descending: column !== "asset" })
 
+/** What sorting looks at, which any holding has, of one wallet or several. */
+type Sortable = Pick<Position, "asset" | "decimals" | "price" | "values">
+
 /** Amounts compared as whole tokens, whatever each token's decimals. */
 const WHOLE = 36
 
 /** What a column shows as a number, or null when it shows none: an unknown, no price, or a dash for what isn't held. */
-function key(position: Position, column: Exclude<HoldingsColumn, "asset">): bigint | null {
+function key(position: Sortable, column: Exclude<HoldingsColumn, "asset">): bigint | null {
   const { values, price, decimals } = position
   const held = BigInt(values.qty) > 0n
   const known = (micros: string | null) => (micros === null ? null : BigInt(micros))
@@ -43,8 +46,8 @@ function key(position: Position, column: Exclude<HoldingsColumn, "asset">): bigi
  * Positions in the order asked for. A row with no number in that column goes last whichever way it's sorted, because it
  * can't be ranked, and it's never treated as zero. Ties keep what's held first, then go by name.
  */
-export function sortHoldings(positions: readonly Position[], { column, descending }: HoldingsSort): Position[] {
-  const tie = (a: Position, b: Position) => Number(BigInt(b.values.qty) > 0n) - Number(BigInt(a.values.qty) > 0n) || a.asset.localeCompare(b.asset)
+export function sortHoldings<Holding extends Sortable>(positions: readonly Holding[], { column, descending }: HoldingsSort): Holding[] {
+  const tie = (a: Holding, b: Holding) => Number(BigInt(b.values.qty) > 0n) - Number(BigInt(a.values.qty) > 0n) || a.asset.localeCompare(b.asset)
   return [...positions].sort((a, b) => {
     if (column === "asset") return (descending ? -1 : 1) * a.asset.localeCompare(b.asset)
     const x = key(a, column)

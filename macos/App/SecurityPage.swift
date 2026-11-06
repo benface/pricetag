@@ -213,7 +213,7 @@ struct SecurityPage: View {
                 SecurityGroup {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
-                        Text("Reading this wallet's approvals from Amp…").foregroundStyle(.secondary)
+                        Text("Reading this wallet's approvals…").foregroundStyle(.secondary)
                     }
                 }
             }
@@ -517,7 +517,7 @@ private struct ApprovalRow: View {
                 .monospacedDigit()
                 .foregroundStyle(approval.unlimited ? Tone.warning.style : AnyShapeStyle(.primary))
                 .fontWeight(approval.unlimited ? .semibold : .regular)
-            if let tx = approval.grantedTx, let url = URL(string: "https://basescan.org/tx/\(tx)") {
+            if let url = approval.grantedTx.flatMap(Basescan.transaction) {
                 Link(destination: url) { Image(systemName: "arrow.up.right.square") }
                     .foregroundStyle(.secondary)
                     .help("Open the transaction that gave it")

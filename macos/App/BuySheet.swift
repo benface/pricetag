@@ -108,7 +108,7 @@ struct BuySheet: View {
         LabeledContent("Amount") {
             HStack(spacing: 4) {
                 Text(display.symbol)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                 TextField("Amount", value: $typed, format: .number.grouping(.never))
                     .labelsHidden()
                     .multilineTextAlignment(.trailing)
@@ -119,7 +119,7 @@ struct BuySheet: View {
         destination
         Text("\(cryptoAmount.map { "About \($0) \(asset.rawValue). " } ?? "")\(PurchaseWording.checkoutNote(display))")
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .secondaryText()
             .fixedSize(horizontal: false, vertical: true)
     }
 
@@ -129,12 +129,12 @@ struct BuySheet: View {
         switch plan.problem {
         case .belowMinimum:
             Text("\(PurchaseWording.provider)'s minimum is about \(display.whole(BuyPlan.minimumUsdMicros, rounding: .up)), depending on how you pay.")
-                .foregroundStyle(.secondary)
+                .secondaryText()
         case .noGasToSweep:
             Notice(.warning, HotWalletWording.buyNoGas(asset.rawValue, savings: savingsName))
         case .notReadYet:
             Text("Reading this wallet…")
-                .foregroundStyle(.secondary)
+                .secondaryText()
         case nil:
             VStack(alignment: .leading, spacing: 4) {
                 Text(whereItGoes)
@@ -206,7 +206,7 @@ struct PurchaseRow: View {
                 Text(PurchaseWording.status(phase, beside: main))
                     .font(.caption)
                     .monospacedDigit()
-                    .foregroundStyle(PurchaseWording.isWarning(phase) ? Tone.warning.style : AnyShapeStyle(.secondary))
+                    .foregroundStyle(PurchaseWording.isWarning(phase) ? Tone.warning.style : Tone.secondary.style)
                     .contentTransition(.opacity)
                     .justKnown(justArrived)
             }

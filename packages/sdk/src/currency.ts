@@ -4,6 +4,7 @@
 // at 1.40 is a real gain in CAD. So this runs before the fold, which then adds up amounts that are already in CAD.
 // A missing rate makes an amount null, which the fold already treats as unknown. It's never filled in from another day.
 
+import { timestampOfBlock } from "./chain.ts"
 import type { PricedLeg } from "./legs.ts"
 import { referenceMarks, type LatestPrices, type MarkPrice } from "./portfolio.ts"
 import type { WalletData } from "./wallet.ts"
@@ -68,7 +69,7 @@ export type RateRound = {
   updatedAt: number
 }
 
-/** Each feed's answers at the blocks where something with a cost stored in that currency arrived, for reading it in another. */
+/** Each feed's answers at the blocks where something with a cost stored in that currency arrived or was already held, for reading it in another. */
 export type PaidRates = Partial<Record<CurrencyCode, Rates["byBlock"]>>
 
 /** What a client needs to convert a wallet. Blocks the feed had no answer for are left out. */
@@ -121,9 +122,12 @@ export type WalletView = {
   missingRateTxs: string[]
 }
 
+/** Every oracle read a chart can mark to. A sample can be empty, so where a transaction has its own read at that block, that one wins. */
+const readsOf = ({ references, priceSamples = [] }: Pick<WalletData, "references" | "priceSamples">) => [...priceSamples, ...references]
+
 /** The wallet as its own USD facts, whatever its currency. */
 export function usdView(wallet: WalletData): WalletView {
-  return { currency: "USD", legs: wallet.legs, prices: wallet.prices, markPrice: referenceMarks(wallet.references, wallet.marketMarks), latestRate: null, missingRateTxs: [] }
+  return { currency: "USD", legs: wallet.legs, prices: wallet.prices, markPrice: referenceMarks(readsOf(wallet), wallet.marketMarks), latestRate: null, missingRateTxs: [] }
 }
 
 export function viewWallet(wallet: WalletData): WalletView {
@@ -151,6 +155,10 @@ export function viewWallet(wallet: WalletData): WalletView {
     }
   })
 
+  for (const { blockNum } of wallet.priceSamples ?? []) {
+    if (!answers.has(blockNum)) answers.set(blockNum, usableAnswer(rates.byBlock[blockNum], timestampOfBlock(blockNum, wallet.latest)))
+  }
+
   const latest = usableAnswer(rates.latest?.round, wallet.latest.timestamp)
   const prices: LatestPrices = {}
   // Without a current rate, what's held has no current value in this currency. An old rate would quietly be wrong.
@@ -160,7 +168,7 @@ export function viewWallet(wallet: WalletData): WalletView {
     }
   }
 
-  const usdMark = referenceMarks(wallet.references, wallet.marketMarks)
+  const usdMark = referenceMarks(readsOf(wallet), wallet.marketMarks)
   return {
     currency: wallet.currency,
     legs,

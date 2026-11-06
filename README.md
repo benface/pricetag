@@ -20,10 +20,11 @@ Patina is a native menu bar app: live total PnL in the bar, holdings, cost and P
 ```sh
 pnpm mac         # builds the app, opens it, and runs the server until you press Ctrl-C
 pnpm mac:build   # only builds it, to macos/build/
-pnpm check:mac   # the Swift tests, the app's build, and the shared packages' builds for iOS
+pnpm check:mac   # the Swift tests, the app's build, and the shared packages' builds for iOS. It takes turns with other worktrees: see macos/TESTING.md
 pnpm check:keychain  # the real Secure Enclave and Keychain, with a throwaway key, from a signed debug build
 pnpm check:anvil     # real signing and sweeps against a local fork of Base, with no real funds. It needs Foundry
 pnpm check:extension # the browser extension on a real site, through to a local fork, with no real funds. It needs Foundry and a Chromium that can load extensions
+pnpm check:tax-answer # a tax report's buttons open the right wallet's questions and come back, in a headless Chromium with made-up wallets
 pnpm mac:shot    # screenshots from fixtures that never open a window you'd see or take focus. See macos/TESTING.md
 ```
 
@@ -49,7 +50,7 @@ The Mac app has a capped hot wallet, this Mac's "spending money", for everyday u
 
 - **The key** comes from `SecRandomCopyBytes`, is wrapped by the Secure Enclave, and stays in a device-only Keychain item. It can't be restored or exported: lose the Mac and you lose what's on it, up to the cap.
 - **Adding a savings wallet** is guided, with steps for a Ledger or a Keystone, and pasting for anything else. A Ledger goes through your browser and a Keystone through the Mac's camera. See [the hardware wallet notes](HARDWARE-WALLETS.md).
-- **The cap** is yours to set, $50 by default and $100 at most, or $25 at most until you add a savings wallet. A plain address can't enforce a cap, so it's what triggers a sweep and not a hard limit. It's kept in USD whatever the main currency is, so what's swept and signed never depends on a rate, and Settings shows and rounds it in the main currency.
+- **The cap** is yours to set, $50 by default and $100 at most, or $25 at most until you add a savings wallet. A plain address can't enforce a cap, so it's what triggers a sweep and not a hard limit. It's kept in USD whatever the main currency is, so what's swept and signed never depends on a rate, and Spending Money's page shows and rounds it in the main currency.
 - **Sweeps** send whatever is above the cap, and realized gains unless you turn that off, to your chosen savings wallet. They only move tokens with a trusted price, they keep enough ETH for gas, and they skip dust. Costs carry over as `inherited`, because the app tells the server which wallets are yours: `GET /api/portfolio/<address>?linked=<addresses>`.
 - **Topping up** comes from a savings wallet, through the [hardware wallet flow](HARDWARE-WALLETS.md) in your browser, which this opens with the amount and address filled in. The steps to do it by hand on the device are still there.
 - **Buying** starts from Buy, in the toolbar, the Wallet menu or the menu bar, and opens the provider's page, Coinbase for now, for this wallet's own address. Everything lands here, and what's above the cap sweeps to your savings, so the amount can be anything the provider allows. The sheet says how much ends up where. It asks for a savings wallet first, because the provider's page can raise the amount, so nothing here could keep a purchase under the cap. It won't buy a token it couldn't sweep for lack of ETH, and the page can only sell the token chosen here. The order is followed from there, across restarts: however long it's been, whatever's unresolved is read again when the app starts or comes back, so a purchase paid for while it was closed still gets its cost. When it's delivered, what you paid, fees included, becomes the cost of what arrived, as "Bought on Coinbase", with nothing asked, and it follows the sweep. That takes a purchase made with money, so an order paid from crypto you already held has no cost here, and an exact match of transaction, token and amount. Anything else stays unknown and asks as usual. ETH in a batched payout has no row to match, so it's found by the block its transaction landed in. You type the amount in the main currency, and the page starts from that number when Coinbase can (`presetFiatAmount`, which its docs limit to USD, CAD, GBP and EUR). In any other currency, it starts from about that much of the token, and the sheet says so. Coinbase's own price and its fees decide what's charged, and that's what's recorded, in what it was charged in. Without a current rate, you type in US dollars, as the sheet says, and the page starts from a token amount. It needs a key in the server's environment (`.env.example`), which never leaves the server, and nothing here signs. Only `server/coinbase.ts` knows the provider's API, behind the interface in `server/onramp.ts`.
@@ -57,7 +58,7 @@ The Mac app has a capped hot wallet, this Mac's "spending money", for everyday u
 - **Publishing a cost** writes what you paid onchain, as a zero-value send to itself that the server reads as `self-reported`. Answering a question offers it when the answer covers everything of one token that arrived in one transaction in this wallet, and warns first, because it publicly ties the amount to the wallet for good. It's always in USD. For a savings wallet, it opens the [hardware wallet flow](HARDWARE-WALLETS.md) in your browser, because that takes its device.
 - **The alarm** compares what Amp and the chain say this wallet did with what the app signed. If they differ, it alerts loudly, stops top-ups, and offers to sweep what's left and replace the key.
 
-Holding a key needs a provisioned build, which `pnpm mac` makes when the team pinned in `macos/run.sh` is signed in to Xcode. Without that, the app says it can't hold a key, and everything else works. It reads balances from `https://mainnet.base.org` directly, set in Settings, so sweeps don't depend on the server. Debug builds have their own wallet.
+Holding a key needs a provisioned build, which `pnpm mac` makes when the team pinned in `macos/run.sh` is signed in to Xcode. Without that, the app says it can't hold a key, and everything else works. It reads balances from `https://mainnet.base.org` directly, set at the bottom of Spending Money's page, so sweeps don't depend on the server. Debug builds have their own wallet.
 
 ### Using it on websites
 
@@ -112,10 +113,10 @@ Mainnet's RPC and blocks may differ. The previous dataset, which read prices wit
 A pricing rule is a dataset version, and the server picks one per request with Amp's `amp-alias` header. The SQL never changes, and the app has no code for any rule. Set these and both apps show a switch, in the Mac app's Settings and above the web app's numbers, with each rule's dataset and manifest hash, and a side-by-side comparison of a wallet. The comparison uses one set of facts at one block for both rules: the same transactions, balances, fees and exchange rates, with only prices from each. If it can't establish that, it says so and shows no numbers. Each rule's market prices are read at that block, and a token only one rule has a market price for is left out on both sides, so the two totals still add up the same things.
 
 ```sh
-PRICETAG_DATASET=benface/pricetag@0.1.0
-PRICETAG_DATASET_HASH=a94e5237dd3eae583eda6f5aefa74800e6778d0c9c2ed14c4d5383f6f67137b2
-PRICETAG_FORK_DATASET=benface/pricetag_cautious@0.1.0
-PRICETAG_FORK_HASH=c5c66a117461e8990c4a5638919ddf9ca3c9ae9333982d9583d127d93ab1705e
+PRICETAG_DATASET=benface/pricetag@0.2.0
+PRICETAG_DATASET_HASH=0aecd2c74b1d6d031f255c0048774a1b2d1911e8cc4d7e21ec2d3134469c0f1f
+PRICETAG_FORK_DATASET=benface/pricetag_cautious@0.2.0
+PRICETAG_FORK_HASH=aff88c5c18750e7fee2471ba5a4b551b3cccd771f80a7af7a72af2843d5df812
 ```
 
 Queries are pinned to those hashes, Proof's included, so a hash on screen is what was read, and a wrong one fails instead of showing other numbers. With no fork set, nothing changes: there's no switch and no header, and `PRICETAG_DATASET_HASH` isn't used.
@@ -125,15 +126,17 @@ The fork here is `dataset/cautious-eth.json`, from `cautiousEthTablesSql` in `da
 To change the rule, edit that function, then build, register and deploy it under a new tag, and update the hash:
 
 ```sh
-FORK_OF=benface/pricetag@0.1.0 AMP_ADMIN_URL=… AMP_ADMIN_TOKEN=… node dataset/build.ts --fork 53515446
-ampctl dataset register benface/pricetag_cautious dataset/cautious-eth.json --tag 0.1.1
+FORK_OF=benface/pricetag@0.2.0 AMP_ADMIN_URL=… AMP_ADMIN_TOKEN=… node dataset/build.ts --fork 53515446
+ampctl dataset register benface/pricetag_cautious dataset/cautious-eth.json --tag 0.2.1
 ```
 
-Deploy with `POST /controller/materialized-datasets/benface/pricetag_cautious/versions/0.1.1` and `{}`, because `ampctl dataset deploy` from v0.0.42 fails on staging. List the versions first and use a free tag, because registering a tag that exists moves it without saying so.
+Deploy with `POST /controller/materialized-datasets/benface/pricetag_cautious/versions/0.2.1` and `{}`, because `ampctl dataset deploy` from v0.0.42 fails on staging. List the versions first and use a free tag, because registering a tag that exists moves it without saying so.
 
 **Replacing the dataset it forks means replacing the fork too.** The fork reads the job of the version it names, so stopping that job stops the fork. Deploy a fork of the new version before stopping the old one, then change all four lines together.
 
-**A new dataset name needs a new manifest hash.** Amp finds a dataset's active tables by hash and table name, not by dataset name, so one manifest under two names can read and write the same tables. That's why `benface/pricetag@0.0.1` is `dataset/pricetag.json` at this start block plus a one-line SQL comment. A manifest with new SQL already has its own hash.
+**Check the serving jobs right after stopping one.** Stopping a job with JS on a worker can panic the other jobs there and leave them `FATAL` (WORK-574), so a replacement can kill what's still serving. `scripts/job-watch.ts` restarts the versions `.env.local` names within about 15 s, but not a new version until it's named there.
+
+**A new dataset name needs a new manifest hash.** Amp finds a dataset's active tables by hash and table name, not by dataset name, so one manifest under two names can read and write the same tables. That's why staging's `benface/pricetag@0.0.1` was `dataset/pricetag.json` at this start block plus a one-line SQL comment. A manifest with new SQL already has its own hash.
 
 `pnpm amp:start` turns the fork off while it runs, because it isn't registered on a local Amp. Hot wallet decisions and tax reports always read by the default rule, whatever the switch says.
 
@@ -193,6 +196,7 @@ Both apps show every value in the chosen currency, and remember the choice: the 
 - **Rates come from Chainlink's feeds on Base**, from the `AnswerUpdated` logs their contracts emit, in the rates dataset (`dataset/rates.json`, set with `PRICETAG_RATES_DATASET`). A rate at a block is its feed's latest update at or before it, which is what the contract answers there, so it needs no RPC. The table only has a row per update, about 200 a day for all of them, and starts 3 days before the Pricetag dataset, so a rate at its first block was set within the table. Its newest row is how far it's reached. From that block on, an update could still be on its way, so those rates are read from the contract with `eth_call` instead: usually the head and a few recent blocks, and everything after it if the table stops, which is slower but never an old rate. Without a rates dataset, as on a local Amp, which has no logs from before its start, rates are read from each feed's contract with `eth_call`. Clicking through a number names the source, the rate, and the amount in USD.
 - **Spending Money uses the current rate too.** It reads `GET /api/rate?currency=CAD`, so it doesn't wait on any wallet's history, every 5 minutes. A failed read is tried again after 30 seconds and keeps the last rate for an hour at most. After that, with no current rate at all, or on a server with no data source, whose demo rates aren't for real balances, its amounts go back to USD and say `US$`. The web app's top-up form reads the same way while it's open. A display rate is all it is: the cap, sweeps and what's signed work in USD.
 - **What stays in USD says so.** The ETH price in the rule comparison is one, because the comparison is about a USD feed. A published cost note is another, because the note itself is in USD. So is what you paid if Coinbase charged you in USD.
+- **A cost you enter for what a wallet already held is the one exception to "the rate when it happened".** When it was paid isn't known, so in another currency it converts at the rate on the block the history starts from, and shows as an estimate that says why. In the currency it was entered in, it stays exact.
 - **A missing rate is never filled in.** That amount is unavailable, whatever depends on it says so, and no other day's rate stands in. A feed that hasn't updated in 3 days counts as missing, since forex markets close for only about 2.
 - **A purchase keeps what was really paid,** in any of these currencies. Read in another currency, it converts at the rate of the block it arrived in, from the feed for what was paid, and its source says what was paid. Coinbase's own USD total only stands in when that feed has no answer. A purchase in a currency with no feed, like SEK, stays unknown and is asked about: Coinbase's USD total for it hasn't been checked against a real order.
 
@@ -312,7 +316,9 @@ The Mac app's Security page (⌘5) has a short checklist, each item checked wher
 
 ## Known gaps
 
-- Sending isn't in the app yet, so "Is this yours?" at send time and linking every account from one device or recovery phrase wait for that. Neither can the app write a note yet, only read one.
+- Sending only covers ETH and the tokens the app tracks, so nothing else in a wallet can be moved from here.
+- A device's accounts are listed 5 at a time, and only what's been listed gets linked, so an account in use further down stays out until you list it. The device is the only way to find them, because the app never sees a recovery phrase.
+- The hardware wallet flows haven't run against a real device yet. See [the checklist](HARDWARE-WALLETS.md#checklist-for-a-real-device).
 - Exchange names are only as good as the list in `src/core/senders.ts`. Each comes from a Basescan name tag or a confirmed withdrawal. A withdrawal from an address not on the list won't say where it came from, and that includes some from Coinbase and any from another exchange. An imported history still matches them.
 - A cost entered in CAD can't be shown in USD for a wallet read in USD, because that read has no rates. It shows as unresolved there, and never as the wrong number.
 - Only the allowlist in `packages/sdk/src/tokens.ts` gets a position and a price. A transaction that also moves another token is never valued as a swap, because its payment can't be split: what arrived has an unknown cost, and what left has unknown proceeds. Internal ETH isn't seen without traces, so it can't trigger this.

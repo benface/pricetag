@@ -15,6 +15,7 @@ struct HotWalletFixture {
     /// Fixed, so a scene looks the same whenever it's taken.
     private nonisolated static let today = Date(timeIntervalSince1970: 1_793_750_400)
     static let savings = EthereumAddress("0x00000000000000000000000000000000000de302")!
+    private static let secondSavings = EthereumAddress("0x00000000000000000000000000000000000de308")!
     static let site = "https://app.example.com"
     /// What a simulation says these do, in `FixtureChain`.
     static let swapRouter = "0x2626664c2603336e57b271c5c0b26f421741e481"
@@ -24,6 +25,7 @@ struct HotWalletFixture {
     private var hasWallet = true
     private var wasDeleted = false
     private var hasSavings = true
+    private var hasSecondSavings = false
     private var balances: [String: UInt128] = ["ETH": 5_000_000_000_000_000, "USDC": 20_000_000]
     private var keys = KeyAnswer.hasIt
     private var unexplainedTransactions = 0
@@ -43,11 +45,13 @@ struct HotWalletFixture {
     static let funded = HotWalletFixture(hasRecords: true)
     /// Every kind of permit a site could have, and one the chain shows is spent, which doesn't appear.
     static let signedPermits = HotWalletFixture(hasRecords: true, hasSignedPermits: true)
+    static let twoSavings = HotWalletFixture(hasSecondSavings: true)
     static let connectedToSite = HotWalletFixture(isConnectedToSite: true)
     /// Connected to a site and to one on this Mac, with the first's transactions: one that went through, and one that fails once it's read.
     static let usedBySites = HotWalletFixture(hasSiteActivity: true)
     static let noSavings = HotWalletFixture(hasSavings: false, balances: ["ETH": 1_000_000_000_000_000, "USDC": 10_000_000])
     static let noPrice = HotWalletFixture(balances: ["ETH": 5_000_000_000_000_000, "USDC": 20_000_000, "AERO": 12_000_000_000_000_000_000])
+    static let nothingToSweep = HotWalletFixture(balances: [:])
     static let nearCap = HotWalletFixture(balances: ["ETH": 5_000_000_000_000_000, "USDC": 36_000_000])
     static let overCap = HotWalletFixture(balances: ["ETH": 10_000_000_000_000_000, "USDC": 80_000_000])
     static let overCapNoSavings = HotWalletFixture(hasSavings: false, balances: ["ETH": 10_000_000_000_000_000, "USDC": 80_000_000])
@@ -83,6 +87,7 @@ struct HotWalletFixture {
     private var settings: WalletSettings {
         var settings = WalletSettings()
         if hasSavings { settings.add(ColdWallet(address: Self.savings, name: "Ledger", confirmedOnDeviceAt: Self.today)) }
+        if hasSecondSavings { settings.add(ColdWallet(address: Self.secondSavings, name: "Trezor", confirmedOnDeviceAt: Self.today)) }
         return settings
     }
 

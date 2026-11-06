@@ -1,21 +1,17 @@
-import HotWalletKit
 import PricetagKit
 import SwiftUI
 
 struct SettingsView: View {
-    enum Pane: Hashable { case general, answers, spendingMoney, server }
+    /// What applies to the whole app. What belongs to one wallet, like Spending Money's cap, is on that wallet's page.
+    enum Pane: Hashable { case general, answers, server }
 
     let store: PortfolioStore
-    let hotWallet: HotWallet
     let notifications: MoneyNotifications
     @Binding var tab: Pane
     @State var server = ""
     @State var serverError: String?
     @State var invite = ""
     @State private var isComparing = false
-    @State var rpc = ""
-    @State var rpcError: String?
-    @State private var isConfirmingDelete = false
     /// How tall what's in each tab wants to be. A tab has no answer until it's first shown.
     @State private var contentHeights: [Pane: CGFloat] = [:]
     /// How tall the tab is right now, which is what moves the window. It's one number for all the tabs, so it can animate from one to the next.
@@ -40,14 +36,12 @@ struct SettingsView: View {
         TabView(selection: $tab) {
             Tab("General", systemImage: "gearshape", value: Pane.general) { general }
             Tab("Answers", systemImage: "checklist", value: Pane.answers) { pane(.answers) { AnswersList(store: store) } }
-            Tab(HotWalletWording.title, systemImage: "banknote", value: Pane.spendingMoney) { spendingMoney }
             Tab("Price Service", systemImage: "server.rack", value: Pane.server) { connection }
         }
         .onAppear {
             // What didn't save stays, next to what's wrong with it.
             if serverError == nil { server = store.serverURL.absoluteString }
             invite = store.invite ?? ""
-            if rpcError == nil { rpc = hotWallet.settings.rpcURL.absoluteString }
         }
         .task { await store.refreshRules() }
         // The person may have just changed it in System Settings.
@@ -90,7 +84,7 @@ struct SettingsView: View {
                     ForEach(CurrencyCode.mainChoices) { Text("\($0.rawValue) · \($0.name)").tag($0) }
                 }
                 .help("Costs use the rate when each transaction happened, and values use the current rate.")
-                Picker("Cost method", selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
+                Picker(Wording.methodName, selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
                     ForEach(CostMethod.allCases) { Text($0.label).tag($0) }
                 }
                 .help(Wording.methodHelp)
@@ -147,60 +141,6 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
         }
-    }
-
-    private var spendingMoney: some View {
-        pane(.spendingMoney) {
-            Section {
-                LabeledContent("Cap") {
-                    HStack {
-                        Slider(value: Binding(get: { Double(hotWallet.settings.capInDollars) }, set: { hotWallet.setCap(dollars: Int($0)) }), in: 1...Double(hotWallet.settings.capCeiling / Money.dollar))
-                        Text(hotWallet.money(dollars: hotWallet.settings.capInDollars))
-                            .monospacedDigit()
-                            .frame(width: 56, alignment: .trailing)
-                    }
-                }
-                Toggle("Sweep realized gains to savings", isOn: Binding(get: { hotWallet.settings.sweepsRealizedGains }, set: { hotWallet.setSweepsRealizedGains($0) }))
-                TextField("Network", text: $rpc, prompt: Text(Base.publicRPC.absoluteString))
-                    .onSubmit(applyRPC)
-                    .onDisappear(perform: applyRPC)
-                    .help("Only reads balances and passes on what this app signed. It can't move anything by itself.")
-                if let rpcError {
-                    WarningText(rpcError).font(.callout)
-                }
-                if hotWallet.address != nil {
-                    Button("Delete This Mac's Spending Money…", role: .destructive) { isConfirmingDelete = true }
-                        .disabled(!hotWallet.canDelete)
-                        .confirmationDialog("Delete this wallet's key?", isPresented: $isConfirmingDelete) {
-                            if hotWallet.settings.sweepDestination != nil {
-                                Button("Sweep Everything to Savings First") { Task { await hotWallet.sweepEverything() } }
-                            }
-                            Button("Delete Forever", role: .destructive) { Task { await hotWallet.deleteWallet() } }
-                        } message: {
-                            Text("There's no recovery phrase and no backup. Whatever is still on this wallet is lost for good.")
-                        }
-                    if !hotWallet.canDelete {
-                        Text(HotWalletWording.deleteWaitsForRotation)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            } footer: {
-                Text("The cap is \(hotWallet.display.whole(hotWallet.settings.capCeiling)) at most \(hotWallet.settings.coldWallets.isEmpty ? "until you add a savings wallet" : "in this unreviewed build").\(hotWallet.display.isConverted ? " \(HotWalletWording.capFollowsRate(hotWallet.display.main))" : "")")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func applyRPC() {
-        let value = rpc.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: value), url.scheme == "http" || url.scheme == "https", url.host() != nil else {
-            rpcError = "That isn't a network address. It should look like \(Base.publicRPC.absoluteString)."
-            return
-        }
-        rpcError = nil
-        hotWallet.setRPC(url)
     }
 
     /// Both fields at once, whichever was left last, so an invite is always saved for the server beside it. One that was only

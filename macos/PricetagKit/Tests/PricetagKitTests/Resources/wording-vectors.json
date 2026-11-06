@@ -203,7 +203,7 @@
     }
   ],
   "sentences": {
-    "methodName": "How cost is worked out",
+    "methodName": "Cost method",
     "methodHelp": "Average spreads what you paid across all you hold. Oldest first counts what you sell as what you got earliest.",
     "averagePricePaid": "Average price paid",
     "networkFees": "Network fees",
@@ -234,8 +234,34 @@
     "costWhy": "Nothing shows what this cost, so PnL leaves it out until you say.",
     "exchangeCostWhy": "You said it came from your exchange account, which knows what you paid. Until you say, PnL leaves it out.",
     "allAnswered": "All answered",
-    "nothingLeft": "That's all for now"
+    "nothingLeft": "That's all for now",
+    "moneyUnaffected": "Your money isn't affected."
   },
+  "problems": [
+    {
+      "kind": "unreachable",
+      "message": "The price service isn't answering. Your money isn't affected. Check your internet connection, then try again.",
+      "detail": "Nothing answered at https://prices.example.com."
+    },
+    {
+      "kind": "unavailable",
+      "said": "Couldn't read this wallet's data.",
+      "message": "The price service can't get its data right now. Your money isn't affected. It usually clears up by itself, and updates start again when it does.",
+      "detail": "The price service said: Couldn't read this wallet's data."
+    },
+    {
+      "kind": "noSource",
+      "said": "No data source is set up, so only the demo wallet is available.",
+      "message": "The price service has no data source, so only the demo wallet works. Your money isn't affected. Set one up, then restart the price service.",
+      "detail": "The price service said: No data source is set up, so only the demo wallet is available. Its data source goes in .env.local."
+    },
+    {
+      "kind": "refused",
+      "said": "That isn't a Base address.",
+      "message": "The price service turned this request down. Your money isn't affected. Try again. If it keeps happening, restart the price service.",
+      "detail": "The price service said: That isn't a Base address."
+    }
+  ],
   "unseenEth": [
     {
       "unseen": [

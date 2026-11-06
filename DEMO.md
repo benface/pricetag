@@ -29,6 +29,7 @@ All times are Montréal. Numbers marked *measured* come from the real server aga
 
 About 5 minutes. **Before you start:**
 - The server has been running for at least 5 minutes, with the wallet already read once under each rule, so nothing's a cold read.
+- [The job watch](#the-job-watch) is running, and its log shows no `ALERT` you haven't dealt with.
 - USD, Average cost, and the Market price rule. The menu bar shows Value, the default: right-click it to check.
 - The Coinbase question is **unanswered**, and what you paid is on a sticky note.
 - The main window and Settings are arranged side by side.
@@ -69,7 +70,7 @@ WORK-452 rewrites the steps for whatever has merged by Thursday at 13:45.
 | **Before funding** | Add your savings wallet if you can, then check the cap | Cap is $50 by default with savings, and at most $25 without. Without savings, cut every amount below to about half |
 | **Thu by 9:30** | Withdraw **$40 of ETH from Coinbase** on Base. Write down the total you paid for both withdrawals, this one and Wednesday's | This is what makes WORK-424 visible, see below. Earlier is better: the chart's one-day change needs a known point from before the range starts, so this has to be at least 24 h before the demo |
 | **Once it shows in the app** | With the extension on `app.uniswap.org`, swap **$12 of ETH to cbBTC**, then **$12 of ETH to AERO**. Don't answer the Coinbase question | Costs that are really paid, and prices that move. Waiting avoids landing in the payout's block, which would leave costs unknown. Each row should show a dollar cost. If one says unknown, see below |
-| **Thu after 14:00** | In Settings, turn off **Sweep realized gains to savings**. Then swap **half the AERO to USDC** | Gives Realized a number, adds a transaction after the block switch, and won't sweep on stage. Sell into USDC rather than ETH, because ETH paid out through a contract is the hardest case |
+| **Thu after 14:00** | At the bottom of Spending Money's page, turn off **Sweep realized gains to savings**. Then swap **half the AERO to USDC** | Gives Realized a number, adds a transaction after the block switch, and won't sweep on stage. Sell into USDC rather than ETH, because ETH paid out through a contract is the hardest case |
 | **Fri morning** | In Settings > **Answers** (or File > **Your Answers…**), remove the Coinbase answer with the ⊖ beside it. Every other answer stays | Puts steps 5 and 6 back on stage |
 
 **If a swap's cost says unknown, don't buy again.** A later purchase doesn't repair the earlier one, and answering Coinbase doesn't either. Click the row and read its reason, then:
@@ -106,11 +107,12 @@ A real card purchase on stage can fail, and a real delivery can take minutes, so
 
 | Problem | How you'd know | Do this |
 |---|---|---|
-| **Public RPC rate limit** (WORK-336's failed swap) | A send or site approval fails, or a balance says not checked. Verify's Transactions says not checked. Shared wifi makes it worse | Set `BASE_RPC_URL=https://base-rpc.publicnode.com` in `.env.local`, restart the server, and paste the URL into the **Network** field in Settings. WORK-396 may change this choice Thursday at 13:30 |
+| **Public RPC rate limit** (WORK-336's failed swap) | A send or site approval fails, or a balance says not checked. Verify's Transactions says not checked. Shared wifi makes it worse | Set `BASE_RPC_URL=https://base-rpc.publicnode.com` in `.env.local`, restart the server, and paste the URL into **Base network address**, under Advanced at the bottom of Spending Money's page. WORK-396 may change this choice Thursday at 13:30 |
 | **Base's block switch**, Thu 13:00 | WORK-406 reports at 13:25 and WORK-396 at 13:30 | Rehearse only after both. If Base delays it, they say so. If `edgeandnode/base_mainnet` stalls, that isn't ours to fix: ask in `#amp-hackathon` and use the recording |
-| **Staging dataset behind** | The app says "Catching up", and the 8:00 health checks report it | A few seconds is fine: keep going, it's the honest behavior. If it's stuck, use the recording. Don't run `pnpm amp:start`: it starts with empty history, so this wallet would have none |
+| **Staging dataset behind** | The app says "Catching up", and the 8:00 health checks report it | A few seconds is fine: keep going, it's the honest behavior. If it's stuck, [restart its job](#if-the-dataset-is-stuck). If that doesn't clear it in a minute, use the recording. Don't run `pnpm amp:start`: it starts with empty history, so this wallet would have none |
+| **A dataset's job dies** (WORK-574) | Like being behind, but it doesn't move: reads still answer with the same newest block, so the numbers freeze and the app says "Catching up". Amp's status says `FATAL`, and bounded reads give no error. Stopping any job with JS on the same worker can cause it | The job watch restarts it within a minute, and it was back at head about 40 s after a restart (*measured*). Keep going, and check `~/Library/Logs/pricetag-job-watch.log` afterward. If the log shows no restart, `POST /controller/materialized-datasets/benface/<name>/versions/<version>` with `{}` by hand. A restart resumes the same job, so nothing's lost |
 | **Only the fork fails** | The rule switch or Compare errors | Stay on Market price and skip steps 7 and 8 |
-| **Admin token** expires Fri 12:46 | Only a write fails | Reads don't use it. The read token lasts until April 2027 (*checked*, not printed). So no `dataset/` merges after Thursday 18:00. A replacement or stopping the jobs after 12:46 needs a new token |
+| **Admin token** expires Fri 12:46 | Only a write fails | Reads don't use it. The read token lasts until April 2027 (*checked*, not printed). So no `dataset/` merges after Thursday 18:00. A replacement, stopping the jobs, or the job watch restarting one after 12:46 needs a new token. The watch keeps checking and says so. Put the new one in `staging.jwt`, and it picks it up |
 | **Slow reads** | A cold read took 19–22 s, warm 3–4 s (*measured*). They may grow by Friday, and the app's query timeout is 60 s. A read past 5 s shows how long it's been going | Don't restart the server on stage, since a restart means a cold read. Read the wallet before you go on. The health checks measure this |
 | **Wifi** | Everything real stops, with "Prices Aren't Available Right Now" (the web app still says "Couldn't read this wallet's data") | Phone hotspot, tested in rehearsal. If that fails, the demo wallet or the recording |
 | **Server on 8787 not running** | The app says "The Price Service Isn't Running" | In the repo: `pnpm start`, then wait for the first read. Keep it in its own terminal, not the one you'd close |
@@ -125,10 +127,35 @@ A real card purchase on stage can fail, and a real delivery can take minutes, so
 - **Screen:** all 10 steps with no voice, about 4 minutes, saved locally and on your phone.
 - **Stills:** Verify's passed checks, the chart once answered, Compare on this wallet, and Compare on a busy public wallet. Read that wallet ahead of time.
 
+
+### If the dataset is stuck
+
+**Don't stop any staging job from Friday 8:00 until the demo's over.** Deploying is fine. Stopping a job that runs JS functions (`pricetag`, `pricetag_cautious`, `pricetag_control`, `pricetag_bloom`) can kill another such job on the same worker, including the one the app reads. That froze the app's dataset for 13 minutes on Thursday night (WORK-575). It's rare, one in 14 stops, but the job doesn't come back by itself.
+
+[The job watch](#the-job-watch) does this by itself within about 15 s. If the numbers stop moving anyway, restart it by hand. This is safe on a healthy job, which it leaves alone. A restart keeps the history and caught up 13 minutes in under a minute (*measured*). `pricetag_cautious` is a separate job, so if the fork is stuck too, run this again with its name. It needs the admin token, so it stops working Friday at 12:46. If `PRICETAG_DATASET` has moved past `0.2.0`, change the version at the end:
+
+```sh
+curl -sS -X POST -H @<(printf 'authorization: Bearer %s' "$(cat ~/.config/pricetag/staging.jwt)") -H 'content-type: application/json' -d '{}' https://gateway.amp.staging.edgeandnode.com/controller/materialized-datasets/benface/pricetag/versions/0.2.0
+```
+
+### The job watch
+
+A small background service checks every dataset `.env.local` names every 15 s, including the fork. When a job is `FATAL`, it restarts it and shows a notification. It restarted real dead jobs on a local Amp about 3 s after they went `FATAL` (*measured*, WORK-577). It runs on this Mac, so it only works while the Mac is awake and online. After Friday 12:46 it can still check but can't restart, and it says so.
+
+To check it, this should print `state = running`, and the log shows each dataset's status:
+
+```sh
+launchctl print gui/$(id -u)/com.benface.pricetag-job-watch | grep -m1 'state ='
+tail ~/Library/Logs/pricetag-job-watch.log
+```
+
+If it isn't running, start it with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.benface.pricetag-job-watch.plist`. If that fails, run `node scripts/job-watch.ts` from the repo in its own terminal. Stop it after the demo with `launchctl bootout gui/$(id -u)/com.benface.pricetag-job-watch`.
+
 ## Rehearsal checklist, Thursday November 5
 
 **Morning**
 - [ ] Read the 8:00 health check on this issue.
+- [ ] [Check the job watch](#the-job-watch) is running. Do it again on Friday morning, after opening the Mac.
 - [ ] Fund and buy, as above.
 - [ ] Right after the buys, answer the Coinbase card. There should be no other question and no line saying what PnL leaves out. If it does, read what it leaves out, and see above. Then remove the Coinbase answer in Settings > **Answers**.
 - [ ] Review WORK-426, then 431 and 432. Merging 426 starts WORK-449's test on real data, so read its results if they're in by 14:00.
@@ -158,4 +185,4 @@ A real card purchase on stage can fail, and a real delivery can take minutes, so
 
 ## After the demo
 
-Say on WORK-448 that it's over. If you agree, the run there stops the staging jobs (`benface/pricetag@0.1.0`, `benface/pricetag_cautious@0.1.0`, and any older ones still running). After Friday 12:46 that needs a new admin token. Then turn **Sweep realized gains to savings** back on, and move what you want off the hot wallet.
+Say on WORK-448 that it's over, and stop [the job watch](#the-job-watch) first, so it doesn't restart a job that stopping another one kills. If you agree, the run there stops the staging jobs (`benface/pricetag@0.1.0`, `benface/pricetag_cautious@0.1.0`, and any older ones still running). After Friday 12:46 that needs a new admin token. Then turn **Sweep realized gains to savings** back on, and move what you want off the hot wallet.
