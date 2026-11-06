@@ -52,6 +52,8 @@ public enum FeedState: Equatable, Sendable {
     case ampUnavailable(String)
     case noAmpConfigured(String)
     case rejected(String)
+    /// The server refused this wallet as having more history than it can hold, so there are no numbers for it.
+    case tooBig(String)
 
     /// Only this state may show a number as current.
     public var isLive: Bool { self == .live }
@@ -60,7 +62,7 @@ public enum FeedState: Equatable, Sendable {
     public var isStale: Bool {
         switch self {
         case .noWallet, .reading, .live, .catchingUp: false
-        case .behind, .serverUnreachable, .tooSlow, .ampUnavailable, .noAmpConfigured, .rejected: true
+        case .behind, .serverUnreachable, .tooSlow, .ampUnavailable, .noAmpConfigured, .rejected, .tooBig: true
         }
     }
 }
@@ -969,6 +971,7 @@ public final class PortfolioStore {
         case .ampUnavailable(let message): .ampUnavailable(message)
         case .noAmpConfigured(let message): .noAmpConfigured(message)
         case .rejected(let message): .rejected(message)
+        case .tooBig(let message): .tooBig(message)
         case .unreachable, .timedOut, nil: .serverUnreachable
         }
     }

@@ -67,6 +67,37 @@ describe("the row budget", () => {
     release()
     budget.reserve(100)
   })
+
+  it("lets a few wallets load at once, and the rest wait their turn", async () => {
+    const budget = createRowBudget(90)
+    const releases = [await budget.loading(), await budget.loading(), await budget.loading()]
+    let fourth = false
+    const waiting = budget.loading().then((release) => {
+      fourth = true
+      return release
+    })
+    await new Promise((resolve) => setTimeout(resolve, 1))
+    assert.equal(fourth, false)
+    releases[0]!()
+    await waiting
+    assert.equal(fourth, true)
+  })
+
+  it("makes a load wait for a read that leaves it no room, without giving up what's kept", async () => {
+    const budget = createRowBudget(90)
+    const kept = holder([60])
+    budget.join(kept)
+    const release = budget.reserve(70)
+    assert.equal(kept.rows.length, 0)
+    kept.rows.push(10)
+    let loaded = false
+    const waiting = budget.loading().then(() => (loaded = true))
+    await new Promise((resolve) => setTimeout(resolve, 1))
+    assert.equal(loaded, false)
+    release()
+    await waiting
+    assert.deepEqual(kept.rows, [10])
+  })
 })
 
 describe("a wallet with too much history", () => {
@@ -130,6 +161,38 @@ describe("a wallet with too much history", () => {
     finish()
     await slow
     await wallets.get(OTHER)
+  })
+})
+
+describe("many wallets read at once", () => {
+  it("loads no more than a few at a time, and each gets its answer", async () => {
+    const addresses = Array.from({ length: 8 }, (_, i) => `0x${(i + 1).toString(16).padStart(40, "0")}`)
+    const source = fakeSource(Object.fromEntries(addresses.map((address) => [address, rowsOf(1, address)])))
+    let loading = 0
+    let most = 0
+    const readWindow = source.readWindow
+    source.readWindow = async (address, from, to) => {
+      most = Math.max(most, ++loading)
+      await new Promise((resolve) => setTimeout(resolve, 2))
+      loading -= 1
+      return readWindow(address, from, to)
+    }
+    const wallets = walletsOn(source, 30)
+    const read = await Promise.all(addresses.map((address) => wallets.get(address)))
+    assert.equal(most, 3)
+    assert.equal(read.length, 8)
+  })
+
+  it("gives up its place when its load fails, so the rest still read", async () => {
+    const source = fakeSource({ [ME]: rowsOf(1), [OTHER]: rowsOf(1, OTHER) })
+    const readWindow = source.readWindow
+    source.readWindow = async (address, from, to) => {
+      if (address === ME) throw new Error("Amp went away")
+      return readWindow(address, from, to)
+    }
+    const wallets = walletsOn(source, 1)
+    await assert.rejects(wallets.get(ME), /Amp went away/)
+    assert.equal((await wallets.get(OTHER)).address, OTHER)
   })
 })
 

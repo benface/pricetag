@@ -637,9 +637,12 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     if (coveredTo >= fromBlock && (!cached || coveredTo > cached.coveredTo || reorgable)) {
       const readFrom = cached ? Math.max(fromBlock, Math.min(settledThrough(cached.coveredTo) + 1, unsettled ?? Infinity)) : fromBlock
       replacedFrom = readFrom
+      // Only a first read can bring in a whole history, and it can't say how much until it has.
+      if (!cached) reservation.release = await budget.loading()
       const window = await source.readWindow(address, readFrom, coveredTo)
       rows = [...rows.filter((r) => r.block_num < readFrom), ...window.rows]
       if (rows.length > budget.maxRows) throw new WalletTooBigError(budget.maxRows)
+      reservation.release?.()
       reservation.release = budget.reserve(rows.length)
       for (const block of known.keys()) if (block >= readFrom) known.delete(block)
       for (const block of ethBalances.keys()) if (block >= readFrom) ethBalances.delete(block)

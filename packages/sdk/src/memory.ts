@@ -39,11 +39,29 @@ export const oldestFirstLegsThatFit = (heapBytes = getHeapStatistics().heap_size
 /** A store of wallets' rows that can give some up. A wallet being read isn't counted, because its read reserves its rows. */
 export type RowHolder = { heldRows(): number; evictOldest(): boolean }
 
+/**
+ * First reads loading at once when nothing else is being read. A wallet holds its rows while its next query waits its turn, so
+ * these add up: 14 wallets of 11,000 to 28,000 rows ran a 512 MB heap out, before any had started folding (WORK-570). Loaded rows
+ * cost about a fifth of what they do at the peak, and a third of the budget for each leaves room for that on top of what's kept.
+ */
+const LOADS_AT_ONCE = 3
+
 /** Rows of wallet history, across everything that keeps or reads them: what's kept goes first to make room, oldest first. */
 export function createRowBudget(maxRows: number) {
   const holders = new Set<RowHolder>()
+  const waiting: (() => void)[] = []
   let reading = 0
   const held = () => [...holders].reduce((sum, holder) => sum + holder.heldRows(), 0)
+  function take(rows: number): () => void {
+    reading += rows
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      reading -= rows
+      for (const wake of waiting.splice(0)) wake()
+    }
+  }
   return {
     maxRows,
     join(holder: RowHolder) {
@@ -53,12 +71,13 @@ export function createRowBudget(maxRows: number) {
     reserve(rows: number): () => void {
       while (reading + rows + held() > maxRows && [...holders].some((holder) => holder.evictOldest()));
       if (reading + rows > maxRows) throw new WalletsBusyError()
-      reading += rows
-      let released = false
-      return () => {
-        if (!released) reading -= rows
-        released = true
-      }
+      return take(rows)
+    },
+    /** Waits for room to load a wallet whose size isn't known yet. Kept wallets stay, since a small one wouldn't need them gone. Returns what gives it back. */
+    async loading(): Promise<() => void> {
+      const rows = Math.ceil(maxRows / LOADS_AT_ONCE)
+      while (reading + rows > maxRows) await new Promise<void>((resolve) => waiting.push(resolve))
+      return take(rows)
     },
   }
 }

@@ -13,6 +13,8 @@ public enum FetchError: Error, Equatable, Sendable {
     case noAmpConfigured(String)
     /// The server refused the request, or sent something this version can't read.
     case rejected(String)
+    /// The wallet has more history than the server can hold. Trying again won't change that.
+    case tooBig(String)
 }
 
 public protocol PortfolioSource: Sendable {
@@ -234,6 +236,7 @@ public struct PricetagClient: PortfolioSource {
         switch status {
         case 502: throw FetchError.ampUnavailable(message)
         case 503: throw FetchError.noAmpConfigured(message)
+        case 413: throw FetchError.tooBig(message)
         default: throw FetchError.rejected(message)
         }
     }

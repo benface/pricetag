@@ -569,7 +569,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
 
     @Test func onlyShowsANumberWhileLive() throws {
         let portfolio = try demoPortfolio()
-        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("x"), .noAmpConfigured("x"), .rejected("x")]
+        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("x"), .noAmpConfigured("x"), .rejected("x"), .tooBig("x")]
         for state in states {
             for shows in MenuBarShows.allCases {
                 let summary = FeedSummary(feed: state, portfolio: portfolio, shows: shows)
@@ -604,7 +604,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
 
     @Test func aProblemFitsInAFewWords() throws {
         let portfolio = try demoPortfolio()
-        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("A very long message from the server."), .noAmpConfigured("x"), .rejected("x")]
+        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("A very long message from the server."), .noAmpConfigured("x"), .rejected("x"), .tooBig("x")]
         for state in states {
             let problem = try #require(state.shortProblem(portfolio: portfolio))
             #expect(problem.count <= 26, "\(state)")
@@ -621,7 +621,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
 
     @Test func aProblemSaysWhatHappenedThatMoneyIsFineAndWhatToDoWithoutTheServersAddress() throws {
         let portfolio = try realPortfolio(at: Date())
-        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("Couldn't read from Amp."), .noAmpConfigured("No Amp."), .rejected("Nope.")]
+        let states: [FeedState] = [.behind(seconds: 600), .serverUnreachable, .tooSlow, .ampUnavailable("Couldn't read from Amp."), .noAmpConfigured("No Amp."), .rejected("Nope."), .tooBig("Too much history.")]
         for state in states {
             for shown in [portfolio, nil] {
                 let problem = try #require(state.problem(serverURL: server, portfolio: shown))
@@ -644,6 +644,10 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         #expect(down.detail?.contains("pnpm start") == true)
         #expect(FeedState.ampUnavailable("Couldn't read from Amp.").problem(serverURL: server, portfolio: nil)?.detail?.contains("Couldn't read from Amp.") == true)
         #expect(FeedState.rejected("Nope.").problem(serverURL: server, portfolio: nil)?.detail?.contains("Nope.") == true)
+        let tooBig = try #require(FeedState.tooBig("Too much history.").problem(serverURL: server, portfolio: nil))
+        #expect(tooBig.title == "This Wallet Is Too Big to Read")
+        #expect(tooBig.message.contains("Trying again won't change this."))
+        #expect(tooBig.detail?.contains("Too much history.") == true)
     }
 
     @Test func aServerElsewhereIsntOneToStart() throws {
