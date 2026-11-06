@@ -122,8 +122,8 @@ export type WalletView = {
   missingRateTxs: string[]
 }
 
-/** Every oracle read a chart can mark to. */
-const readsOf = ({ references, priceSamples = [] }: Pick<WalletData, "references" | "priceSamples">) => [...references, ...priceSamples]
+/** Every oracle read a chart can mark to. A sample can be empty, so where a transaction has its own read at that block, that one wins. */
+const readsOf = ({ references, priceSamples = [] }: Pick<WalletData, "references" | "priceSamples">) => [...priceSamples, ...references]
 
 /** The wallet as its own USD facts, whatever its currency. */
 export function usdView(wallet: WalletData): WalletView {
@@ -155,7 +155,9 @@ export function viewWallet(wallet: WalletData): WalletView {
     }
   })
 
-  for (const { blockNum } of wallet.priceSamples ?? []) answers.set(blockNum, usableAnswer(rates.byBlock[blockNum], timestampOfBlock(blockNum, wallet.latest)))
+  for (const { blockNum } of wallet.priceSamples ?? []) {
+    if (!answers.has(blockNum)) answers.set(blockNum, usableAnswer(rates.byBlock[blockNum], timestampOfBlock(blockNum, wallet.latest)))
+  }
 
   const latest = usableAnswer(rates.latest?.round, wallet.latest.timestamp)
   const prices: LatestPrices = {}

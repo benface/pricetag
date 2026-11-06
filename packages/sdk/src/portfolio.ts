@@ -392,7 +392,8 @@ export type PnlPoint = {
  *
  * Each of `sampleBlocks` adds a point with no transaction, between two that have one, wherever it can price what those
  * can. Only for value: PnL holds still between transactions, so those points say what it was at the one before. One it
- * can't price, or that nobody's read yet, adds nothing, and that stretch stays a guess.
+ * can't price, or that nobody's read yet, adds nothing, and that stretch stays a guess. One that prices more than the point
+ * before can't be joined to it, so it starts a new stretch.
  */
 export function pnlOverTime(
   legs: readonly PricedLeg[],
@@ -497,7 +498,7 @@ export function pnlOverTime(
       const blockNum = samples[nextSample] as number
       if (!lastPoint || !latest || !previous) continue
       const now = worthNow((asset) => markPrice(blockNum, asset))
-      if (!leavesOutTheSame(previous, now)) {
+      if (!leavesOutTheSame(previous, now) && !leavesOutLess(now, previous)) {
         sampleMissed = true
         continue
       }
@@ -532,3 +533,6 @@ type Worth = { valueMicros: string | null; excluded: string[] }
 
 /** Two values can only be compared when they leave out the same things. */
 const leavesOutTheSame = (a: Worth, b: Worth) => a.excluded.join() === b.excluded.join()
+
+/** Everything `a` leaves out, `than` does too, and it leaves out more. */
+const leavesOutLess = (a: Worth, than: Worth) => a.excluded.length < than.excluded.length && a.excluded.every((asset) => than.excluded.includes(asset))

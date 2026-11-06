@@ -24,6 +24,28 @@ import Testing
         #expect(series.values.contains(120), "what's only read between transactions is on the scale")
     }
 
+    @Test func aReadAfterAMissingPriceStartsANewStretch() {
+        let series = ValueSeries(points: [
+            point(0, before: nil, after: 100, excluded: 1, continues: false),
+            point(30, before: 120, after: 120, tx: false, continues: false),
+            point(60, before: 130, after: 130, tx: false, read: true),
+        ])
+        #expect(series.lines.map(\.known) == [true])
+        #expect(series.lines[0].steps.map(\.value) == [120, 130])
+        #expect(series.gaps.count == 1)
+    }
+
+    @Test func aReadAfterNothingKnownStartsANewStretch() {
+        let series = ValueSeries(points: [
+            point(0, before: nil, after: nil, excluded: 1, continues: false),
+            point(30, before: 120, after: 120, tx: false, continues: false),
+            point(60, before: 130, after: 130, tx: false, read: true),
+        ])
+        #expect(series.lines.map(\.known) == [true])
+        #expect(series.lines[0].steps.map(\.value) == [120, 130])
+        #expect(series.gaps.count == 1)
+    }
+
     @Test func pointsWithNoTransactionArentTransactions() {
         let series = ValueSeries(points: [point(0, before: 0, after: 100), point(30, before: 120, after: 120, tx: false, read: true), point(60, before: 110, after: 110, read: true)])
         #expect(series.nearestTransaction(to: series.plotted[1].date)?.point.txHash != nil)

@@ -591,12 +591,13 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
   }
 
   /**
-   * What a wallet's chart still wants, added to what it has. One past what's covered waits, since the tables haven't reached
-   * it. A block the table has no row for has no price to find, so it isn't asked about again. A failed read is tried next refresh.
+   * What a wallet's chart still wants, added to what it has. A block with a transaction in it was already read for that. One
+   * past what's covered waits, since the tables haven't reached it. A block the table has no row for has no price to find, so
+   * it isn't asked about again. A failed read is tried next refresh.
    */
-  async function readSamples(wallet: Pick<Cached, "rows" | "latest" | "coveredTo">, known: Map<number, Reference>): Promise<Map<number, Reference>> {
+  async function readSamples(wallet: Pick<Cached, "rows" | "latest" | "coveredTo" | "references">, known: Map<number, Reference>): Promise<Map<number, Reference>> {
     const blocks = sampleBlocksOf(wallet)
-    const samples = new Map(blocks.flatMap((block) => { const read = known.get(block); return read ? [[block, read] as const] : [] }))
+    const samples = new Map(blocks.flatMap((block) => { const read = wallet.references.get(block) ?? known.get(block); return read ? [[block, read] as const] : [] }))
     const missing = blocks.filter((block) => !samples.has(block) && block <= wallet.coveredTo)
     if (missing.length === 0) return samples
     try {
@@ -720,7 +721,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       }
     }
 
-    const samples = priceSamples ? await readSamples({ rows, latest: head, coveredTo }, knownSamples) : null
+    const samples = priceSamples ? await readSamples({ rows, latest: head, coveredTo, references: known }, knownSamples) : null
     const prices = latestPrices(await source.readLatestReference(head.blockNum))
 
     if (unsettled !== null) forgetPricesFrom(unsettled)

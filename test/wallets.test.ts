@@ -1951,6 +1951,38 @@ describe("prices between a wallet's transactions", () => {
     assert.ok(referenceReads.length > 0)
   })
 
+  describe("at a block with a transaction in it", () => {
+    const BLOCK = 3600
+    const reading = (failing: () => boolean) => {
+      const { source, referenceReads } = fake(new Map([[BLOCK, [row(BLOCK)]]]), () => reference(HEAD), (at) => at, async (block) => Object.fromEntries(ASSETS.map((asset) => [asset, asset === "ETH" && block >= BLOCK ? "5" : "0"])))
+      source.historyFrom = () => 900
+      const read = source.readReferences
+      source.readReferences = async (blocks) => {
+        if (failing() && !blocks.includes(BLOCK)) throw new Error("no")
+        return read(blocks)
+      }
+      return { source, referenceReads, wallets: createWallets(source, async () => headAt(HEAD)(), noFees, quiet, { priceSamples: true }) }
+    }
+
+    it("uses the read it has, rather than reading it twice", async () => {
+      assert.ok(wanted(BLOCK, HEAD).includes(BLOCK))
+      const { wallets, referenceReads } = reading(() => false)
+      const wallet = await wallets.get(ME)
+      assert.equal(referenceReads.flat().filter((block) => block === BLOCK).length, 1)
+      assert.equal(wallet.priceSamples?.find((sample) => sample.blockNum === BLOCK)?.ethUsd, "240000000000")
+    })
+
+    it("keeps its value when the other reads fail", async () => {
+      const { source, wallets } = reading(() => true)
+      const wallet = await wallets.get(ME)
+      assert.ok(wallet.priceSamples!.some((sample) => sample.ethUsd === ""), "so the other samples are empty")
+      const without = await createWallets(source, async () => headAt(HEAD)(), noFees, quiet).get(ME)
+      const atTx = ({ points }: ReturnType<typeof foldWallet>) => points.filter((p) => p.txHash !== null).map((p) => [p.txHash, p.pnlMicros, p.valueMicros])
+      assert.deepEqual(atTx(foldWallet(wallet, "average")), atTx(foldWallet(without, "average")))
+      assert.ok(atTx(foldWallet(wallet, "average"))[0]![2] !== null)
+    })
+  })
+
   it("doesn't ask again about a block the table has no row for", async () => {
     const { source, referenceReads } = fake(new Map([[1000, [row(1000)]]]), () => reference(HEAD))
     source.historyFrom = () => 900

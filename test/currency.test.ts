@@ -350,6 +350,32 @@ describe("what a wallet already held", () => {
       assert.equal(point.valueRead, true)
     })
 
+    describe("that failed, at a block with a transaction", () => {
+      const references = [{ blockNum: BUY_BLOCK, ethUsd: "200000000000", usdcUsd: "100000000" }, { blockNum: SELL_BLOCK, ethUsd: "200000000000", usdcUsd: "100000000" }]
+      const empty = [BUY_BLOCK, SELL_BLOCK].map((blockNum) => ({ blockNum, ethUsd: "", usdcUsd: "" }))
+      const atTransactions = (changes: Partial<WalletResponse>) => foldWallet(walletWith({ legs: [buy, sell], references, ...changes }), "average").points.filter((p) => p.txHash !== null).map((p) => [p.txHash, p.pnlMicros, p.valueMicros, p.valueBeforeMicros])
+
+      it("leaves its value and PnL alone in USD", () => {
+        const points = atTransactions({ priceSamples: empty })
+        assert.deepEqual(points, atTransactions({}))
+        assert.ok(points[0]![1] !== null && points[0]![2] !== null)
+      })
+
+      it("leaves its value and PnL alone in another currency", () => {
+        const points = atTransactions({ priceSamples: empty, currency: "CAD", rates: RATES })
+        assert.deepEqual(points, atTransactions({ currency: "CAD", rates: RATES }))
+        assert.ok(points[0]![1] !== null && points[0]![2] !== null)
+      })
+
+      it("keeps the rate the transaction used, not one judged by an estimated time", () => {
+        // A head whose time is well past what its block says makes the rate look stale, if it's judged by that.
+        const latest = { blockNum: HEAD, timestamp: "2027-06-01T00:00:00.000Z" }
+        const points = atTransactions({ priceSamples: empty, currency: "CAD", rates: RATES, latest })
+        assert.deepEqual(points, atTransactions({ currency: "CAD", rates: RATES, latest }))
+        assert.ok(points[0]![2] !== null)
+      })
+    })
+
     it("adds no point without one, rather than leaving the rate out", () => {
       const points = sampled(RATES.byBlock)
       assert.deepEqual(points.map((p) => p.blockNum), [BUY_BLOCK, SELL_BLOCK, HEAD])

@@ -342,6 +342,38 @@ describe("what the value chart can join", () => {
       assert.deepEqual(points.map((p) => p.valueRead), [undefined, undefined, true, true], "from the transaction to the first price it could read")
     })
 
+    describe("after a transaction with no price", () => {
+      const ethOnly = [move(0, "0x1", ETH_ADDRESS, ETH)]
+      const unpriced = (blockNum: number) => ({ ...at(blockNum), ethUsd: "" })
+
+      it("starts again at the first sample that knows it, from nothing known", () => {
+        const points = sampled(ethOnly, [unpriced(0), at(50), at(70), at(100)], [50, 70, 100])
+        assert.deepEqual(points.map((p) => [p.blockNum, p.valueMicros === null, p.valueContinues, p.valueRead]), [[0, true, false, undefined], [50, false, false, undefined], [70, false, true, true], [100, false, true, true], [150, false, true, true]])
+      })
+
+      it("starts again from part of it known, without joining the two", () => {
+        const points = sampled(held, [at(0), unpriced(100), at(110), at(120)], [110, 120])
+        assert.deepEqual(points.map((p) => [p.blockNum, p.valueExcludedCount, p.valueContinues, p.valueRead]), [[0, 0, false, undefined], [100, 1, false, undefined], [110, 0, false, undefined], [120, 0, true, true], [150, 0, true, true]])
+        assert.equal(points[2]!.valueMicros, "2001000000")
+      })
+
+      it("carries on into the next transaction", () => {
+        const points = sampled([...ethOnly, move(90, "0x2", USDC_ADDRESS, DOLLAR)], [unpriced(0), at(50), at(90)], [50])
+        assert.deepEqual(points.map((p) => [p.blockNum, p.valueContinues, p.valueRead]), [[0, false, undefined], [50, false, undefined], [90, true, true], [150, true, true]])
+      })
+
+      it("skips one that only leaves out something else, which it can't start from", () => {
+        const points = sampled(held, [at(0), unpriced(100), { ...at(110), usdcUsd: "" }, at(120)], [110, 120])
+        assert.deepEqual(points.map((p) => p.blockNum), [0, 100, 120, 150])
+        assert.equal(points[2]!.valueContinues, false)
+      })
+
+      it("still leaves out what's left out at every price", () => {
+        const points = pnlOverTime(buildPricedLegs({ account: ME, rows: held, references: [at(0), at(100)], priced: derivePricedRows(held, [at(0), at(100)]) }), "average", {}, referenceMarks([at(0), unpriced(100), at(110)]), { blockNum: 150, timestamp: minute(150) }, new Set(["USDC"]), new Set(), [110])
+        assert.deepEqual(points.map((p) => [p.blockNum, p.valueExcludedCount, p.valueContinues]), [[0, 1, false], [100, 2, false], [110, 1, false], [150, 2, false]])
+      })
+    })
+
     it("keeps a sample that leaves out what the point before already left out", () => {
       const unpriced = [{ ...at(0), ethUsd: "" }, { ...at(50), ethUsd: "" }, { ...at(100), ethUsd: "" }]
       const points = sampled(held, unpriced, [50])
