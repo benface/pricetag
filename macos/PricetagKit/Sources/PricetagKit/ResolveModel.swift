@@ -43,6 +43,8 @@ public final class ResolveModel {
     /// Asking what they paid, because they said it's their exchange account.
     public private(set) var isAskingCost = false
     public var failure: String?
+    /// What the last import found. It's apart from `failure`, which goes with a card, because an import can answer the card it was made from.
+    public private(set) var lastImport: ExchangeImport?
     /// From the moment it's asked for until it's on its way or isn't going. It can't be called back in that time.
     public private(set) var isPublishing = false
 
@@ -197,9 +199,11 @@ public final class ResolveModel {
     }
 
     public func importCoinbase(csv: String) async -> ExchangeImport? {
+        lastImport = nil
         do {
             let imported = try await store.importCoinbase(csv: csv)
-            failure = imported.skipped > 0 ? "Found \(imported.withdrawals.count) withdrawals. \(imported.skipped) had no usable cost." : nil
+            lastImport = imported
+            failure = nil
             advance()
             return imported
         } catch FetchError.rejected(let message) {
@@ -217,6 +221,7 @@ public final class ResolveModel {
     }
 
     public func undo() {
+        lastImport = nil
         store.undo()
         advance()
     }

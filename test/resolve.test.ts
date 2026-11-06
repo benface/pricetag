@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
 import { describe, it } from "node:test"
 import { verifyLink } from "../server/links.ts"
 import { explainPortfolio, portfolioOf } from "../src/core/portfolio.ts"
@@ -6,7 +7,7 @@ import { createWallets, type Source } from "@pricetag/sdk/internal"
 import { ASSETS, CURRENCIES, ETH_ADDRESS, USDC_ADDRESS, buildPricedLegs, openingLegs, shortHash, type LegRow, type Method, type Reference, encodeNote, parseNote } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../src/core/api.ts"
 import { answerSender, applyChange, costKey, emptyBook, enterExchangeCosts, linkDeviceAccounts, linkMessage, linkedWallets, parseBook, proofOwner, undoAnswer, type Book, type BookChange, type Money, type Receipt, type SenderAnswer } from "../src/core/book.ts"
-import { matchWithdrawals, parseCoinbaseCsv } from "../src/core/exchange-import.ts"
+import { matchWithdrawals, mergeWithdrawals, parseCoinbaseCsv } from "../src/core/exchange-import.ts"
 import { exportCsv } from "../src/core/export.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_SAVINGS_WALLET, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import { linkByProof } from "../src/ui/link-proof.ts"
@@ -1308,6 +1309,94 @@ Timestamp,Transaction Type,Asset,Quantity Transacted,Spot Price Currency,Spot Pr
     assert.deepEqual(mixed, { withdrawals: [], skipped: 1 })
   })
 
+  describe("with a history it can't follow", () => {
+    const header = "Timestamp,Transaction Type,Asset,Quantity Transacted,Price Currency,Price at Transaction,Subtotal,Total (inclusive of fees and/or spread),Fees and/or Spread,Notes"
+    const day = (n: number) => `2026-10-${String(n).padStart(2, "0")}T10:00:00Z`
+    const row = (when: string, type: string, quantity: string, total = "$0") => `${when},${type},ETH,${quantity},USD,$0,$0,${total},$0,x`
+    const parse = (...rows: string[]) => parseCoinbaseCsv(`${header}\n${rows.join("\n")}\n`)!
+
+    it("won't price anything after a send bigger than what it saw bought", () => {
+      // Without this the last send came out at $3,000: the first emptied the units but left $1,000 of cost behind.
+      const parsed = parse(row(day(1), "Buy", "1", "$1000"), row(day(2), "Send", "2"), row(day(3), "Buy", "1", "$2000"), row(day(4), "Send", "1"))
+      assert.deepEqual(parsed, { withdrawals: [], skipped: 2 })
+    })
+
+    it("won't price anything after a sale bigger than what it saw bought", () => {
+      const parsed = parse(row(day(1), "Buy", "1", "$1000"), row(day(2), "Sell", "2"), row(day(3), "Buy", "1", "$2000"), row(day(4), "Send", "1"))
+      assert.deepEqual(parsed, { withdrawals: [], skipped: 1 })
+    })
+
+    it("still prices a send of everything it saw bought", () => {
+      const parsed = parse(row(day(1), "Buy", "1", "$1000"), row(day(2), "Send", "1"), row(day(3), "Buy", "1", "$2000"), row(day(4), "Send", "1"))
+      assert.deepEqual(parsed.withdrawals.map((w) => w.cost.micros), ["1000000000", "2000000000"])
+      assert.equal(parsed.skipped, 0)
+    })
+
+    it("won't price anything after a quantity it can't read", () => {
+      for (const [type, skipped] of [["Sell", 1], ["Buy", 1], ["Receive", 1], ["Send", 2]] as const) {
+        const parsed = parse(row(day(1), "Buy", "1", "$1000"), row(day(2), type, "5E-1"), row(day(3), "Send", "1"))
+        assert.deepEqual(parsed, { withdrawals: [], skipped }, type)
+      }
+    })
+
+    it("won't price anything of an asset with a row it can't put in order", () => {
+      for (const [type, skipped] of [["Buy", 1], ["Send", 2]] as const) {
+        const parsed = parse(row(day(1), "Buy", "1", "$1000"), row("yesterday", type, "1"), row(day(3), "Send", "1"))
+        assert.deepEqual(parsed, { withdrawals: [], skipped }, type)
+      }
+    })
+
+    it("ignores a row that isn't about anything it tracks", () => {
+      assert.equal(parse(row(day(1), "Buy", "1", "$1000"), "Total,,,,,,,,,", "Something at the end of the file", row(day(3), "Send", "1")).withdrawals.length, 1)
+    })
+
+    it("leaves what it can't price a question, rather than a cost", () => {
+      const rows = [{ ...move(60, "0x1", A, "credit", E18, COINBASE, ETH_ADDRESS), timestamp: "2026-10-05T10:03:00.000Z" }]
+      const { withdrawals, skipped } = parse(row(day(1), "Buy", "1", "$1000"), row(day(2), "Send", "2"), row(day(3), "Buy", "1", "$2000"), row(day(5), "Send", "1"))
+      assert.equal(skipped, 2)
+      const fold = foldBook(wallet(A, rows), [], "average", { ...emptyBook(), withdrawals })
+      assert.equal(fold.positions[0]?.effects[0]?.leg.costLabel, "unknown")
+      assert.equal(fold.positions[0]?.values.costMicros, null)
+      assert.equal(fold.questions.length, 1)
+    })
+  })
+
+  describe("a later import", () => {
+    const earlier = { exchange: "Coinbase", asset: "ETH", units: E18.toString(), at: "2025-06-01T00:00:00.000Z", cost: usd("1000000000"), toAddress: null }
+    const later = { ...earlier, at: "2026-06-01T00:00:00.000Z", cost: usd("2000000000") }
+
+    it("adds to an earlier one", () => {
+      assert.deepEqual(mergeWithdrawals([earlier], [later]), [earlier, later])
+    })
+
+    it("changes nothing when it has nothing", () => {
+      assert.deepEqual(mergeWithdrawals([earlier, later], []), [earlier, later])
+    })
+
+    it("changes nothing when it's the same file, even with two alike in it", () => {
+      const once = mergeWithdrawals([], [earlier, earlier, later])
+      assert.deepEqual(once, [earlier, earlier, later], "two alike in one file are two withdrawals")
+      assert.deepEqual(mergeWithdrawals(once, [earlier, earlier, later]), once)
+    })
+
+    it("takes over for a withdrawal it has again, as the latest word on what it cost", () => {
+      const corrected = { ...earlier, cost: usd("1500000000") }
+      assert.deepEqual(mergeWithdrawals([earlier, later], [corrected]), [later, corrected])
+    })
+
+    it("keeps a withdrawal to another address, which is another withdrawal", () => {
+      assert.equal(mergeWithdrawals([earlier], [{ ...earlier, toAddress: A }]).length, 2)
+    })
+
+    it("keeps what each one priced, so neither's cost goes back to unknown", () => {
+      const arrivalAt = (at: string, key: string) => ({ key, wallet: A, asset: "ETH", units: E18, timestamp: at })
+      const both = mergeWithdrawals([earlier], [later])
+      const [first, second] = [arrivalAt(earlier.at, "first"), arrivalAt(later.at, "second")]
+      const matches = matchWithdrawals(both, [first, second])
+      assert.deepEqual([matches.get("first")?.cost, matches.get("second")?.cost], [earlier.cost, later.cost])
+    })
+  })
+
   it("isn't fooled by something that isn't one", () => {
     assert.equal(parseCoinbaseCsv("a,b,c\n1,2,3\n"), null)
   })
@@ -1520,6 +1609,24 @@ describe("a book from a request", () => {
     for (const bad of [null, 1, "x", [], { senders: [] }, { senders: { nope: { kind: "mine" } } }, { senders: { [A]: { kind: "nope" } } }, { costs: { x: "-1" } }, { costs: { x: 5 } }, { senders: { [A]: { kind: "my-exchange", costs: { USDC: "1" } } } }, { withdrawals: [{}] }]) {
       assert.equal(parseBook(bad), null, JSON.stringify(bad))
     }
+  })
+
+  it("reads what the Mac app encodes, which leaves out whatever it doesn't have", () => {
+    // Written by a Swift test. Without `toAddress` here, every read from the Mac was refused until the import was undone.
+    const sent = JSON.parse(readFileSync(new URL("../macos/PricetagKit/Tests/PricetagKitTests/Resources/mac-book.json", import.meta.url), "utf8"))
+    const [answer] = Object.values(sent.senders) as Record<string, unknown>[]
+    assert.deepEqual(["costs" in answer!, "toAddress" in sent.withdrawals[0], "blockNum" in sent.purchases[0], "costUsdMicros" in sent.purchases[0]], [false, false, false, false], "every optional's left out, or this tests nothing")
+    const parsed = parseBook(sent)
+    assert.ok(parsed, "the server would refuse every read")
+    assert.equal(parsed.withdrawals[0]?.toAddress, null)
+    assert.equal(parsed.purchases?.[0]?.blockNum, null)
+    assert.equal(parsed.purchases?.[0]?.costUsdMicros, null)
+  })
+
+  it("still refuses a withdrawal's address that isn't one", () => {
+    const withdrawal = { exchange: "Coinbase", asset: "ETH", units: "1", at: "2026-11-04T00:00:00.000Z", cost: usd("5") }
+    assert.equal(parseBook({ withdrawals: [{ ...withdrawal }] })?.withdrawals[0]?.toAddress, null)
+    for (const toAddress of ["nope", 5, ""]) assert.equal(parseBook({ withdrawals: [{ ...withdrawal, toAddress }] }), null, JSON.stringify(toAddress))
   })
 
   it("drops fields it doesn't know, so nothing extra is carried along", () => {

@@ -350,6 +350,13 @@ public enum Wording {
         "Updating. \(count == 1 ? "1 wallet is" : "\(count) wallets are") still being read, and \(count == 1 ? "isn't" : "aren't") in these numbers yet."
     }
 
+    /// What a Coinbase history had in it. Nothing changes when it had nothing usable, and that's worth saying.
+    public static func imported(found: Int, skipped: Int) -> String {
+        func withdrawals(_ count: Int) -> String { count == 1 ? "1 withdrawal" : "\(count) withdrawals" }
+        if found == 0 { return skipped == 0 ? "That file has no withdrawals, so nothing changed." : "Found \(withdrawals(skipped)) with no usable cost, so nothing changed." }
+        return skipped == 0 ? "Found \(withdrawals(found))." : "Found \(withdrawals(found)). \(skipped) more had no usable cost."
+    }
+
     public static func linkedFailed(_ count: Int) -> String {
         count == 1 ? "Couldn't read your other wallet, so what came from it may show an unknown cost." : "Couldn't read \(count) of your other wallets, so what came from them may show an unknown cost."
     }

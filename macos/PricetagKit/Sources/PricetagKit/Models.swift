@@ -715,6 +715,9 @@ public struct ExchangeImport: Codable, Sendable, Equatable {
     public let withdrawals: [ExchangeWithdrawal]
     /// Withdrawals with no usable cost: bought in a currency this app doesn't have, in several at once, or with a history it can't follow.
     public let skipped: Int
+
+    /// Something in it didn't come through, or nothing did.
+    public var needsALook: Bool { withdrawals.isEmpty || skipped > 0 }
 }
 
 /// An amount someone entered or imported, in the currency it was in, because that's what it stays true in.
@@ -826,6 +829,16 @@ public struct Book: Codable, Sendable, Equatable, Hashable {
         costs = try container.decode([String: Money].self, forKey: .costs)
         withdrawals = try container.decode([ExchangeWithdrawal].self, forKey: .withdrawals)
         purchases = try container.decodeIfPresent([Purchase].self, forKey: .purchases) ?? []
+    }
+
+    /// What an import adds to what earlier ones found. A file that has the same withdrawal again takes over for it, since it's the
+    /// latest word on what it cost. Two alike in one file are two withdrawals, so both stay.
+    public func importing(_ found: [ExchangeWithdrawal]) -> Book {
+        func key(_ withdrawal: ExchangeWithdrawal) -> [String?] { [withdrawal.exchange, withdrawal.asset, withdrawal.units, withdrawal.at, withdrawal.toAddress] }
+        let again = Set(found.map(key))
+        var next = self
+        next.withdrawals = withdrawals.filter { !again.contains(key($0)) } + found
+        return next
     }
 
     /// An order can say more as it goes, like the block its delivery landed in, so a newer read of one takes over.
