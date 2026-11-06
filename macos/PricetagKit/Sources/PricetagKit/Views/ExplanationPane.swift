@@ -78,6 +78,9 @@ public struct ExplanationPane: View {
                     if store.feed.isStale {
                         WarningText("Not updating").font(.callout)
                     }
+                    if let priceProof = explanation.priceProof {
+                        PriceProofRow(proof: priceProof, store: store)
+                    }
                 }
                 .padding(.vertical, 4)
             }
@@ -93,6 +96,30 @@ public struct ExplanationPane: View {
                 ForEach(explanation.legs, id: \.rowID) { leg in
                     LegRow(leg: leg, currency: explanation.currency, store: store, questions: questionCount(for: leg.asset), showsProof: opensFirstProof && leg.rowID == first, onResolve: onResolve)
                 }
+            }
+        }
+    }
+}
+
+/// The way into what's behind a current price, like a row's Proof.
+private struct PriceProofRow: View {
+    let proof: ExplanationPriceProof
+    let store: PortfolioStore
+    @State private var isShowing = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                isShowing.toggle()
+            } label: {
+                Label("Proof of this price", systemImage: isShowing ? "chevron.down" : "chevron.right")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.tint)
+            .font(.caption)
+            .accessibilityValue(isShowing ? "Showing" : "Hidden")
+            if isShowing {
+                ProofPanel(asset: proof.asset, price: proof.price, address: proof.wallet, store: store).id(proof.panelID(currency: store.currency, rule: store.selectedRule))
             }
         }
     }
@@ -164,19 +191,7 @@ public struct LegRow: View {
                 }
             }
             if isFee {
-                // Two lines at most, with Proof at the end of the second.
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    if let wallet = leg.wallet { Tag(walletNames.walletName(wallet)) }
-                    Tag("\(Format.signedAmount(leg.delta, decimals: leg.decimals)) \(leg.asset)")
-                    if leg.priceMicros == nil {
-                        Tag("No price", isWarning: true)
-                    }
-                    if let unknown = leg.unknown {
-                        Tag("Gain unknown", isWarning: true).help(unknown)
-                    }
-                    Spacer(minLength: 8)
-                    proofButton
-                }
+                feeFacts
             } else {
                 tags
                 if let unknown = leg.unknown {
@@ -269,16 +284,61 @@ public struct LegRow: View {
         }
     }
 
+    /// A fee's facts take one line when they fit. When they don't, the wallet moves up first, because Proof should stay beside the amount for as long as it can.
+    /// A long wallet name gets cut there, rather than pushing everything else onto its own line, and its tooltip has the rest.
+    private var feeFacts: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                walletTag
+                feeTags
+                Spacer(minLength: 8)
+                proofButton
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                walletTag.frame(idealWidth: 0, maxWidth: .infinity, alignment: .leading)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    feeTags
+                    Spacer(minLength: 8)
+                    proofButton
+                }
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                walletTag
+                feeTags
+                proofButton
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var walletTag: some View {
+        if let wallet = leg.wallet {
+            let name = walletNames.walletName(wallet)
+            Tag(name).help(name)
+        }
+    }
+
+    @ViewBuilder
+    private var feeTags: some View {
+        Tag("\(Format.signedAmount(leg.delta, decimals: leg.decimals)) \(leg.asset)")
+        if leg.priceMicros == nil {
+            Tag(Wording.noPrice, isWarning: true)
+        }
+        if let unknown = leg.unknown {
+            Tag("Gain unknown", isWarning: true).help(unknown)
+        }
+    }
+
     @ViewBuilder
     private var tagList: some View {
-        if let wallet = leg.wallet { Tag(walletNames.walletName(wallet)) }
+        walletTag
         Tag("\(Format.signedAmount(leg.delta, decimals: leg.decimals)) \(leg.asset)")
         if let price = leg.priceMicros, let source = leg.priceSource {
             Tag("\(Format.price(price, currency)) · \(Wording.priceSource(source))")
                 .help("The price per \(leg.asset) at this block. Proof says where it comes from.")
                 .accessibilityLabel("Price, \(Format.price(price, currency)), \(Wording.priceSource(source))")
         } else {
-            Tag("No price", isWarning: true)
+            Tag(Wording.noPrice, isWarning: true)
         }
         // An unknown cost has its own line below, with what fixes it.
         if leg.isIncoming, leg.costLabel != "unknown" {

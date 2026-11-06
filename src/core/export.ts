@@ -7,11 +7,11 @@ const HEADER = ["time", "block", "transaction", "asset", "amount", "kind", "curr
 function statusOf({ leg, before, after }: LegEffect, noMarket: boolean): string {
   if (noMarket) return "no market"
   if (BigInt(leg.delta) > 0n) {
-    if (leg.costLabel === "unknown" || leg.costMicros === null) return "unresolved"
+    if (leg.costLabel === "unknown" || leg.costMicros === null) return "unknown"
     return leg.estimated ? "estimated" : "exact"
   }
   const grew = (field: "unresolvedDisposedQty" | "unpricedGasQty" | "shortfallQty" | "transferredOutUnknownQty" | "estimatedRealizedMicros" | "transferredOutEstimatedMicros") => BigInt(after[field]) > BigInt(before[field])
-  if (grew("unresolvedDisposedQty") || grew("unpricedGasQty") || grew("shortfallQty") || grew("transferredOutUnknownQty")) return "unresolved"
+  if (grew("unresolvedDisposedQty") || grew("unpricedGasQty") || grew("shortfallQty") || grew("transferredOutUnknownQty")) return "unknown"
   return grew("estimatedRealizedMicros") || grew("transferredOutEstimatedMicros") ? "estimated" : "exact"
 }
 

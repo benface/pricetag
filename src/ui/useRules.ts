@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
-import type { PricingRule } from "../core/rules.ts"
+import { readRules, type PricingRule } from "../core/rules.ts"
 
 const RULE_KEY = "pricetag.rule"
 
@@ -19,11 +19,11 @@ export function useRules(): RulesState {
   useEffect(() => {
     const abort = new AbortController()
     fetch("/api/rules", { signal: abort.signal })
-      .then((response) => response.json() as Promise<{ rules: PricingRule[] }>)
-      .then((body) => {
-        setRules(body.rules)
+      .then(readRules)
+      .then((rules) => {
+        setRules(rules)
         // A rule this server doesn't have would fail every read.
-        setChosen((id) => (id !== null && body.rules.some((rule) => rule.id === id) ? id : null))
+        setChosen((id) => (id !== null && rules.some((rule) => rule.id === id) ? id : null))
       })
       .catch(() => {})
     return () => abort.abort()

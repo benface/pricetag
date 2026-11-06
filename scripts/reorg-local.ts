@@ -12,7 +12,7 @@
 // Amp's tables, its stream and two wallets, one following the stream and one polling, take to match the new chain.
 
 import { createPricetag, type WalletUpdate } from "@pricetag/sdk"
-import { createQuery, createRangeStream, followSql, pricetagClient, readHeadMark, settledThrough } from "@pricetag/sdk/internal"
+import { createQuery, createRangeStream, createRowStream, followSql, followedWallets, followedWindowSql, pricetagClient, readBlockHashes, readHeadMark, settledThrough } from "@pricetag/sdk/internal"
 
 const ANVIL = process.env.ANVIL_URL ?? "http://127.0.0.1:18597"
 const FLIGHT = process.env.FLIGHT_URL ?? "http://127.0.0.1:11602"
@@ -32,9 +32,6 @@ const WETH = "0x4200000000000000000000000000000000000006"
 /** Uniswap v3's USDC/WETH pool, impersonated on the fork as a source of USDC. */
 const USDC_SOURCE = "0xd0b53d9277642d899df5c87a3966a349a798f224"
 const ROUTER = "0x2626664c2603336e57b271c5c0b26f421741e481"
-/** An unlisted token that only emits a `Transfer` from its caller to its caller. */
-const UNLISTED = "0x4970000000000000000000000000000000000001"
-const UNLISTED_CODE = "0x60016000523333" + "7fddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef" + "60206000a300"
 
 const T0 = Date.now()
 const log = (event: string, data: Record<string, unknown> = {}) => console.log(JSON.stringify({ t: ((Date.now() - T0) / 1000).toFixed(2), event, ...data }))
@@ -56,15 +53,6 @@ const usdcBalance = async (block: number) => BigInt(await rpc<string>("eth_call"
 const sendEth = (wei: bigint) => rpc<string>("eth_sendTransaction", [{ from: SENDER, to: WALLET, value: hex(wei) }])
 const sendUsdc = (units: bigint) => rpc<string>("eth_sendTransaction", [{ from: USDC_SOURCE, to: USDC, data: `0xa9059cbb${word(WALLET)}${word(units)}`, gas: hex(200_000) }])
 
-/**
- * The SDK counts a table as processed up to its newest row, and Base always has swaps and unlisted tokens. A quiet fork
- * doesn't, so the chain gets one of each every few blocks, from the sender, never the watched wallet.
- */
-async function activity() {
-  await swapEth(10n ** 15n)
-  await rpc("eth_sendTransaction", [{ from: SENDER, to: UNLISTED, data: "0x", gas: hex(100_000) }])
-}
-
 /** The sender sells `wei` of ETH for USDC on Uniswap, which gives `priced_legs` a row for it. */
 function swapEth(wei: bigint) {
   const swap = `0x04e45aaf${word(WETH)}${word(USDC)}${word(500n)}${word(SENDER)}${word(wei)}${word(0n)}${word(0n)}`
@@ -81,14 +69,10 @@ async function txsIn(from: number, to: number): Promise<Set<string>> {
   return txs
 }
 
-/** `blocks` blocks at once, after anything already sent, with activity in the last one. */
-async function mineNow(blocks: number) {
-  if (blocks > 1) await rpc("anvil_mine", [hex(blocks - 1)])
-  await activity()
-  await rpc("anvil_mine", ["0x1"])
-}
+/** `blocks` blocks at once, after anything already sent. */
+const mineNow = (blocks: number) => rpc("anvil_mine", [hex(blocks)])
 
-/** A block every 200 ms like Base, with activity in every 5th, except while a reorg is being set up. */
+/** A block every 200 ms like Base, except while a reorg is being set up. */
 const miner = { paused: false, idle: Promise.resolve(), stopped: false }
 async function runMiner() {
   for (let n = 0; !miner.stopped; n++) {
@@ -96,7 +80,6 @@ async function runMiner() {
       let done = () => {}
       miner.idle = new Promise((resolve) => (done = resolve))
       try {
-        if (n % 5 === 0) await activity()
         await rpc("anvil_mine", ["0x1"])
       } finally {
         done()
@@ -229,6 +212,39 @@ async function diagnose(first: number, newHead: number, probes: number[], oldHas
   log("diagnosis", { served, blockRows, expectedBlockRows: newHead - first + 1, orphanedTxs, newTxRows, walletLegs: legs, pricedLegsHead: pricedHead, chainHead: await head() })
 }
 
+/**
+ * A wallet's rows held from its streams, never told of a reorg, so this is only the streams saying so. It holds far more
+ * than the server's, since a deep reorg here goes back further than a read usually does.
+ */
+const followed = followedWallets({
+  stream: createRowStream(FLIGHT, undefined, NETWORK),
+  sql: (address) => followedWindowSql(address, DATASET),
+  readMark: (after) => readHeadMark(query, RAW, after),
+  readHashes: (blocks) => readBlockHashes(query, RAW, blocks),
+  logger: { warn: (message) => log("followed warn", { message: message.slice(0, 200) }) },
+  resumeMs: 5000,
+  retryMs: 2000,
+  idleMs: 3_600_000,
+  stallMs: 120_000,
+})
+
+/** What the streams hold for `from`..`to` is exactly what a query says, and has every one of `txs` and none of `gone`. */
+async function followedMatches(from: number, to: number, txs: readonly string[], gone: readonly string[]): Promise<boolean> {
+  const me = WALLET.slice(2)
+  const canonical = (rows: readonly Record<string, unknown>[]) => rows.map((row) => JSON.stringify(row)).sort()
+  for (const table of ["legs", "priced_legs"] as const) {
+    const held = await followed.read(WALLET, table, from, to)
+    if (!held) return false
+    const columns = held[0] ? Object.keys(held[0]).map((column) => `"${column}"`).join(", ") : "*"
+    const queried = await query<Record<string, unknown>>(`SELECT ${columns} FROM "${DATASET}".${table} WHERE block_num BETWEEN ${from} AND ${to} AND account = X'${me}'`)
+    if (JSON.stringify(canonical(held)) !== JSON.stringify(canonical(queried))) return false
+    if (table !== "legs") continue
+    const hashes = held.map((row) => hashOf(row.tx_hash))
+    if (!txs.every((tx) => hashes.includes(tx)) || gone.some((tx) => hashes.includes(tx))) return false
+  }
+  return true
+}
+
 const stop = new AbortController()
 const rewinds: Rewind[] = []
 let watchers: Watcher[] = []
@@ -247,6 +263,10 @@ async function reorg(depth: number, round: number) {
   miner.paused = false
   const oldSince = Date.now()
   for (const w of watchers) await until(`${label}: ${w.name} shows the old chain`, oldSince, () => walletMatches(w, oldSince, oldTxs, []))
+  await until(`${label}: followed rows have the old chain`, oldSince, async () => {
+    const held = await followed.read(WALLET, "legs", forkPoint + 1, forkPoint + 1)
+    return held !== null && oldTxs.every((tx) => held.some((row) => hashOf(row.tx_hash) === tx))
+  })
   // The old chain's price row has to be there for its removal to mean anything.
   const oldPriced = await until(`${label}: priced_legs has the old swap`, oldSince, async () => hasTx(await pricedTxs(forkPoint + 1), oldSwap))
 
@@ -301,6 +321,7 @@ async function reorg(depth: number, round: number) {
     until(`${label}: priced_legs stream rewound`, since, async () => rewinds.some((r) => r.table === "priced_legs" && r.at >= since && r.start <= first)).then((s) => (result.pricedStream = s)),
     until(`${label}: stream wallet said reorg`, since, async () => watchers[0]!.updates.some((u) => u.at >= since && u.reorgFrom !== null && u.reorgFrom <= first)).then((s) => (result.walletReorg = s)),
     ...watchers.map((w) => until(`${label}: ${w.name} matches the new chain`, since, () => walletMatches(w, since, newTxs, oldTxs)).then((s) => (result[w.name] = s))),
+    until(`${label}: followed rows match the new chain`, since, () => followedMatches(first, newHead, newTxs, oldTxs)).then((s) => (result.followed = s)),
   ])
   if (result.raw === null || result.legs === null || result.pricedLegs === null) await diagnose(first, newHead, probes, oldHashes, newHashes, oldTxs, newTxs)
   const wallets = Object.fromEntries(watchers.map((w) => [w.name, describeWallet(w, oldTxs)]))
@@ -311,7 +332,6 @@ async function reorg(depth: number, round: number) {
 if (!Number.isSafeInteger(START)) throw new Error("Set START_BLOCK to the datasets' start block")
 await rpc("anvil_impersonateAccount", [USDC_SOURCE])
 await rpc("anvil_setBalance", [USDC_SOURCE, hex(10n ** 18n)])
-await rpc("anvil_setCode", [UNLISTED, UNLISTED_CODE])
 void runMiner()
 await sleep(20_000)
 
@@ -320,9 +340,10 @@ watchRanges("priced_legs", followSql(DATASET), stop.signal, rewinds)
 const config = { url: FLIGHT, dataset: DATASET, baseDataset: RAW, startBlock: START, logger: { warn: (message: string) => log("sdk warn", { message: message.slice(0, 200) }) } }
 watchers = [
   watch("stream wallet", createPricetag(config).watchWallet(WALLET, { signal: stop.signal })),
-  // Polling only, which is what a client gets while the stream is down. It only finds a reorg at the head.
+  // Polling only, which is what a client gets while the stream is down.
   watch("polling wallet", pricetagClient(createQuery(FLIGHT, undefined), { ...config, follow: { pollMs: 1000 } }).watchWallet(WALLET, { signal: stop.signal })),
 ]
+await followed.read(WALLET, "legs", await head(), await head())
 await sleep(10_000)
 
 const summary = []

@@ -8,7 +8,7 @@ import Testing
         proof: @escaping @MainActor () async throws -> Proof = { try resource("proof", as: Proof.self) },
         verify: @escaping @MainActor () async throws -> Verification = { try resource("verification", as: Verification.self) }
     ) -> ProofModel {
-        ProofModel(fetch: proof, verify: verify)
+        ProofModel(fetch: proof, verify: { _ in try await verify() })
     }
 
     @Test func readsWhatTheServerSends() throws {
@@ -26,7 +26,7 @@ import Testing
 
         let passed = try resource("verification", as: Verification.self)
         #expect(passed.status == .passed)
-        #expect(passed.checks.count == 4)
+        #expect(passed.checks.count == 6)
         #expect(passed.checks.allSatisfy { $0.status == .passed })
 
         let failed = try resource("verification-failed", as: Verification.self)
@@ -90,6 +90,68 @@ import Testing
         await model.verify()
         #expect(model.verification != nil)
         #expect(model.verificationFailure == nil)
+    }
+
+    @Test func sendsTheProofOnScreenWithTheCheck() async {
+        var checked: Proof?
+        let model = ProofModel(fetch: { try resource("proof", as: Proof.self) }, verify: { proof in
+            checked = proof
+            return try resource("verification", as: Verification.self)
+        })
+        await model.load()
+        await model.verify()
+        #expect(checked != nil)
+        #expect(checked == model.proof)
+    }
+
+    @Test func anUpdateBeforeTheCheckReadsTheProofAgain() async {
+        var reads = 0
+        let model = model(proof: {
+            reads += 1
+            return try resource("proof", as: Proof.self)
+        }, verify: { throw FetchError.priceChanged("The update behind this price has changed.") })
+        await model.load()
+        await model.verify()
+        #expect(reads == 2)
+        #expect(model.proof != nil)
+        #expect(model.verification == nil)
+        #expect(model.verificationFailure == "The update behind this price has changed.")
+    }
+
+    @Test func anUpdateAfterAPassTakesThePassAway() async {
+        var checks = 0
+        let model = model(verify: {
+            checks += 1
+            if checks == 2 { throw FetchError.priceChanged("The update behind this price has changed.") }
+            return try resource("verification", as: Verification.self)
+        })
+        await model.load()
+        await model.verify()
+        #expect(model.verification?.status == .passed)
+        await model.verify()
+        #expect(model.verification == nil)
+    }
+
+    @Test func aPriceThatMovedAgainSaysSoInsteadOfAnOldProof() async {
+        var reads = 0
+        let model = model(proof: {
+            reads += 1
+            if reads == 2 { throw FetchError.priceChanged("This price has just changed.") }
+            return try resource("proof", as: Proof.self)
+        }, verify: { throw FetchError.priceChanged("The update behind this price has changed.") })
+        await model.load()
+        await model.verify()
+        #expect(model.proof == nil)
+        #expect(model.failure == "This price has just changed.")
+    }
+
+    @Test func aPricesPanelDoesntOutliveThePriceOrItsSettings() {
+        let proof = ExplanationPriceProof(asset: "ETH", price: "3000000000", wallet: "0xabc")
+        let original = proof.panelID(currency: .USD, rule: nil)
+        #expect(proof.panelID(currency: .USD, rule: nil) == original)
+        #expect(ExplanationPriceProof(asset: "ETH", price: "3100000000", wallet: "0xabc").panelID(currency: .USD, rule: nil) != original)
+        #expect(proof.panelID(currency: .CAD, rule: nil) != original)
+        #expect(proof.panelID(currency: .USD, rule: "cautious") != original)
     }
 
     @Test func aRefusedProofSaysWhy() async {

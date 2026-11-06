@@ -10,7 +10,7 @@ import { createHandler } from "../server/http.ts"
 import { createCoinbase as createOnramp, orderOf, requestToken } from "../server/coinbase.ts"
 import { unitsOf, type Onramp } from "../server/onramp.ts"
 import { readPaidRates } from "../server/rates.ts"
-import { explainPortfolio, portfolioOf } from "../server/portfolio.ts"
+import { explainPortfolio, portfolioOf } from "../src/core/portfolio.ts"
 import type { PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { costKey, emptyBook, parseBook, type Book, type Purchase } from "../src/core/book.ts"
 import { exportCsv } from "../src/core/export.ts"
@@ -786,7 +786,7 @@ describe("the server, reading a purchase paid in euros", () => {
   let server: Server
   let base: string
   before(async () => {
-    const api = createApi({}, { source, readRates, proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } })
+    const api = createApi({}, { source, readRates, proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } })
     server = createServer((req, res) => void api(req, res))
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`

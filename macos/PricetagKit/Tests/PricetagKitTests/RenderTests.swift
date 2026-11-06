@@ -89,15 +89,26 @@ struct RenderTests {
     }
 
     @Test func sizesToTheViewUnlessToldOtherwise() throws {
-        let fitted = try #require(NSBitmapImageRep(data: OffscreenRenderer.png(of: Color.red.frame(width: 100, height: 50))))
+        let fitted = try #require(NSBitmapImageRep(data: OffscreenRenderer.png(of: Color.red.frame(width: 100, height: 50), settle: 0)))
         #expect(fitted.size == NSSize(width: 100, height: 50))
-        let told = try #require(NSBitmapImageRep(data: OffscreenRenderer.png(of: Color.red, size: CGSize(width: 40, height: 30))))
+        let told = try #require(NSBitmapImageRep(data: OffscreenRenderer.png(of: Color.red, size: CGSize(width: 40, height: 30), settle: 0)))
         #expect(told.size == NSSize(width: 40, height: 30))
+    }
+
+    /// A narrow details pane has to fit a fee's facts on more lines rather than cut them short.
+    @Test func aFeeRowMakesRoomInANarrowPane() throws {
+        let explanation = try resource("all-yours-demo-explanation", as: Explanation.self)
+        let fee = try #require(explanation.legs.first { $0.kind == "gas" })
+        let wallet = try #require(fee.wallet)
+        let store = PortfolioStore(defaults: UserDefaults(suiteName: "fee-row-\(UUID().uuidString)")!, makeSource: { _ in BookSource([]) })
+        let row = NSHostingController(rootView: LegRow(leg: fee, currency: explanation.currency, store: store).environment(\.walletNames, [wallet: "Spending Money"]))
+        let height = { (width: CGFloat) in row.sizeThatFits(in: CGSize(width: width, height: 1000)).height }
+        #expect(height(268) > height(520))
     }
 
     @Test func givesUpWhenWhatItWaitsForNeverArrives() {
         #expect(throws: OffscreenRenderer.Failure.neverReady) {
-            try OffscreenRenderer.png(of: Text("Waiting"), isReady: { false })
+            try OffscreenRenderer.png(of: Text("Waiting"), timeout: 0.1, isReady: { false })
         }
     }
 }

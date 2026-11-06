@@ -63,6 +63,11 @@ export type WalletData = {
   marketChecked: boolean
   /** What this wallet's tokens the dataset has no oracle reads for were worth at the blocks of its transactions, by their feed or else their market, for a chart. Some can still be unread. */
   marketMarks: MarketMarks
+  /**
+   * Oracle reads at evenly spread blocks with no transaction in them, for a chart. A block whose read hasn't worked yet has
+   * empty answers, because it's still somewhere a chart needs a price. Left out when nobody asked for them.
+   */
+  priceSamples?: Reference[]
 }
 
 export const hasStarted = ({ coverage }: Pick<WalletData, "coverage">) => coverage.toBlock >= coverage.fromBlock
@@ -97,13 +102,13 @@ export function foldWallet(wallet: WalletData, method: Method, view: WalletView 
     unreadAssets: unread,
     totals,
     pnlStatus: status,
-    points: pnlOverTime(view.legs, method, view.prices, view.markPrice, wallet.latest, unconfirmedAssets(positions, unread), new Set(totals.noMarket)),
+    points: pnlOverTime(view.legs, method, view.prices, view.markPrice, wallet.latest, unconfirmedAssets(positions, unread), new Set(totals.noMarket), wallet.priceSamples?.map((sample) => sample.blockNum)),
     holdComparison: compareWithHoldingEth(positions, totals, status, view.prices, view.markPrice),
   }
 }
 
 /** What a wallet's numbers leave out, in words. Empty when nothing is. */
-export function describeMissing({ totals, gasUnknownTxs, l1FeeUnknownTxs }: { totals: Totals; gasUnknownTxs: readonly string[]; l1FeeUnknownTxs: readonly string[] }): string[] {
+export function describeMissing({ totals, gasUnknownTxs, l1FeeUnknownTxs, missingRateTxs = [] }: { totals: Totals; gasUnknownTxs: readonly string[]; l1FeeUnknownTxs: readonly string[]; missingRateTxs?: readonly string[] }): string[] {
   const reasons = new Map<string, string[]>()
   for (const { asset, reason } of totals.excluded) reasons.set(asset, [...(reasons.get(asset) ?? []), reason])
   return [
@@ -111,5 +116,6 @@ export function describeMissing({ totals, gasUnknownTxs, l1FeeUnknownTxs }: { to
     ...(totals.unpricedGas ? ["gas with no price"] : []),
     ...(gasUnknownTxs.length > 0 ? [`gas that couldn't be worked out, in ${gasUnknownTxs.length} tx, so ETH is overstated`] : []),
     ...(l1FeeUnknownTxs.length > 0 ? [`the L1 fees of ${l1FeeUnknownTxs.length} tx, so ETH can't be checked`] : []),
+    ...(missingRateTxs.length > 0 ? [`the exchange rate of ${missingRateTxs.length} tx, so what they moved has no amount in this currency`] : []),
   ]
 }

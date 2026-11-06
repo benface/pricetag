@@ -138,7 +138,7 @@ struct WalletButton: View {
             Button("Switch Wallet…") { navigation.switchWallet() }
         }
         .popover(isPresented: $navigation.isSwitchingWallet, arrowEdge: .bottom) {
-            WalletSwitcher(store: store, hotWallet: hotWallet, pendingName: navigation.pendingWalletName, onOpenSpendingMoney: navigation.showSpendingMoney, onRemoveFromSavings: { navigation.removingFromSavings = $0 }, onDeleteSpendingMoney: { navigation.settingsPane = .spendingMoney }) { navigation.isSwitchingWallet = false }
+            WalletSwitcher(store: store, hotWallet: hotWallet, pendingName: navigation.pendingWalletName, onOpenSpendingMoney: navigation.showSpendingMoney, onRemoveFromSavings: { navigation.removingFromSavings = $0 }, onDeleteSpendingMoney: navigation.deleteSpendingMoney) { navigation.isSwitchingWallet = false }
         }
     }
 }
@@ -159,8 +159,6 @@ struct WalletSwitcher: View {
     /// Where the pointer was when the arrows last moved. Rows scrolling under a still pointer report a hover that nobody made.
     @State private var pointerAtLastKey: CGPoint?
     @FocusState private var focus: Field?
-    @Environment(\.openSettings) private var openSettings
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private enum Field: Hashable {
         case add, rename
@@ -181,6 +179,11 @@ struct WalletSwitcher: View {
     private var listHeight: CGFloat {
         let titles = [list.yours, list.watching, list.recent].filter { !$0.isEmpty }.count
         return min(CGFloat(list.all.count) * Self.rowHeight + CGFloat(titles) * Self.titleHeight + 8, 440)
+    }
+
+    /// Which rows are in which section, and in what order. It's what the list slides on, so it does whatever moved them: a row's actions, Undo, or the Edit menu.
+    private var rowsBySection: [[String]] {
+        [list.yours, list.watching, list.recent].map { $0.map(\.address) }
     }
 
     var body: some View {
@@ -223,11 +226,12 @@ struct WalletSwitcher: View {
             VStack(alignment: .leading, spacing: 0) {
                 if offersSpendingMoney || cantOpenSpendingMoney { createSpendingMoney }
                 addRow
-                if let note { noteRow(note).arrives() }
+                if let note, note.change.map(store.isLatestChange) ?? true { noteRow(note).arrives() }
             }
             .padding(6)
         }
         .frame(width: 340)
+        .motion(Motion.state, value: rowsBySection)
         .onAppear {
             highlighted = nil
             focus = pendingName.address == nil ? .add : .rename
@@ -380,9 +384,9 @@ struct WalletSwitcher: View {
         }
         if let arranged = [list.yours, list.watching].first(where: { $0.contains(entry) && $0.count > 1 }), let index = arranged.firstIndex(of: entry) {
             // For the keyboard and VoiceOver, which can't drag.
-            Button("Move Up") { withAnimation(reduceMotion ? nil : Motion.state) { store.moveWallets(in: arranged.map(\.address), from: [index], to: index - 1) } }
+            Button("Move Up") { store.moveWallets(in: arranged.map(\.address), from: [index], to: index - 1) }
                 .disabled(index == 0)
-            Button("Move Down") { withAnimation(reduceMotion ? nil : Motion.state) { store.moveWallets(in: arranged.map(\.address), from: [index], to: index + 2) } }
+            Button("Move Down") { store.moveWallets(in: arranged.map(\.address), from: [index], to: index + 2) }
                 .disabled(index == arranged.count - 1)
         }
         if entry.canKeep {
@@ -415,30 +419,23 @@ struct WalletSwitcher: View {
         }
         if entry.kind == .spendingMoney {
             Divider()
-            // It holds a key, so deleting it is never one click away, and only Settings does it.
-            Button("Delete in Settings…") {
-                onDeleteSpendingMoney()
+            // It holds a key, so deleting it is never one click away: its page asks first, and offers to sweep it.
+            Button("Delete…", role: .destructive) {
                 onDone()
-                openSettings()
-                DockPresence.bringForward()
+                onDeleteSpendingMoney()
             }
         }
     }
 
     /// Does it, and says what changed right away, because the numbers change with it. An account from a device comes back with Undo too,
-    /// here and in the Edit menu. The rows slide to where they now are, and so does Undo.
+    /// here and in the Edit menu.
     private func change(_ entry: WalletEntry, to text: String, named name: String, _ action: @escaping () -> Void) {
         let account = hotWallet?.settings.deviceAccounts.first { $0.lowercased == entry.address }
         let relink = { [hotWallet] in if let account { hotWallet?.linkDeviceAccounts([account.lowercased]) } }
-        let animation = reduceMotion ? nil : Motion.state
-        withAnimation(animation) {
-            let before = store.changeWallet(entry.address, name: name, alsoUndo: relink, action)
-            note = WalletListNote(text: text) { [store] in
-                withAnimation(animation) {
-                    relink()
-                    store.restore(before)
-                }
-            }
+        let before = store.changeWallet(entry.address, name: name, alsoUndo: relink, action)
+        note = WalletListNote(text: text, change: before) { [store] in
+            relink()
+            store.restore(before)
         }
     }
 
@@ -499,6 +496,8 @@ struct WalletSwitcher: View {
 /// What a change to the list did.
 struct WalletListNote {
     let text: String
+    /// Shows only while this is the latest change, so the Edit menu's Undo hides it and its Redo brings it back.
+    var change: WalletListSnapshot?
     var undo: (() -> Void)?
 }
 

@@ -4,14 +4,15 @@ import { after, before, describe, it } from "node:test"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { ASSETS, ETH_ADDRESS, formatSignedMoney, type LegPart, type LegRow, type Method, type PricedLeg } from "@pricetag/sdk/core"
-import type { Source } from "@pricetag/sdk/internal"
+import type { RatesReader, Source } from "@pricetag/sdk/internal"
 import { createApi } from "../server/app.ts"
-import { combinedPortfolioOf, explainCombined, type CombinedPortfolioResponse } from "../server/combined.ts"
-import { portfolioOf } from "../server/portfolio.ts"
-import type { RatesReader } from "../server/rates.ts"
+import { combinedPortfolioOf, explainAcross, explainCombined, previewCombined, type AllYoursRead, type CombinedPortfolioResponse } from "../src/core/combined.ts"
+import { portfolioOf } from "../src/core/portfolio.ts"
 import { NO_FACTS, combinedFacts, type TransactionGain } from "../src/core/activity.ts"
 import type { PortfolioResponse, WalletResponse } from "../src/core/api.ts"
-import { DEMO_SAVINGS_ADDRESS, emptyBook, type Book } from "../src/core/book.ts"
+import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, answerSender, emptyBook, yourWallets, type Book } from "../src/core/book.ts"
+import { sortHoldings } from "../src/core/holdings.ts"
+import { allYoursFailedSentence, allYoursReadingSentence, coverageSentence, excludedSentence, holdCaveatSentence } from "../src/core/wording.ts"
 import { DEMO_WALLET, demoWallet } from "../src/core/fixtures.ts"
 
 const HOT = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -183,6 +184,51 @@ describe("all your wallets as one", () => {
   })
 })
 
+describe("all your wallets, in the browser", () => {
+  it("counts the wallets the answers say are yours and device accounts, and never a watched one or the demo's", () => {
+    let book = answerSender(emptyBook(), HOT, COLD, { kind: "mine" })
+    book = answerSender(book, HOT, STRANGER, { kind: "someone-else" })
+    book = answerSender(book, DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, { kind: "mine" })
+    assert.deepEqual(new Set(yourWallets(book)), new Set([HOT, COLD]))
+    assert.deepEqual(new Set(yourWallets(book, [THIRD.toUpperCase().replace("0X", "0x"), HOT])), new Set([HOT, COLD, THIRD]))
+    assert.deepEqual(yourWallets(emptyBook()), [])
+  })
+
+  it("explains with the legs themselves, the same ones the server sends", () => {
+    const shown = explainAcross([hot, cold], "average", { kind: "tx", txHash: "0x2" }, emptyBook())
+    const sent = explainCombined([hot, cold], "average", { kind: "tx", txHash: "0x2" }, emptyBook())
+    assert.deepEqual(shown?.effects.map(({ leg }) => [shown.walletOf(leg), leg.id]), sent?.legs.map((leg) => [leg.wallet, leg.id]))
+    assert.deepEqual(shown?.parts, sent?.parts)
+    assert.equal(shown?.value, sent?.value)
+    // A move is the same leg id in both wallets, so anything listing them has to tell them apart by wallet.
+    assert.deepEqual(new Set(shown?.effects.map(({ leg }) => shown.walletOf(leg))), new Set([HOT, COLD]))
+  })
+
+  it("previews what answering for a wallet would do to the total", () => {
+    const [before] = previewCombined([hot, third], "average", [emptyBook()])
+    const [answered] = previewCombined([hot, third], "average", [answerSender(emptyBook(), THIRD, STRANGER, { kind: "someone-else" })])
+    assert.equal(before?.open, 1)
+    assert.equal(answered?.open, 0)
+    assert.notEqual(before?.unresolvedMicros, answered?.unresolvedMicros)
+    assert.equal(previewCombined([hot], "average", [emptyBook()], { reading: [THIRD], failed: [] })[0]?.pending, true)
+  })
+
+  it("sorts its holdings the way it sorts one wallet's", () => {
+    const { positions } = combinedPortfolioOf([hot, cold], "average", emptyBook())
+    assert.deepEqual(sortHoldings(positions, { column: "asset", descending: true }).map((p) => p.asset), positions.map((p) => p.asset).sort().reverse())
+  })
+
+  it("says which wallet what's left out is in", () => {
+    assert.equal(excludedSentence([{ asset: "ETH", reason: "unknown cost", wallet: THIRD }]), "Excludes ETH in 0xcccc…cccc (unknown cost).")
+    assert.equal(excludedSentence([{ asset: "ETH", reason: "unknown cost" }]), "Excludes ETH (unknown cost).")
+    const { holdComparison } = combinedPortfolioOf([third], "average", emptyBook())
+    assert.match(holdCaveatSentence(holdComparison, "USD", { combined: true }) as string, /nothing put in your wallets/)
+    assert.match(coverageSentence({ fromBlock: 1, toBlock: 100 }, 10, false, { combined: true }), /What your wallets held/)
+    assert.equal(allYoursReadingSentence([THIRD]), "Still reading 0xcccc…cccc, so it isn't in these numbers yet.")
+    assert.equal(allYoursFailedSentence([HOT, COLD]), "Couldn't read 0xaaaa…aaaa and 0xbbbb…bbbb, so they aren't in these numbers.")
+  })
+})
+
 describe("all your wallets over the api", () => {
   const row = (block: number, tx: string, account: string, side: LegRow["side"], amount: bigint): LegRow => ({
     block_num: block,
@@ -230,7 +276,7 @@ describe("all your wallets over the api", () => {
   let server: Server
   let base: string
   before(async () => {
-    const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } })
+    const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } })
     server = createServer((req, res) => void api(req, res))
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
@@ -263,6 +309,26 @@ describe("all your wallets over the api", () => {
     const csv = await (await post("/export", { method: "average", linked: [HOT, COLD] })).text()
     assert.match(csv.split("\n")[0] as string, /,wallet$/)
     assert.ok(csv.includes(COLD))
+  })
+
+  it("gives the browser the wallets to fold itself, and it comes to the same numbers", async () => {
+    const body = { method: "average", linked: [HOT, COLD, THIRD] }
+    const { wallets, unread } = (await (await post("/wallets", body)).json()) as AllYoursRead
+    assert.deepEqual(wallets.map((w) => w.address.toLowerCase()), [HOT, COLD])
+    assert.deepEqual(unread, { reading: [THIRD], failed: [] })
+    const answered = (await (await post("", body)).json()) as CombinedPortfolioResponse
+    const folded = combinedPortfolioOf(wallets, "average", emptyBook(), unread)
+    assert.deepEqual(JSON.parse(JSON.stringify(folded)), answered)
+  })
+
+  it("reads the rates for what the browser's answers are in, without being sent them", async () => {
+    const { wallets } = (await (await post("/wallets", { method: "average", linked: [HOT, COLD], paid: "CAD" })).json()) as AllYoursRead
+    assert.ok(wallets.some((wallet) => wallet.paidRates?.CAD))
+    assert.equal((await post("/wallets", { method: "average", linked: [HOT, COLD], paid: "CAD,XXX" })).status, 400)
+  })
+
+  it("only reads wallets together for all of them", async () => {
+    assert.equal((await fetch(`${base}/api/portfolio/${HOT}/wallets`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).status, 404)
   })
 
   it("refuses what isn't a list of wallets, and comparing rules", async () => {
@@ -320,7 +386,7 @@ describe("all your wallets, when one of them can't keep up", () => {
       if (state.troubled) await trouble.rates?.(wallet.legs.some((leg) => leg.txHash === "0x1") ? COLD : wallet.legs.some((leg) => leg.txHash === "0x2") ? HOT : THIRD, wallet.latest.blockNum)
       return { byBlock: {}, latest: null }
     }
-    const api = createApi({}, { source, readRates, proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } })
+    const api = createApi({}, { source, readRates, proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null } })
     const server = createServer((req, res) => void api(req, res))
     const ready = new Promise<string>((resolve) => server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server.address() as AddressInfo).port}`)))
     const post = async (path: string, body: unknown) => (await fetch(`${await ready}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json() as Promise<CombinedPortfolioResponse>
@@ -347,6 +413,17 @@ describe("all your wallets, when one of them can't keep up", () => {
     assert.deepEqual([all.linkedFailed, all.linkedReading], [[COLD], []])
     // And what's already been read says so too.
     assert.deepEqual((await api.post("/api/portfolio/all/last", body)).linkedFailed, [COLD])
+    api.close()
+  })
+
+  it("doesn't give the browser a wallet's old balance either", async () => {
+    const api = serve({ read: async (address) => (address === COLD ? Promise.reject(new Error("nope")) : undefined) })
+    await api.post("/api/portfolio/all/wallets", body)
+    api.moveOn()
+    const { wallets, unread } = (await api.post("/api/portfolio/all/wallets", body)) as unknown as AllYoursRead
+    assert.deepEqual(wallets.map((w) => w.address.toLowerCase()), [HOT])
+    assert.deepEqual(unread, { reading: [], failed: [COLD] })
+    assert.equal(ethOf(combinedPortfolioOf(wallets, "average", emptyBook(), unread)), ONE.toString())
     api.close()
   })
 

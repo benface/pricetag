@@ -138,9 +138,9 @@ const UNKNOWN_PROCEEDS = "What this sold for isn't known."
 const NO_RATE = "There's no exchange rate at this block, so this can't be shown in this currency."
 const NO_GAS_PRICE = "ETH had no price at this block."
 const SENT = "Sent to another address, so it's not counted as a sale. If that's your own wallet, add it to this report. If it paid for something or was a gift, it's generally taxable."
-const ESTIMATED_COST = "Part of its cost is an estimate, from a market price."
+const ESTIMATED_COST = "Part of its cost is an estimate, from a market price or an exchange rate."
 const ESTIMATED_PROCEEDS = "What it sold for is an estimate, from a market price."
-const ESTIMATED_BOTH = "What it sold for and part of its cost are estimates, from market prices."
+const ESTIMATED_BOTH = "What it sold for and part of its cost are estimates, from market prices or exchange rates."
 const REPORTED_COST = "Part of its cost is what you entered or imported, which the chain can't confirm."
 const purchasedCost = (source: string) => `Some or all of its cost: ${source}, fees included.`
 const MISMATCH = "This asset's history doesn't match its onchain balance, so its cost can't be trusted."
@@ -405,14 +405,21 @@ export function taxRows(wallets: readonly WalletResponse[], { method, scope, cou
   return rowsFrom(sourcesOf(wallets, method, context), method, scope, country ? TAX_COUNTRIES[country] : null)
 }
 
+const walletWords = (text: string) => text.split(/[\s,]+/).filter(Boolean)
+
 /**
  * The wallets someone typed in, and the first that can't be one. The demo wallet can't be combined with anything, so
  * what's saved from another wallet is ignored there: it mustn't block a report whose field for fixing it isn't shown.
  */
 export function readOtherWallets(text: string, address: string): { others: string[]; bad: string | null } {
   if (address === "demo") return { others: [], bad: null }
-  const others = text.split(/[\s,]+/).filter(Boolean)
+  const others = walletWords(text)
   return { others: others.map((other) => other.toLowerCase()), bad: others.find((other) => !isAddress(other)) ?? null }
+}
+
+/** What's worth keeping of that text: only its addresses, so anything pasted there by mistake isn't saved. */
+export function savedOtherWallets(text: string): string {
+  return [...new Set(walletWords(text).filter(isAddress).map((other) => other.toLowerCase()))].join("\n")
 }
 
 const plural = (count: number, one: string, many = `${one}s`) => `${count.toLocaleString("en-US")} ${count === 1 ? one : many}`
@@ -455,7 +462,7 @@ function units(amount: string, decimals: number): string {
   return `${size / scale}${fraction ? `.${fraction}` : ""}`
 }
 
-const STATUS_LABELS: Record<TaxRowStatus, string> = { resolved: "OK", estimated: "ESTIMATED", "self-reported": "SELF-REPORTED", unresolved: "UNRESOLVED" }
+const STATUS_LABELS: Record<TaxRowStatus, string> = { resolved: "OK", estimated: "ESTIMATED", "self-reported": "SELF-REPORTED", unresolved: "UNKNOWN GAIN" }
 
 const CSV_HEADER = ["Date (UTC)", "Type", "Asset", "Amount", "Proceeds", "Cost", "Gain", "Currency", "Method", "Calculation", "Price source", "Status", "Notes", "Wallet", "Transaction"]
 
@@ -515,7 +522,7 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
   ])
 
   const warnings: string[] = partialYear === null ? [] : [partialYear]
-  if (unresolved > 0) warnings.push(`${plural(unresolved, "row")} of ${rows.length.toLocaleString("en-US")} ${unresolved === 1 ? "is" : "are"} unresolved. What can't be worked out says "unknown". It's never counted as 0, and it isn't in the gain total.`)
+  if (unresolved > 0) warnings.push(`${plural(unresolved, "row")} of ${rows.length.toLocaleString("en-US")} ${unresolved === 1 ? "has" : "have"} an unknown gain. What can't be worked out says "unknown". It's never counted as 0, and it isn't in the gain total.`)
   if (estimated > 0) warnings.push(`${plural(estimated, "row")} of ${rows.length.toLocaleString("en-US")} ${estimated === 1 ? "rests" : "rest"} on an estimate.`)
   if (selfReported > 0) warnings.push(`${plural(selfReported, "row")} of ${rows.length.toLocaleString("en-US")} ${selfReported === 1 ? "uses" : "use"} a cost you entered or imported, which the chain can't confirm, so keep your records for it.`)
   if (given > 0) warnings.push(`${plural(given, "row")} of ${rows.length.toLocaleString("en-US")} ${given === 1 ? "uses" : "use"} a market price from when something you said came from someone else arrived. ${country.marketWarning}`)
