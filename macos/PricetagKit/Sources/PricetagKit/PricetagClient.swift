@@ -75,11 +75,56 @@ extension PortfolioSource {
     public func onrampOrders(ref: String) async throws -> [OnrampOrder] { throw FetchError.unreachable }
 }
 
+/// The last reply for each way of reading a wallet, so the next can leave out what it says. They're the same lists the store holds, not copies.
+private actor ReplyMemory {
+    /// One wallet by a few settings, or a few wallets being looked between. The newest is last.
+    private static let kept = 4
+    private var replies: [(key: String, portfolio: Portfolio)] = []
+
+    static func key(_ address: String, _ method: CostMethod, _ currency: CurrencyCode, _ rule: String?) -> String {
+        "\(address)|\(method.rawValue)|\(currency.rawValue)|\(rule ?? "")"
+    }
+
+    func last(_ key: String) -> Portfolio? { replies.last { $0.key == key }?.portfolio }
+
+    func remember(_ portfolio: Portfolio, _ key: String) {
+        replies.removeAll { $0.key == key }
+        // Nothing to send next time, so it's not worth holding on to.
+        guard portfolio.marks != nil else { return }
+        replies.append((key, portfolio))
+        replies.removeFirst(max(0, replies.count - Self.kept))
+    }
+}
+
+extension Portfolio {
+    /// This reply with what it left out put back from what the server compared it to, or nil if that isn't there to put back.
+    func restoring(from base: Portfolio?) -> Portfolio? {
+        guard let kept else { return self }
+        var whole = self
+        whole.kept = nil
+        if let count = kept.points {
+            guard let base, count == base.marks?.points?.markedCount, count <= base.points.count else { return nil }
+            whole.points = Array(base.points.prefix(count)) + points
+        }
+        if let count = kept.outgoingTxs {
+            guard let base, count == base.marks?.outgoingTxs?.markedCount, count <= base.outgoingTxs.count else { return nil }
+            whole.outgoingTxs = Array(base.outgoingTxs.prefix(count)) + outgoingTxs
+        }
+        return whole
+    }
+}
+
+private extension String {
+    /// How many entries a mark vouches for, which it starts with.
+    var markedCount: Int? { split(separator: ":").first.flatMap { Int($0) } }
+}
+
 public struct PricetagClient: PortfolioSource {
     public let serverURL: URL
     /// What a shared server knows this person by. It only goes over HTTPS, so a server on this Mac, or any other plain address, never gets it.
     let invite: String?
     private let session: URLSession
+    private let memory = ReplyMemory()
 
     /// A block every 2 s means the events are never quiet for this long, unless something's wrong.
     private static let eventsIdleTimeout: TimeInterval = 30
@@ -118,13 +163,20 @@ public struct PricetagClient: PortfolioSource {
     }
 
     public func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
-        try await decoded(post("/api/portfolio/\(address)", body: FoldBody(method: method, currency: currency, rule: rule, linked: linked, book: book), timeout: timeout))
+        let key = ReplyMemory.key(address, method, currency, rule)
+        let portfolio = try await whole(key: key) { since in
+            try await post("/api/portfolio/\(address)", body: FoldBody(method: method, currency: currency, rule: rule, linked: linked, book: book, since: since), timeout: timeout)
+        }
+        guard let portfolio else { throw FetchError.rejected("The price service sent something this version can't read.") }
+        return portfolio
     }
 
     public func lastRead(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Portfolio? {
         // Past this, a real read is as quick, say when a currency's rates have to be read first.
-        let data = try await post("/api/portfolio/\(address)/last", body: FoldBody(method: method, currency: currency, rule: rule, linked: linked, book: book), timeout: .seconds(5))
-        return data.isEmpty ? nil : try decoded(data) as Portfolio
+        let key = ReplyMemory.key(address, method, currency, rule)
+        return try await whole(key: key) { since in
+            try await post("/api/portfolio/\(address)/last", body: FoldBody(method: method, currency: currency, rule: rule, linked: linked, book: book, since: since), timeout: .seconds(5))
+        }
     }
 
     public func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
@@ -209,6 +261,24 @@ public struct PricetagClient: PortfolioSource {
     public func onrampOrders(ref: String) async throws -> [OnrampOrder] {
         let body: OrdersBody = try await get("/api/onramp/orders/\(ref)", query: [], timeout: .seconds(30))
         return body.orders
+    }
+
+    /// A reply with its lists whole, whatever the server left out. Nil if it has nothing to say. A reply that leaves out what this doesn't have can't be used, so it asks again for all of it.
+    private func whole(key: String, read: (LongLists<String>) async throws -> Data) async throws -> Portfolio? {
+        // What was asked with, not whatever's newest by the time the answer gets here: it's what the server compared.
+        let base = await memory.last(key)
+        let data = try await read(base?.marks ?? LongLists())
+        if data.isEmpty { return nil }
+        let reply: Portfolio = try decoded(data)
+        var portfolio = reply.restoring(from: base)
+        if portfolio == nil {
+            let again = try await read(LongLists())
+            if again.isEmpty { return nil }
+            portfolio = try (decoded(again) as Portfolio).restoring(from: nil)
+        }
+        guard let portfolio else { throw FetchError.rejected("The price service sent something this version can't read.") }
+        await memory.remember(portfolio, key)
+        return portfolio
     }
 
     private func decoded<Body: Decodable>(_ data: Data) throws -> Body {
@@ -314,6 +384,7 @@ public struct PricetagClient: PortfolioSource {
         let rule: String?
         let linked: [String]
         let book: Book
+        var since: LongLists<String>? = nil
     }
 
     private struct PreviewBody: Encodable {
