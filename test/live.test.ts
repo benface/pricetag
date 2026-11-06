@@ -141,19 +141,112 @@ describe("following the chain", () => {
     await chain.stop()
   })
 
-  it("polls when the stream fails, and goes back to it from the newest block", async () => {
+  it("polls when the stream fails, goes back to it from the last block it finished, and reads what polling said again once it catches up", async () => {
     const hand = handStream()
     let mark = MARK
     const chain = following({ stream: hand.stream, readMark: async () => mark, retryMs: 20 })
     const first = chain.next()
     await new Promise((resolve) => setTimeout(resolve, 2))
-    mark = { blockNum: 101, hash: "0x101" }
+    mark = { blockNum: 102, hash: "0x102" }
     hand.send(new Error("no stream here"))
-    assert.deepEqual(await first, { kind: "block", blockNum: 101, reorgFrom: null, via: "polling" })
+    assert.deepEqual(await first, { kind: "block", blockNum: 102, reorgFrom: null, via: "polling" })
+    while (hand.resumes.length < 2) await new Promise((resolve) => setTimeout(resolve, 2))
+    assert.deepEqual(hand.resumes[1], MARK)
+    hand.send(blockOf(101), blockOf(102))
+    assert.deepEqual(await chain.next(), { kind: "block", blockNum: 102, reorgFrom: 101, via: "stream" })
+    hand.send(blockOf(103))
+    assert.deepEqual(await chain.next(), { kind: "block", blockNum: 103, reorgFrom: null, via: "stream" })
+    await chain.stop()
+  })
+
+  it("doesn't say a reorg when the stream comes back and polling found nothing new", async () => {
+    const hand = handStream()
+    const chain = following({ stream: hand.stream, readMark: async () => ({ blockNum: 101, hash: "0x101" }), retryMs: 5 })
+    const first = chain.next()
+    await new Promise((resolve) => setTimeout(resolve, 2))
+    hand.send(blockOf(102), new Error("connection lost"))
+    assert.deepEqual(await first, { kind: "block", blockNum: 102, reorgFrom: null, via: "stream" })
+    while (hand.resumes.length < 2) await new Promise((resolve) => setTimeout(resolve, 2))
+    hand.send(blockOf(103))
+    assert.deepEqual(await chain.next(), { kind: "block", blockNum: 103, reorgFrom: null, via: "stream" })
+    await chain.stop()
+  })
+
+  it("says a reorg that replaced the last streamed block while polling, however deep, once the stream is back", async () => {
+    // Found on a real Amp (WORK-497): a derived table took longer than the stall timeout to recover from a 328-block reorg.
+    const hand = handStream()
+    let mark = MARK
+    const chain = following({ stream: hand.stream, readMark: async () => mark, stallMs: 5, retryMs: 20 })
+    const first = chain.next()
+    await new Promise((resolve) => setTimeout(resolve, 2))
+    hand.send(blockOf(101))
+    assert.deepEqual(await first, { kind: "block", blockNum: 101, reorgFrom: null, via: "stream" })
+    // The stream goes quiet, and polling only sees a higher head, which is on the new chain.
+    mark = { blockNum: 500, hash: "0xnew500" }
+    assert.deepEqual(await chain.next(), { kind: "block", blockNum: 500, reorgFrom: null, via: "polling" })
     while (hand.resumes.length < 2) await new Promise((resolve) => setTimeout(resolve, 2))
     assert.deepEqual(hand.resumes[1], { blockNum: 101, hash: "0x101" })
-    hand.send(blockOf(102))
-    assert.equal(((await chain.next()) as { via: string }).via, "stream")
+    hand.send(blockOf(501, 90, "0xnew501"))
+    assert.deepEqual(await chain.next(), { kind: "block", blockNum: 501, reorgFrom: 90, via: "stream" })
+    await chain.stop()
+  })
+
+  it("counts what polling said after the last streamed block as replaced, when the stream comes back past it on another chain", async () => {
+    // Found in WORK-497's review: block 101 still holds, so Amp resumes with plain new blocks and reports nothing.
+    const hand = handStream()
+    let mark = MARK
+    const chain = following({ stream: hand.stream, readMark: async () => mark, retryMs: 20 })
+    const first = chain.next()
+    await new Promise((resolve) => setTimeout(resolve, 2))
+    hand.send(blockOf(101))
+    assert.deepEqual(await first, { kind: "block", blockNum: 101, reorgFrom: null, via: "stream" })
+    mark = { blockNum: 500, hash: "0x500" }
+    hand.send(new Error("connection lost"))
+    assert.deepEqual(await chain.next(), { kind: "block", blockNum: 500, reorgFrom: null, via: "polling" })
+    while (hand.resumes.length < 2) await new Promise((resolve) => setTimeout(resolve, 2))
+    assert.deepEqual(hand.resumes[1], { blockNum: 101, hash: "0x101" })
+    hand.send(blockOf(601, 102, "0xnew601"))
+    assert.deepEqual(await chain.next(), { kind: "block", blockNum: 601, reorgFrom: 102, via: "stream" })
+    await chain.stop()
+  })
+
+  it("counts what polling said as replaced even when the stream gets to the newest polled block with its hash, since an earlier one can be from another chain", async () => {
+    const hand = handStream()
+    let mark = MARK
+    const chain = following({ stream: hand.stream, readMark: async () => mark, retryMs: 20 })
+    const first = chain.next()
+    await new Promise((resolve) => setTimeout(resolve, 2))
+    hand.send(blockOf(101))
+    await first
+    mark = { blockNum: 500, hash: "0xold500" }
+    hand.send(new Error("connection lost"))
+    assert.equal((await chain.next()).kind, "block")
+    mark = { blockNum: 501, hash: "0xnew501" }
+    assert.deepEqual(await chain.next(), { kind: "block", blockNum: 501, reorgFrom: null, via: "polling" })
+    while (hand.resumes.length < 2) await new Promise((resolve) => setTimeout(resolve, 2))
+    hand.send(blockOf(501, 102, "0xnew501"))
+    assert.deepEqual(await chain.next(), { kind: "block", blockNum: 501, reorgFrom: 102, via: "stream" })
+    await chain.stop()
+  })
+
+  it("remembers the first block polling said through a stream that dies catching up", async () => {
+    // Found in WORK-497's review: the next try resumes from block 300, but the replaced blocks can be before it.
+    const hand = handStream()
+    let mark = MARK
+    const chain = following({ stream: hand.stream, readMark: async () => mark, retryMs: 20 })
+    const first = chain.next()
+    await new Promise((resolve) => setTimeout(resolve, 2))
+    hand.send(blockOf(101))
+    await first
+    mark = { blockNum: 500, hash: "0xold500" }
+    hand.send(new Error("connection lost"))
+    assert.deepEqual(await chain.next(), { kind: "block", blockNum: 500, reorgFrom: null, via: "polling" })
+    while (hand.resumes.length < 2) await new Promise((resolve) => setTimeout(resolve, 2))
+    hand.send(blockOf(300, 102, "0xnew300"), new Error("connection lost again"))
+    while (hand.resumes.length < 3) await new Promise((resolve) => setTimeout(resolve, 2))
+    assert.deepEqual(hand.resumes[2], { blockNum: 300, hash: "0xnew300" })
+    hand.send(blockOf(601, 301, "0xnew601"))
+    assert.deepEqual(await chain.next(), { kind: "block", blockNum: 601, reorgFrom: 102, via: "stream" })
     await chain.stop()
   })
 
@@ -277,7 +370,7 @@ describe("Amp's stream on the wire", () => {
 })
 
 /** A chain a test can move and reorg: what its tables hold, how far it's gone, and a stream of what happened. */
-function chainAt(block: number, tables: Tables, onQuery: (sql: string) => void = () => {}) {
+function chainAt(block: number, tables: Tables, onQuery: (sql: string) => void = () => {}, follow: Partial<FollowConfig> = {}) {
   const chain: { block: number; tables: Tables; through?: number } = { block, tables }
   const query: Query = async <T,>(sql: string) => {
     onQuery(sql)
@@ -285,7 +378,7 @@ function chainAt(block: number, tables: Tables, onQuery: (sql: string) => void =
     return fakeAmp(chain.tables, chain.through ?? chain.block).query<T>(sql)
   }
   const hand = handStream()
-  const client = pricetagClient(query, { dataset: "benface/pricetag@0.0.1", startBlock: 50, stream: hand.stream, logger: QUIET, readL1Fees: async (txs) => new Map(txs.map((t) => [t.txHash, "0"])), follow: { pollMs: 1, tickMs: 0 } })
+  const client = pricetagClient(query, { dataset: "benface/pricetag@0.0.1", startBlock: 50, stream: hand.stream, logger: QUIET, readL1Fees: async (txs) => new Map(txs.map((t) => [t.txHash, "0"])), follow: { pollMs: 1, tickMs: 0, ...follow } })
   return { chain, hand, client }
 }
 
@@ -341,6 +434,63 @@ describe("watchWallet", () => {
     assert.equal(update.reorgFrom, 100)
     assert.deepEqual(update.blocks, { fromBlock: 50, toBlock: 149 })
     assert.deepEqual(legsOf(update), ["120:0xee:9"])
+    await updates.return()
+  })
+
+  // Before the fix, no update came, so this would wait forever.
+  it("replaces a transfer polling read from a chain that was replaced before the stream came back, past the blocks it would re-read anyway", { timeout: 5_000 }, async () => {
+    const { chain, hand, client } = chainAt(100, { legs: [creditAt(100, "aa", "5")], reference_prices: [{ ...REFERENCE, block_num: "100" }], balances: balancesThrough(700, "5") }, undefined, { retryMs: 5 })
+    const updates = client.watchWallet(ADDRESS)
+    await updates.next()
+    chain.block = 101
+    hand.send(blockOf(101))
+    assert.equal(((await updates.next()).value as WalletUpdate).via, "stream")
+
+    // The stream drops, and polling reads a transfer at block 200.
+    chain.block = 500
+    chain.tables = { ...chain.tables, legs: [creditAt(100, "aa", "5"), creditAt(200, "bb", "2")], reference_prices: [{ ...REFERENCE, block_num: "100" }, { ...REFERENCE, block_num: "200" }], balances: balancesThrough(700, "7") }
+    hand.send(new Error("connection lost"))
+    const polled = (await updates.next()).value as WalletUpdate
+    assert.equal(polled.via, "polling")
+    assert.deepEqual(legsOf(polled), ["100:0xaa:5", "200:0xbb:2"])
+
+    // Then blocks from 200 on are replaced, with another transfer at 250, and the stream comes back from block 101.
+    while (hand.resumes.length < 2) await new Promise((resolve) => setTimeout(resolve, 2))
+    chain.block = 601
+    chain.tables = { ...chain.tables, legs: [creditAt(100, "aa", "5"), creditAt(250, "cc", "3")], reference_prices: [{ ...REFERENCE, block_num: "100" }, { ...REFERENCE, block_num: "250" }], balances: balancesThrough(700, "8") }
+    hand.send(blockOf(601, 102, "0xnew601"))
+    const update = (await updates.next()).value as WalletUpdate
+    assert.equal(update.reorgFrom, 102)
+    assert.deepEqual(legsOf(update), ["100:0xaa:5", "250:0xcc:3"])
+    await updates.return()
+  })
+
+  it("replaces a transfer polling read from a chain that was replaced, when the stream dies once more before it catches up", { timeout: 5_000 }, async () => {
+    const { chain, hand, client } = chainAt(100, { legs: [creditAt(100, "aa", "5")], reference_prices: [{ ...REFERENCE, block_num: "100" }], balances: balancesThrough(700, "5") }, undefined, { retryMs: 5 })
+    const updates = client.watchWallet(ADDRESS)
+    await updates.next()
+    chain.block = 101
+    hand.send(blockOf(101))
+    assert.equal(((await updates.next()).value as WalletUpdate).via, "stream")
+
+    // The stream drops, and polling reads a transfer at block 200.
+    chain.block = 500
+    chain.tables = { ...chain.tables, legs: [creditAt(100, "aa", "5"), creditAt(200, "bb", "2")], reference_prices: [{ ...REFERENCE, block_num: "100" }, { ...REFERENCE, block_num: "200" }], balances: balancesThrough(700, "7") }
+    hand.send(new Error("connection lost"))
+    assert.deepEqual(legsOf((await updates.next()).value as WalletUpdate), ["100:0xaa:5", "200:0xbb:2"])
+
+    // Blocks from 200 on are replaced, and the stream comes back from block 101, but dies again at block 300.
+    while (hand.resumes.length < 2) await new Promise((resolve) => setTimeout(resolve, 2))
+    chain.tables = { ...chain.tables, legs: [creditAt(100, "aa", "5"), creditAt(250, "cc", "3")], reference_prices: [{ ...REFERENCE, block_num: "100" }, { ...REFERENCE, block_num: "250" }], balances: balancesThrough(700, "8") }
+    hand.send(blockOf(300, 102, "0xnew300"), new Error("connection lost again"))
+    while (hand.resumes.length < 3) await new Promise((resolve) => setTimeout(resolve, 2))
+
+    chain.block = 601
+    hand.send(blockOf(601, 301, "0xnew601"))
+    let update = (await updates.next()).value as WalletUpdate
+    while (update.reorgFrom === null) update = (await updates.next()).value as WalletUpdate
+    assert.equal(update.reorgFrom, 102)
+    assert.deepEqual(legsOf(update), ["100:0xaa:5", "250:0xcc:3"])
     await updates.return()
   })
 

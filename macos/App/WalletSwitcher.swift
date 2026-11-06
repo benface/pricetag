@@ -206,6 +206,7 @@ struct WalletSwitcher: View {
                 // A list, so dragging a row is what it is everywhere else on a Mac. Sections keep their own order, because moving to another section
                 // changes what a wallet is, and that isn't something to do by a slip of the mouse.
                 List {
+                    section(nil, list.allYours.map { [$0] } ?? [])
                     section("Yours", list.yours, canReorder: true)
                     section("Watching", list.watching, canReorder: true)
                     section("Recent", list.recent)
@@ -308,7 +309,7 @@ struct WalletSwitcher: View {
             .accessibilityLabel([entry.title, entry.detail].joined(separator: ", "))
             .accessibilityAddTraits(entry.address == store.address ? [.isButton, .isSelected] : .isButton)
             .accessibilityAction { choose(entry.address) }
-            if isHighlighted, entry.kind != .demo {
+            if isHighlighted, entry.kind != .demo, entry.kind != .allYours {
                 Menu {
                     actions(entry)
                 } label: {
@@ -339,7 +340,7 @@ struct WalletSwitcher: View {
             if hovering { highlighted = entry.address } else if highlighted == entry.address { highlighted = nil }
         }
         .contextMenu {
-            if entry.kind != .demo { actions(entry) }
+            if entry.kind != .demo, entry.kind != .allYours { actions(entry) }
         }
     }
 

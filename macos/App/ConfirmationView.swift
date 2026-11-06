@@ -359,6 +359,8 @@ struct TouchIDFooter: View {
     let leaveTitle: String
     /// The warning that "I Trust This Site" says yes to. It's part of the button's label, so it's heard by whoever goes straight to the button.
     var acknowledges = ""
+    /// What a cancelled Touch ID left undone, beside the way to ask again.
+    var cancelled = "Touch ID was cancelled, so nothing happened."
     let leave: () -> Void
 
     @State private var isArmed = false
@@ -427,8 +429,9 @@ struct TouchIDFooter: View {
             Text(doing)
                 .font(.headline)
         case .stopped(let reason):
-            Text(reason ?? "Nothing happened")
-                .font(.headline)
+            Text(reason ?? cancelled)
+                // A reason says what to do next, which is too much to set in bold.
+                .font(reason == nil ? .headline : .callout.weight(.medium))
                 .foregroundStyle(reason == nil ? AnyShapeStyle(.primary) : Tone.warning.style)
                 .fixedSize(horizontal: false, vertical: true)
         case .done:

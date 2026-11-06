@@ -1,10 +1,11 @@
 import HotWalletKit
 import Observation
 import PricetagKit
+import SwiftUI
 
 /// The main window's sections.
 enum AppSection: String, CaseIterable, Identifiable {
-    case overview, transactions, taxReport
+    case overview, transactions, taxReport, security
 
     var id: Self { self }
 
@@ -13,6 +14,17 @@ enum AppSection: String, CaseIterable, Identifiable {
         case .overview: "Overview"
         case .transactions: "Transactions"
         case .taxReport: "Tax Report"
+        case .security: "Security"
+        }
+    }
+
+    /// ⌘4 was Spending Money's before it was a wallet like any other, and it still is, so Security comes after it.
+    var shortcut: KeyEquivalent {
+        switch self {
+        case .overview: "1"
+        case .transactions: "2"
+        case .taxReport: "3"
+        case .security: "5"
         }
     }
 
@@ -21,6 +33,7 @@ enum AppSection: String, CaseIterable, Identifiable {
         case .overview: "chart.line.uptrend.xyaxis"
         case .transactions: "list.bullet"
         case .taxReport: "doc.text"
+        case .security: "lock.shield"
         }
     }
 }
@@ -82,6 +95,8 @@ final class Navigation {
     /// Where to go back to once those questions close.
     private(set) var returnWallet: String?
     var isExporting = false
+    /// ⌘F was pressed. The transactions' search field takes it from here.
+    var wantsSearch = false
     /// A notification was clicked. Spending Money scrolls to its row and lights it up, and the window opens if it's closed.
     var shownRow: String?
 
@@ -142,6 +157,12 @@ final class Navigation {
     func addSavings() {
         showSpendingMoney()
         wantsAddSavings = true
+    }
+
+    /// Goes to the transactions and puts the cursor in their search field.
+    func findTransactions() {
+        section = .transactions
+        wantsSearch = true
     }
 
     /// Goes to spending money and shows one of its rows, which it scrolls to once the page is on screen.

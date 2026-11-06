@@ -12,6 +12,7 @@ public struct ResolveFlow: View {
     @State private var isImporting = false
     @State private var publishing: CostNoteDraft?
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.walletNames) private var walletNames
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var isFocused: Bool
     @FocusState private var focusedCost: String?
@@ -169,9 +170,11 @@ public struct ResolveFlow: View {
     /// What it can say about where this came from. With no sender, the line under the question already says why it's asked.
     private func detail(_ question: Question) -> String? {
         let transfers = question.transfers == 1 ? "1 transfer" : "\(question.transfers) transfers"
-        let isElsewhere = question.wallet != store.portfolio?.address.lowercased()
-        guard let sender = question.sender else { return isElsewhere ? "Arrived in your other wallet \(Format.shortHash(question.wallet))" : nil }
-        return "From \(Format.shortHash(sender)) · \(transfers)\(isElsewhere ? " · arrived in your other wallet \(Format.shortHash(question.wallet))" : "")"
+        let elsewhere = store.portfolio?.isAllYours == true
+            ? walletNames.walletName(question.wallet)
+            : question.wallet != store.portfolio?.address.lowercased() ? "your other wallet \(Format.shortHash(question.wallet))" : nil
+        guard let sender = question.sender else { return elsewhere.map { "Arrived in \($0)" } }
+        return "From \(Format.shortHash(sender)) · \(transfers)\(elsewhere.map { " · arrived in \($0)" } ?? "")"
     }
 
     private func senderCard(_ question: Question) -> some View {

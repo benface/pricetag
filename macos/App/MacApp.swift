@@ -123,9 +123,9 @@ struct MacApp: App {
             SidebarCommands()
             CommandGroup(after: .toolbar) {
                 Divider()
-                ForEach(Array(AppSection.allCases.enumerated()), id: \.element) { index, section in
+                ForEach(AppSection.allCases) { section in
                     OpenSectionCommand(section: section, navigation: navigation)
-                        .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+                        .keyboardShortcut(section.shortcut, modifiers: .command)
                 }
                 Divider()
                 Button(navigation.target == nil ? "Show Details" : "Hide Details") { navigation.toggleDetails() }
@@ -137,6 +137,10 @@ struct MacApp: App {
                 }
                 Button("Refresh") { store.refresh() }
                     .keyboardShortcut("r", modifiers: .command)
+            }
+            CommandGroup(after: .textEditing) {
+                Button("Find Transactions…") { navigation.findTransactions() }
+                    .keyboardShortcut("f", modifiers: .command)
             }
             CommandMenu("Wallet") {
                 WalletCommands(store: store, hotWallet: hotWallet, navigation: navigation)

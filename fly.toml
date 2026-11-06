@@ -1,0 +1,39 @@
+# The hosted server on Fly.io, the host proposed in WORK-528. Nothing deploys from here until benface approves it.
+# Secrets never go in this file: `fly secrets set` holds them, and the server reads them from its environment.
+app = "patina-server"
+primary_region = "ord"
+kill_signal = "SIGTERM"
+kill_timeout = 15
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PRICETAG_CLIENT_IP_HEADER = "fly-client-ip"
+  PRICETAG_MAX_WALLETS = "200"
+
+# One machine that stays up: wallet reads are kept in its memory, and the Mac app holds a stream open to it. The limits and the
+# day's checkouts are counted in that memory too, so a second machine would double them. Fly starts two on a first deploy unless
+# told not to, so always deploy with `fly deploy --ha=false`, and check `fly machine list` shows one.
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 200
+    hard_limit = 400
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/healthz"
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "20s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"

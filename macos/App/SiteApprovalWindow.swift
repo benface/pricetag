@@ -62,7 +62,7 @@ struct SiteApprovalView: View {
                 if case .connect = approval.action {
                     ConnectFooter(connect: connect, reject: reject)
                 } else {
-                    TouchIDFooter(gate: gate, verb: verb, doing: isMessage ? "Signing…" : "Sending…", leaveTitle: "Reject", acknowledges: approval.warnings.filter(\.isStrong).map(\.text).joined(separator: " "), leave: reject)
+                    TouchIDFooter(gate: gate, verb: verb, doing: isMessage ? "Signing…" : "Sending…", leaveTitle: "Reject", acknowledges: approval.warnings.filter(\.isStrong).map(\.text).joined(separator: " "), cancelled: "Touch ID was cancelled, so nothing was \(isMessage ? "signed" : "sent").", leave: reject)
                 }
                 if waitingBehind > 0 {
                     Text("\(waitingBehind) more waiting")

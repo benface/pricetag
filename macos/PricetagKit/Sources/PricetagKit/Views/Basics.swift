@@ -98,13 +98,25 @@ extension EnvironmentValues {
     @Entry public var isStale = false
     /// Set while a read runs and the numbers on screen may change once it's done, to what a mark beside them says. See `updatingMark`.
     @Entry public var updatingNote: String?
+    /// What each of the user's wallets is called, by address, for saying which wallet something is in.
+    @Entry public var walletNames: [String: String] = [:]
+}
+
+extension [String: String] {
+    /// A wallet's name, or its short address when it has none here.
+    public func walletName(_ address: String) -> String {
+        self[address.lowercased()] ?? Format.shortHash(address)
+    }
 }
 
 extension PortfolioStore {
-    /// nil unless there are numbers on screen that this read may change.
+    /// nil unless there are numbers on screen that this read may change. All Yours also changes when a wallet that's still
+    /// being read is done, so it says so until then.
     public var updatingNote: String? {
-        guard feed == .reading, let portfolio else { return nil }
-        return Wording.updating(lastUpdate: portfolio.latest.date.map(Format.time) ?? portfolio.latest.timestamp)
+        guard let portfolio else { return nil }
+        if feed == .reading { return Wording.updating(lastUpdate: portfolio.latest.date.map(Format.time) ?? portfolio.latest.timestamp) }
+        if portfolio.isAllYours, !portfolio.linkedReading.isEmpty, !feed.isStale { return Wording.updatingWallets(portfolio.linkedReading.count) }
+        return nil
     }
 }
 

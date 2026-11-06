@@ -1221,6 +1221,95 @@
         }
       },
       "network": "base-mainnet"
+    },
+    "approvals": {
+      "input": {
+        "sql": "SELECT block_num, timestamp, tx_hash, log_index, address, topic0, topic1, topic2, topic3 FROM base.logs\nWHERE ((topic0 = X'8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925' AND topic3 IS NULL) OR topic0 = X'17307eab39ab6107e8899845ad3d59bd9653f200f220920489ca2b5937696c31' OR (address = X'000000000022d473030f116ddee9f6b43ac78ba3' AND topic0 IN (X'da9fa7c1b00402c17d0161b249b1ab8bbec047c5a52207b9c112deffd817036b', X'c6a377bfc4eb120024a8ac08eef205be16b817020812c73223e81d1bdb9708ec'))) AND block_num() >= 53514029"
+      },
+      "schema": {
+        "arrow": {
+          "fields": [
+            {
+              "name": "_block_num",
+              "type": "UInt64",
+              "nullable": false
+            },
+            {
+              "name": "_ts",
+              "type": {
+                "Timestamp": [
+                  "Nanosecond",
+                  "+00:00"
+                ]
+              },
+              "nullable": false
+            },
+            {
+              "name": "block_num",
+              "type": "UInt64",
+              "nullable": false
+            },
+            {
+              "name": "timestamp",
+              "type": {
+                "Timestamp": [
+                  "Nanosecond",
+                  "+00:00"
+                ]
+              },
+              "nullable": false
+            },
+            {
+              "name": "tx_hash",
+              "type": {
+                "FixedSizeBinary": 32
+              },
+              "nullable": false
+            },
+            {
+              "name": "log_index",
+              "type": "UInt32",
+              "nullable": false
+            },
+            {
+              "name": "address",
+              "type": {
+                "FixedSizeBinary": 20
+              },
+              "nullable": false
+            },
+            {
+              "name": "topic0",
+              "type": {
+                "FixedSizeBinary": 32
+              },
+              "nullable": true
+            },
+            {
+              "name": "topic1",
+              "type": {
+                "FixedSizeBinary": 32
+              },
+              "nullable": true
+            },
+            {
+              "name": "topic2",
+              "type": {
+                "FixedSizeBinary": 32
+              },
+              "nullable": true
+            },
+            {
+              "name": "topic3",
+              "type": {
+                "FixedSizeBinary": 32
+              },
+              "nullable": true
+            }
+          ]
+        }
+      },
+      "network": "base-mainnet"
     }
   },
   "functions": {

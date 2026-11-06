@@ -33,7 +33,7 @@ struct AnswersList: View {
                 .confirmationDialog("Forget all your answers?", isPresented: $isConfirmingForget) {
                     Button("Forget All", role: .destructive) { store.setBook(Book(), action: "Forget All Answers") }
                 } message: {
-                    Text("Every question comes back, and what you paid is unknown again until you answer. Edit > Undo brings them back.")
+                    Text("Every question comes back, and what you said you paid is unknown again until you answer. What your purchases cost stays. Edit > Undo brings your answers back.")
                 }
         }
     }
