@@ -280,9 +280,10 @@ describe("following the chain", () => {
     const chain = following({ stream: hand.stream, tickMs: 50 })
     const first = chain.next()
     await new Promise((resolve) => setTimeout(resolve, 2))
+    // From before the first tick, since the wait counts from there: a stall after it would shorten what's left to wait.
+    const started = Date.now()
     hand.send(blockOf(101))
     await first
-    const started = Date.now()
     const second = chain.next()
     hand.send(blockOf(102), blockOf(101, 101, "0xnew"), blockOf(102, 102, "0xnew2"), blockOf(103))
     assert.deepEqual(await second, { kind: "block", blockNum: 103, reorgFrom: 101, via: "stream" })
