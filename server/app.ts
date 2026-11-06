@@ -10,6 +10,7 @@ import { parseCoinbaseCsv } from "../src/core/exchange-import.ts"
 import { exportCsv } from "../src/core/export.ts"
 import { DEMO_ADDRESS, DEMO_WALLET, demoRates, demoWallet } from "../src/core/fixtures.ts"
 import { foldBook, previewBook } from "../src/core/resolve.ts"
+import { withoutWhatItHas } from "./long-lists.ts"
 import { CAUTIOUS_RULE_ID, MARKET_RULE_ID, RULE_TEXT, ruleNote, type PricingRule } from "../src/core/rules.ts"
 import { verifyLink } from "./links.ts"
 import { ALL_YOURS, combinedPortfolioOf, explainCombined, exportCombined, previewCombined, type AllYoursRead, type Unread } from "../src/core/combined.ts"
@@ -518,7 +519,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       const explanation = explainCombined(read, method, target, book, unread)
       return explanation ? sendJson(res, 200, explanation) : sendJson(res, 404, { error: "None of your wallets has anything like that." })
     }
-    sendJson(res, 200, combinedPortfolioOf(read, method, book, unread))
+    sendJson(res, 200, withoutWhatItHas(combinedPortfolioOf(read, method, book, unread), body.since))
   }
 
   /** The provider's detail stays in the server's log, and the client gets a sentence it can show. */
@@ -625,7 +626,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       res.end(exportCsv(positions, view.currency))
       return
     }
-    if (!target) return sendJson(res, 200, portfolioOf(wallet, method, others, linkedBooks[0], [...linkedFailures]))
+    if (!target) return sendJson(res, 200, withoutWhatItHas(portfolioOf(wallet, method, others, linkedBooks[0], [...linkedFailures]), body.since))
     const explanation = explainPortfolio(wallet, method, target, others, linkedBooks[0])
     if (explanation) sendJson(res, 200, explanation)
     else sendJson(res, 404, { error: "This wallet has nothing like that." })

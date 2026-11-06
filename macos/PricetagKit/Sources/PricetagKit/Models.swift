@@ -379,6 +379,12 @@ public struct HoldComparison: Codable, Sendable, Equatable {
     public let estimated: Bool
 }
 
+/// Something about each of the lists in a reply that can be too long to send every time.
+struct LongLists<Value: Codable & Sendable & Equatable>: Codable, Sendable, Equatable {
+    var points: Value? = nil
+    var outgoingTxs: Value? = nil
+}
+
 public struct Portfolio: Codable, Sendable, Equatable {
     public let address: String
     public let mode: Mode
@@ -394,7 +400,7 @@ public struct Portfolio: Codable, Sendable, Equatable {
     public let latest: Head
     public let progress: ReadProgress
     public let gasUnknownTxs: [String]
-    public let outgoingTxs: [String]
+    public internal(set) var outgoingTxs: [String]
     public let unlisted: [UnlistedToken]
     public let l1FeeUnknownTxs: [String]
     /// Assets whose balance before the first block couldn't be read yet.
@@ -404,7 +410,7 @@ public struct Portfolio: Codable, Sendable, Equatable {
     public let positions: [Position]
     public let totals: Totals
     public let pnlStatus: PnlStatus
-    public let points: [PnlPoint]
+    public internal(set) var points: [PnlPoint]
     public let holdComparison: HoldComparison
     /// What's left to ask, most useful first.
     public let questions: [Question]
@@ -420,6 +426,10 @@ public struct Portfolio: Codable, Sendable, Equatable {
     public let marketChecked: Bool
     /// Every wallet in it and how far each one's read has got, when it's all of the user's wallets as one.
     public var wallets: [CombinedWallet]? = nil
+    /// What to tell the server this already has, so a busy wallet's next reply leaves it out.
+    var marks: LongLists<String>? = nil
+    /// How much of each list the server left out, which `PricetagClient` puts back before anything else sees it.
+    var kept: LongLists<Int>? = nil
 
     /// All of the user's wallets as one, rather than one wallet.
     public var isAllYours: Bool { WalletAddress.isAllYours(address) }
