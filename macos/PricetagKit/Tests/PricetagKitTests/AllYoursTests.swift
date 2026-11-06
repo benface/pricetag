@@ -17,7 +17,7 @@ private actor AllYoursSource: PortfolioSource {
         return try resource("all-yours-portfolio", as: Portfolio.self)
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation {
         throw FetchError.unreachable
     }
 
@@ -37,12 +37,74 @@ private actor AnswersInTurn: PortfolioSource {
         try answers.removeFirst().get()
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation {
         throw FetchError.unreachable
     }
 
     func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof {
         throw FetchError.unreachable
+    }
+}
+
+/// Answers each read with the next of the test's answers, and explains and exports as the server does: it won't leave out a wallet it's told is showing.
+private actor ForgetfulServer: PortfolioSource {
+    private var answers: [Portfolio]
+    /// The wallets it still has.
+    var has: Set<String>
+    private(set) var shownAsked: [[String]?] = []
+
+    init(_ answers: [Portfolio], has: Set<String>) {
+        self.answers = answers
+        self.has = has
+    }
+
+    func forget(keeping wallets: Set<String>) { has = wallets }
+
+    private func refusing(_ shown: [String]?) throws {
+        shownAsked.append(shown)
+        if !(shown ?? []).allSatisfy(has.contains) { throw FetchError.notCaughtUp("Not yet") }
+    }
+
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
+        answers.removeFirst()
+    }
+
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation {
+        try refusing(shown)
+        return Explanation(currency: .USD, title: "Value", value: "\(has.count) wallets", sourceValue: nil, lines: [], legCount: 0, legs: [])
+    }
+
+    func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> String {
+        try refusing(shown)
+        return has.sorted().joined(separator: "\n")
+    }
+
+    func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof {
+        throw FetchError.unreachable
+    }
+}
+
+/// Refuses every request the way the server does when a wallet that's showing isn't back, after noting what it was sent.
+private final class BehindProtocol: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var bodies: [[String: Any]] = []
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func stopLoading() {}
+
+    override func startLoading() {
+        if let stream = request.httpBodyStream {
+            stream.open()
+            defer { stream.close() }
+            var data = Data()
+            var chunk = [UInt8](repeating: 0, count: 65_536)
+            while case let count = stream.read(&chunk, maxLength: chunk.count), count > 0 { data.append(chunk, count: count) }
+            if let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { Self.bodies.append(body) }
+        }
+        let response = HTTPURLResponse(url: request.url!, statusCode: 409, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(#"{"error":"Not yet"}"#.utf8))
+        client?.urlProtocolDidFinishLoading(self)
     }
 }
 
@@ -72,6 +134,71 @@ struct AllYoursTests {
         let defaults = UserDefaults(suiteName: "all-yours-held-\(UUID().uuidString)")!
         defaults.set(WalletAddress.allYours, forKey: "wallet")
         return PortfolioStore(defaults: defaults, makeSource: { _ in source }, now: { now })
+    }
+
+    @Test func explainsAndExportsOnlyWhatCanIncludeEveryWalletShowing() async throws {
+        let now = Date()
+        let server = ForgetfulServer([
+            try answer([a: .read, b: .read], block: 10, value: "2000000", at: now),
+            // Slow, and the server's let go of its last answer, then failed, and then it's back.
+            try answer([a: .read, b: .reading], block: 20, at: now),
+            try answer([a: .read, b: .failed], block: 21, at: now),
+            try answer([a: .read, b: .read], block: 22, value: "2100000", at: now),
+        ], has: [a, b])
+        let store = allYoursStore(server, at: now)
+        _ = await store.poll()
+        let target = ExplainTarget.total(.value)
+        let open = ExplanationModel(fetch: { try await store.explanation(for: $0) })
+        await open.show(store.explanationRequest(for: target))
+        #expect(open.explanation?.value == "2 wallets")
+
+        await server.forget(keeping: [a])
+        for expected in [CombinedWallet.State.updating, .outdated] {
+            _ = await store.poll()
+            #expect(store.portfolio?.totals.valueMicros == "2000000")
+            #expect(store.portfolio?.wallets?.map(\.state) == [.read, expected])
+            // What's open stays, as the total does.
+            await open.show(store.explanationRequest(for: target))
+            await open.refresh()
+            #expect(open.explanation?.value == "2 wallets")
+            #expect(open.failure == nil)
+            // Anything opened now says why there's nothing, and doesn't say something about one wallet.
+            let opened = ExplanationModel(fetch: { try await store.explanation(for: $0) })
+            await opened.show(store.explanationRequest(for: target))
+            #expect(opened.explanation == nil)
+            #expect(opened.failure == "Not yet")
+            await #expect(throws: FetchError.notCaughtUp("Not yet")) { try await store.exportCSV() }
+        }
+        #expect(await server.shownAsked.allSatisfy { $0 == [a, b] })
+
+        await server.forget(keeping: [a, b])
+        _ = await store.poll()
+        #expect(store.portfolio?.totals.valueMicros == "2100000")
+        await open.refresh()
+        #expect(open.explanation?.value == "2 wallets")
+        #expect(try await store.exportCSV() == "\(a)\n\(b)")
+    }
+
+    @Test func asksOnlyForTheWalletsInTheNumbers() async throws {
+        let now = Date()
+        let server = ForgetfulServer([try answer([a: .read, b: .reading, c: .failed], block: 10, at: now)], has: [a])
+        let store = allYoursStore(server, at: now)
+        _ = await store.poll()
+        #expect(store.explanationRequest(for: .total(.value))?.shown == [a])
+        #expect(try await store.exportCSV() == a)
+    }
+
+    @Test func tellsTheServerWhatsShowingAndHearsWhenItsBehind() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [BehindProtocol.self]
+        let client = PricetagClient(serverURL: URL(string: "http://127.0.0.1:1")!, configuration: configuration)
+        await #expect(throws: FetchError.notCaughtUp("Not yet")) {
+            try await client.exportCSV(address: WalletAddress.allYours, method: .average, currency: .USD, rule: nil, linked: [a, b], shown: [a, b], book: Book())
+        }
+        await #expect(throws: FetchError.notCaughtUp("Not yet")) {
+            try await client.explanation(of: .total(.value), address: WalletAddress.allYours, method: .average, currency: .USD, rule: nil, linked: [a, b], shown: [a], book: Book())
+        }
+        #expect(BehindProtocol.bodies.compactMap { $0["shown"] as? [String] } == [[a, b], [a]])
     }
 
     @Test func keepsTheLastAnswerWhenTheServerHasForgottenIt() async throws {

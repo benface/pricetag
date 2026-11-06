@@ -72,7 +72,7 @@ private actor Rates: PortfolioSource {
     func say(_ answer: Result<String?, FetchError>) { self.answer = answer }
 
     func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio { throw FetchError.unreachable }
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation { throw FetchError.unreachable }
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation { throw FetchError.unreachable }
     func currentRate(currency: CurrencyCode) async throws -> String? {
         asked.append(currency)
         return try answer.get()

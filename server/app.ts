@@ -567,11 +567,18 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     const books = action === "preview" ? (candidates as Book[]) : [book]
     const paidIn = parsePaidIn(typeof body.paid === "string" ? body.paid : null)
     if (!paidIn) return sendJson(res, 400, { error: "That currency isn't supported." })
+    const shown: unknown = body.shown ?? []
+    if (!Array.isArray(shown) || !shown.every((address) => typeof address === "string" && isAddress(address))) return sendJson(res, 400, { error: "The wallets shown are a list of Base addresses." })
     const found = await readAllYours(addresses, currency, rule, books, action === undefined || action === "wallets", action !== "preview", res, paidIn)
     if (!found) return
     const { read, unread } = found
     // The wallets themselves, because the browser runs the fold, with answers that stay with it.
     if (action === "wallets") return sendJson(res, 200, { wallets: read, unread } satisfies AllYoursRead)
+    // A client that doesn't fold its own can be showing a wallet this server no longer has. Leaving it out here would contradict the total, and a file can't say so.
+    if (action === "explain" || action === "export") {
+      const answered = new Set(read.map((wallet) => wallet.address.toLowerCase()))
+      if (!(shown as string[]).every((address) => answered.has(address.toLowerCase()))) return sendJson(res, 409, { error: "One of your wallets isn't back yet, and this would leave it out. Try again once it's updated." })
+    }
     if (read.length === 0) {
       res.writeHead(204, { "cache-control": "no-store" })
       res.end()

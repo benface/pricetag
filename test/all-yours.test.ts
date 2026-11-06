@@ -462,7 +462,11 @@ describe("all your wallets, when one of them can't keep up", () => {
       state.head = 20
       state.troubled = true
     }
-    return { post, moveOn, state, close: () => server.close() }
+    const ask = async (path: string, body: unknown) => {
+      const response = await fetch(`${await ready}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+      return { status: response.status, text: await response.text() }
+    }
+    return { post, ask, moveOn, state, close: () => server.close() }
   }
   const ethOf = (all: CombinedPortfolioResponse) => all.positions.find((p) => p.asset === "ETH")?.values.qty
   const stuck = () => new Promise<void>(() => {})
@@ -599,6 +603,91 @@ describe("all your wallets, when one of them can't keep up", () => {
     assert.deepEqual(asLastRead(all), beforeTheMove)
     assert.deepEqual(all.linkedUpdating, [COLD])
     api.close()
+  })
+
+  describe("for a client that asks the server to explain and export what it's showing", () => {
+    const shown = { ...body, shown: [HOT, COLD] }
+    const asked = async (api: ReturnType<typeof serve>, request: unknown = shown) => ({ explain: await api.ask("/api/portfolio/all/explain?kind=total&metric=value", request), file: await api.ask("/api/portfolio/all/export", request) })
+
+    /** Two wallets of 499 rows and 1 ETH each, read together, on a server with room for 1,000 rows, so the next read of one makes room by giving up the last answer. */
+    async function forgetting(read: (address: string, stalled: boolean) => Promise<void>) {
+      let stalled = false
+      const api = serve({ maxRows: 1000, read: (address) => read(address, stalled) })
+      api.state.rows = { [HOT]: oneEthIn(HOT, 499), [COLD]: oneEthIn(COLD, 499) }
+      await api.post("/api/portfolio/all", body)
+      api.state.head = 20
+      api.state.troubled = true
+      stalled = true
+      await api.post("/api/portfolio/all", body)
+      return { api, recover: () => (stalled = false) }
+    }
+
+    it("refuses, rather than leave out a wallet whose read failed once the server's forgotten it", async () => {
+      const { api } = await forgetting(async (address, stalled) => (stalled && address === COLD ? Promise.reject(new Error("nope")) : undefined))
+      const { explain, file } = await asked(api)
+      assert.deepEqual([explain.status, file.status], [409, 409])
+      assert.match(file.text, /would leave it out/)
+      api.close()
+    })
+
+    it("refuses, rather than leave out a wallet that isn't read and that the server has no room for", async () => {
+      const api = serve({ maxWallets: 1 })
+      await api.post("/api/portfolio/all", body)
+      const other = (i: number) => `0x${i.toString(16).padStart(40, "f")}`
+      for (let i = 0; i < 50; i++) await api.post("/api/portfolio/all", { ...body, linked: [HOT, other(i)] })
+      const { explain, file } = await asked(api)
+      assert.deepEqual([explain.status, file.status], [409, 409])
+      api.close()
+    })
+
+    it("answers with every wallet while one is slow, from what it last read of it, once the server's forgotten its last answer", async () => {
+      const { api } = await forgetting(async (address, stalled) => (stalled && address === COLD ? stuck() : undefined))
+      const { explain, file } = await asked(api)
+      assert.deepEqual([explain.status, file.status], [200, 200])
+      assert.equal((JSON.parse(explain.text) as { value: string }).value, "$6,000.00")
+      assert.deepEqual(new Set(file.text.trim().split("\n").slice(1).map((line) => line.split(",").at(-1))), new Set([HOT, COLD]))
+      api.close()
+    })
+
+    it("answers with every wallet once the one that failed is back", async () => {
+      const { api, recover } = await forgetting(async (address, stalled) => (stalled && address === COLD ? Promise.reject(new Error("nope")) : undefined))
+      assert.equal((await asked(api)).file.status, 409)
+      recover()
+      await api.post("/api/portfolio/all", body)
+      const { explain, file } = await asked(api)
+      assert.deepEqual([explain.status, file.status], [200, 200])
+      assert.equal((JSON.parse(explain.text) as { value: string }).value, "$6,000.00")
+      const rows = file.text.trim().split("\n").slice(1)
+      assert.deepEqual(new Set(rows.map((line) => line.split(",").at(-1))), new Set([HOT, COLD]))
+      api.close()
+    })
+
+    it("answers from the last answer while the server still has it, at its one block", async () => {
+      const api = serve({ read: async (address) => (address === COLD ? Promise.reject(new Error("nope")) : undefined) })
+      await api.post("/api/portfolio/all", body)
+      api.moveOn()
+      await api.post("/api/portfolio/all", body)
+      const { explain, file } = await asked(api)
+      assert.deepEqual([explain.status, file.status], [200, 200])
+      assert.equal((JSON.parse(explain.text) as { value: string }).value, "$3,000.00")
+      assert.ok(!file.text.includes("0x2"), "the move isn't in that block")
+      api.close()
+    })
+
+    it("still answers about what's on screen when a wallet that was never in the numbers isn't there", async () => {
+      const api = serve({ read: async (address) => (address === COLD ? Promise.reject(new Error("nope")) : undefined) })
+      api.state.troubled = true
+      await api.post("/api/portfolio/all", body)
+      const { explain, file } = await asked(api, { ...body, shown: [HOT] })
+      assert.deepEqual([explain.status, file.status], [200, 200])
+      api.close()
+    })
+
+    it("turns down a list that isn't addresses", async () => {
+      const api = serve({})
+      assert.equal((await api.ask("/api/portfolio/all/export", { ...body, shown: ["nope"] })).status, 400)
+      api.close()
+    })
   })
 
   it("says a client's total isn't updating when a read of every wallet failed", async () => {

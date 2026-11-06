@@ -80,6 +80,8 @@ public struct ExplanationRequest: Hashable, Sendable {
     public let currency: CurrencyCode
     public let rule: String?
     public let linked: [String]
+    /// All Yours' wallets in the numbers on screen, which the explanation can't leave out.
+    public let shown: [String]?
     public let serverURL: URL
     public let book: Book
 }
@@ -867,7 +869,7 @@ public final class PortfolioStore {
     /// Every movement as a spreadsheet, marked so an estimate or an unknown can't pass for an exact number.
     public func exportCSV() async throws -> String {
         guard let address else { throw FetchError.unreachable }
-        return try await source.exportCSV(address: address, method: method, currency: currency, rule: selectedRule, linked: linked(for: address), book: bookToSend(book, for: address))
+        return try await source.exportCSV(address: address, method: method, currency: currency, rule: selectedRule, linked: linked(for: address), shown: walletsShown, book: bookToSend(book, for: address))
     }
 
     /// Reads an exchange's history, and adds what it found to what's on this device. Says how many withdrawals had no usable cost.
@@ -879,13 +881,18 @@ public final class PortfolioStore {
 
     /// nil with no wallet, when there's nothing to explain.
     public func explanationRequest(for target: ExplainTarget) -> ExplanationRequest? {
-        address.map { ExplanationRequest(target: target, address: $0, method: method, currency: currency, rule: selectedRule, linked: linked(for: $0), serverURL: serverURL, book: bookToSend(book, for: $0)) }
+        address.map { ExplanationRequest(target: target, address: $0, method: method, currency: currency, rule: selectedRule, linked: linked(for: $0), shown: walletsShown, serverURL: serverURL, book: bookToSend(book, for: $0)) }
     }
 
     public func explanation(for request: ExplanationRequest) async throws -> Explanation {
         // A request from before a change has nothing to say about what's on screen now.
         guard request == explanationRequest(for: request.target) else { throw CancellationError() }
-        return try await source.explanation(of: request.target, address: request.address, method: request.method, currency: request.currency, rule: request.rule, linked: request.linked, book: request.book)
+        return try await source.explanation(of: request.target, address: request.address, method: request.method, currency: request.currency, rule: request.rule, linked: request.linked, shown: request.shown, book: request.book)
+    }
+
+    /// What can't be left out of an answer about what's on screen. Nil for what's about one wallet, or with nothing on screen.
+    private var walletsShown: [String]? {
+        portfolio.flatMap { $0.address == address ? $0.walletsInNumbers : nil }
     }
 
     /// Whether a leg in this wallet belongs to what's on screen.
@@ -1063,7 +1070,7 @@ public final class PortfolioStore {
         return switch error as? FetchError {
         case .ampUnavailable(let message): .ampUnavailable(message)
         case .noAmpConfigured(let message): .noAmpConfigured(message)
-        case .rejected(let message), .needsInvite(let message), .priceChanged(let message): .rejected(message)
+        case .rejected(let message), .needsInvite(let message), .priceChanged(let message), .notCaughtUp(let message): .rejected(message)
         case .tooBig(let message): .tooBig(message)
         case .rateLimited(let message, _): .rateLimited(message)
         case .unreachable, .timedOut, nil: .serverUnreachable

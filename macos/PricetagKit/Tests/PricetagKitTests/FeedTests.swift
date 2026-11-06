@@ -28,7 +28,7 @@ actor ScriptedSource: PortfolioSource {
         return []
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation {
         throw FetchError.unreachable
     }
 
@@ -53,7 +53,7 @@ actor GatedSource: PortfolioSource {
         try await withCheckedThrowingContinuation { waiting = $0 }
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation {
         throw FetchError.unreachable
     }
 
@@ -109,7 +109,7 @@ actor TimedOutThenGatedSource: PortfolioSource {
         return try await withCheckedThrowingContinuation { waiting = $0 }
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation {
         throw FetchError.unreachable
     }
 
@@ -842,7 +842,7 @@ actor RuledSource: PortfolioSource {
         return try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: json))
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation {
         throw FetchError.unreachable
     }
 
@@ -962,7 +962,7 @@ actor HeldBackSource: PortfolioSource {
         return answer
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation { throw FetchError.unreachable }
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation { throw FetchError.unreachable }
 }
 
 /// Answers every read the same way, counts them, and reports new blocks when a test says so.
@@ -991,7 +991,7 @@ actor PushedSource: PortfolioSource {
         return answer
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation { throw FetchError.unreachable }
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation { throw FetchError.unreachable }
 }
 
 @MainActor
