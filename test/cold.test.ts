@@ -11,6 +11,7 @@ import { NOT_ALLOWED, NOT_LISTED, NOT_YOURS, readColdRequest, sendFromCold, sign
 import { accountsToLink, defaultAccount, isFresh, readCheckedAccounts, rememberCheckedAccount, selectedAccount, type SeenAccount } from "../src/core/device-accounts.ts"
 import { addToMacLink, noteLinkFor, parseDeviceLink, usdMicrosOf } from "../src/core/device-link.ts"
 import { FAKE_SIGNATURE, accountSigningWithFake, mockSigner } from "./support/mock-signer.ts"
+import { assertMatchesFixture } from "./support/fixtures.ts"
 
 const COLD = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 const HOT = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -339,6 +340,23 @@ describe("links into the flow", () => {
   test("reads what the Mac app writes, as `DeviceFlowTests.swift` pins it", () => {
     assert.deepEqual(parseDeviceLink(new URL(`http://127.0.0.1:8787?topup=${HOT}&usd=20`).search), { kind: "top-up", to: HOT, usdMicros: "20000000" })
     assert.deepEqual(parseDeviceLink(new URL(`http://127.0.0.1:8787?publish=${TX}&wallet=${COLD}&asset=USDC&units=1500000&decimals=6&usd=250`).search), { kind: "publish", wallet: COLD, txHash: TX, asset: "USDC", usdMicros: "250000000", amount: { units: "1500000", decimals: 6 } })
+  })
+
+  test("is what the Swift tests read, for the names it writes and the amounts it reads", () => {
+    const written: [typed: string, usd: string][] = [["250", "250"], ["US$46", "46"], ["46 USD", "46"], ["$1,234.50", "1234.5"], ["46,20", "46.2"], [".5", "0.5"], ["1 234,50 $", "1234.5"]]
+    const amounts = written.map(([typed, usd]) => {
+      const link = parseDeviceLink(new URLSearchParams({ publish: TX, wallet: COLD, asset: "USDC", usd }).toString())
+      assert.equal(link?.kind, "publish")
+      return { typed, usd, usdMicros: link?.kind === "publish" ? link.usdMicros : null }
+    })
+    assert.ok(amounts.every(({ usdMicros }) => usdMicros !== null))
+    const notAmounts = ["lots", "€46", "0", "-5"]
+    for (const typed of notAmounts) assert.equal(usdMicrosOf(typed), null, typed)
+    assertMatchesFixture("device-link-vectors.json", {
+      names: ["Ledger", "Rabby Wallet", "A+B & C", "Écran 1"].map((name) => ({ name, link: addToMacLink(COLD, name, [HOT]) })),
+      amounts,
+      notAmounts,
+    })
   })
 
   test("a note from Resolve, only when one can say the whole answer", () => {

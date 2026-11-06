@@ -51,13 +51,13 @@ const ALL_YOURS_WAIT_MS = 2_500
 const LAST_ANSWERS_KEPT = 50
 
 /**
- * Waits for every job, or `ALL_YOURS_WAIT_MS`, whichever's first. If `enough` still says no by then, it keeps waiting, a job at
+ * Waits for every job, or `waitMs`, whichever's first. If `enough` still says no by then, it keeps waiting, a job at
  * a time, until it does or they're all done. Jobs that aren't done keep running, and never reject.
  */
-async function settleSome(jobs: readonly Promise<void>[], enough: () => boolean): Promise<void> {
+async function settleSome(jobs: readonly Promise<void>[], enough: () => boolean, waitMs: number): Promise<void> {
   const pending = new Set(jobs)
   for (const job of jobs) void job.finally(() => pending.delete(job))
-  await Promise.race([Promise.all(jobs), new Promise((resolve) => setTimeout(resolve, ALL_YOURS_WAIT_MS).unref())])
+  await Promise.race([Promise.all(jobs), new Promise((resolve) => setTimeout(resolve, waitMs).unref())])
   while (pending.size > 0 && !enough()) await Promise.race(pending)
 }
 
@@ -245,9 +245,11 @@ export type ApiOptions = {
   maxWallets?: number
   /** Counts a valid checkout just before it reaches the provider, or says why it can't go. */
   limitCheckout?: (req: IncomingMessage) => CheckoutRefusal | null
+  /** How long a read of all the user's wallets waits on the slowest. */
+  allYoursWaitMs?: number
 }
 
-export function createApi(env: Env, created: Created | null = createSource(env), onramp: Onramp | null = createCoinbase(env), { clientIp = () => null, maxWallets, limitCheckout = () => null }: ApiOptions = {}) {
+export function createApi(env: Env, created: Created | null = createSource(env), onramp: Onramp | null = createCoinbase(env), { clientIp = () => null, maxWallets, limitCheckout = () => null, allYoursWaitMs = ALL_YOURS_WAIT_MS }: ApiOptions = {}) {
   const source = created?.source ?? null
   limitFolds(foldBytesThatFit())
 
@@ -489,7 +491,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
         failed.add(address)
       }
     }
-    await settleSome(addresses.map(job), () => done.size > 0 || lastAnswers.has(lastKey))
+    await settleSome(addresses.map(job), () => done.size > 0 || lastAnswers.has(lastKey), allYoursWaitMs)
 
     // What's done by now is the answer. A job that finishes later comes too late to be taken back to the block below, so it stays out, as still reading.
     const answer = new Map(done)
@@ -517,6 +519,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
           }
         }),
         () => true,
+        allYoursWaitMs,
       )
     }
 

@@ -1,11 +1,11 @@
 import assert from "node:assert/strict"
-import { readFileSync, writeFileSync } from "node:fs"
 import { describe, it } from "node:test"
 import { decodeAbiParameters, encodeAbiParameters, parseAbiParameters } from "viem"
 import { combineOtherTokens, cleanText, createOtherTokens, decodeAggregate3, decodeText, decodeTokenFacts, encodeAggregate3, encodeTokenFacts, MAX_OTHER_TOKENS, tuckedReason, USDC_ADDRESS, type LegRow, type OtherToken, type TokenAnswer, type TokenRequest } from "@pricetag/sdk/core"
 import { foldWallet } from "@pricetag/sdk/core"
 import { DEMO_WALLET } from "../src/core/fixtures.ts"
 import { noMarketSentence, otherTokenAmount, otherTokenName, otherTokensLeftOutSentence, OTHER_TOKENS_NOTE, OTHER_TOKENS_TITLE, POSSIBLE_SPAM_RULE, POSSIBLE_SPAM_TITLE } from "../src/core/wording.ts"
+import { assertMatchesFixture } from "./support/fixtures.ts"
 
 const ME = "0x00000000000000000000000000000000000000aa"
 const JACK = "0x00000000000000000000000000000000000000f1"
@@ -678,10 +678,7 @@ describe("the words the Swift package repeats", () => {
       leftOut: [0, 1, 40].map((count) => ({ count, sentence: otherTokensLeftOutSentence(count) })),
       noMarket: ([[[], 0], [["DEGEN"], 0], [[], 1], [[], 3], [["DEGEN"], 1], [["DEGEN", "AERO"], 4]] as const).map(([listed, others]) => ({ listed, others, sentence: noMarketSentence(listed, others) })),
     }
-    const url = new URL("../macos/PricetagKit/Tests/PricetagKitTests/Resources/other-token-vectors.json", import.meta.url)
-    const text = `${JSON.stringify(vectors, null, 2)}\n`
-    if (process.env.UPDATE_FIXTURES) writeFileSync(url, text)
-    assert.equal(readFileSync(url, "utf8"), text, "other-token-vectors.json is out of date. Run with UPDATE_FIXTURES=1 if the change is on purpose.")
+    assertMatchesFixture("other-token-vectors.json", vectors)
   })
 })
 

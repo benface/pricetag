@@ -12,10 +12,10 @@ import { describeConversion } from "../src/core/explain.ts"
 import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import { foldBook } from "../src/core/resolve.ts"
 import { walletUrl } from "../src/ui/useWallet.ts"
+import { E6 } from "./support/units.ts"
 
 const addr = (n: number) => `0x${n.toString(16).padStart(40, "0")}`
 const [ME, SAVINGS, EXCHANGE] = [addr(0xa1), addr(0xb1), addr(0xd1)] as [string, string, string]
-const E6 = 10n ** 6n
 const START = Date.UTC(2026, 10, 4)
 const timeOf = (block: number) => new Date(START + block * 1000).toISOString()
 

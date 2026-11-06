@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { readFileSync, writeFileSync } from "node:fs"
+import { readFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
@@ -12,29 +12,17 @@ import { failureOf, readResponse, type ReadFailure } from "../src/core/read-fail
 import * as wording from "../src/core/wording.ts"
 import { createApi } from "../server/app.ts"
 import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "../src/core/portfolio.ts"
-import { emptyBook, linkMessage } from "../src/core/book.ts"
+import { emptyBook } from "../src/core/book.ts"
 import { foldBook, microsOf } from "../src/core/resolve.ts"
 import { PRESET_FIAT } from "../server/coinbase.ts"
 import { RULE_TEXT, differenceOf, ruleNote, showRuleDifference, showRuleValue, whySentence, type RuleComparison } from "../src/core/rules.ts"
 import { proofOf, verificationOf } from "../server/proof.ts"
-
-const RESOURCES = new URL("../macos/PricetagKit/Tests/PricetagKitTests/Resources/", import.meta.url)
-
-/** The Swift package's tests read these, so a change to what the server sends or prints fails on both sides. */
-function assertMatchesFile(name: string, actual: unknown) {
-  const url = new URL(name, RESOURCES)
-  const text = `${JSON.stringify(actual, null, 2)}\n`
-  if (process.env.UPDATE_FIXTURES) writeFileSync(url, text)
-  assert.equal(readFileSync(url, "utf8"), text, `${name} is out of date. Run with UPDATE_FIXTURES=1 if the change is on purpose.`)
-}
+import { assertMatchesFixture } from "./support/fixtures.ts"
 
 describe("the hot wallet's allowlist", () => {
   it("matches what the Swift package has compiled in", () => {
-    const url = new URL("../macos/HotWalletKit/Tests/HotWalletKitTests/Resources/tokens.json", import.meta.url)
-    const actual = { tokens: TOKENS.map(({ address, symbol, decimals, asset, sanity }) => ({ address, symbol, decimals, asset, sanity })), ethUsdFeed: ETH_USD_FEED.toLowerCase(), usdcUsdFeed: USDC_USD_FEED.toLowerCase(), feeds: TOKEN_FEEDS }
-    const text = `${JSON.stringify(actual, null, 2)}\n`
-    if (process.env.UPDATE_FIXTURES) writeFileSync(url, text)
-    assert.equal(readFileSync(url, "utf8"), text, "tokens.json is out of date. Run with UPDATE_FIXTURES=1, and change Tokens.swift to match.")
+    // When this one changes, Tokens.swift has to change to match.
+    assertMatchesFixture("tokens.json", { tokens: TOKENS.map(({ address, symbol, decimals, asset, sanity }) => ({ address, symbol, decimals, asset, sanity })), ethUsdFeed: ETH_USD_FEED.toLowerCase(), usdcUsdFeed: USDC_USD_FEED.toLowerCase(), feeds: TOKEN_FEEDS }, new URL("../macos/HotWalletKit/Tests/HotWalletKitTests/Resources/", import.meta.url))
   })
 })
 
@@ -256,19 +244,19 @@ describe("portfolioOf", () => {
   })
 
   it("matches the files the Swift package reads", () => {
-    assertMatchesFile("demo-portfolio.json", portfolioOf(DEMO_WALLET, "average"))
-    assertMatchesFile("demo-explanation.json", explainPortfolio(DEMO_WALLET, "average", { kind: "asset", asset: "AERO", metric: "realized" }))
+    assertMatchesFixture("demo-portfolio.json", portfolioOf(DEMO_WALLET, "average"))
+    assertMatchesFixture("demo-explanation.json", explainPortfolio(DEMO_WALLET, "average", { kind: "asset", asset: "AERO", metric: "realized" }))
     const inCad = walletWith({ currency: "CAD", rates: demoRates("CAD") })
-    assertMatchesFile("demo-portfolio-cad.json", portfolioOf(inCad, "average"))
-    assertMatchesFile("demo-explanation-cad.json", explainPortfolio(inCad, "average", { kind: "asset", asset: "AERO", metric: "realized" }))
-    assertMatchesFile("demo-hold-explanation.json", explainPortfolio(DEMO_WALLET, "average", { kind: "hold" }))
+    assertMatchesFixture("demo-portfolio-cad.json", portfolioOf(inCad, "average"))
+    assertMatchesFixture("demo-explanation-cad.json", explainPortfolio(inCad, "average", { kind: "asset", asset: "AERO", metric: "realized" }))
+    assertMatchesFixture("demo-hold-explanation.json", explainPortfolio(DEMO_WALLET, "average", { kind: "hold" }))
     const leg = DEMO_WALLET.legs.find(({ priceSource, kind }) => priceSource === "swap" && kind === "swap") as PricedLeg
     const dataset = { title: "Base's blocks", name: "edgeandnode/base_mainnet@0.0.2", hash: "6428aaca2cf57b8403ca3ab8bc657b361926ce6beeb6577477c85684e6ea569e" }
-    assertMatchesFile("proof.json", proofOf(leg, DEMO_WALLET.legs, "USD", [dataset, { ...dataset, name: "a/b@1", hash: null }], null))
-    assertMatchesFile("demo-proof.json", proofOf(leg, DEMO_WALLET.legs, "USD", [], "This is the demo wallet, so there's no real block to check."))
+    assertMatchesFixture("proof.json", proofOf(leg, DEMO_WALLET.legs, "USD", [dataset, { ...dataset, name: "a/b@1", hash: null }], null))
+    assertMatchesFixture("demo-proof.json", proofOf(leg, DEMO_WALLET.legs, "USD", [], "This is the demo wallet, so there's no real block to check."))
     const fixture = JSON.parse(readFileSync(new URL("./support/base-blocks.json", import.meta.url), "utf8"))
-    assertMatchesFile("verification.json", verificationOf({ ...leg, blockNum: 9200017, txHash: `0x${fixture.block.txs[1].tx_hash}`, parts: [] }, [], fixture.block, new Map(Object.entries(fixture.deposits)), null, fixture.block.block.hash))
-    assertMatchesFile("verification-failed.json", verificationOf({ ...leg, blockNum: 9200017, parts: [] }, [], { ...fixture.block, logs: [] }, null))
+    assertMatchesFixture("verification.json", verificationOf({ ...leg, blockNum: 9200017, txHash: `0x${fixture.block.txs[1].tx_hash}`, parts: [] }, [], fixture.block, new Map(Object.entries(fixture.deposits)), null, fixture.block.block.hash))
+    assertMatchesFixture("verification-failed.json", verificationOf({ ...leg, blockNum: 9200017, parts: [] }, [], { ...fixture.block, logs: [] }, null))
   })
 })
 
@@ -312,7 +300,7 @@ describe("what the value chart can join", () => {
   })
 
   it("matches the file the Swift package reads", () => {
-    assertMatchesFile("value-breaks.json", { unnamedEth, differentOmissions })
+    assertMatchesFixture("value-breaks.json", { unnamedEth, differentOmissions })
   })
 
   describe("with prices read between transactions", () => {
@@ -601,7 +589,7 @@ describe("the formatters the Swift package repeats", () => {
       ["50000000000000000000000", 18],
       ["115792089237316195423570985008687907853269984665640564039457584007913129639935", 18],
     ]
-    assertMatchesFile("format-vectors.json", {
+    assertMatchesFixture("format-vectors.json", {
       usd: usd.map((micros) => ({ micros, usd: formatMoney(micros, "USD"), signed: formatSignedMoney(micros, "USD") })),
       cad: usd.map((micros) => ({ micros, usd: formatMoney(micros, "CAD"), signed: formatSignedMoney(micros, "CAD") })),
       price: usd.filter((micros) => !micros.startsWith("-") && micros !== "0").map((micros) => ({ micros, price: formatPrice(micros, "USD"), cad: formatPrice(micros, "CAD") })),
@@ -624,7 +612,6 @@ describe("the formatters the Swift package repeats", () => {
       plainAmount: ["46,20", "46,2", "0,5", "1 234,50", "1\u00a0234,50", "1\u202f234,50", "1,234", "1,234,567.50", "1,000.", "12.50", "46", ".5", "", "abc", "1.234,50", "12,3456", "1,23,456", "1,234,50", "1234,567", "0,125", "012,345", ",5", "5,", "1,,5", "46,20.5", "abc,5", "٤٦,٢٠"].map((text) => ({ text, plain: plainAmount(text) })),
       typed: CURRENCY_CODES.flatMap((currency) => [...new Set(CURRENCY_CODES.flatMap((other) => [CURRENCIES[other].code, CURRENCIES[other].symbol.trim(), CURRENCIES[other].label.trim()]))].flatMap((mark) => [`${mark}46`, `46 ${mark}`]).concat(["46,20", "$46", "46 $", "€46", "46,20 €", "£46", "US$46", "CA$46", "A$46", "MX$46", "R$46", "R46", "₺46", "CHF 46", "46 EUR", "46 SEK"]).map((text) => ({ currency, text, micros: microsOf(text, currency) }))),
       presetFiat: [...PRESET_FIAT],
-      linkMessage: { owner: DEMO_WALLET.address, address: "0x00000000000000000000000000000000000DE301", message: linkMessage(DEMO_WALLET.address, "0x00000000000000000000000000000000000DE301") },
       note: { txHash: `0x${"ab".repeat(32)}`, asset: "USDC", usdMicros: "250000000", calldata: encodeNote(`0x${"ab".repeat(32)}`, "USDC", "250000000") },
     })
   })
@@ -847,7 +834,7 @@ describe("wording", () => {
   }
 
   it("says the same on the Mac", () => {
-    assertMatchesFile("wording-vectors.json", vectors)
+    assertMatchesFixture("wording-vectors.json", vectors)
   })
 
   it("says what a failed read means, that money is fine and what to do, with the technical side apart", () => {
@@ -1152,9 +1139,9 @@ describe("comparing pricing rules", () => {
   })
 
   it("sends the Mac app what it can read", () => {
-    assertMatchesFile("demo-rule-comparison.json", compared)
+    assertMatchesFixture("demo-rule-comparison.json", compared)
     const inCad = (wallet: WalletResponse) => ({ ...wallet, currency: "CAD" as const, rates: demoRates("CAD") })
-    assertMatchesFile("demo-rule-comparison-cad.json", compareRules({ rule: market, wallet: inCad(walletWith({})), reference: reference("240000000000") }, { rule: cautious, wallet: inCad(forked), reference: reference("237600000000") }, "average", 1))
+    assertMatchesFixture("demo-rule-comparison-cad.json", compareRules({ rule: market, wallet: inCad(walletWith({})), reference: reference("240000000000") }, { rule: cautious, wallet: inCad(forked), reference: reference("237600000000") }, "average", 1))
   })
 
   it("keeps the rule's words plain", () => {

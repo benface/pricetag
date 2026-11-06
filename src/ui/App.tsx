@@ -75,6 +75,7 @@ import { currenciesIn, walletsBehind, walletsToRead, yourWallets } from "../core
 import { readCheckedAccounts } from "../core/device-accounts.ts"
 import { parseDeviceLink, type DeviceLink } from "../core/device-link.ts"
 import { exportCsv } from "../core/export.ts"
+import { bookContext } from "../core/portfolio.ts"
 import { foldBook, type Question } from "../core/resolve.ts"
 import { PurchaseList } from "./PurchaseList.tsx"
 import { usePurchases } from "./usePurchases.ts"
@@ -524,8 +525,7 @@ export function App() {
     if (!target) return null
     if (together) return explainAcross(together.read, method, target, book, together.unread)
     if (!fold || !wallet) return null
-    const usd = fold.view.currency === "USD" ? null : foldBook(wallet, others, method, book, { usd: true })
-    return explainTarget(target, fold, { view: fold.view, ruleNote: wallet.ruleNote ?? null, source: usd && { positions: usd.positions, totals: usd.totals, points: usd.points, holdComparison: usd.holdComparison } })
+    return explainTarget(target, fold, bookContext(wallet, others, method, book, fold.view))
   }, [target, together, fold, wallet, others, method, book])
   const close = useCallback(() => setTarget(null), [])
   const statusLines = showing ? [

@@ -3,14 +3,16 @@ import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
+import { emptyBook } from "../src/core/book.ts"
 import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
-import { CURRENCIES, atCurrentRate, currentRateMicros, foldPositions, formatMoney, formatUsdIn, formatPrice, formatRate, formatSignedMoney, openingLegs, foldWallet, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets, viewWallet, type LegEffect, type PricedLeg, type RateRound, type Rates } from "@pricetag/sdk/core"
-import { describeConversion, describeEffect, explainContext, explainTarget, priceProofKey, type ExplainTarget } from "../src/core/explain.ts"
+import { CURRENCIES, atCurrentRate, currentRateMicros, foldPositions, formatMoney, formatUsdIn, formatPrice, formatRate, formatSignedMoney, openingLegs, foldWallet, sumTotals, viewWallet, type LegEffect, type PricedLeg, type RateRound, type Rates } from "@pricetag/sdk/core"
+import { describeConversion, describeEffect, explainTarget, priceProofKey, type ExplainTarget } from "../src/core/explain.ts"
 import { createApi } from "../server/app.ts"
-import { explainPortfolio, portfolioOf } from "../src/core/portfolio.ts"
+import { bookContext, explainPortfolio, portfolioOf } from "../src/core/portfolio.ts"
+import { foldBook } from "../src/core/resolve.ts"
 import { createRates, decodeRound, feedRounds, updateRounds, type RoundReader } from "@pricetag/sdk/internal"
+import { E18 } from "./support/units.ts"
 
-const E18 = 10n ** 18n
 const BUY_BLOCK = 100
 const SELL_BLOCK = 200
 const GAS_BLOCK = 300
@@ -271,13 +273,10 @@ describe("explaining a converted number", () => {
 describe("what's open when the currency changes", () => {
   const closed = leg({ id: "all", blockNum: SELL_BLOCK, delta: `-${E18}`, priceMicros: "2000000000", proceedsMicros: "2000000000" })
   const closedWallet = (changes: Partial<WalletResponse>) => walletWith({ legs: [buy, closed], balances: { blockNum: HEAD, amounts: { ETH: "0" } }, ...changes })
+  /** As the app does it, from what's on screen. */
   const explainIn = (wallet: WalletResponse, target: ExplainTarget) => {
-    const view = viewWallet(wallet)
-    const positions = foldPositions(view.legs, "average", view.prices, wallet)
-    const unread = unreadAssets(positions, wallet)
-    const totals = sumTotals(positions, unread)
-    const points = pnlOverTime(view.legs, "average", view.prices, view.markPrice, wallet.latest, unconfirmedAssets(positions, unread))
-    return explainTarget(target, { positions, totals, points }, explainContext(wallet, view, "average"))
+    const fold = foldBook(wallet, [], "average", emptyBook())
+    return explainTarget(target, fold, bookContext(wallet, [], "average", emptyBook(), fold.view))
   }
   const USD = closedWallet({ currency: "USD", rates: null })
   const CAD = closedWallet({})

@@ -11,6 +11,7 @@ import { resolvingSource } from "../server/source.ts"
 import { portfolioOf } from "../src/core/portfolio.ts"
 import { DEMO_REFERENCES, DEMO_ROWS, DEMO_WALLET } from "../src/core/fixtures.ts"
 import { fakeAmp, type Tables } from "./support/fake-amp.ts"
+import { E18 } from "./support/units.ts"
 
 const ME = "00000000000000000000000000000000000000aa"
 const POOL = "00000000000000000000000000000000000000bb"
@@ -20,7 +21,6 @@ const UNLISTED = "000000000000000000000000000000000000f00d"
 const USDC = USDC_ADDRESS.slice(2)
 const ETH_ANSWER = "240000000000"
 const USDC_ANSWER = "100000000"
-const E18 = 10n ** 18n
 
 const leg = (tx: string, token: string, account: string, side: string, amount: string | null, kind: string) => ({
   block_num: "100",
