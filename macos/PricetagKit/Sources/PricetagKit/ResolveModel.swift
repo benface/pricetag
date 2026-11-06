@@ -72,10 +72,12 @@ public final class ResolveModel {
     }
 
     public var current: Question? { questions.first }
-    /// What's already said to be a wallet can't also be an exchange account, and what's asked is about the wallet it reached.
+    /// What a card offers. See `answersOffered` in `src/core/resolve.ts`. An address with a name is an exchange's or a contract's, so nobody's
+    /// wallet. An answer that already says so stays as it is: that card is about the wallet it reached, and the answer can be changed in Answers.
     public var options: [Ownership] {
-        guard let sender = current?.sender, store.book.senders[sender.lowercased()]?.kind == .mine else { return Ownership.allCases }
-        return Ownership.allCases.filter { $0 != .myExchange }
+        // What's already said to be a wallet can't also be an exchange account.
+        if let sender = current?.sender, store.book.senders[sender.lowercased()]?.kind == .mine { return Ownership.allCases.filter { $0 != .myExchange } }
+        return current?.known == nil ? Ownership.allCases : Ownership.allCases.filter { $0 != .mine }
     }
     public var meter: Meter? { store.portfolio?.meter }
     public var canUndo: Bool { !store.undoStack.isEmpty }

@@ -11,7 +11,7 @@ import { importStart, keepingImport, matchWithdrawals, mergeWithdrawals, parseCo
 import { exportCsv } from "../src/core/export.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_SAVINGS_WALLET, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import { linkByProof } from "../src/ui/link-proof.ts"
-import { allocateTaken, foldBook, isBalanced, microsOf, missingWallets, previewBook, readKey, readsMatching } from "../src/core/resolve.ts"
+import { allocateTaken, answersOffered, foldBook, isBalanced, microsOf, missingWallets, previewBook, readKey, readsMatching } from "../src/core/resolve.ts"
 import { combinedPortfolioOf } from "../src/core/combined.ts"
 
 const addr = (n: number) => `0x${n.toString(16).padStart(40, "0")}`
@@ -1992,5 +1992,34 @@ describe("a cost as typed", () => {
       }
     }
     for (const [text, currency] of [["$46", "EUR"], ["US$46", "CAD"], ["£46", "EUR"], ["R$46", "ZAR"], ["CA$46", "AUD"]] as const) assert.equal(microsOf(text, currency), null, `${text} in ${currency}`)
+  })
+})
+
+describe("what a card offers (WORK-649)", () => {
+  const MERKL = "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae"
+  const question = (sender: string, answers: Book = emptyBook()) => foldBook(wallet(A, send(10, "0x1", sender, A, 100n * E6), { mode: "raw" }), [], "average", answers).questions.find((q) => q.sender === sender)!
+  const offered = (sender: string, answers?: Book) => answersOffered(question(sender, answers), answers ?? emptyBook())
+
+  it("offers all three for an address nothing's known about", () => {
+    assert.deepEqual(offered(STRANGER), ["mine", "my-exchange", "someone-else"])
+  })
+
+  it("doesn't call an address with a name a wallet, and an exchange account comes first", () => {
+    assert.equal(question(COINBASE).known?.kind, "exchange")
+    assert.deepEqual(offered(COINBASE), ["my-exchange", "someone-else"])
+    assert.equal(question(MERKL).known?.kind, "reward")
+    assert.deepEqual(offered(MERKL), ["my-exchange", "someone-else"])
+  })
+
+  it("keeps an earlier My wallet answer about one working, since that card is about the wallet it reached", () => {
+    const earlier = book({ [COINBASE]: { kind: "mine" } })
+    assert.deepEqual(offered(COINBASE, earlier), ["mine", "someone-else"])
+    const moved = send(10, "0x1", COINBASE, A, 100n * E6)
+    const yours = answerSender(earlier, A, COINBASE, { kind: "mine" })
+    assert.deepEqual(foldBook(wallet(A, moved, { mode: "raw" }), [wallet(COINBASE, moved, { mode: "raw" })], "average", yours).questions.filter((q) => q.sender === COINBASE), [], "and a wallet that's also yours isn't asked about it at all")
+  })
+
+  it("offers all three when there's no sender", () => {
+    assert.deepEqual(answersOffered({ sender: null, known: null }, emptyBook()), ["mine", "my-exchange", "someone-else"])
   })
 })

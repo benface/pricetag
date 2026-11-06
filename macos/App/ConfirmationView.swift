@@ -79,16 +79,7 @@ struct ConfirmationView<Footer: View>: View {
             .fixedSize(horizontal: false, vertical: true)
             // A scroll bar only shows once it's scrolling, and what's out of sight is part of what's being approved.
             .overlay(alignment: .bottom) {
-                if hasMoreBelow {
-                    Label("More below", systemImage: "chevron.down")
-                        .font(.caption.weight(.medium))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(.regularMaterial, in: Capsule())
-                        .shadow(radius: 2, y: 1)
-                        .padding(.bottom, 8)
-                        .allowsHitTesting(false)
-                }
+                if hasMoreBelow { MoreBelowHint() }
             }
             VStack(spacing: 20) {
                 if !warnings.isEmpty {
@@ -592,6 +583,20 @@ private struct TouchIDGlyph: NSViewRepresentable {
 
     final class Holder: NSView {
         var glyph: LAAuthenticationView?
+    }
+}
+
+/// Over the bottom of something that scrolls, and never in the way of a click.
+struct MoreBelowHint: View {
+    var body: some View {
+        Label("More below", systemImage: "chevron.down")
+            .font(.caption.weight(.medium))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(.regularMaterial, in: Capsule())
+            .shadow(radius: 2, y: 1)
+            .padding(.bottom, 8)
+            .allowsHitTesting(false)
     }
 }
 

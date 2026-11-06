@@ -175,6 +175,14 @@ The invites live in `~/.config/pricetag/invites.txt`, mode 600, outside any repo
 
 That restarts the machine, so wallet reads start over, the limits reset and the apps reconnect. Nothing else is lost, because it keeps nothing else. The dataset settings are secrets too, so when `.env.local` moves to a new version, set the same ones with `fly secrets import`, and only after that version reaches head. Code changes reach it with `fly deploy --ha=false`.
 
+### The hosted build
+
+`pnpm mac:hosted` builds the whole app for colleagues to install: Spending Money, Send, Buy, sites and hardware wallets, reading `PATINA_HOSTED_SERVER_HOST`. It's the normal app with `macos/Config/Hosted.xcconfig`, under its own bundle ID, sandbox and Keychain group, so it can't see the wallet of a normal build on the same Mac. It needs this Mac signed in to Xcode with an admin of team `R7TNNTC382`, and nothing else: Xcode makes the App ID and a Developer ID profile, which isn't tied to registered Macs, and notarizes through the same account, with no `notarytool` credential. `macos/build/Patina-<version>-hosted.dmg` holds the app, the browser extension to load unpacked, and `macos/INSTALLING.md` as its Read Me First.
+
+An installed copy tells each Chromium browser where the extension's host is when it opens (`BrowserHosts`). Its sandbox allows that one file and nothing else in a browser's folders, and it never replaces a manifest it didn't write, so on a Mac with `pnpm mac`, the extension stays with that build.
+
+`pnpm check:hosted [--no-launch] [dmg]` tests a built one with no real funds, and `macos/TESTING.md` says how to run it without interrupting anyone.
+
 ### The watch-only build
 
 `pnpm mac:watch-only` builds the copy colleagues can install: a Developer ID `.dmg` with no key code in it and its own bundle ID, which reads `PATINA_HOSTED_SERVER_HOST` in `macos/Config/App.xcconfig`, notarized and stapled. It tells you what to do if this Mac has no notarytool profile yet. `pnpm check:watch-only` checks a built one, and `macos/WATCH-ONLY.md` is what to send people. `pnpm mac` never uses any of this.
@@ -316,7 +324,7 @@ What's held now is valued at its Chainlink feed first, then at `market`. The dat
 
 A transfer's cost goes to the wallets it actually went to, whichever wallet is open: oldest lots first for the first transfer, or the same mix for each by average cost. An entered exchange cost covers only what had arrived when it was answered, so anything later is asked about in turn. One withdrawal in an exchange history explains one arrival, and when more than one fits, none of them is resolved from it. Native ETH bought in a swap can be an unwrap the account never received, so those `priced_legs` rows never set a market price.
 
-Answer Questions asks once per address, most useful first, and each question says why it's asked. Each answer shows what it would do before it's picked, Undo is always there, and skipping leaves it flagged. On the Mac, Settings > Answers lists every answer with what it was about and when, and any one can be changed or removed later. Costs only carry onto a wallet that's yours, so being paid by one of your wallets isn't enough: it asks, and My wallet says this one's yours too, while Someone else leaves your wallet as yours and values what arrived at the price then. A token with no price anywhere isn't asked about: it's listed apart and can't affect PnL. Totals say how much is unresolved and estimated right next to the number, and exports mark every row `exact`, `estimated`, `unknown` or `no market`.
+Answer Questions asks once per address, most useful first, and each question says why it's asked. Each answer shows what it would do before it's picked, Undo is always there, and skipping leaves it flagged. On the Mac, Settings > Answers lists every answer with what it was about and when, and any one can be changed or removed later. Costs only carry onto a wallet that's yours, so being paid by one of your wallets isn't enough: it asks, and My wallet says this one's yours too, while Someone else leaves your wallet as yours and values what arrived at the price then. An address known to be an exchange's or a contract's is nobody's wallet, so its card doesn't offer My wallet, though a My wallet answer given before keeps working until it's changed. A token with no price anywhere isn't asked about: it's listed apart and can't affect PnL. Totals say how much is unresolved and estimated right next to the number, and exports mark every row `exact`, `estimated`, `unknown` or `no market`.
 
 ## Proving a price
 
