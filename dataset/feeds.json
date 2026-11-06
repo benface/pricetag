@@ -1,0 +1,83 @@
+{
+  "kind": "manifest",
+  "dependencies": {
+    "base": "edgeandnode/base_mainnet@0.0.2"
+  },
+  "tables": {
+    "feed_updates": {
+      "input": {
+        "sql": "SELECT block_num, timestamp, tx_hash, log_index, CASE WHEN address = X'84640bb7b71b0963e8eb57ad379a0b204eb2fdc8' THEN 'USDT' WHEN address = X'4bb0a4edbafd66e6891fdcf23f95428fd5b27564' THEN 'DAI' WHEN address = X'71e021bc2e8a709b72ac7b6036e5b2bf30f263d0' THEN 'cbETH' WHEN address = X'1b70e0ee4041fa9f0e0fa2879b8818eaf4e2d81c' THEN 'wstETH' WHEN address = X'51ce3091cf646587e02cad83b580992f8723e718' THEN 'cbBTC' WHEN address = X'fcddfb2294beba43987516371febb2e677eb403e' THEN 'AERO' WHEN address = X'f9036c275a07f5ce669416ca1108388e071d6ab2' THEN 'VIRTUAL' WHEN address = X'8597c19e048ea1deff99e9ef233eaf2ff6c0d508' THEN 'DEGEN' END AS asset,\n  get_field(t, 'current') AS answer, get_field(t, 'roundId') AS round_id, get_field(t, 'updatedAt') AS updated_at\nFROM (SELECT block_num, timestamp, tx_hash, log_index, address, evm_decode_log(topic1, topic2, topic3, data, 'AnswerUpdated(int256 indexed current, uint256 indexed roundId, uint256 updatedAt)') AS t\n  FROM base.logs WHERE topic0 = evm_topic('AnswerUpdated(int256 indexed current, uint256 indexed roundId, uint256 updatedAt)') AND address IN (X'84640bb7b71b0963e8eb57ad379a0b204eb2fdc8', X'4bb0a4edbafd66e6891fdcf23f95428fd5b27564', X'71e021bc2e8a709b72ac7b6036e5b2bf30f263d0', X'1b70e0ee4041fa9f0e0fa2879b8818eaf4e2d81c', X'51ce3091cf646587e02cad83b580992f8723e718', X'fcddfb2294beba43987516371febb2e677eb403e', X'f9036c275a07f5ce669416ca1108388e071d6ab2', X'8597c19e048ea1deff99e9ef233eaf2ff6c0d508'))\nWHERE block_num() >= 53468646"
+      },
+      "schema": {
+        "arrow": {
+          "fields": [
+            {
+              "name": "_block_num",
+              "type": "UInt64",
+              "nullable": false
+            },
+            {
+              "name": "_ts",
+              "type": {
+                "Timestamp": [
+                  "Nanosecond",
+                  "+00:00"
+                ]
+              },
+              "nullable": false
+            },
+            {
+              "name": "block_num",
+              "type": "UInt64",
+              "nullable": false
+            },
+            {
+              "name": "timestamp",
+              "type": {
+                "Timestamp": [
+                  "Nanosecond",
+                  "+00:00"
+                ]
+              },
+              "nullable": false
+            },
+            {
+              "name": "tx_hash",
+              "type": {
+                "FixedSizeBinary": 32
+              },
+              "nullable": false
+            },
+            {
+              "name": "log_index",
+              "type": "UInt32",
+              "nullable": false
+            },
+            {
+              "name": "asset",
+              "type": "Utf8",
+              "nullable": true
+            },
+            {
+              "name": "answer",
+              "type": "Utf8",
+              "nullable": true
+            },
+            {
+              "name": "round_id",
+              "type": "Utf8",
+              "nullable": true
+            },
+            {
+              "name": "updated_at",
+              "type": "Utf8",
+              "nullable": true
+            }
+          ]
+        }
+      },
+      "network": "base-mainnet"
+    }
+  },
+  "functions": {}
+}

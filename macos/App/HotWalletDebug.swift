@@ -28,12 +28,18 @@ nonisolated enum HotWalletDebug {
         CommandLine.arguments.firstIndex(of: flag).flatMap { CommandLine.arguments.indices.contains($0 + 1) ? CommandLine.arguments[$0 + 1] : nil }
     }
 
-    /// Sets up a state to look at, against a local fork. What this does goes through the same calls as the app's buttons.
+    /// An isolated wallet's settings, against a local fork, in place before it starts. These don't go through the wallet's own calls, which would ask for Touch ID.
+    static func applySettingsArguments(to store: some WalletSettingsStore) {
+        var settings = store.load()
+        if let rpc = value(after: "--rpc").flatMap(URL.init(string:)) { settings.rpcURL = rpc }
+        if let cold = value(after: "--add-cold").flatMap(EthereumAddress.init) { settings.add(ColdWallet(address: cold, name: "Ledger", confirmedOnDeviceAt: Date())) }
+        if let cap = value(after: "--cap").flatMap(Int.init) { settings.setCap(dollars: cap) }
+        store.save(settings)
+    }
+
+    /// Sets up a state to look at. What this does goes through the same calls as the app's buttons.
     @MainActor static func applyLaunchArguments(to wallet: HotWallet, bridge: SiteBridge) {
         if let url = value(after: "--answer-site-requests-from").flatMap(URL.init(string:)) { answerSiteRequests(bridge, from: url) }
-        if let rpc = value(after: "--rpc").flatMap(URL.init(string:)) { wallet.setRPC(rpc) }
-        if let cold = value(after: "--add-cold") { try? wallet.addColdWallet(address: cold, name: "Ledger") }
-        if let cap = value(after: "--cap").flatMap(Int.init) { wallet.setCap(dollars: cap) }
         if CommandLine.arguments.contains("--create-wallet") { Task { await wallet.createWallet() } }
         // An address is public, and scripts driving a fork need it to fund the wallet.
         if CommandLine.arguments.contains("--print-address") {

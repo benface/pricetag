@@ -49,6 +49,14 @@ public enum SiteWording {
         "This signature lets \(spender ?? "someone else") spend your tokens or act for you, with no transaction and no fee, so you won't see it happen. Scams rely on this. Only approve it if you trust this site and meant to do this."
     }
 
+    /// For a token off the list, whose decimals can't be trusted, so no amount says how much of it someone holds.
+    static func unknownAllowance(spender: String?) -> String {
+        "This lets \(spender ?? "someone else") spend a token this app doesn't know, and there's no telling how much of it that comes to. Scams rely on this. Only approve it if you trust this site and meant to do this."
+    }
+
+    static let typedUnclear = "This app can't tell what this signature allows. It could let someone spend your tokens or act for you, with no transaction and no fee, so you won't see it happen. Scams rely on this. Only approve it if you trust this site and meant to do this."
+    static let hiddenCharacters = "This has characters that change how it reads, shown here as codes, so it may not say what it seems to. Scams rely on this."
+
     /// A permit for nothing takes effect only when someone sends it, and the site can just keep it.
     static func removalIsOnlyARequest(spender: String) -> String {
         "Signing this doesn't stop anything by itself. It only takes effect if it's sent, so whatever \(spender) can spend now, it still can until then."
@@ -155,9 +163,8 @@ public struct TransactionReview: Equatable, Sendable {
     public var moved: ReviewAmount?
     /// What a call this app can't read would do, as an estimate.
     public var preview: CallPreview?
-
     /// Whether all there is to say about this is what the node can work out.
-    public var isUnreadableCall: Bool { preview != nil || warnings.contains(SiteWarning(SiteWording.unreadableCall)) }
+    public var isUnreadableCall = false
 
     /// What the window says this does. For a call this app can't read, that's the estimate's words when it's clear, and plainly
     /// that it isn't otherwise. Touch ID only ever gets `headline`, which says nothing an estimate came up with.
@@ -181,8 +188,24 @@ extension String {
 }
 
 extension TransactionReview {
-    /// Past this it's unlimited in practice: no token anyone holds has that many units, and it covers the maximums in common use.
-    static let unlimitedAt: UInt128 = 1 << 96
+    /// Whole tokens from which an allowance is unlimited in practice, whatever it says: a billion dollars or so, or about what exists.
+    /// Nobody allows that on purpose, and a guess that's too low only costs acknowledging a warning.
+    private static let unlimitedWholeTokens: [String: UInt128] = [
+        "WETH": 1_000_000, "cbETH": 1_000_000, "wstETH": 1_000_000, "cbBTC": 100_000,
+        "USDC": 1_000_000_000, "USDT": 1_000_000_000, "DAI": 1_000_000_000,
+        "AERO": 1_000_000_000, "VIRTUAL": 1_000_000_000, "DEGEN": 10_000_000_000,
+    ]
+
+    /// For a token off the list, in units, because it can have any decimals. It covers the maximums in common use. Less than this
+    /// says how many units and gets `SiteWording.unknownAllowance`.
+    private static let unlimitedUnits: UInt128 = 1 << 96
+
+    /// nil is an amount that doesn't fit, which is far more than anything's worth.
+    static func isUnlimited(_ amount: UInt128?, of token: Token?) -> Bool {
+        guard let amount else { return true }
+        guard let token, let whole = unlimitedWholeTokens[token.symbol] else { return amount >= unlimitedUnits }
+        return amount >= (0..<token.decimals).reduce(whole) { units, _ in units * 10 }
+    }
 
     private enum Selectors {
         static let transfer = Calldata.selector("transfer(address,uint256)")
@@ -214,9 +237,39 @@ extension TransactionReview {
         }
     }
 
+    /// What a call to a contract off the list says it would allow. That contract can do anything at all whatever its selector says, so
+    /// these words are never the title, and only ever warn: one that asks like an approval could well be one, and a preview can be wrong.
+    private static func claimedAllowance(selector: [UInt8], arguments: Arguments, contract: EthereumAddress) -> SiteWarning? {
+        let contractText = SiteWording.address(contract)
+        func tokens(spender: EthereumAddress?, amount: UInt128?) -> SiteWarning? {
+            guard let spender = spender.map(SiteWording.who), amount != 0 else { return nil }
+            let text = isUnlimited(amount, of: nil) ? SiteWording.unlimited(spender: spender, asset: "tokens at \(contractText)") : SiteWording.unknownAllowance(spender: spender)
+            return SiteWarning(text, isStrong: true)
+        }
+        switch selector {
+        case Selectors.approve, Selectors.increaseAllowance:
+            return tokens(spender: arguments.address(0), amount: arguments.amount(1))
+        case Selectors.permit2Approve:
+            return tokens(spender: arguments.address(1), amount: arguments.amount(2))
+        case Selectors.permit:
+            return tokens(spender: arguments.address(1), amount: nil)
+        case Selectors.setApprovalForAll:
+            guard let spender = arguments.address(0).map(SiteWording.who), arguments.amount(1) != 0 else { return nil }
+            return SiteWarning(SiteWording.unlimited(spender: spender, asset: "items in the collection at \(contractText)"), isStrong: true)
+        default:
+            return nil
+        }
+    }
+
     init(_ transaction: SiteTransaction, quote: SiteQuote) {
         let token = Base.tokens.first { $0.contract == transaction.to }
         let selector = Array(transaction.data.prefix(4))
+        // Only a contract on the list is known to do what its selector says: Permit2 for its own, and a token for the rest. No token is a collection.
+        let isOnTheList = switch selector {
+        case Selectors.permit2Approve: transaction.to == KnownContracts.permit2
+        case Selectors.setApprovalForAll: false
+        default: token != nil
+        }
         let arguments = Arguments(bytes: transaction.data.dropFirst(4))
         var warnings: [SiteWarning] = []
         var headline: String?
@@ -225,15 +278,18 @@ extension TransactionReview {
         var spender: EthereumAddress?
         var moved: ReviewAmount?
         var preview: CallPreview?
+        var isUnreadableCall = false
         let valueUsd = quote.ethUsdMicros.map { Money.usdMicros(of: transaction.value, priceMicros: $0, decimals: 18) }
         let movedEth = ReviewAmount(text: Money.text(ofUnits: transaction.value, decimals: 18), symbol: "ETH", usdMicros: valueUsd)
 
-        func asset(_ token: Token?) -> String { token?.symbol ?? "this token" }
+        func asset(_ token: Token?, at contract: EthereumAddress?) -> String {
+            token?.symbol ?? contract.map { "tokens at \(SiteWording.address($0))" } ?? "this token"
+        }
         func amountText(_ amount: UInt128, _ token: Token?) -> String {
             token.map { "\(Money.text(ofUnits: amount, decimals: $0.decimals)) \($0.symbol)" } ?? "\(amount) units of this token"
         }
 
-        switch selector {
+        switch isOnTheList ? selector : [] {
         case Selectors.transfer:
             if let to = arguments.address(0), let amount = arguments.amount(1) {
                 headline = "Send \(amountText(amount, token)) to \(SiteWording.who(to))"
@@ -249,12 +305,12 @@ extension TransactionReview {
             if let spender = spender.map(SiteWording.who) {
                 let amount = arguments.amount(1)
                 if amount == 0 {
-                    headline = "Add nothing to what \(spender) can spend of your \(asset(token))"
-                } else if let amount, amount < Self.unlimitedAt {
+                    headline = "Add nothing to what \(spender) can spend of your \(asset(token, at: transaction.to))"
+                } else if let amount, !Self.isUnlimited(amount, of: token) {
                     headline = "Let \(spender) spend \(amountText(amount, token)) more"
                 } else {
-                    headline = "Let \(spender) spend all of your \(asset(token))"
-                    warnings.append(SiteWarning(SiteWording.unlimited(spender: spender, asset: asset(token)), isStrong: true))
+                    headline = "Let \(spender) spend all of your \(asset(token, at: transaction.to))"
+                    warnings.append(SiteWarning(SiteWording.unlimited(spender: spender, asset: asset(token, at: transaction.to)), isStrong: true))
                 }
             }
         case Selectors.approve:
@@ -262,43 +318,35 @@ extension TransactionReview {
             if let spender = spender.map(SiteWording.who) {
                 let amount = arguments.amount(1)
                 if amount == 0 {
-                    headline = "Stop \(spender) from spending your \(asset(token))"
-                } else if let amount, amount < Self.unlimitedAt {
+                    headline = "Stop \(spender) from spending your \(asset(token, at: transaction.to))"
+                } else if let amount, !Self.isUnlimited(amount, of: token) {
                     headline = "Let \(spender) spend up to \(amountText(amount, token))"
                 } else {
-                    headline = "Let \(spender) spend all of your \(asset(token))"
-                    warnings.append(SiteWarning(SiteWording.unlimited(spender: spender, asset: asset(token)), isStrong: true))
+                    headline = "Let \(spender) spend all of your \(asset(token, at: transaction.to))"
+                    warnings.append(SiteWarning(SiteWording.unlimited(spender: spender, asset: asset(token, at: transaction.to)), isStrong: true))
                 }
             }
         case Selectors.permit2Approve:
             spender = arguments.address(1)
             if let spender = spender.map(SiteWording.who) {
-                let approved = arguments.address(0).flatMap { address in Base.tokens.first { $0.contract == address } }
+                let approvedAddress = arguments.address(0)
+                let approved = approvedAddress.flatMap { address in Base.tokens.first { $0.contract == address } }
                 let amount = arguments.amount(2)
                 if amount == 0 {
-                    headline = "Stop \(spender) from spending your \(asset(approved))"
-                } else if let amount, amount < Self.unlimitedAt {
+                    headline = "Stop \(spender) from spending your \(asset(approved, at: approvedAddress))"
+                } else if let amount, !Self.isUnlimited(amount, of: approved) {
                     headline = "Let \(spender) spend up to \(amountText(amount, approved))"
+                    if approved == nil { warnings.append(SiteWarning(SiteWording.unknownAllowance(spender: spender), isStrong: true)) }
                 } else {
-                    headline = "Let \(spender) spend all of your \(asset(approved))"
-                    warnings.append(SiteWarning(SiteWording.unlimited(spender: spender, asset: asset(approved)), isStrong: true))
-                }
-            }
-        case Selectors.setApprovalForAll:
-            spender = arguments.address(0)
-            if let spender = spender.map(SiteWording.who), let flag = arguments.amount(1) {
-                if flag == 0 {
-                    headline = "Stop \(spender) from moving your items in this collection"
-                } else {
-                    headline = "Let \(spender) move every item you hold in this collection"
-                    warnings.append(SiteWarning(SiteWording.unlimited(spender: spender, asset: "items in this collection"), isStrong: true))
+                    headline = "Let \(spender) spend all of your \(asset(approved, at: approvedAddress))"
+                    warnings.append(SiteWarning(SiteWording.unlimited(spender: spender, asset: asset(approved, at: approvedAddress)), isStrong: true))
                 }
             }
         case Selectors.permit:
             spender = arguments.address(1)
             if let spender = spender.map(SiteWording.who) {
-                headline = "Let \(spender) spend your \(asset(token))"
-                warnings.append(SiteWarning(SiteWording.unlimited(spender: spender, asset: asset(token)), isStrong: true))
+                headline = "Let \(spender) spend your \(asset(token, at: transaction.to))"
+                warnings.append(SiteWarning(SiteWording.unlimited(spender: spender, asset: asset(token, at: transaction.to)), isStrong: true))
             }
         default:
             break
@@ -310,6 +358,7 @@ extension TransactionReview {
             moved = movedEth
         }
         if headline == nil {
+            isUnreadableCall = true
             if transaction.value > 0 { moved = movedEth }
             headline = transaction.value > 0 ? "Send \(Money.text(ofUnits: transaction.value, decimals: 18)) ETH with a request this app can't read" : "Approve a request this app can't read"
             preview = quote.preview
@@ -322,8 +371,15 @@ extension TransactionReview {
                 } else if let allowance = unlimited.first {
                     warnings.append(SiteWarning(SiteWording.unlimited(spender: SiteWording.who(allowance.spender), asset: allowance.asset), isStrong: true))
                 }
+                let unknown = preview.allowances.filter { !$0.isUnlimited && !$0.isCollection && $0.unknownContract != nil }
+                if let allowance = unknown.first {
+                    warnings.append(SiteWarning(SiteWording.unknownAllowance(spender: unknown.count == 1 ? SiteWording.who(allowance.spender) : nil), isStrong: true))
+                }
             } else {
                 warnings.append(SiteWarning(SiteWording.unreadableCall))
+            }
+            if !isOnTheList, let claimed = Self.claimedAllowance(selector: selector, arguments: arguments, contract: transaction.to), !warnings.contains(claimed) {
+                warnings.append(claimed)
             }
         }
         if transaction.to == .zero { warnings.append(SiteWarning(SiteWording.burn, isStrong: true)) }
@@ -347,7 +403,8 @@ extension TransactionReview {
             recipient: recipient,
             spender: spender,
             moved: moved,
-            preview: preview
+            preview: preview,
+            isUnreadableCall: isUnreadableCall
         )
     }
 }
@@ -357,7 +414,10 @@ private extension String {
 }
 
 public struct MessageReview: Equatable, Sendable {
+    /// For Touch ID, so nothing in it comes from what a site named things.
     public let headline: String
+    /// For the window, which can say who the message names itself as.
+    public let title: String
     public let body: String
     /// The contract the signature is for, when it names one.
     public let contract: EthereumAddress?
@@ -383,7 +443,7 @@ extension MessageReview {
             body = "0x" + Hex.encode(bytes)
             warnings.append(SiteWarning(SiteWording.unreadableMessage, isStrong: true))
         }
-        self.init(headline: "Sign this message", body: body, contract: nil, warnings: warnings, signable: .personal(bytes))
+        self.init(headline: "Sign this message", title: "Sign this message", body: body, contract: nil, warnings: warnings, signable: .personal(bytes))
     }
 
     /// `formatDate` is only for tests, which can't depend on where they run.
@@ -393,20 +453,65 @@ extension MessageReview {
         let chain = try data.chainID
         if chain == nil { warnings.append(SiteWarning(SiteWording.anyChain, isStrong: true)) }
         let spender = Self.firstValue(of: ["spender", "operator", "delegate", "taker"], in: data.message)?.string.flatMap { EthereumAddress($0) }.map(SiteWording.who)
-        if Self.looksLikeAPermit(data) { warnings.insert(SiteWarning(SiteWording.typedPermit(spender: spender), isStrong: true), at: 0) }
+        // Always strong: a contract can act on any shape, with or without naming itself in the domain. The word list only picks which warning.
+        warnings.insert(SiteWarning(Self.looksLikeAPermit(data) ? SiteWording.typedPermit(spender: spender) : SiteWording.typedUnclear, isStrong: true), at: 0)
+        let name = data.domain["name"]?.string
+        if Self.hasHiddenCharacters(data.message) || name.map(JSONValue.string).map(Self.hasHiddenCharacters) == true {
+            warnings.append(SiteWarning(SiteWording.hiddenCharacters, isStrong: true))
+        }
         // The token list is Base's, so a permit for anywhere else isn't read as one.
         let permit = chain == Base.chainID ? PermitSummary(data, formatDate: formatDate) : nil
         if let permit, permit.isZero, permit.kind != .permit2Transfer { warnings.append(SiteWarning(SiteWording.removalIsOnlyARequest(spender: SiteWording.who(permit.spender)))) }
-        let headline = permit?.headline ?? "Sign \(data.domain["name"]?.string.map { "this for \($0)" } ?? "this message")"
-        self.init(headline: headline, body: Self.pretty(data.message, indent: 0), contract: contract, warnings: warnings, signable: try data.signable(), permit: permit, isPermitLike: Self.looksLikeAPermit(data))
+        let headline = permit?.headline ?? "Sign this message"
+        // A name with anything in it that `shown` would change is left out, since the title has no room to explain it.
+        let title = permit == nil ? name.flatMap { Self.shown($0) == $0 ? "Sign this for \($0)" : nil } ?? headline : headline
+        self.init(headline: headline, title: title, body: Self.pretty(data.message, indent: 0), contract: contract, warnings: warnings, signable: try data.signable(), permit: permit, isPermitLike: Self.looksLikeAPermit(data))
     }
 
     /// Line breaks are fine. Direction overrides, zero-width characters and the like can make a message read as something it isn't.
+    /// So can anything that draws nothing: Unicode's default-ignorable characters, plus two blanks it doesn't list as ignorable.
     private static func isPlainlyVisible(_ scalar: Unicode.Scalar) -> Bool {
-        switch scalar.properties.generalCategory {
+        if scalar.properties.isDefaultIgnorableCodePoint || scalar == "\u{2800}" || scalar == "\u{1D159}" { return false }
+        return switch scalar.properties.generalCategory {
         case .control: scalar == "\n" || scalar == "\t" || scalar == "\r"
         case .format, .privateUse, .surrogate, .unassigned: false
         default: true
+        }
+    }
+
+    /// A typed message's strings on one line each, so none can look like another field, or like anything but what it is. What's
+    /// signed doesn't change: anything that could mislead is shown as a code. So are repeated spaces, which can push text to a new line.
+    private static func shown(_ text: String) -> String {
+        var result = ""
+        var previous: Unicode.Scalar?
+        for scalar in text.unicodeScalars {
+            let isPlain: Bool
+            switch scalar.properties.generalCategory {
+            case .lineSeparator, .paragraphSeparator: isPlain = false
+            case .spaceSeparator: isPlain = scalar == " " && previous != " "
+            case .control: isPlain = false
+            default: isPlain = isPlainlyVisible(scalar)
+            }
+            switch scalar {
+            case _ where isPlain: result.unicodeScalars.append(scalar)
+            case "\n": result += "\\n"
+            case "\r": result += "\\r"
+            case "\t": result += "\\t"
+            default: result += "\\u{\(String(scalar.value, radix: 16, uppercase: true))}"
+            }
+            previous = scalar
+        }
+        return result
+    }
+
+    /// Any character in a key or value that hides or rearranges text. Line breaks don't count, since `shown` makes those harmless.
+    private static func hasHiddenCharacters(_ value: JSONValue) -> Bool {
+        func hides(_ text: String) -> Bool { !text.unicodeScalars.allSatisfy(isPlainlyVisible) }
+        switch value {
+        case .object(let object): return object.keys.contains { key in hides(key) || object[key].map(hasHiddenCharacters) == true }
+        case .array(let items): return items.contains(where: hasHiddenCharacters)
+        case .string(let text): return hides(text)
+        default: return false
         }
     }
 
@@ -448,13 +553,13 @@ extension MessageReview {
             return object.keys.sorted().map { key in
                 let child = object[key] ?? .null
                 switch child {
-                case .object, .array: return "\(padding)\(key):\n\(pretty(child, indent: indent + 1))"
-                default: return "\(padding)\(key): \(pretty(child, indent: 0))"
+                case .object, .array: return "\(padding)\(shown(key)):\n\(pretty(child, indent: indent + 1))"
+                default: return "\(padding)\(shown(key)): \(pretty(child, indent: 0))"
                 }
             }.joined(separator: "\n")
         case .array(let items):
             return items.map { pretty($0, indent: indent) }.joined(separator: "\n")
-        case .string(let text): return text
+        case .string(let text): return shown(text)
         case .number(let number): return number == number.rounded() && abs(number) < 1e15 ? String(Int(number)) : String(number)
         case .bool(let flag): return flag ? "true" : "false"
         case .null: return "nothing"

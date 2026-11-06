@@ -555,7 +555,13 @@ public final class HotWallet {
 
     // MARK: - Settings
 
-    public func setCap(dollars: Int) {
+    /// Lowering it can send money to savings at the next look, so that asks. Raising it moves nothing, so that doesn't.
+    public func setCap(dollars: Int) async {
+        var next = settings
+        next.setCap(dollars: dollars)
+        if next.capUsdMicros < settings.capUsdMicros {
+            guard await confirmingSetting("lower this wallet's cap to \(money(dollars: next.capInDollars)), which can move what's above it to your savings") else { return }
+        }
         updateSettings { $0.setCap(dollars: dollars) }
     }
 
@@ -563,11 +569,16 @@ public final class HotWallet {
         updateSettings { $0.sweepsRealizedGains = value }
     }
 
-    public func setSweepDestination(_ address: EthereumAddress) {
+    public func setSweepDestination(_ address: EthereumAddress) async {
+        guard address != settings.sweepDestination, let wallet = settings.coldWallets.first(where: { $0.address == address }) else { return }
+        guard await confirmingSetting("send sweeps to \(wallet.name) (\(address.checksummed))") else { return }
         updateSettings { $0.setSweepDestination(address) }
     }
 
-    public func setRPC(_ url: URL) {
+    public func setRPC(_ url: URL) async {
+        guard url != settings.rpcURL else { return }
+        guard await confirmingSetting("change this wallet's network address to \(url.host() ?? url.absoluteString)") else { return }
+        // Two can ask at once, and only the first has anything left to do.
         guard url != settings.rpcURL else { return }
         updateSettings { $0.rpcURL = url }
         chain = makeChain(url)
@@ -588,11 +599,18 @@ public final class HotWallet {
     }
 
     /// The address has to be what the user read on the device's screen. Nothing here can check that, so the sheet makes them say so.
-    public func addColdWallet(address text: String, name: String) throws(ColdWalletProblem) {
+    /// True if it was added. `isWanted` is asked after the prompt, since what's on screen can change while it's open.
+    @discardableResult
+    public func addColdWallet(address text: String, name: String, isWanted: () -> Bool = { true }) async throws(ColdWalletProblem) -> Bool {
         guard let address = EthereumAddress(text.trimmingCharacters(in: .whitespacesAndNewlines)) else { throw .notAnAddress }
+        if let problem = problem(addingColdWallet: address) { throw problem }
+        let what = settings.sweepDestination == nil ? "add \(address.checksummed) as your savings wallet, where money above your cap will go" : "add \(address.checksummed) as a savings wallet"
+        guard await confirmingSetting(what), isWanted() else { return false }
+        // A rotation can start or finish while the prompt's open.
         if let problem = problem(addingColdWallet: address) { throw problem }
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         updateSettings { $0.add(ColdWallet(address: address, name: cleanName.isEmpty ? "Savings" : cleanName, confirmedOnDeviceAt: now())) }
+        return true
     }
 
     /// Other accounts on a device, which go in the book as the user's from here on. This can't tell whose they are, so the caller has to have asked. They only link costs.
@@ -616,6 +634,23 @@ public final class HotWallet {
     public func renameColdWallet(_ address: EthereumAddress, to name: String) {
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         updateSettings { $0.renameColdWallet(address, to: cleanName.isEmpty ? "Savings" : cleanName) }
+    }
+
+    /// For a setting that decides what the next sweep does, since a sweep then runs with nobody asked. It doesn't wait its turn like `work`,
+    /// because nothing here signs, and a node that's stuck is a reason to change the RPC.
+    private func confirmingSetting(_ reason: String) async -> Bool {
+        isWorking = true
+        defer { isWorking = false }
+        sweepProblem = nil
+        do {
+            try await confirmPresence(reason: reason)
+            return true
+        } catch let error as LAError where [.userCancel, .appCancel, .systemCancel].contains(error.code) {
+            return false
+        } catch {
+            sweepProblem = HotWalletWording.touchIDDidNotConfirm
+            return false
+        }
     }
 
     private func updateSettings(_ change: (inout WalletSettings) -> Void) {
@@ -654,9 +689,9 @@ public final class HotWallet {
     @discardableResult
     public func sweepEverything(in prompt: PresencePrompt? = nil) async -> Bool {
         guard let address, let destination = settings.sweepDestination else { return false }
-        // Touch ID is for approving something, and as of the last read there's nothing to approve. A read that does find something still asks, and then reads again.
-        if let whyNothing = sweepPreview?.whyNothing {
-            sweepProblem = whyNothing
+        // Touch ID is for approving something, and as of the last read there's nothing to approve, or it couldn't go yet. A read that does find something still asks, and then reads again.
+        if let whyNot = whySweepHasToWait(for: address, lastRead: snapshot) ?? sweepPreview?.whyNothing {
+            sweepProblem = whyNot
             return false
         }
         var isOnItsWay = false
@@ -672,8 +707,7 @@ public final class HotWallet {
             let snapshot = try await patientSnapshot(of: address)
             self.snapshot = snapshot
             guard snapshot.chainID == Base.chainID else { throw ChainError.rejected(HotWalletWording.wrongChain) }
-            guard snapshot.blockNumber >= state.settledThroughBlock ?? 0 else { throw ChainError.rejected("The last sweep is still showing up. Try again in a moment.") }
-            guard !(state.records[address] ?? []).contains(where: { $0.status == .pending }) else { throw ChainError.rejected("A sweep is still on its way. Try again in a moment.") }
+            if let wait = whySweepHasToWait(for: address, lastRead: snapshot) { throw ChainError.rejected(wait) }
             let everything = SweepPlanner.everything(holdings: holdings, fees: snapshot.fees, destination: destination)
             if let whyNothing = HotWalletWording.whyNothingSweeps(everything) { throw ChainError.rejected(whyNothing) }
             pausedUntil = nil
@@ -702,6 +736,13 @@ public final class HotWallet {
             ))
         }
         return isOnItsWay
+    }
+
+    /// What's already gone has to land and show up first, so a sweep can't reuse its nonce or move it twice.
+    private func whySweepHasToWait(for address: EthereumAddress, lastRead: ChainSnapshot?) -> String? {
+        if let lastRead, lastRead.blockNumber < state.settledThroughBlock ?? 0 { return HotWalletWording.lastOneStillShowingUp }
+        if (state.records[address] ?? []).contains(where: { $0.status == .pending }) { return HotWalletWording.lastOneOnItsWay }
+        return nil
     }
 
     /// What the confirmation asks for, in its own terms. Only all of it being on its way is done, because done closes the sheet.

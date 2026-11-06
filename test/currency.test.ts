@@ -5,12 +5,10 @@ import { after, before, describe, it } from "node:test"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import { CURRENCIES, atCurrentRate, currentRateMicros, foldPositions, formatMoney, formatUsdIn, formatPrice, formatRate, formatSignedMoney, openingLegs, foldWallet, pnlOverTime, sumTotals, unconfirmedAssets, unreadAssets, viewWallet, type LegEffect, type PricedLeg, type RateRound, type Rates } from "@pricetag/sdk/core"
-import { describeConversion, describeEffect, explainContext, explainTarget, type ExplainTarget } from "../src/core/explain.ts"
+import { describeConversion, describeEffect, explainContext, explainTarget, priceProofKey, type ExplainTarget } from "../src/core/explain.ts"
 import { createApi } from "../server/app.ts"
 import { explainPortfolio, portfolioOf } from "../src/core/portfolio.ts"
-import { createRates } from "../server/rates.ts"
-import { feedRounds, updateRounds, type RoundReader } from "../server/source.ts"
-import { decodeRound } from "../server/raw.ts"
+import { createRates, decodeRound, feedRounds, updateRounds, type RoundReader } from "@pricetag/sdk/internal"
 
 const E18 = 10n ** 18n
 const BUY_BLOCK = 100
@@ -211,6 +209,25 @@ describe("explaining a converted number", () => {
     const bought = explanation?.legs.find((l) => l.id === "buy")
     assert.equal(bought?.conversion, "In USD: $2,000.00 each, $2,000.00 paid. 1 USD = $1.2500 CAD at this block, from Chainlink's CAD / USD price on Base.")
     assert.match(bought?.effect ?? "", /for \$2,500\.00$/)
+  })
+
+  it("offers the proof of a current price from Chainlink, on what rests on it", () => {
+    const wallet = walletWith({})
+    const proof = (metric: "value" | "price" | "return" | "unrealized" | "amount" | "realized", from = wallet) => explainPortfolio(from, "average", { kind: "asset", asset: "ETH", metric })?.priceProof
+    // In USD, like the price the server reads, whatever currency it's shown in.
+    for (const metric of ["value", "price", "return", "unrealized"] as const) assert.deepEqual(proof(metric), { asset: "ETH", price: "3000000000", wallet: wallet.address }, metric)
+    for (const metric of ["amount", "realized"] as const) assert.equal(proof(metric), null, metric)
+    const market = { ...wallet, prices: { ...wallet.prices, ETH: { ...wallet.prices.ETH!, source: "market" as const } } }
+    assert.equal(proof("value", market), null, "a price from recent trades has no update behind it")
+  })
+
+  it("gives a current price's proof a new key when the price, rule or currency moves on", () => {
+    const explanation = { currency: "USD", priceProof: { asset: "ETH", price: "3000000000" } } as Parameters<typeof priceProofKey>[1]
+    const original = priceProofKey("0xa", explanation, null)
+    assert.equal(priceProofKey("0xa", { ...explanation }, null), original)
+    assert.notEqual(priceProofKey("0xa", { ...explanation, priceProof: { asset: "ETH", price: "3100000000" } }, null), original)
+    assert.notEqual(priceProofKey("0xa", { ...explanation, currency: "CAD" }, null), original)
+    assert.notEqual(priceProofKey("0xa", explanation, "cautious"), original)
   })
 
   it("says the current rate where a current value uses it", () => {
@@ -550,6 +567,24 @@ describe("reading rates", () => {
     assert.deepEqual(asked.at(-1), [100, 1000])
     assert.ok(second?.byBlock[100])
     assert.equal(second?.latest?.blockNum, 1000)
+  })
+
+  it("goes by the chain's head for a wallet as of an earlier block", async () => {
+    const { asked, read } = scripted()
+    const ratesFor = createRates(read)
+    const wallet = walletAt(190, [100, 175])
+    await ratesFor("CAD", wallet, { chainHead: 200 })
+    assert.deepEqual(asked, [[100, 175, 190]])
+    await ratesFor("CAD", wallet, { chainHead: 200 })
+    assert.deepEqual(asked.at(-1), [175], "a recent transaction's block, as ever, but not 190 without a new block")
+    await ratesFor("CAD", wallet, { chainHead: 201 })
+    assert.deepEqual(asked.at(-1), [175, 190], "100 is settled, seen from the chain's head. The rest aren't yet.")
+    await ratesFor("CAD", wallet, { chainHead: 220 })
+    assert.deepEqual(asked.at(-1), [175, 190])
+    const settled = await ratesFor("CAD", wallet, { chainHead: 221 })
+    assert.equal(asked.length, 4, "past any reorg, so that read was the last")
+    assert.equal(settled?.latest?.blockNum, 190)
+    assert.deepEqual(Object.keys(settled?.latest ?? {}).sort(), ["blockNum", "round"])
   })
 
   it("reads nothing for USD", async () => {

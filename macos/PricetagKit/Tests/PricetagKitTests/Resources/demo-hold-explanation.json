@@ -12,6 +12,7 @@
     "Partial, so the two don't cover the same money. Holding ETH counts the $199.98 put in with a known value. 4 other amounts have no known value, and aren't counted. This wallet's total leaves some things out.",
     "Past results don't predict future ones."
   ],
+  "priceProof": null,
   "legCount": 6,
   "legs": [
     {

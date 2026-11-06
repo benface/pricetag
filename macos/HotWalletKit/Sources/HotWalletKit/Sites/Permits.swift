@@ -100,8 +100,8 @@ public struct PermitSummary: Equatable, Sendable {
         let known = Base.tokens.first { $0.contract == token }
         tokenSymbol = known?.symbol
         let units = amount.prefix(16).allSatisfy { $0 == 0 } ? amount.suffix(16).reduce(UInt128(0)) { $0 << 8 | UInt128($1) } : nil
-        // Permit2's own maximum is 2^160 - 1, which this counts as unlimited too, as everything else here does from 2^96.
-        isUnlimited = units.map { $0 >= TransactionReview.unlimitedAt } ?? true
+        // Permit2's own maximum is 2^160 - 1, which doesn't fit in `units`, and this counts as unlimited too.
+        isUnlimited = TransactionReview.isUnlimited(units, of: known)
         isZero = units == 0
         if isUnlimited {
             self.amount = "Unlimited"

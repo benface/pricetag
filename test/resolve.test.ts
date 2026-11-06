@@ -5,7 +5,7 @@ import { explainPortfolio, portfolioOf } from "../src/core/portfolio.ts"
 import { createWallets, type Source } from "@pricetag/sdk/internal"
 import { ASSETS, CURRENCIES, ETH_ADDRESS, USDC_ADDRESS, buildPricedLegs, openingLegs, shortHash, type LegRow, type Method, type Reference, encodeNote, parseNote } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../src/core/api.ts"
-import { answerSender, changeBook, costKey, emptyBook, enterExchangeCosts, linkAccountsInBook, linkMessage, linkedWallets, parseBook, proofOwner, undoBook, type Book, type BookChange, type BookState, type Money, type Receipt, type SenderAnswer } from "../src/core/book.ts"
+import { answerSender, applyChange, costKey, emptyBook, enterExchangeCosts, linkDeviceAccounts, linkMessage, linkedWallets, parseBook, proofOwner, undoAnswer, type Book, type BookChange, type Money, type Receipt, type SenderAnswer } from "../src/core/book.ts"
 import { matchWithdrawals, parseCoinbaseCsv } from "../src/core/exchange-import.ts"
 import { exportCsv } from "../src/core/export.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_SAVINGS_WALLET, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
@@ -1132,6 +1132,20 @@ describe("each kind of sender", () => {
     assert.equal(position(wallet(A, send(10, "0x1", gate, A, 100n * E6)), [], emptyBook()).effects[0]?.leg.costLabel, "unknown")
   })
 
+  it("a bridge's question reads properly, whatever the bridge is called, once an answer makes it a question", () => {
+    const named = {
+      "0x4200000000000000000000000000000000000010": "From a Base bridge address",
+      "0x4200000000000000000000000000000000000007": "From a Base bridge address",
+      "0x09aea4b2242abc8bb4bb78d537a67a245a7bec64": "From an Across address",
+      "0xf70da97812cb96acdf810712aa562db8dfa3dbef": "From a Relay address",
+      "0x27a16dc786820b16e5c9028b75b99f6f604b5d26": "From a Stargate address",
+      "0x2cff890f0378a11913b6129b2e97417a2c302680": "From a NEAR Intents address",
+    }
+    for (const [bridge, line] of Object.entries(named)) {
+      assert.deepEqual(question(send(10, "0x1", bridge, A, 100n * E6), book({ [bridge]: { kind: "my-exchange" } })).map((q) => q.evidence), [[line]])
+    }
+  })
+
   it("a mint can't be anyone's wallet, so there's nothing to ask", () => {
     assert.deepEqual(question(send(10, "0x1", MINT, A, 100n * E6)), [])
   })
@@ -1516,18 +1530,26 @@ describe("a book from a request", () => {
 describe("a book that changes while a wallet signs", () => {
   /** A browser wallet whose signature comes back when `finish` is called, with the book kept the way `useBook` keeps it. */
   function signing(start = emptyBook()) {
-    let state: BookState = { book: start, history: [] }
+    let book = start
+    const history: { before: Book; after: Book }[] = []
     let finish = (_: unknown) => {}
     const signature = new Promise((resolve) => (finish = resolve))
     const ethereum = { request: async ({ method }: { method: string }) => (method === "eth_requestAccounts" ? [B] : signature) }
-    const change = (next: BookChange) => void (state = changeBook(state, next))
+    const change = (next: BookChange) => {
+      const before = book
+      book = applyChange(before, before, next)
+      history.push({ before, after: book })
+    }
     return {
       finish,
       change,
-      link: () => linkByProof(ethereum, A, () => state.book, change, async () => true),
-      linkAccounts: (addresses: readonly string[]) => void (state = linkAccountsInBook(state, addresses)),
-      undo: () => void (state = undoBook(state)),
-      senders: () => state.book.senders,
+      link: () => linkByProof(ethereum, A, () => book, change, async () => true),
+      linkAccounts: (addresses: readonly string[]) => void (book = linkDeviceAccounts(book, addresses)),
+      undo: () => {
+        const step = history.pop()
+        if (step) book = undoAnswer(book, step.before, step.after)
+      },
+      senders: () => book.senders,
     }
   }
   const prompted = () => new Promise((resolve) => setImmediate(resolve))
@@ -1590,13 +1612,11 @@ describe("a book that changes while a wallet signs", () => {
     assert.deepEqual(signed, [linkMessage(C, B)])
   })
 
-  it("takes a plain book too, and undoing with nothing to go back to does nothing", () => {
-    const answered = answerSender(emptyBook(), A, STRANGER, { kind: "someone-else" })
-    const state = changeBook({ book: emptyBook(), history: [] }, answered)
-    assert.equal(state.book, answered)
-    assert.deepEqual(state.history, [emptyBook()])
-    const untouched = { book: answered, history: [] }
-    assert.equal(undoBook(untouched), untouched)
+  it("takes a plain book too, on top of what's been said since it was worked out", () => {
+    const shown = emptyBook()
+    const latest = answerSender(shown, null, C, { kind: "mine" })
+    const changed = applyChange(latest, shown, answerSender(shown, A, STRANGER, { kind: "someone-else" }))
+    assert.deepEqual(changed.senders, { [C]: { kind: "mine" }, [STRANGER]: { kind: "someone-else" } })
   })
 })
 

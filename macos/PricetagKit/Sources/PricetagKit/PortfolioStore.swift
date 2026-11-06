@@ -52,6 +52,8 @@ public enum FeedState: Equatable, Sendable {
     case ampUnavailable(String)
     case noAmpConfigured(String)
     case rejected(String)
+    /// The server is holding this client back for now, which clears by itself.
+    case rateLimited(String)
 
     /// Only this state may show a number as current.
     public var isLive: Bool { self == .live }
@@ -60,7 +62,7 @@ public enum FeedState: Equatable, Sendable {
     public var isStale: Bool {
         switch self {
         case .noWallet, .reading, .live, .catchingUp: false
-        case .behind, .serverUnreachable, .tooSlow, .ampUnavailable, .noAmpConfigured, .rejected: true
+        case .behind, .serverUnreachable, .tooSlow, .ampUnavailable, .noAmpConfigured, .rejected, .rateLimited: true
         }
     }
 }
@@ -162,6 +164,8 @@ public final class PortfolioStore {
     @ObservationIgnored private let reachableDelay: Duration
     @ObservationIgnored private let unreachableDelay: Duration
     @ObservationIgnored private let pushedDelay: Duration
+    /// When the server said it'd have room again, after holding this client back.
+    @ObservationIgnored private var heldUntil: Date?
     @ObservationIgnored private let liveFor: Duration
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var eventsTask: Task<Void, Never>?
@@ -274,22 +278,27 @@ public final class PortfolioStore {
     private func followEvents() async {
         while !Task.isCancelled {
             guard let events = source.headEvents() else { return }
+            var again = unreachableDelay
             do {
                 for try await _ in events {
                     guard !Task.isCancelled else { return }
                     isPushed = true
                     wake()
                 }
+            } catch FetchError.rateLimited(_, let retryAfter) {
+                again = .seconds(retryAfter)
             } catch {}
             guard !Task.isCancelled else { return }
             // Back to polling straight away, not after the long wait that being told about blocks allowed.
             isPushed = false
             wake()
-            try? await Task.sleep(for: unreachableDelay)
+            try? await Task.sleep(for: again)
         }
     }
 
     private func wake() {
+        // A new block isn't a reason to ask a server that's said to wait.
+        if let heldUntil, now() < heldUntil { return }
         if let sleeper { sleeper.cancel() } else { wakePending = true }
     }
 
@@ -417,6 +426,12 @@ public final class PortfolioStore {
         putBack(snapshot)
         // What Undo took back may have the change in it or not, so Redo can't know what it would bring back.
         future = []
+    }
+
+    /// Whether the change is the last thing done, with nothing undone since. Only then can the wallet list still talk about it, and take it back without costing Redo anything.
+    public func isLatestChange(_ snapshot: WalletListSnapshot) -> Bool {
+        guard let entry = snapshot.undoEntry else { return false }
+        return history.last?.id == entry && future.isEmpty
     }
 
     private func putBack(_ snapshot: WalletListSnapshot) {
@@ -836,6 +851,16 @@ public final class PortfolioStore {
         return try await source.verification(leg: leg, address: address, currency: currency, rule: selectedRule)
     }
 
+    public func priceProof(asset: String, price: String, address: String) async throws -> Proof {
+        guard isShowing(address) else { throw CancellationError() }
+        return try await source.priceProof(asset: asset, price: price, address: address, currency: currency, rule: selectedRule)
+    }
+
+    public func priceVerification(asset: String, revision: String?, address: String) async throws -> Verification {
+        guard isShowing(address) else { throw CancellationError() }
+        return try await source.priceVerification(asset: asset, revision: revision, address: address, currency: currency, rule: selectedRule)
+    }
+
     /// Any wallet's, not just the one showing, since the security page asks about each of them.
     public func approvals(address: String) async throws -> WalletApprovals {
         try await source.approvals(address: address)
@@ -901,6 +926,7 @@ public final class PortfolioStore {
             updatedAt = now()
             cache.remember(next, of: address, on: serverURL, at: now())
             feed = state(of: next)
+            heldUntil = nil
             expireLive()
             return reachableDelay
         } catch {
@@ -908,6 +934,11 @@ public final class PortfolioStore {
             // Numbers by another method or rule, or in another currency, are wrong now, not just old, and there's no way to get the right ones.
             if let portfolio, !isForCurrentSettings(portfolio) { self.portfolio = nil }
             feed = state(of: error)
+            if case FetchError.rateLimited(_, let retryAfter) = error {
+                heldUntil = now().addingTimeInterval(TimeInterval(retryAfter))
+                wakePending = false
+                return .seconds(retryAfter)
+            }
             return feed == .serverUnreachable ? unreachableDelay : reachableDelay
         }
     }
@@ -968,7 +999,8 @@ public final class PortfolioStore {
         return switch error as? FetchError {
         case .ampUnavailable(let message): .ampUnavailable(message)
         case .noAmpConfigured(let message): .noAmpConfigured(message)
-        case .rejected(let message): .rejected(message)
+        case .rejected(let message), .priceChanged(let message): .rejected(message)
+        case .rateLimited(let message, _): .rateLimited(message)
         case .unreachable, .timedOut, nil: .serverUnreachable
         }
     }

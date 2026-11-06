@@ -35,6 +35,7 @@ public struct FeedSummary: Equatable, Sendable {
         case .ampUnavailable: (text, isWarning) = ("Prices offline", true)
         case .noAmpConfigured: (text, isWarning) = ("No prices", true)
         case .rejected: (text, isWarning) = ("Can't read", true)
+        case .rateLimited: (text, isWarning) = ("Slowed down", true)
         case .live:
             guard let portfolio else {
                 (text, isWarning) = ("Reading…", false)
@@ -120,6 +121,11 @@ extension FeedState {
             what = "The price service turned this request down."
             next = "Try again. If it keeps happening, restart the price service."
             detail = "The price service said: \(message)"
+        case .rateLimited(let message):
+            title = "Slowed Down for a Moment"
+            what = "The price service asked this app to slow down."
+            next = "Updates start again by themselves."
+            detail = "The price service said: \(message)"
         }
         let stale = portfolio.flatMap { $0.progress.started ? Wording.stale(lastUpdate: $0.latest.date.map(Format.time) ?? $0.latest.timestamp) : nil }
         return FeedProblem(title: title, message: [what, stale, Wording.moneyUnaffected, next].compactMap { $0 }.joined(separator: " "), detail: detail)
@@ -143,6 +149,7 @@ extension FeedState {
         case .ampUnavailable: "Prices unavailable for now"
         case .noAmpConfigured: "No price data set up"
         case .rejected: "Couldn't read this wallet"
+        case .rateLimited: "Slowed down for a moment"
         }
     }
 

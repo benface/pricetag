@@ -14,6 +14,8 @@ export const METHOD_HELP = "Average spreads what you paid across all you hold. O
 export const AVERAGE_PRICE_PAID = "Average price paid"
 export const AVERAGE_PAID = "Average paid"
 export const NETWORK_FEES = "Network fees"
+/** An answer, an undo or a device's accounts that didn't reach what's stored, so they're back as they were. */
+export const NOT_SAVED = "This browser couldn't save that, so it's back as it was. Try again."
 export const BALANCE_CHECK = "Balance check"
 export const CHECK_LABELS = { reconciled: "Matches", incomplete: "Doesn't match", unchecked: "Not checked" }
 export const STARTING_BALANCE = "Starting balance"
@@ -153,6 +155,12 @@ export function costTag(label: CostLabel, source: string | null = null): string 
 
 /** How a purchase's provider is named wherever its cost shows up. */
 export const purchaseSource = (provider: "coinbase", paid?: string) => `${{ coinbase: "Bought on Coinbase" }[provider]}${paid ? ` for ${paid}` : ""}`
+
+/** Where a bought cost comes from. That's on this device, so the server's proof can't say. */
+export const costProof = (source: string, label: CostLabel) =>
+  label === "inherited"
+    ? `${source}, by your other wallet. This transaction only moved it here, so the order isn't for this one. What's shown is this amount's share of what you paid, fees included.`
+    : `${source}. The order says what you paid, fees included, and matches this transaction exactly.`
 
 /** A cost's source, to finish "from …". */
 export const COST_WORDS: Record<CostLabel, string> = {
@@ -312,12 +320,14 @@ export function feedProblem(failure: ReadFailure, serverUrl: string, stale: stri
       return say("The price service has no data source, so only the demo wallet works.", "Set one up, then restart the price service.", `${SAID(failure.said)} Its data source goes in .env.local.`)
     case "refused":
       return say("The price service turned this request down.", "Try again. If it keeps happening, restart the price service.", SAID(failure.said))
+    case "slowedDown":
+      return say("The price service asked this app to slow down.", "Updates start again by themselves.", SAID(failure.said))
   }
 }
 
 /** A failure in a panel, which answers one question and doesn't update by itself. A refusal already says what about that question went wrong. */
 export function panelProblem(failure: ReadFailure, serverUrl: string): Problem {
-  if (failure.kind === "refused") return { message: failure.said, detail: null }
+  if (failure.kind === "refused" || failure.kind === "slowedDown") return { message: failure.said, detail: null }
   if (failure.kind === "unavailable") return { message: `The price service can't get its data right now. ${MONEY_UNAFFECTED} It usually clears up by itself, so try again in a moment.`, detail: SAID(failure.said) }
   return feedProblem(failure, serverUrl)
 }
