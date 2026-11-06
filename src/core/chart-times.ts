@@ -2,10 +2,16 @@
 
 const GAP = 12
 export const TICK_GAP = 8
+export const END_LABEL_GAP = 10
 
 /** The left margin that fits a chart's money labels and the gap beside them. Very small amounts need more than the usual room, and their sign comes first. */
 export function chartLeftMargin(tickWidths: number[], least: number): number {
   return Math.max(least, Math.ceil(Math.max(0, ...tickWidths)) + TICK_GAP)
+}
+
+/** The right margin that fits the money label at the end of a chart's line and the gap before it. Large amounts need more than the usual room. */
+export function chartRightMargin(labelWidth: number, least: number): number {
+  return Math.max(least, Math.ceil(labelWidth) + END_LABEL_GAP)
 }
 
 export type PlacedTime = { x: number; row: number }

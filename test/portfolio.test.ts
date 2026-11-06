@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
 import { ASSETS, CURRENCIES, CURRENCY_CODES, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, buildPricedLegs, chartMoneyTicks, derivePricedRows, formatChartSpan, msBetweenBlocks, encodeNote, foldPositions, formatAmount, formatDuration, formatMoney, formatPaid, formatPrice, formatReturn, formatSignedAmount, formatSignedMoney, labelUsd, plainAmount, sumTotals, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
-import { TICK_GAP, chartLeftMargin, placeChartTimes } from "../src/core/chart-times.ts"
+import { END_LABEL_GAP, TICK_GAP, chartLeftMargin, chartRightMargin, placeChartTimes } from "../src/core/chart-times.ts"
 import { describeEffect, describeNetting } from "../src/core/explain.ts"
 import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import * as wording from "../src/core/wording.ts"
@@ -482,6 +482,12 @@ describe("a chart's axes", () => {
     assert.equal(chartLeftMargin([], 64), 64)
     assert.equal(chartLeftMargin([30, 40], 64), 64)
     assert.equal(chartLeftMargin([71.53, 66.28], 64), 72 + TICK_GAP)
+  })
+
+  it("leaves room for the money label at the end of the line", () => {
+    assert.equal(chartRightMargin(0, 84), 84)
+    assert.equal(chartRightMargin(60, 84), 84)
+    assert.equal(chartRightMargin(87.2, 84), 88 + END_LABEL_GAP)
   })
 
   it("says one moment once", () => {
