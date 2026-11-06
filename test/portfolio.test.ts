@@ -3,14 +3,15 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
-import { ASSETS, CURRENCIES, CURRENCY_CODES, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, applyLeg, blockBefore, buildPricedLegs, chartMoneyTicks, derivePricedRows, emptyPosition, formatChartSpan, msBetweenBlocks, encodeNote, foldPositions, pnlOverTime, referenceMarks, formatAmount, formatDuration, formatMoney, formatPaid, formatPrice, formatReturn, formatSignedAmount, formatSignedMoney, labelUsd, plainAmount, sumTotals, type LegRow, type Method, type PricedLeg } from "@pricetag/sdk/core"
+import { ASSETS, CURRENCIES, CURRENCY_CODES, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, applyLeg, blockBefore, buildPricedLegs, chartMoneyTicks, derivePricedRows, emptyPosition, formatChartSpan, msBetweenBlocks, encodeNote, foldPositions, pnlOverTime, referenceMarks, formatAmount, formatDuration, formatExactUsd, formatMoney, formatPaid, formatPrice, formatReturn, formatSignedAmount, formatSignedMoney, labelUsd, plainAmount, sumTotals, type LegRow, type Method, type PricedLeg } from "@pricetag/sdk/core"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
-import { TICK_GAP, chartLeftMargin, placeChartTimes } from "../src/core/chart-times.ts"
+import { END_LABEL_GAP, TICK_GAP, chartLeftMargin, chartRightMargin, placeChartTimes } from "../src/core/chart-times.ts"
 import { describeEffect, describeNetting, summarizeEffect } from "../src/core/explain.ts"
 import { DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
+import { failureOf, readResponse, type ReadFailure } from "../src/core/read-failure.ts"
 import * as wording from "../src/core/wording.ts"
 import { createApi } from "../server/app.ts"
-import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "../server/portfolio.ts"
+import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "../src/core/portfolio.ts"
 import { emptyBook, linkMessage } from "../src/core/book.ts"
 import { foldBook, microsOf } from "../src/core/resolve.ts"
 import { PRESET_FIAT } from "../server/coinbase.ts"
@@ -511,6 +512,7 @@ describe("the formatters the Swift package repeats", () => {
         price: usd.filter((micros) => !micros.startsWith("-") && micros !== "0").map((micros) => ({ micros, price: formatPrice(micros, currency) })),
         chartTicks: [[0], [-0.0023], [0.75], [120], [-250000, 1250000]].map((values) => ({ values, ticks: chartMoneyTicks(values, currency) })),
       })),
+      exactUsd: ["0", "1", "1234", "500000", "1000000", "250000000", "1234500000", "1234567000", "1234567891", "1000000000000"].map((micros) => ({ micros, usd: formatExactUsd(micros) })),
       labeledUsd: ["$2,376.00", "+$24.00", "-$24.00", "$0.004", "-$0.004"].map((text) => ({ text, usd: labelUsd(text, "USD"), cad: labelUsd(text, "CAD") })),
       amount: units.map(([value, decimals]) => ({ units: value, decimals, amount: formatAmount(value, decimals), signed: formatSignedAmount(value, decimals) })),
       chartTicks: [[], [0], [-0.0023], [-0.0015, -0.0023], [0.000001], [-0.2], [0.75], [8.5], [-3, 12], [120], [1250], [8000], [-250000, 1250000], [12000000]].map((values) => ({ values, usd: chartMoneyTicks(values, "USD"), cad: chartMoneyTicks(values, "CAD") })),
@@ -598,6 +600,12 @@ describe("a chart's axes", () => {
     assert.equal(chartLeftMargin([71.53, 66.28], 64), 72 + TICK_GAP)
   })
 
+  it("leaves room for the money label at the end of the line", () => {
+    assert.equal(chartRightMargin(0, 84), 84)
+    assert.equal(chartRightMargin(60, 84), 84)
+    assert.equal(chartRightMargin(87.2, 84), 88 + END_LABEL_GAP)
+  })
+
   it("says one moment once", () => {
     const [first, last] = formatChartSpan("2026-11-05T02:57:05.000Z", "2026-11-05T02:57:05.000Z")
     assert.equal(first, last)
@@ -668,6 +676,8 @@ describe("what a transaction did", () => {
   })
 })
 
+const READ_FAILURES: readonly ReadFailure[] = [{ kind: "unreachable" }, { kind: "unavailable", said: "Couldn't read this wallet's data." }, { kind: "noSource", said: "No data source is set up, so only the demo wallet is available." }, { kind: "refused", said: "That isn't a Base address." }]
+
 describe("wording", () => {
   const costLabels = ["paid", "inherited", "received at market", "self-reported", "unknown"] as const
   const kinds = ["swap", "transfer", "gas"] as const
@@ -723,14 +733,56 @@ describe("wording", () => {
       exchangeCostWhy: wording.EXCHANGE_COST_WHY,
       allAnswered: wording.ALL_ANSWERED,
       nothingLeft: wording.NOTHING_LEFT,
+      moneyUnaffected: wording.MONEY_UNAFFECTED,
     },
     finishNotes: FINISH_METERS.map((meter) => ({ ...meter, text: wording.finishNote(meter) })),
+    problems: READ_FAILURES.map((failure) => ({ ...failure, ...wording.feedProblem(failure, "https://prices.example.com") })),
     unseenEth: UNSEEN_ETH_CASES.map((unseen) => ({ unseen, text: wording.unseenEthCause(unseen) })),
     manifestHash: wording.shortManifestHash("bea12f7575e74575f2f0318213d61d421706eea0314e5d7116edebd4e77818a1"),
   }
 
   it("says the same on the Mac", () => {
     assertMatchesFile("wording-vectors.json", vectors)
+  })
+
+  it("says what a failed read means, that money is fine and what to do, with the technical side apart", () => {
+    const stale = wording.staleSentence("Nov 4 at 5:40 AM")
+    for (const failure of READ_FAILURES) {
+      for (const problem of [wording.feedProblem(failure, "https://prices.example.com"), wording.feedProblem(failure, "https://prices.example.com", stale), failure.kind === "refused" ? null : wording.panelProblem(failure, "https://prices.example.com")]) {
+        if (!problem) continue
+        assert.ok(problem.message.includes(wording.MONEY_UNAFFECTED), problem.message)
+        assert.ok(problem.detail, failure.kind)
+        assert.doesNotMatch(problem.message, /https?:|server|\bAmp\b|Couldn't read this wallet's data/)
+      }
+    }
+    assert.ok(wording.feedProblem(READ_FAILURES[1]!, "https://prices.example.com", stale).message.includes(`right now. ${stale} ${wording.MONEY_UNAFFECTED}`))
+    assert.equal(wording.feedProblem({ kind: "unreachable" }, "https://prices.example.com").detail, "Nothing answered at https://prices.example.com.")
+    assert.equal(wording.feedProblem({ kind: "unavailable", said: "Couldn't read this wallet's data." }, "x").detail, "The price service said: Couldn't read this wallet's data.")
+  })
+
+  it("lets a panel say what a refusal said, since that's about the question it asked", () => {
+    assert.deepEqual(wording.panelProblem({ kind: "refused", said: "The two rules haven't reached the same block yet. Try again in a moment." }, "x"), { message: "The two rules haven't reached the same block yet. Try again in a moment.", detail: null })
+  })
+
+  it("sorts a failed read the way the Mac does", async () => {
+    const failed = async (response: Response) => {
+      try {
+        await readResponse(response)
+      } catch (error) {
+        return failureOf(error)
+      }
+      return null
+    }
+    const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status })
+    assert.deepEqual(await failed(json(502, { error: "a" })), { kind: "unavailable", said: "a" })
+    assert.deepEqual(await failed(json(503, { error: "b" })), { kind: "noSource", said: "b" })
+    assert.deepEqual(await failed(json(409, { error: "c" })), { kind: "refused", said: "c" })
+    assert.deepEqual(await failed(json(200, { error: "d" })), { kind: "refused", said: "d" })
+    assert.deepEqual(await failed(new Response("<html>Bad gateway</html>", { status: 502 })), { kind: "unreachable" })
+    assert.deepEqual(await failed(new Response("not json", { status: 200 })), { kind: "unreachable" })
+    assert.equal(await failed(json(200, { ok: true })), null)
+    assert.deepEqual(await readResponse(json(200, { ok: true })), { ok: true })
+    assert.deepEqual(failureOf(new TypeError("Failed to fetch")), { kind: "unreachable" })
   })
 
   it("says what PnL stands for", () => {

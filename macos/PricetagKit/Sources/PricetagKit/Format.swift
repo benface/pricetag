@@ -48,6 +48,12 @@ public enum Format {
         return money.currency == main ? text : text.replacing(money.currency.symbol, with: money.currency.label, maxReplacements: 1)
     }
 
+    /// A note's amount, for what can't be taken back: in USD, with every decimal it has, and cents always.
+    public static func exactUSD(_ micros: String) -> String {
+        let parts = typed(micros).split(separator: ".")
+        return "$\(grouped(String(parts[0]))).\(parts[1])"
+    }
+
     /// In plain digits for a provider, with no symbol or grouping.
     static func plainAmount(_ micros: String) -> String {
         "\(whole(micros))"

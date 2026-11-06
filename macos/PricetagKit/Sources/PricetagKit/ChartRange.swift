@@ -85,6 +85,10 @@ public enum ChartMetric: String, CaseIterable, Identifiable, Sendable {
         case .pnl: point.excludedCount
         }
     }
+
+    func isEstimated(_ point: PnlPoint) -> Bool {
+        self == .value && point.valueEstimated
+    }
 }
 
 /// The part of the history in a range. PnL holds still between transactions, so what it was when the range starts comes along as its first point.
@@ -108,7 +112,7 @@ public struct ChartWindow: Equatable, Sendable {
             return
         }
         let value = Self.valueBetween(before, inside.first, at: start)
-        let carried = PnlPoint(blockNum: before.blockNum, timestamp: start.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true)), txHash: nil, pnlMicros: before.pnlMicros, excludedCount: before.excludedCount, valueMicros: value, valueBeforeMicros: value, valueExcludedCount: before.valueExcludedCount)
+        let carried = PnlPoint(blockNum: before.blockNum, timestamp: start.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true)), txHash: nil, pnlMicros: before.pnlMicros, excludedCount: before.excludedCount, valueMicros: value, valueBeforeMicros: value, valueExcludedCount: before.valueExcludedCount, valueEstimated: value != nil)
         points = [carried] + inside
     }
 

@@ -15,6 +15,7 @@ struct HotWalletFixture {
     /// Fixed, so a scene looks the same whenever it's taken.
     private nonisolated static let today = Date(timeIntervalSince1970: 1_793_750_400)
     static let savings = EthereumAddress("0x00000000000000000000000000000000000de302")!
+    private static let secondSavings = EthereumAddress("0x00000000000000000000000000000000000de308")!
     static let site = "https://app.example.com"
     /// What a simulation says these do, in `FixtureChain`.
     static let swapRouter = "0x2626664c2603336e57b271c5c0b26f421741e481"
@@ -24,6 +25,7 @@ struct HotWalletFixture {
     private var hasWallet = true
     private var wasDeleted = false
     private var hasSavings = true
+    private var hasSecondSavings = false
     private var balances: [String: UInt128] = ["ETH": 5_000_000_000_000_000, "USDC": 20_000_000]
     private var keys = KeyAnswer.hasIt
     private var unexplainedTransactions = 0
@@ -40,6 +42,7 @@ struct HotWalletFixture {
     static let notProvisioned = HotWalletFixture(hasWallet: false, hasSavings: false, balances: [:], keys: .notProvisioned)
     static let unreadableRecords = HotWalletFixture(hasWallet: false, hasSavings: false, balances: [:], recordsAreUnreadable: true)
     static let funded = HotWalletFixture(hasRecords: true)
+    static let twoSavings = HotWalletFixture(hasSecondSavings: true)
     static let connectedToSite = HotWalletFixture(isConnectedToSite: true)
     /// Connected to a site and to one on this Mac, with the first's transactions: one that went through, and one that fails once it's read.
     static let usedBySites = HotWalletFixture(hasSiteActivity: true)
@@ -81,6 +84,7 @@ struct HotWalletFixture {
     private var settings: WalletSettings {
         var settings = WalletSettings()
         if hasSavings { settings.add(ColdWallet(address: Self.savings, name: "Ledger", confirmedOnDeviceAt: Self.today)) }
+        if hasSecondSavings { settings.add(ColdWallet(address: Self.secondSavings, name: "Trezor", confirmedOnDeviceAt: Self.today)) }
         return settings
     }
 

@@ -96,6 +96,22 @@ export function linkDeviceAccounts(book: Book, addresses: readonly string[]): Bo
   return { ...book, senders }
 }
 
+/** A book and what undo goes back to, oldest first. */
+export type BookState = { book: Book; history: Book[] }
+
+/** A new book, or how to get one from the latest. Anything that waited on something has to use the latest, because the book may have changed meanwhile. */
+export type BookChange = Book | ((latest: Book) => Book)
+
+export const changeBook = ({ book, history }: BookState, change: BookChange): BookState => ({ book: typeof change === "function" ? change(book) : change, history: [...history, book] })
+
+export function undoBook(state: BookState): BookState {
+  const previous = state.history.at(-1)
+  return previous ? { book: previous, history: state.history.slice(0, -1) } : state
+}
+
+/** Not an answer, so undo doesn't take it back, whichever answers came before it. */
+export const linkAccountsInBook = ({ book, history }: BookState, addresses: readonly string[]): BookState => ({ book: linkDeviceAccounts(book, addresses), history: history.map((one) => linkDeviceAccounts(one, addresses)) })
+
 /** Saying what was paid for a sender's open receipts, by asset. It takes over for those receipts, and any others keep their earlier answers. */
 export function enterExchangeCosts(book: Book, focus: string, sender: string, receipts: readonly Receipt[], amounts: Readonly<Record<string, Money>>): Book {
   const earlier = book.senders[sender]?.kind === "my-exchange" ? (book.senders[sender].costs ?? []) : []
@@ -121,6 +137,12 @@ export const walletsBehind = (book: Book, wallet: { address: string; mode?: stri
 
 /** The other wallets to read alongside the one on screen. Until it has loaded nothing says which side it's on, so none. */
 export const walletsToRead = (book: Book, shown: string | null, sender: string | null) => (shown === null ? [] : [...new Set([...linkedWallets(book), ...(sender ? [sender] : [])])].filter((address) => address !== shown && isDemoWallet(address) === isDemoWallet(shown)))
+
+/**
+ * The wallets All Yours adds up: the ones the answers say are the user's, plus their device accounts. A wallet that's only being
+ * watched isn't one, and neither are the demo's, which nobody owns even after answering for them.
+ */
+export const yourWallets = (book: Book, deviceAccounts: readonly string[] = []) => [...new Set([...linkedWallets(book), ...deviceAccounts.map(normalizeAddress)])].filter((wallet) => wallet !== DEMO_ADDRESS && wallet !== DEMO_SAVINGS_ADDRESS)
 
 const plainRecord = (value: unknown): Record<string, unknown> | null => (typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null)
 
