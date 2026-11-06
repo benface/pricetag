@@ -136,6 +136,8 @@ export type ExplanationResponse = {
   /** The same number in USD, when that isn't what `value` is in. */
   sourceValue: string | null
   lines: string[]
+  /** Where to read the proof of the current price this number rests on, when that price comes from Chainlink. */
+  priceProof?: { asset: string; price: string; wallet: string } | null
   /** All of them, which can be more than `legs` holds. */
   legCount: number
   legs: ExplanationLeg[]
@@ -218,8 +220,11 @@ export type TaxReportResponse = {
   csv: string
 }
 
-/** A derived table is normally a few seconds behind the chain. More than this is worth saying out loud. */
-const BEHIND_MS = 10_000
+/**
+ * A derived table is normally about 5 seconds behind the chain, and one read in a dozen lands over 10, up to 17 when measured. More than this is worth saying out loud.
+ * A table that's stopped falls further behind with every second, so it still gets past this quickly.
+ */
+const BEHIND_MS = 30_000
 
 export const isBehind = ({ coverage, latest }: Pick<WalletResponse, "coverage" | "latest">) => msBetweenBlocks(coverage.toBlock, latest.blockNum) > BEHIND_MS
 
@@ -240,6 +245,8 @@ export type ProofResponse = {
   scope: string[]
   /** Why the block can't be checked, or null when it can. */
   unavailable: string | null
+  /** What a current price's proof describes, which checking it has to name. Only set when it has an update behind it. */
+  revision?: string
 }
 
 export type CheckStatus = "passed" | "failed" | "unchecked"

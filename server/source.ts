@@ -3,89 +3,70 @@
 //
 // Every query is bounded by block, because staging is shared.
 
-import { CURRENCIES, ERC20_ADDRESSES, ETH_ADDRESS, ETH_USD_FEED, MAX_ROUND_AGE_SECONDS, MIN_TRADE_USD_MICROS, TOKENS, TOKEN_FEEDS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, marketTrades, parseNote, type CostNote, type CurrencyCode, type FeedRound, type MarketTrade, type PricedRow, type RateRound } from "@pricetag/sdk/core"
-import { asIso, asNumber, blockFilters, blockRanges, datasetReader, datasetSource, decimalString, describeError, hexOf, isNotStarted, prefixed, readBalancesAt, readTokenFactsAt, readEthBalancesAt, readHead, readPayoutTxsAt, settledThrough, type Query, type ReadL1Fees, type Row, type Source, type WindowRows } from "@pricetag/sdk/internal"
-import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, counterpartyBlocks, decodeRound, decodeRoundAnswer, legRowsFromRaw, withCounterparties, type RawLog, type RawTx } from "./raw.ts"
+import { ERC20_ADDRESSES, ETH_ADDRESS, ETH_USD_FEED, MIN_TRADE_USD_MICROS, TOKENS, TOKEN_FEEDS, TOKEN_FEED_WINDOW_SECONDS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, marketTrades, parseNote, type CostNote, type FeedRound, type MarketTrade, type PricedRow } from "@pricetag/sdk/core"
+import { asIso, asNumber, blockFilters, datasetReader, datasetSource, decimalString, decodeRoundAnswer, describeError, hexOf, isNotStarted, prefixed, readBalancesAt, readTokenFactsAt, readEthBalancesAt, readFeedRoundsAt, readHead, readPayoutTxsAt, settledThrough, type Followed, type PriceUpdate, type Query, type ReadL1Fees, type Row, type Source, type StreamedTable, type WindowRows } from "@pricetag/sdk/internal"
+import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, legRowsFromRaw, type RawLog, type RawTx } from "./raw.ts"
 
-/** A currency's answer at each block, leaving out blocks where the read failed. */
-export type RoundReader = (currency: CurrencyCode, blocks: readonly number[]) => Promise<Map<number, RateRound>>
+/** One `AnswerUpdated` of a token's feed, in the feeds dataset. */
+export type FeedUpdate = PriceUpdate & { asset: string; updatedAt: number }
 
-/**
- * Exchange rates read from each feed's contract, the way `rawSource` reads the oracle, for an Amp with no rates dataset. It leans on
- * an RPC, and it's what a local Amp has to do, because it has no logs from before its start. See the note on the query's shape in `readReferences`.
- */
-export function feedRounds(query: Query, config: { baseDataset: string; network: string }): RoundReader {
-  return async (currency, blocks) => {
-    const rounds = new Map<number, RateRound>()
-    const address = CURRENCIES[currency].feed?.address
-    if (!address) return rounds
-    for (const { filter, count } of blockFilters(blocks)) {
-      const rows = await query<Row>(
-        `SELECT block_num, rpc.${config.network}.eth_call(NULL, evm_encode_hex('${address}'), evm_encode_params('latestRoundData()'), block_num) AS round
-         FROM (SELECT block_num FROM "${config.baseDataset}".blocks WHERE ${filter} LIMIT ${count})`,
-      )
-      for (const row of rows) {
-        const round = decodeRound((row.round as { data?: string } | null)?.data)
-        if (round) rounds.set(asNumber(row.block_num), round)
-      }
-    }
-    return rounds
-  }
+const FEED_LOG_TIMEOUT_MS = 15_000
+
+/** Every feed's updates from as far back as one could still count at `block`, up to the newest. A table with nothing yet has none. */
+export async function readFeedUpdates(query: Query, dataset: string, block: number): Promise<FeedUpdate[]> {
+  const sql = `SELECT block_num, tx_hash, log_index, asset, answer, updated_at FROM "${dataset}".feed_updates WHERE block_num >= ${blockBefore(block, TOKEN_FEED_WINDOW_SECONDS * 1000)} ORDER BY block_num, log_index`
+  const rows = await query<Row>(sql, FEED_LOG_TIMEOUT_MS).catch((error: unknown) => {
+    if (isNotStarted(error)) return [] as Row[]
+    throw error
+  })
+  return rows.map((row) => ({ block_num: asNumber(row.block_num), tx_hash: prefixed(String(row.tx_hash)), log_index: asNumber(row.log_index), asset: String(row.asset), answer: String(row.answer), updatedAt: Number(row.updated_at) }))
+}
+
+/** The newest of `updates` for each asset at or before `block`. */
+export function latestFeedUpdates(updates: readonly FeedUpdate[], block: number): Map<string, FeedUpdate> {
+  return new Map(updates.filter((update) => update.block_num <= block).map((update) => [update.asset, update]))
 }
 
 /**
- * Exchange rates from Chainlink's `AnswerUpdated` logs, in the rates dataset. A rate at a block is the feed's latest update at or
- * before it, which is what the contract answers there, so it needs no RPC.
+ * Feeds' answers from Chainlink's `AnswerUpdated` logs, in the feeds dataset, which are what the contracts answer at that block.
+ * As in `updateRounds`, the table's newest row is the only sign of how far it's reached, so from that row on, an update could still
+ * be on its way, and those blocks read the contract instead. That's what a current price usually is, and a chart's older points are
+ * what this saves calls on. Anything the table can't answer, or a failed read of it, goes to the contract too, as it always did.
  *
- * The table only has a row when a feed updates, so its newest row, from any feed, is the only sign of how far it's reached. It
- * writes in block order, so before that row it's complete. From that row on, an update could still be on its way, and an old
- * answer would quietly be wrong, so those blocks go to `exact`, which reads the contract. That's usually the head and a few
- * recent blocks. If the table stops, everything after it does, which is slower but still right.
+ * Blocks past the newest row seen go straight to the contract, so following the head costs no read of the table. A chart's older
+ * points read the table, which moves that row along.
  */
-export function updateRounds(query: Query, dataset: string, exact: RoundReader): RoundReader {
-  return async (currency, blocks) => {
-    const rounds = new Map<number, RateRound>()
-    const wanted = [...blocks].sort((a, b) => a - b)
-    const first = wanted[0]
-    if (first === undefined) return rounds
-    const sql = `SELECT block_num, currency, answer, updated_at FROM "${dataset}".rate_updates WHERE block_num >= ${blockBefore(first, MAX_ROUND_AGE_SECONDS * 1000)} ORDER BY block_num, log_index`
-    const rows = await query<Row>(sql).catch((error: unknown) => {
-      if (isNotStarted(error)) return [] as Row[]
-      throw error
+export function updateFeedRounds(query: Query, config: { baseDataset: string; feedsDataset: string }, exact: NonNullable<Source["readFeedRounds"]>): NonNullable<Source["readFeedRounds"]> {
+  let reached: number | null = null
+  return async (assets, blocks) => {
+    const feeds = assets.filter((asset) => TOKEN_FEEDS[asset])
+    if (feeds.length === 0 || blocks.length === 0) return new Map()
+    const oldest = Math.min(...blocks)
+    if (reached !== null && oldest >= reached) return exact(assets, blocks)
+    const updates = await readFeedUpdates(query, config.feedsDataset, oldest).catch((error: unknown) => {
+      console.warn(`Reading the feeds dataset failed, so this reads the contracts: ${describeError(error)}`)
+      return [] as FeedUpdate[]
     })
-    const covered = asNumber(rows.at(-1)?.block_num ?? 0)
-    let at = 0
-    let latest: Row | null = null
-    for (const block of wanted.filter((block) => block < covered)) {
-      while (at < rows.length && asNumber((rows[at] as Row).block_num) <= block) {
-        const row = rows[at++] as Row
-        if (row.currency === currency) latest = row
+    const newest = updates.at(-1)?.block_num ?? 0
+    if (newest > 0) reached = Math.max(reached ?? 0, newest)
+    const rounds = new Map<number, Record<string, FeedRound>>()
+    for (const { filter, count } of blockFilters(blocks.filter((block) => block < newest))) {
+      for (const row of await query<Row>(`SELECT block_num, timestamp FROM "${config.baseDataset}".blocks WHERE ${filter} LIMIT ${count}`)) {
+        const block = asNumber(row.block_num)
+        const latest = latestFeedUpdates(updates, block)
+        const known: Record<string, FeedRound> = {}
+        for (const asset of feeds) {
+          const update = latest.get(asset)
+          if (update) known[asset] = { answer: update.answer, updatedAt: update.updatedAt, blockNum: block, timestamp: asIso(row.timestamp) }
+        }
+        rounds.set(block, known)
       }
-      if (latest) rounds.set(block, { answer: String(latest.answer), updatedAt: Number(latest.updated_at) })
     }
-    const past = wanted.filter((block) => block >= covered)
-    if (past.length > 0) for (const [block, round] of await exact(currency, past)) rounds.set(block, round)
-    return rounds
-  }
-}
-
-/** One query however many feeds, in the same shape: a wallet that holds several asks for them all at once. */
-function readFeedRoundsAt(query: Query, config: { baseDataset: string; network: string }): NonNullable<Source["readFeedRounds"]> {
-  return async (assets, block) => {
-    const feeds = assets.flatMap((asset) => {
-      const feed = TOKEN_FEEDS[asset]
-      return feed ? [{ asset, address: feed.address }] : []
-    })
-    if (feeds.length === 0) return {}
-    const calls = feeds.map(({ address }, i) => `rpc.${config.network}.eth_call(NULL, evm_encode_hex('${address}'), evm_encode_params('latestRoundData()'), block_num) AS f${i}`)
-    const { filter, count } = blockFilters([block])[0] as { filter: string; count: number }
-    const [row] = await query<Row>(`SELECT block_num, timestamp, ${calls.join(", ")} FROM (SELECT block_num, timestamp FROM "${config.baseDataset}".blocks WHERE ${filter} LIMIT ${count})`)
-    if (!row) return {}
-    const rounds: Record<string, FeedRound> = {}
-    feeds.forEach(({ asset }, i) => {
-      const round = decodeRound((row[`f${i}`] as { data?: string } | null)?.data)
-      if (round) rounds[asset] = { ...round, blockNum: asNumber(row.block_num), timestamp: asIso(row.timestamp) }
-    })
+    const unanswered = (block: number) => feeds.filter((asset) => !rounds.get(block)?.[asset])
+    const contractBlocks = blocks.filter((block) => unanswered(block).length > 0)
+    if (contractBlocks.length === 0) return rounds
+    const contractAssets = feeds.filter((asset) => contractBlocks.some((block) => !rounds.get(block)?.[asset]))
+    for (const [block, read] of await exact(contractAssets, contractBlocks)) rounds.set(block, { ...read, ...rounds.get(block) })
     return rounds
   }
 }
@@ -250,9 +231,6 @@ function unsettledFrom(reached: number, reorgs: readonly Reorg[]): number | null
   return unsettled.length > 0 ? Math.min(...unsettled.map(({ from }) => from)) : null
 }
 
-/** 5,000 blocks of `logs` took 3.8 s on staging, against about 7 s for the same blocks named 200 at a time. */
-const COUNTERPARTY_SPAN = 5_000
-
 /** What's been read of a wallet: its rows from `from` to `to`, and the answers for blocks that were past any reorg by then. */
 type SharedWallet = Pick<WindowRows, "rows" | "gasUnknown"> & { from: number; to: number; notes: Map<number, CostNote[]>; ethBalances: Map<number, string> }
 
@@ -261,9 +239,8 @@ type SharedWallet = Pick<WindowRows, "rows" | "gasUnknown"> & { from: number; to
  * other, so the second usually wants a few blocks more than the first. Blocks a reorg could still reach are always read
  * again, and everything older comes from what's held, until `rewind` says a reorg went further back than that.
  */
-export function sharedReads(query: Query, config: { baseDataset: string; dataset: string; network: string }) {
-  const reader = datasetReader(query, config)
-  const base = `"${config.baseDataset}"`
+export function sharedReads(query: Query, config: { baseDataset: string; dataset: string; network: string; followed?: Followed<StreamedTable> | undefined }) {
+  const reader = datasetReader(query, { ...config, counterparties: true })
   const wallets = new Map<string, SharedWallet>()
   const turns = new Map<string, Promise<void>>()
   const reorgs: Reorg[] = []
@@ -275,26 +252,6 @@ export function sharedReads(query: Query, config: { baseDataset: string; dataset
     return turn
   }
 
-  /** The rows in a range, with who was on the other side. `legs` doesn't say, so that comes from the raw tables, for only the blocks that matter. */
-  async function readRows(address: string, from: number, to: number): Promise<Pick<WindowRows, "rows" | "gasUnknown">> {
-    const window = await reader.readLegs(address, from, to)
-    const me = hexOf(address)
-    const topic = `X'${me.padStart(64, "0")}'`
-    const allowlist = ERC20_ADDRESSES.map((a) => `X'${hexOf(a)}'`).join(", ")
-    const logs: Pick<RawLog, "tx_hash" | "log_index" | "topic1" | "topic2">[] = []
-    const txs: Pick<RawTx, "tx_hash" | "from" | "to">[] = []
-    // What else these ranges find matches no row of this wallet's, so `withCounterparties` never looks at it.
-    for (const filter of blockRanges(counterpartyBlocks(window.rows, "erc20"), COUNTERPARTY_SPAN)) {
-      const logRows = await query<Row>(`SELECT tx_hash, log_index, topic1, topic2 FROM ${base}.logs WHERE ${filter} AND topic0 = X'${TRANSFER_TOPIC}' AND address IN (${allowlist}) AND (topic1 = ${topic} OR topic2 = ${topic})`)
-      logs.push(...logRows.map((l) => ({ tx_hash: prefixed(String(l.tx_hash)), log_index: asNumber(l.log_index), topic1: String(l.topic1), topic2: String(l.topic2) })))
-    }
-    for (const filter of blockRanges(counterpartyBlocks(window.rows, "eth"), COUNTERPARTY_SPAN)) {
-      const txRows = await query<Row>(`SELECT tx_hash, "from", "to" FROM ${base}.transactions WHERE ${filter} AND ("from" = X'${me}' OR "to" = X'${me}') AND value <> '0'`)
-      txs.push(...txRows.map((t) => ({ tx_hash: prefixed(String(t.tx_hash)), from: String(t.from), to: t.to == null ? null : String(t.to) })))
-    }
-    return { ...window, rows: withCounterparties(window.rows, logs, txs) }
-  }
-
   return {
     readLegs: (address: string, from: number, to: number) =>
       inTurn(address, async () => {
@@ -302,7 +259,7 @@ export function sharedReads(query: Query, config: { baseDataset: string; dataset
         const extended = held && held.from <= from && from <= held.to + 1 ? held : null
         // Until the tables get past a reorg, every read goes back to it, however far that is.
         const readFrom = extended ? Math.max(extended.from, Math.min(settledThrough(extended.to) + 1, unsettledFrom(extended.to, reorgs) ?? Infinity)) : from
-        const read = readFrom <= to ? await readRows(address, readFrom, to) : { rows: [], gasUnknown: [] }
+        const read = readFrom <= to ? await reader.readLegs(address, readFrom, to) : { rows: [], gasUnknown: [] }
         const unread = ({ block_num }: { block_num: number }) => block_num < readFrom || block_num > to
         const next: SharedWallet = {
           from: extended?.from ?? from,
@@ -350,6 +307,7 @@ export function sharedReads(query: Query, config: { baseDataset: string; dataset
      * so what it found goes too.
      */
     async rewind(block: number, tip: number): Promise<void> {
+      config.followed?.rewind()
       reorgs.push({ from: block, oldTip: Math.max(tip, ...[...wallets.values()].map((wallet) => wallet.to)) })
       const before = <T>(answers: Map<number, T>) => new Map([...answers].filter(([at]) => at < block))
       const kept = ({ block_num }: { block_num: number }) => block_num < block
@@ -412,8 +370,8 @@ export function settledL1Fees(read: ReadL1Fees, tip: () => number | null): ReadL
  * The SDK's `datasetSource`, plus what only working out a cost needs: who was on the other side, notes, and market prices.
  * Pricing rules of one wallet history pass the same `shared`, so only what a rule changes is read for each.
  */
-export function resolvingSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string; startBlock: number; network: string }, shared = sharedReads(query, config)): Source {
-  const { readPriced } = datasetReader(query, config)
+export function resolvingSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string; feedsDataset?: string | undefined; startBlock: number; network: string; followed?: Followed<StreamedTable> | undefined }, shared = sharedReads(query, config)): Source {
+  const { readPricedOf } = datasetReader(query, config)
   const ds = `"${config.dataset}"`
   // What a fork of the pricing rule changes, so its market prices come from its own trades.
   const prices = `"${config.priceDataset ?? config.dataset}"`
@@ -421,10 +379,11 @@ export function resolvingSource(query: Query, config: { baseDataset: string; dat
     ...datasetSource(query, config),
     readNotes: shared.readNotes,
     readEthBalances: shared.readEthBalances,
-    readFeedRounds: readFeedRoundsAt(query, config),
+    readFeedRounds: config.feedsDataset ? updateFeedRounds(query, { baseDataset: config.baseDataset, feedsDataset: config.feedsDataset }, readFeedRoundsAt(query, config)) : readFeedRoundsAt(query, config),
 
     async readWindow(address, from, to) {
-      return { ...(await shared.readLegs(address, from, to)), priced: await readPriced(address, from, to) }
+      const legs = await shared.readLegs(address, from, to)
+      return { ...legs, priced: await readPricedOf(legs.rows, address, from, to) }
     },
 
     async marketReady() {

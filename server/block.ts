@@ -1,4 +1,4 @@
-// Reads one block's rows from Amp for `verify.ts`, and what a deposit's hash covers from an RPC.
+// Reads one block's rows from Amp for `verify.ts`, and from an RPC, what a deposit's hash covers and the block's hash.
 
 import { RpcAnswerError, asNumber, decimalString, describeRpcError, hexOf, type Query, type Row } from "@pricetag/sdk/internal"
 import { DEPOSIT_TX_TYPE, type AccessListEntry, type Authorization, type BlockRow, type DepositDetails, type LogRow, type TxRow } from "./verify.ts"
@@ -127,20 +127,25 @@ const PAUSE_AFTER_429_MS = 1_000
 
 type DepositResult = { id: number; result?: { sourceHash?: string; mint?: string; isSystemTx?: boolean } | null }
 
+/** Asks an RPC, waiting out a 429. */
+async function askRpc(url: string, body: string, send: typeof fetch, pauseAfter429Ms: number): Promise<Response> {
+  const post = () => send(url, { method: "POST", headers: { "content-type": "application/json" }, body, signal: AbortSignal.timeout(TIMEOUT_MS) })
+  let response = await post()
+  for (let retry = 0; response.status === 429 && retry < RETRIES; retry++) {
+    await new Promise((resolve) => setTimeout(resolve, pauseAfter429Ms))
+    response = await post()
+  }
+  if (!response.ok) throw new RpcAnswerError(`status ${response.status}`)
+  return response
+}
+
 /** What each deposit's hash covers and Amp doesn't store, or null unless every one was read. */
 export function createDepositReader(url: string, send: typeof fetch = fetch, pauseAfter429Ms = PAUSE_AFTER_429_MS): ReadDeposits {
   return async (txHashes) => {
     if (txHashes.length === 0) return new Map()
     try {
       const body = JSON.stringify(txHashes.map((hash, id) => ({ jsonrpc: "2.0", id, method: "eth_getTransactionByHash", params: [`0x${hexOf(hash)}`] })))
-      const post = () => send(url, { method: "POST", headers: { "content-type": "application/json" }, body, signal: AbortSignal.timeout(TIMEOUT_MS) })
-      let response = await post()
-      for (let retry = 0; response.status === 429 && retry < RETRIES; retry++) {
-        await new Promise((resolve) => setTimeout(resolve, pauseAfter429Ms))
-        response = await post()
-      }
-      if (!response.ok) throw new RpcAnswerError(`status ${response.status}`)
-      const results = (await response.json()) as DepositResult[]
+      const results = (await (await askRpc(url, body, send, pauseAfter429Ms)).json()) as DepositResult[]
       const deposits = new Map<string, DepositDetails>()
       for (const { id, result } of results) {
         const hash = txHashes[id]
@@ -149,6 +154,22 @@ export function createDepositReader(url: string, send: typeof fetch = fetch, pau
       return deposits.size === txHashes.length ? deposits : null
     } catch (error) {
       console.error("Couldn't read deposits:", describeRpcError(error))
+      return null
+    }
+  }
+}
+
+export type ReadBlockHash = (blockNum: number) => Promise<string | null>
+
+/** The hash Base's node reports at a block number, or null when it doesn't answer or doesn't have that block. */
+export function createBlockHashReader(url: string, send: typeof fetch = fetch, pauseAfter429Ms = PAUSE_AFTER_429_MS): ReadBlockHash {
+  return async (blockNum) => {
+    try {
+      const body = JSON.stringify({ jsonrpc: "2.0", id: 0, method: "eth_getBlockByNumber", params: [`0x${blockNum.toString(16)}`, false] })
+      const { result } = (await (await askRpc(url, body, send, pauseAfter429Ms)).json()) as { result?: { hash?: unknown } | null }
+      return typeof result?.hash === "string" ? hexOf(result.hash) : null
+    } catch (error) {
+      console.error("Couldn't read a block's hash:", describeRpcError(error))
       return null
     }
   }

@@ -291,7 +291,7 @@ export function combinedPortfolioOf(read: readonly WalletResponse[], method: Met
 export type ExplanationPart = { wallet: string; value: string | null; lines: string[] }
 
 /** The same explanation with its legs folded, for a client that shows them itself. `walletOf` says which wallet each is in. */
-export type CombinedExplanation = Explanation & { parts: ExplanationPart[]; walletOf: (leg: PricedLeg) => string }
+export type CombinedExplanation = Explanation & { parts: ExplanationPart[]; walletOf: (leg: PricedLeg) => string; priceProof?: { asset: string; price: string; wallet: string } }
 
 /** What's behind one number across the wallets: the number, each wallet's side of it, and every leg, saying which wallet it's in. */
 export type CombinedExplanationResponse = Omit<ExplanationResponse, "legs"> & { parts: ExplanationPart[]; legs: (ExplanationLeg & { wallet: string })[] }
@@ -355,7 +355,10 @@ export function explainAcross(read: readonly WalletResponse[], method: Method, t
     if (!position || parts.length === 0) return null
     const { title } = (parts[0] as (typeof parts)[number]).explanation
     const lines = parts.length > 1 ? [`Across ${parts.length} of your wallets.`] : []
-    return { currency, title, value: assetValue(position, target.metric, currency), sourceValue: null, lines, parts: partsOut, effects, walletOf: whose }
+    // The same price in every wallet that holds it, so any of them can show where it comes from.
+    const priced = parts.find(({ explanation }) => explanation.priceProof)
+    const priceProof = priced?.explanation.priceProof ? { priceProof: { ...priced.explanation.priceProof, wallet: priced.wallet } } : {}
+    return { currency, title, value: assetValue(position, target.metric, currency), sourceValue: null, lines, ...priceProof, parts: partsOut, effects, walletOf: whose }
   }
   const point = points.find((p) => p.txHash === target.txHash)
   if (!point) return null

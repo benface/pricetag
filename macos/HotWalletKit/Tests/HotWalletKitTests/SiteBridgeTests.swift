@@ -1045,10 +1045,10 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
             // Adding to an allowance doesn't set it, so it can't say "up to", and adding nothing doesn't stop anything.
             ("0x39509351" + spenderWord + limited, false, "spend 5 USDC more"),
             ("0x39509351" + spenderWord + word("0"), false, "Add nothing"),
-            ("0xa22cb465" + spenderWord + word("1"), true, "every item"),
-            ("0xa22cb465" + spenderWord + word("0"), false, "Stop"),
+            // No token on the list is a collection, and that's all that can be said without the contract's word for it.
+            ("0xa22cb465" + spenderWord + word("1"), true, "can't read"),
+            ("0xa22cb465" + spenderWord + word("0"), false, "can't read"),
             ("0xa9059cbb" + spenderWord + limited, false, "Send 5 USDC"),
-            ("0x87517c45" + word(String(usdcText.dropFirst(2))) + spenderWord + word("ffffffffffffffffffffffffffffffffffffffff") + word("1"), true, "all of your USDC"),
             ("0xd505accf" + word(String(hot.dropFirst(2))) + spenderWord + maxWord + maxWord + word("1b") + word("1") + word("2"), true, "spend your USDC"),
             ("0x12345678", false, "can't read"),
         ]
@@ -1060,6 +1060,32 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
             rig.bridge.cancelAll(connection: rig.connection)
             _ = await task.value
         }
+    }
+
+    @Test func permit2sApprovalOnlyReadsAsOneOnPermit2() async {
+        let rig = SiteRig()
+        await rig.connect()
+        let data = "0x87517c45" + word(String(usdcText.dropFirst(2))) + spenderWord + word("ffffffffffffffffffffffffffffffffffffffff") + word("1")
+        for (to, headline) in [(Base.permit2.lowercased, "all of your USDC"), (usdcText, "can't read")] {
+            let (task, approval) = await rig.start("eth_sendTransaction", rig.sendParameters(to: to, value: "0x0", data: data))
+            guard case .transaction(let review) = approval.action else { Issue.record("Not a transaction"); return }
+            #expect(approval.needsAcknowledgment)
+            #expect(review.headline.contains(headline), "\(review.headline) to \(to)")
+            rig.bridge.cancelAll(connection: rig.connection)
+            _ = await task.value
+        }
+    }
+
+    @Test func whatTouchIDAsksNeverRepeatsWhatASiteNamedThings() async throws {
+        let rig = SiteRig()
+        await rig.connect()
+        let json = JSONValue.string(#"{"domain":{"name":"Your bank, safe to approve","chainId":8453},"types":{"Note":[{"name":"text","type":"string"}]},"primaryType":"Note","message":{"text":"hi"}}"#)
+        let (task, approval) = await rig.start("eth_signTypedData_v4", .array([.string(hot), json]))
+        guard case .message(let review) = approval.action else { Issue.record("Not a message"); return }
+        #expect(review.title == "Sign this for Your bank, safe to approve")
+        await rig.bridge.approve(approval.id, acknowledged: true)
+        _ = try await task.value.get()
+        #expect(rig.presence.reasons == ["sign this message for app.example.com"])
     }
 
     @Test func aTypedPermitTakesAcknowledgingAndAStrongWarning() async throws {
@@ -1091,12 +1117,12 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
         _ = await task.value
     }
 
-    @Test func plainTypedDataOnBaseIsntSomethingToBeAlarmedAbout() async {
+    @Test func evenPlainTypedDataOnBaseTakesAcknowledging() async {
         let rig = SiteRig()
         await rig.connect()
         let json = JSONValue.string(#"{"domain":{"name":"x","chainId":8453},"types":{"Note":[{"name":"text","type":"string"}]},"primaryType":"Note","message":{"text":"hi"}}"#)
         let (task, approval) = await rig.start("eth_signTypedData_v4", .array([.string(hot), json]))
-        #expect(!approval.needsAcknowledgment)
+        #expect(approval.needsAcknowledgment)
         rig.bridge.reject(approval.id)
         _ = await task.value
     }
@@ -1664,7 +1690,7 @@ private func paddedAddress(_ text: String) -> String { word(String(text.dropFirs
             await Task.yield()
         }
         #expect(await base.isWaiting)
-        wallet.setRPC(otherURL)
+        await wallet.setRPC(otherURL)
         await base.releaseChainID()
         await check.value
 

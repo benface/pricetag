@@ -182,7 +182,221 @@ private func permitSingle(amount: String, expiration: String, verifyingContract:
             .replacingOccurrences(of: #""deadline":"1793836800"}"#, with: #""deadline":"1793836800","note":"hi"}"#)
         let message = try review(extra)
         #expect(message.permit == nil)
-        #expect(message.headline == "Sign this for USD Coin")
+        #expect(message.title == "Sign this for USD Coin")
+        #expect(message.headline == "Sign this message")
         #expect(message.warnings.first?.isStrong == true)
+    }
+}
+
+private func note(domain: String = #""name":"x","chainId":8453"#, text: String) -> String {
+    #"{"domain":{\#(domain)},"types":{"Note":[{"name":"text","type":"string"}]},"primaryType":"Note","message":{"text":"\#(text)"}}"#
+}
+
+/// What a site could otherwise get past the warnings that make someone stop and read.
+@Suite struct StrongWarningTests {
+    private let quote = SiteQuote(gasLimit: 60000, maxFeePerGas: 1, feeWei: 1, ethUsdMicros: nil, ethBalance: 1 << 64)
+    private let spenderWord = String(repeating: "0", count: 24) + stranger.dropFirst(2)
+    private let usdcWord = String(repeating: "0", count: 24) + usdcText.dropFirst(2)
+
+    private func amountWord(_ amount: UInt128) -> String {
+        let hex = String(amount, radix: 16)
+        return String(repeating: "0", count: 64 - hex.count) + hex
+    }
+
+    private func call(to: String = usdcText, _ selector: String, _ arguments: String...) -> TransactionReview {
+        TransactionReview(SiteTransaction(to: EthereumAddress(to)!, value: 0, data: Hex.decode(selector + arguments.joined())!), quote: quote)
+    }
+
+    private static let approve = "095ea7b3"
+    private static let increaseAllowance = "39509351"
+    private static let setApprovalForAll = "a22cb465"
+    private static let transfer = "a9059cbb"
+
+    // MARK: Near-unlimited approvals
+
+    /// 2^96 - 1 of a token with 6 decimals is 79 sextillion of it.
+    @Test func justUnderTheOldLineIsStillUnlimited() throws {
+        let nearly = (UInt128(1) << 96) - 1
+        for selector in [Self.approve, Self.increaseAllowance] {
+            let review = call(selector, spenderWord, amountWord(nearly))
+            #expect(review.headline == "Let 0x4444…4444 spend all of your USDC")
+            #expect(review.warnings.first == SiteWarning(SiteWording.unlimited(spender: "0x4444…4444", asset: "USDC"), isStrong: true))
+        }
+        let permit2 = call(to: Base.permit2.lowercased, "87517c45", usdcWord, spenderWord, amountWord(nearly), amountWord(1))
+        #expect(permit2.headline == "Let 0x4444…4444 spend all of your USDC")
+        #expect(permit2.warnings.first?.isStrong == true)
+        let permit = try review(eip2612(value: String(nearly)))
+        #expect(permit.permit?.amount == "Unlimited")
+        #expect(permit.headline == "Let 0x4444…4444 spend all of your USDC")
+    }
+
+    @Test func theLineIsWhereItSaysForEachToken() {
+        let usdcBillion: UInt128 = 1_000_000_000 * 1_000_000
+        #expect(call(Self.approve, spenderWord, amountWord(usdcBillion - 1)).warnings.filter(\.isStrong).isEmpty)
+        #expect(call(Self.approve, spenderWord, amountWord(usdcBillion - 1)).headline == "Let 0x4444…4444 spend up to 999999999.999999 USDC")
+        #expect(call(Self.approve, spenderWord, amountWord(usdcBillion)).warnings.first?.isStrong == true)
+        // Decimals alone wouldn't catch this: a billion WETH is a thousand times as many as exist.
+        let weth = Base.tokens.first { $0.symbol == "WETH" }
+        #expect(TransactionReview.isUnlimited(1_000_000 * 1_000_000_000_000_000_000, of: weth))
+        #expect(!TransactionReview.isUnlimited(1_000_000 * 1_000_000_000_000_000_000 - 1, of: weth))
+    }
+
+    /// A token added to the list without a line of its own would fall back to one that's far too high.
+    @Test func everyTokenOnTheListHasItsOwnLine() {
+        for token in Base.tokens where !token.isNative {
+            #expect(TransactionReview.isUnlimited((UInt128(1) << 96) - 1, of: token), "\(token.symbol)")
+            let one = (0..<token.decimals).reduce(UInt128(1)) { units, _ in units * 10 }
+            #expect(!TransactionReview.isUnlimited(one, of: token), "\(token.symbol)")
+        }
+    }
+
+    /// With no decimals to go by, no amount can be called small.
+    @Test func anyAmountOfATokenOffTheListIsStrong() {
+        let review = call(to: stranger, Self.approve, spenderWord, amountWord(5))
+        #expect(review.warnings.contains(SiteWarning(SiteWording.unknownAllowance(spender: "0x4444…4444"), isStrong: true)))
+        let unlimited = call(to: stranger, Self.increaseAllowance, spenderWord, amountWord(1 << 96))
+        #expect(unlimited.warnings.first == SiteWarning(SiteWording.unlimited(spender: "0x4444…4444", asset: "tokens at 0x4444…4444"), isStrong: true))
+        let onPermit2 = call(to: Base.permit2.lowercased, "87517c45", spenderWord, spenderWord, amountWord(5), amountWord(1))
+        #expect(onPermit2.headline == "Let 0x4444…4444 spend up to 5 units of this token")
+        #expect(onPermit2.warnings.first == SiteWarning(SiteWording.unknownAllowance(spender: "0x4444…4444"), isStrong: true))
+    }
+
+    // MARK: Typed data of any shape
+
+    @Test func everyShapeIsStrong() throws {
+        let contract = #""chainId":8453,"verifyingContract":"\#(stranger)""#
+        let shapes = [
+            #"{"domain":{\#(contract)},"types":{"ForwardRequest":[{"name":"from","type":"address"},{"name":"to","type":"address"},{"name":"value","type":"uint256"},{"name":"gas","type":"uint256"},{"name":"nonce","type":"uint256"},{"name":"data","type":"bytes"}]},"primaryType":"ForwardRequest","message":{"from":"\#(stranger)","to":"\#(stranger)","value":"0","gas":"1","nonce":"0","data":"0x"}}"#,
+            #"{"domain":{\#(contract)},"types":{"MetaTransaction":[{"name":"nonce","type":"uint256"},{"name":"from","type":"address"},{"name":"functionSignature","type":"bytes"}]},"primaryType":"MetaTransaction","message":{"nonce":"0","from":"\#(stranger)","functionSignature":"0x"}}"#,
+            #"{"domain":{\#(contract)},"types":{"SafeTx":[{"name":"to","type":"address"},{"name":"value","type":"uint256"},{"name":"data","type":"bytes"}]},"primaryType":"SafeTx","message":{"to":"\#(stranger)","value":"0","data":"0x"}}"#,
+            // Only words, but for a contract that can read them however it likes.
+            note(domain: contract, text: "hi"),
+            note(domain: #""chainId":8453,"salt":"0x\#(String(repeating: "0", count: 64))""#, text: "hi"),
+            // No contract, but there's something in it to act on.
+            #"{"domain":{"chainId":8453},"types":{"Pay":[{"name":"to","type":"address"}]},"primaryType":"Pay","message":{"to":"\#(stranger)"}}"#,
+            #"{"domain":{"chainId":8453},"types":{"Outer":[{"name":"inner","type":"Inner"}],"Inner":[{"name":"text","type":"string"}]},"primaryType":"Outer","message":{"inner":{"text":"hi"}}}"#,
+            // No contract and only words, but words can carry an address and a call, and a contract can still accept it.
+            #"{"domain":{"name":"Example","chainId":8453},"types":{"ForwardRequest":[{"name":"to","type":"string"},{"name":"data","type":"string"},{"name":"nonce","type":"string"}]},"primaryType":"ForwardRequest","message":{"to":"\#(stranger)","data":"0xabcdef","nonce":"1"}}"#,
+            #"{"domain":{"chainId":8453},"types":{"Note":[{"name":"text","type":"string"},{"name":"ok","type":"bool"}]},"primaryType":"Note","message":{"text":"hi","ok":true}}"#,
+            note(text: "hi"),
+        ]
+        for shape in shapes {
+            let message = try review(shape)
+            #expect(message.warnings.first == SiteWarning(SiteWording.typedUnclear, isStrong: true), "\(shape)")
+            #expect(message.headline == "Sign this message", "\(shape)")
+        }
+    }
+
+    @Test func whatItsCalledOnlyPicksTheWarning() throws {
+        let named = note(text: "hi").replacingOccurrences(of: "Note", with: "Permit")
+        #expect(try review(named).warnings.first == SiteWarning(SiteWording.typedPermit(spender: nil), isStrong: true))
+    }
+
+    // MARK: Text that pretends to be something else
+
+    /// Each is a letter, mark or symbol to Unicode, so only what it draws gives it away: nothing. JSON can't write the last one as one code.
+    private static let drawNothing = [(#"͏"#, #"\u{34F}"#), (#"ㅤ"#, #"\u{3164}"#), (#"ᅟ"#, #"\u{115F}"#), (#"ﾠ"#, #"\u{FFA0}"#), (#"️"#, #"\u{FE0F}"#), (#"⠀"#, #"\u{2800}"#), (#"𝅙"#, #"\u{1D159}"#)]
+    private static let hiddenInUnclear = [SiteWarning(SiteWording.typedUnclear, isStrong: true), SiteWarning(SiteWording.hiddenCharacters, isStrong: true)]
+
+    @Test func aStringCantLookLikeAnotherField() throws {
+        let message = try review(note(text: #"hi\nspender: Uniswap"#))
+        #expect(message.body == #"text: hi\nspender: Uniswap"#)
+        #expect(!message.body.contains("\n"))
+        // Harmless once it's on one line, so it adds no warning of its own.
+        #expect(message.warnings == [SiteWarning(SiteWording.typedUnclear, isStrong: true)])
+        for (escaped, code) in [(#"\u2028"#, #"\u{2028}"#), (#"\u2029"#, #"\u{2029}"#), (#"\u0085"#, #"\u{85}"#), (#"\r"#, #"\r"#), (#"\t"#, #"\t"#)] {
+            let body = try review(note(text: "a\(escaped)b")).body
+            #expect(body == "text: a\(code)b", "\(escaped)")
+        }
+    }
+
+    @Test func spacesCantPushTextOntoANewLine() throws {
+        #expect(try review(note(text: "one two")).body == "text: one two")
+        #expect(try review(note(text: "one   two")).body == #"text: one \u{20}\u{20}two"#)
+        #expect(try review(note(text: #"one\u3000two"#)).body == #"text: one\u{3000}two"#)
+    }
+
+    @Test func charactersThatHideOrRearrangeAreShownAndWarnedAbout() throws {
+        for (escaped, code) in [(#"\u202e"#, #"\u{202E}"#), (#"\u200b"#, #"\u{200B}"#), (#"\u0007"#, #"\u{7}"#)] + Self.drawNothing {
+            let message = try review(note(text: "safe\(escaped)text"))
+            #expect(message.body == "text: safe\(code)text", "\(escaped)")
+            #expect(message.warnings == Self.hiddenInUnclear, "\(escaped)")
+        }
+    }
+
+    /// `spen\u034fder` looks just like `spender`, but it's another field.
+    @Test func aFieldsNameCantHideAnythingEither() throws {
+        for (escaped, code) in Self.drawNothing {
+            let json = #"{"domain":{"chainId":8453},"types":{"Note":[{"name":"spen\#(escaped)der","type":"string"}]},"primaryType":"Note","message":{"spen\#(escaped)der":"Uniswap"}}"#
+            let message = try review(json)
+            #expect(message.body == "spen\(code)der: Uniswap", "\(escaped)")
+            #expect(message.warnings == Self.hiddenInUnclear, "\(escaped)")
+        }
+    }
+
+    @Test func aPersonalMessageThatDrawsNothingIsShownAsHex() {
+        for scalar in ["\u{034F}", "\u{3164}", "\u{115F}", "\u{FFA0}", "\u{FE0F}", "\u{2800}", "\u{1D159}"] {
+            let bytes = Array("safe\(scalar)text".utf8)
+            let message = MessageReview(personal: bytes, origin: "https://app.example.com")
+            #expect(message.body == "0x" + Hex.encode(bytes), "\(scalar.unicodeScalars.first!.value)")
+            #expect(message.warnings == [SiteWarning(SiteWording.unreadableMessage, isStrong: true)])
+        }
+        #expect(MessageReview(personal: Array("caf\u{65}\u{301} ok".utf8), origin: "https://app.example.com").warnings.isEmpty)
+    }
+
+    @Test func aFieldsNameIsFilteredToo() throws {
+        let json = #"{"domain":{"chainId":8453},"types":{"Note":[{"name":"a\nspender","type":"string"}]},"primaryType":"Note","message":{"a\nspender":"Uniswap"}}"#
+        #expect(try review(json).body == #"a\nspender: Uniswap"#)
+    }
+
+    @Test func aNameThatIsntPlainStaysOffTheTitle() throws {
+        #expect(try review(note(domain: #""name":"USD Coin","chainId":8453"#, text: "hi")).title == "Sign this for USD Coin")
+        for name in [#"USD\nCoin"#, #"USD\u202eCoin"#, #"USD\u200bCoin"#, "USD  Coin"] + Self.drawNothing.map({ "USD\($0.0)Coin" }) {
+            let message = try review(note(domain: #""name":"\#(name)","chainId":8453"#, text: "hi"))
+            #expect(message.title == "Sign this message", "\(name)")
+        }
+        for name in [#"USD\u202eCoin"#] + Self.drawNothing.map({ "USD\($0.0)Coin" }) {
+            #expect(try review(note(domain: #""name":"\#(name)","chainId":8453"#, text: "hi")).warnings == Self.hiddenInUnclear, "\(name)")
+        }
+    }
+
+    /// What a permit says comes from what's signed, so nothing a site named things reaches the window or Touch ID.
+    @Test func aPermitsTitleIsItsOwn() throws {
+        let message = try review(eip2612(value: "250000000").replacingOccurrences(of: "USD Coin", with: "Totally Safe"))
+        #expect(message.title == "Let 0x4444…4444 spend up to 250 USDC")
+        #expect(message.title == message.headline)
+    }
+
+    // MARK: Selectors on contracts off the list
+
+    @Test func aSelectorMeansNothingOffTheList() {
+        let cases: [(String, [String], Bool)] = [
+            (Self.approve, [spenderWord, amountWord(0)], false),
+            (Self.increaseAllowance, [spenderWord, amountWord(0)], false),
+            (Self.transfer, [spenderWord, amountWord(5)], false),
+            (Self.setApprovalForAll, [spenderWord, amountWord(0)], false),
+            (Self.approve, [spenderWord, amountWord(5)], true),
+            (Self.setApprovalForAll, [spenderWord, amountWord(1)], true),
+            ("d505accf", [spenderWord, spenderWord, amountWord(5), amountWord(1), amountWord(27), amountWord(1), amountWord(2)], true),
+        ]
+        for (selector, arguments, isStrong) in cases {
+            let data = Hex.decode(selector + arguments.joined())!
+            let review = TransactionReview(SiteTransaction(to: EthereumAddress(stranger)!, value: 0, data: data), quote: quote)
+            #expect(review.isUnreadableCall, "\(selector)")
+            #expect(review.headline == "Approve a request this app can't read", "\(selector)")
+            #expect(review.title == SiteWording.unclear, "\(selector)")
+            #expect(review.recipient == nil && review.spender == nil, "\(selector)")
+            #expect(review.warnings.filter(\.isStrong).isEmpty != isStrong, "\(selector)")
+        }
+    }
+
+    @Test func approveForAllStaysStrongWithoutAnEstimate() {
+        let review = call(to: stranger, Self.setApprovalForAll, spenderWord, amountWord(1))
+        #expect(review.warnings.first == SiteWarning(SiteWording.unlimited(spender: "0x4444…4444", asset: "items in the collection at 0x4444…4444"), isStrong: true))
+    }
+
+    @Test func aReadableCallToTheListIsntAnUnreadableOne() {
+        #expect(!call(Self.approve, spenderWord, amountWord(5)).isUnreadableCall)
+        #expect(!call(Self.transfer, spenderWord, amountWord(5)).isUnreadableCall)
     }
 }
