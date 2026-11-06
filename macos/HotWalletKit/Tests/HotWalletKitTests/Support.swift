@@ -42,6 +42,9 @@ actor FakeChain: ChainClient {
     /// What a node says to `eth_simulateV1`, and to reading a price feed.
     var simulation: RPCAnswer = .failure(SiteError(code: -32601, message: "the method eth_simulateV1 does not exist/is not available"))
     var feedRound: RPCAnswer = .failure(SiteError(code: 3, message: "execution reverted"))
+    /// What a node says to reading a contract, by its address and calldata, and which chain it's on.
+    var callAnswers: [String: RPCAnswer] = [:]
+    var chainIDAnswer: RPCAnswer?
     private(set) var simulationParameters: JSONValue?
     private(set) var sent: [SignedTransaction] = []
     private(set) var reads: [String] = []
@@ -81,6 +84,8 @@ actor FakeChain: ChainClient {
     func setReadFailure(_ failure: ChainError?) { readFailure = failure }
     func setSimulation(_ answer: RPCAnswer) { simulation = answer }
     func setFeedRound(_ answer: RPCAnswer) { feedRound = answer }
+    func setChainID(_ answer: RPCAnswer) { chainIDAnswer = answer }
+    func answerCall(_ call: String, _ answer: RPCAnswer) { callAnswers[call] = answer }
     func failSnapshots(_ times: Int, with failure: ChainError) { snapshotFailures = Array(repeating: failure, count: times) }
     func setOnSend(_ body: @escaping @Sendable (SignedTransaction) -> Void) { onSend = body }
 
@@ -130,6 +135,8 @@ actor FakeChain: ChainClient {
 
     func read(_ method: String, _ parameters: JSONValue) -> RPCAnswer {
         reads.append(method)
+        if method == "eth_chainId", let chainIDAnswer { return chainIDAnswer }
+        if method == "eth_call", case .string(let to)? = parameters[0]?["to"], case .string(let data)? = parameters[0]?["data"], let answer = callAnswers[to + data] { return answer }
         if method == "eth_simulateV1" {
             simulationParameters = parameters
             return simulation
@@ -339,5 +346,16 @@ struct Rig {
         self.stateStore = stateStore
         self.portfolios = portfolios
         wallet = HotWallet(signer: signer, settingsStore: settingsStore, stateStore: stateStore, presence: userPresence ?? FakePresence(allows: presence), portfolioSource: { portfolios }, moneyDisplay: moneyDisplay, makeChain: { _ in chain }, now: now, tickDelay: tickDelay, receiptDelay: receiptDelay)
+    }
+}
+
+/// Says what it's told, and remembers what it was asked.
+final class RecordingPresence: UserPresence, @unchecked Sendable {
+    private(set) var reasons: [String] = []
+    var refusal: (any Error)?
+
+    func confirm(reason: String) throws {
+        reasons.append(reason)
+        if let refusal { throw refusal }
     }
 }

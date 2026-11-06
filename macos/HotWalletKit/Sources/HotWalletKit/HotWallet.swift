@@ -517,6 +517,12 @@ public final class HotWallet {
 
     public var capText: String { display.cap(settings.capUsdMicros) }
 
+    /// What everything priced here is worth, ETH kept for gas included, so it reads the same as this wallet's numbers anywhere else.
+    /// The cap counts the plan's value, which leaves that ETH out. Nil until the first read.
+    public var valueUsdMicros: UInt128? {
+        plan.map { _ in holdings.reduce(0) { $0 + ($1.valueUsdMicros ?? 0) } }
+    }
+
     /// Whether something needs the user, for places with room for only a triangle.
     public var needsAttention: Bool {
         alarm != nil || notices.contains { $0.kind == .warning }
@@ -545,7 +551,13 @@ public final class HotWallet {
 
     // MARK: - Settings
 
-    public func setCap(dollars: Int) {
+    /// Lowering it can send money to savings at the next look, so that asks. Raising it moves nothing, so that doesn't.
+    public func setCap(dollars: Int) async {
+        var next = settings
+        next.setCap(dollars: dollars)
+        if next.capUsdMicros < settings.capUsdMicros {
+            guard await confirmingSetting("lower this wallet's cap to \(money(dollars: next.capInDollars)), which can move what's above it to your savings") else { return }
+        }
         updateSettings { $0.setCap(dollars: dollars) }
     }
 
@@ -553,11 +565,16 @@ public final class HotWallet {
         updateSettings { $0.sweepsRealizedGains = value }
     }
 
-    public func setSweepDestination(_ address: EthereumAddress) {
+    public func setSweepDestination(_ address: EthereumAddress) async {
+        guard address != settings.sweepDestination, let wallet = settings.coldWallets.first(where: { $0.address == address }) else { return }
+        guard await confirmingSetting("send sweeps to \(wallet.name) (\(address.checksummed))") else { return }
         updateSettings { $0.setSweepDestination(address) }
     }
 
-    public func setRPC(_ url: URL) {
+    public func setRPC(_ url: URL) async {
+        guard url != settings.rpcURL else { return }
+        guard await confirmingSetting("change this wallet's network address to \(url.host() ?? url.absoluteString)") else { return }
+        // Two can ask at once, and only the first has anything left to do.
         guard url != settings.rpcURL else { return }
         updateSettings { $0.rpcURL = url }
         chain = makeChain(url)
@@ -578,11 +595,18 @@ public final class HotWallet {
     }
 
     /// The address has to be what the user read on the device's screen. Nothing here can check that, so the sheet makes them say so.
-    public func addColdWallet(address text: String, name: String) throws(ColdWalletProblem) {
+    /// True if it was added. `isWanted` is asked after the prompt, since what's on screen can change while it's open.
+    @discardableResult
+    public func addColdWallet(address text: String, name: String, isWanted: () -> Bool = { true }) async throws(ColdWalletProblem) -> Bool {
         guard let address = EthereumAddress(text.trimmingCharacters(in: .whitespacesAndNewlines)) else { throw .notAnAddress }
+        if let problem = problem(addingColdWallet: address) { throw problem }
+        let what = settings.sweepDestination == nil ? "add \(address.checksummed) as your savings wallet, where money above your cap will go" : "add \(address.checksummed) as a savings wallet"
+        guard await confirmingSetting(what), isWanted() else { return false }
+        // A rotation can start or finish while the prompt's open.
         if let problem = problem(addingColdWallet: address) { throw problem }
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         updateSettings { $0.add(ColdWallet(address: address, name: cleanName.isEmpty ? "Savings" : cleanName, confirmedOnDeviceAt: now())) }
+        return true
     }
 
     /// Other accounts on a device, which go in the book as the user's from here on. This can't tell whose they are, so the caller has to have asked. They only link costs.
@@ -606,6 +630,23 @@ public final class HotWallet {
     public func renameColdWallet(_ address: EthereumAddress, to name: String) {
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         updateSettings { $0.renameColdWallet(address, to: cleanName.isEmpty ? "Savings" : cleanName) }
+    }
+
+    /// For a setting that decides what the next sweep does, since a sweep then runs with nobody asked. It doesn't wait its turn like `work`,
+    /// because nothing here signs, and a node that's stuck is a reason to change the RPC.
+    private func confirmingSetting(_ reason: String) async -> Bool {
+        isWorking = true
+        defer { isWorking = false }
+        sweepProblem = nil
+        do {
+            try await confirmPresence(reason: reason)
+            return true
+        } catch let error as LAError where [.userCancel, .appCancel, .systemCancel].contains(error.code) {
+            return false
+        } catch {
+            sweepProblem = HotWalletWording.touchIDDidNotConfirm
+            return false
+        }
     }
 
     private func updateSettings(_ change: (inout WalletSettings) -> Void) {
@@ -695,8 +736,8 @@ public final class HotWallet {
 
     /// What's already gone has to land and show up first, so a sweep can't reuse its nonce or move it twice.
     private func whySweepHasToWait(for address: EthereumAddress, lastRead: ChainSnapshot?) -> String? {
-        if let lastRead, lastRead.blockNumber < state.settledThroughBlock ?? 0 { return "The last sweep is still showing up. Try again in a moment." }
-        if (state.records[address] ?? []).contains(where: { $0.status == .pending }) { return "A sweep is still on its way. Try again in a moment." }
+        if let lastRead, lastRead.blockNumber < state.settledThroughBlock ?? 0 { return HotWalletWording.lastOneStillShowingUp }
+        if (state.records[address] ?? []).contains(where: { $0.status == .pending }) { return HotWalletWording.lastOneOnItsWay }
         return nil
     }
 
@@ -767,6 +808,7 @@ public final class HotWallet {
 
     /// Everything else that was about one key, and that's not worth writing down.
     private func forgetTheOldKeysReads() {
+        permitChecks = [:]
         snapshot = nil
         plan = nil
         portfolio = nil
@@ -838,6 +880,9 @@ public final class HotWallet {
     }
 
     public var connectedSites: [String] { state.connectedSites ?? [] }
+    /// What the last check of `signedPermits` found. One it hasn't looked at has no answer here.
+    public private(set) var permitChecks: [String: SignedPermit.Check] = [:]
+    public private(set) var isCheckingPermits = false
 
     func isConnected(_ origin: String) -> Bool {
         connectedSites.contains(origin)
@@ -1000,10 +1045,62 @@ public final class HotWallet {
         return signed.hash
     }
 
-    /// Only after the user approved exactly this in the app. A message never spends by itself, but what it permits can.
-    func signForSite(_ message: SignableMessage) async throws -> MessageSignature {
+    /// Only after the user approved exactly this in the app. A message never spends by itself, but what it permits can, so a permit
+    /// is written down before the site gets it. If that fails, the site doesn't get it.
+    func signForSite(_ review: MessageReview, origin: String) async throws -> MessageSignature {
         guard let address else { throw ChainError.unreadable }
-        return try await signer.sign(message, from: address)
+        let signature = try await signer.sign(review.signable, from: address)
+        if let permit = SignedPermit(review, site: origin, signedAt: now()), state.signedPermits?[address]?.contains(where: { $0.id == permit.id }) != true {
+            let before = state.signedPermits
+            state.signedPermits = (before ?? [:]).merging([address: [permit]]) { $0 + $1 }
+            do {
+                try persist()
+            } catch {
+                state.signedPermits = before
+                throw error
+            }
+        }
+        return signature
+    }
+
+    /// What this key signed for sites that may still be used, newest first. An expired one can't be, whatever else is known about it.
+    public var signedPermits: [SignedPermit] {
+        guard let address else { return [] }
+        let time = now()
+        return (state.signedPermits?[address] ?? []).filter { !$0.hasExpired(at: time) }.reversed()
+    }
+
+    /// Asks the chain about each one, and forgets it only once that's proof it can't be used, or once it's expired. Anything that
+    /// doesn't answer stays listed, because a permit that can't be checked may still work.
+    public func checkSignedPermits() async {
+        guard let address, !isCheckingPermits else { return }
+        isCheckingPermits = true
+        defer { isCheckingPermits = false }
+        let time = now()
+        let permits = state.signedPermits?[address] ?? []
+        let open = permits.filter { !$0.hasExpired(at: time) }
+        // Settings can change the node while this waits, and only the node that said it's on Base gets to answer.
+        let chain = chain
+        // A node on another chain could answer anything about these, so only Base's answers count.
+        var isBase = false
+        if open.contains(where: { $0.terms != nil }) { isBase = (try? await chain.read("eth_chainId", .array([])))?.isBaseChainID == true }
+        var spent = Set<String>()
+        var checks: [String: SignedPermit.Check] = [:]
+        for permit in open {
+            guard let terms = permit.terms else { continue }
+            checks[permit.id] = .couldntCheck
+            guard isBase, let read = terms.read(owner: address),
+                  case .success(let answer)? = try? await chain.read("eth_call", .array([.object(["to": .string(read.to.lowercased), "data": .string("0x" + Hex.encode(read.data))]), .string("latest")])),
+                  let bytes = answer.string.flatMap(Hex.decode), let isSpent = terms.isSpent(given: bytes) else { continue }
+            if isSpent { spent.insert(permit.id) } else { checks[permit.id] = .notUsed }
+        }
+        permitChecks = checks
+        let expired = Set(permits.filter { $0.hasExpired(at: time) }.map(\.id))
+        guard !spent.isEmpty || !expired.isEmpty else { return }
+        // More may have been signed while this was reading, so this only takes out what it knows about.
+        state.signedPermits?[address]?.removeAll { spent.contains($0.id) || expired.contains($0.id) }
+        // If this doesn't reach the disk, the next check finds the same again.
+        try? persist()
     }
 
     // MARK: - Sending

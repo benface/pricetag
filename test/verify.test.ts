@@ -3,10 +3,10 @@ import { readFileSync } from "node:fs"
 import { describe, it } from "node:test"
 import { ETH_ADDRESS, PRICE_FEEDS, WETH_ADDRESS, buildPricedLegs, derivePricedRows, settleUnwraps, type LegPart, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
 import { hexOf, type Query } from "@pricetag/sdk/internal"
-import { createDepositReader, readBlock, type BlockData } from "../server/block.ts"
+import { createBlockHashReader, createDepositReader, readBlock, type BlockData } from "../server/block.ts"
 import { createManifestReader, createProofs, proofOf, verificationOf } from "../server/proof.ts"
 import { ANSWER_UPDATED_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC } from "../server/raw.ts"
-import { DEPOSIT_TX_TYPE, checkHeader, checkReceipts, checkTransactions, encodeReceipt, encodeTransaction, headerHash, keccak, rlp, trieRoot, type BlockRow, type DepositDetails, type LogRow, type TxRow } from "../server/verify.ts"
+import { DEPOSIT_TX_TYPE, checkHeader, checkReceipts, checkSender, checkTransactions, encodeReceipt, encodeTransaction, headerHash, keccak, recoverSender, rlp, trieRoot, type BlockRow, type DepositDetails, type LogRow, type TxRow } from "../server/verify.ts"
 
 /** Real rows from Amp's Base dataset: a whole block, a current header, and one transaction of each kind. */
 const FIXTURES = JSON.parse(readFileSync(new URL("./support/base-blocks.json", import.meta.url), "utf8")) as {
@@ -123,6 +123,29 @@ describe("checking a block", () => {
     assert.equal(checkTransactions(block, [deposit, { ...user, tx_index: 5 }], deposits).status, "failed")
   })
 
+  it("recovers each kind of transaction's sender from its signature", () => {
+    for (const tx of FIXTURES.samples.filter(({ type }) => type !== DEPOSIT_TX_TYPE)) {
+      assert.equal(recoverSender(tx), tx.from.replace(/^0x/, "").toLowerCase(), `type ${tx.type}`)
+      assert.deepEqual(checkSender(tx), { status: "passed" }, `type ${tx.type}`)
+    }
+  })
+
+  it("fails a stored sender that isn't who signed", () => {
+    const check = checkSender({ ...user, from: "cc".repeat(20) })
+    assert.equal(check.status, "failed")
+    assert.equal(checkSender({ ...user, r: "00" }).status, "failed", "a signature that recovers to nobody")
+    assert.equal(checkSender({ ...user, value: "1" }).status, "failed", "a change to what was signed")
+  })
+
+  it("has no signature to recover on a deposit, whose hash covers its sender", () => {
+    assert.deepEqual(checkSender({ ...(txs[0] as TxRow), from: "cc".repeat(20) }), { status: "passed" })
+    assert.equal(checkTransactions(block, [{ ...(txs[0] as TxRow), from: "cc".repeat(20) }, ...txs.slice(1)], deposits).status, "failed")
+  })
+
+  it("can't recover from a kind of transaction it doesn't read, which isn't a failure", () => {
+    assert.equal(checkSender({ ...user, type: 3 }).status, "unchecked")
+  })
+
   it("fails a changed result", () => {
     const [deposit, user] = txs as [TxRow, TxRow]
     assert.equal(checkReceipts(block, [deposit, { ...user, status: !user.status }], logs).status, "failed")
@@ -200,11 +223,31 @@ describe("a block from after the 200 ms upgrade", () => {
 
 describe("a leg against its checked block", () => {
   it("passes the whole check and says so", () => {
-    const verification = verificationOf(legOf({}), [], data, deposits)
+    const verification = verificationOf(legOf({}), [], data, deposits, null, block.hash)
     assert.equal(verification.status, "passed")
     assert.equal(verification.blockHash, `0x${block.hash}`)
-    assert.deepEqual(verification.checks.map((check) => check.status), ["passed", "passed", "passed", "passed"])
-    assert.match(verification.summary, /matches its header/)
+    assert.deepEqual(verification.checks.map((check) => check.status), ["passed", "passed", "passed", "passed", "passed", "passed"])
+    assert.match(verification.summary, /matches its header, and Base's node reports the same block/)
+  })
+
+  it("compares the block's hash with Base's node, and doesn't call that proof", () => {
+    const nodeCheck = (nodeHash: string | null) => verificationOf(legOf({}), [], data, deposits, null, nodeHash)
+    const check = (nodeHash: string | null) => nodeCheck(nodeHash).checks.find(({ title }) => title === "Base's node")!
+    assert.equal(check(block.hash).status, "passed")
+    assert.match(check(block.hash).detail, /one node's word, not proof/)
+    assert.equal(check("00".repeat(32)).status, "failed")
+    assert.match(check("00".repeat(32)).detail, /may have replaced this block/)
+    assert.equal(nodeCheck("00".repeat(32)).status, "failed")
+    assert.equal(check(null).status, "unchecked")
+    assert.equal(nodeCheck(null).status, "unchecked")
+  })
+
+  it("names who sent the row's transaction once its signature confirms it", () => {
+    const check = verificationOf(legOf({}), [], data, deposits, null, block.hash).checks.find(({ title }) => title === "Who sent it")!
+    assert.equal(check.status, "passed")
+    assert.match(check.detail, new RegExp(`signature works out to its stored sender, 0x${user.from}`))
+    const onDeposit = verificationOf(legOf({ txHash: `0x${(txs[0] as TxRow).tx_hash}` }), [], data, deposits, null, block.hash).checks.find(({ title }) => title === "Who sent it")!
+    assert.match(onDeposit.detail, /deposit isn't signed/)
   })
 
   it("says the check leaned on Base's node for a deposit", () => {
@@ -308,15 +351,14 @@ describe("a leg against its checked block", () => {
     assert.ok(proofOf(leg, [], "USD", [], null).scope.some((line) => /doesn't cover the fee paid to Ethereum/.test(line)))
   })
 
-  it("says a sender isn't checked, since changing it and the row together still passes", () => {
+  it("fails a sender that isn't who signed, even when the row was changed to match it", () => {
     const stranger = "cc".repeat(20)
     const forged = { block, txs: [txs[0] as TxRow, { ...user, from: stranger }], logs }
     const leg = legOf({ kind: "gas", parts: [legRow({ amount: paidForGas.toString(), account: `0x${stranger}` })] })
-    const verification = verificationOf(leg, [], forged, deposits)
-    assert.equal(verification.status, "passed")
-    assert.match(verification.checks.at(-1)!.detail, /sender is as Amp stored it, and isn't checked against the signature/)
-    assert.ok(proofOf(leg, [], "USD", [], null).scope.some((line) => /doesn't confirm who sent this transaction/.test(line)))
-    assert.match(activity(legOf({ parts: [legRow({ kind: "eth", amount: user.value, side: "debit" })] })).detail, /sender is as Amp stored it/)
+    const verification = verificationOf(leg, [], forged, deposits, null, block.hash)
+    assert.equal(verification.status, "failed")
+    assert.match(verification.checks.find(({ title }) => title === "Who sent it")!.detail, new RegExp(`signature says 0x${user.from} sent this transaction, but Amp stored 0x${stranger}`))
+    assert.ok(!proofOf(leg, [], "USD", [], null).scope.some((line) => /who sent/.test(line)))
   })
 
   it("doesn't bring up the sender when logs or the recipient already name the account", () => {
@@ -425,12 +467,12 @@ describe("ETH a wallet received from unwrapping", () => {
     const legs = buildPricedLegs({ account, rows: settled.rows, references, priced: settled.priced })
     const read = withLogs(added)
     const update = { block_num: blockNum, tx_hash: txHash, log_index: updateIndex, answer: ANSWER.toString() }
-    const check = (leg: PricedLeg, data: BlockData = read) => verificationOf(leg, legs, data, deposits, { behind: { feed, update }, read: { data, deposits } })
+    const check = (leg: PricedLeg, data: BlockData = read) => verificationOf(leg, legs, data, deposits, { behind: { feed, update }, read: { data, deposits, nodeHash: data.block.hash } }, data.block.hash)
     const proof = (leg: PricedLeg) => proofOf(leg, legs, "USD", [], null, { feed, update })
     return { legs, read, added, check, proof, eth: legs.find((leg) => leg.asset === "ETH" && leg.kind !== "gas"), cbBtc: legs.find((leg) => leg.asset === "cbBTC")!, gas: legs.find((leg) => leg.kind === "gas")! }
   }
   const statuses = (verification: ReturnType<typeof verificationOf>) => verification.checks.map((check) => check.status)
-  const ALL_PASS = ["passed", "passed", "passed", "passed", "passed"]
+  const ALL_PASS = ["passed", "passed", "passed", "passed", "passed", "passed", "passed"]
 
   describe("ETH only the balance says arrived", () => {
     const part: LegPart = { token: ETH_ADDRESS, account, side: "credit", amount: E18.toString(), kind: "unseen_eth", logIndex: 0 }
@@ -506,7 +548,7 @@ describe("ETH a wallet received from unwrapping", () => {
         assert.match(scope, /That 0\.9 ETH reached this wallet comes from its balance before and after this block, which this check doesn't read/)
         assert.match(scope, /It covers (this price, the transaction and )?what the logs record/)
         assert.doesNotMatch(scope, /the amounts/)
-        assert.match(check(leg).checks[3]!.detail, /That 0\.9 ETH reached this wallet comes from its balance/)
+        assert.match(check(leg).checks.find(({ title }) => title === "This activity")!.detail, /That 0\.9 ETH reached this wallet comes from its balance/)
       }
       assert.match(proof(cbBtc).scope.join(" "), /This price is worked out using that amount/)
     })
@@ -534,7 +576,7 @@ describe("ETH a wallet received from unwrapping", () => {
       assert.deepEqual(statuses(check(leg)), ALL_PASS)
       assert.deepEqual(proof(leg).movements.filter((line) => /unwrapped|ETH received/.test(line)), ["Log #5: 0.6 ETH unwrapped", "Log #6: 0.4 ETH unwrapped", "ETH received: 0.9 ETH, worked out from this wallet's balance before and after this block"])
     }
-    assert.match(check(eth!).checks[3]!.detail, /its 2 movements match/)
+    assert.match(check(eth!).checks.find(({ title }) => title === "This activity")!.detail, /its 2 movements match/)
     const second = added[3]!
     const changed = { ...read, logs: read.logs.map((log) => (log.log_index === second.log_index ? { ...log, data: word(1n) } : log)) }
     const activity = verificationOf(eth!, [eth!], changed, deposits).checks.at(-1)!
@@ -547,8 +589,8 @@ describe("ETH a wallet received from unwrapping", () => {
       const { eth, cbBtc, check, proof } = sale({ withdrawn: [E18], received: 0n })
       assert.equal(eth, undefined)
       assert.equal(cbBtc.kind, "transfer")
-      assert.equal(check(cbBtc).checks[3]!.status, "passed")
-      assert.match(check(cbBtc).checks[3]!.detail, /That none of it reached this wallet comes from its balance/)
+      assert.equal(check(cbBtc).checks.find(({ title }) => title === "This activity")!.status, "passed")
+      assert.match(check(cbBtc).checks.find(({ title }) => title === "This activity")!.detail, /That none of it reached this wallet comes from its balance/)
       assert.deepEqual(proof(cbBtc).movements.filter((line) => /unwrapped|ETH received/.test(line)), ["Log #5: 1 ETH unwrapped", "ETH received: 0 ETH, worked out from this wallet's balance before and after this block"])
       assert.doesNotMatch(proof(cbBtc).scope.join(" "), /who sent/)
     })
@@ -572,8 +614,8 @@ describe("ETH a wallet received from unwrapping", () => {
     const { eth, read, added, check, proof } = sale({ withdrawn: [E18], received: null })
     assert.equal(eth!.unsettledCredit, true)
     assert.equal(eth!.settledCredit, undefined)
-    assert.equal(check(eth!).checks[3]!.status, "passed")
-    assert.match(check(eth!).checks[3]!.detail, /How much of it reached this wallet isn't confirmed/)
+    assert.equal(check(eth!).checks.find(({ title }) => title === "This activity")!.status, "passed")
+    assert.match(check(eth!).checks.find(({ title }) => title === "This activity")!.detail, /How much of it reached this wallet isn't confirmed/)
     assert.match(proof(eth!).scope.join(" "), /How much of it reached this wallet isn't confirmed/)
     assert.deepEqual(proof(eth!).movements, ["Log #5: 1 ETH unwrapped"])
     const changed = { ...read, logs: read.logs.map((log) => (log.log_index === added[2]!.log_index ? { ...log, data: word(1n) } : log)) }
@@ -680,7 +722,7 @@ describe("reading a block", () => {
     const quiet = { warn: console.warn }
     console.warn = () => {}
     try {
-      const config = { baseDataset: "a/b@1", dataset: null, readDeposits: async () => new Map(), readManifestHash: async () => null, retryPauseMs: 0 }
+      const config = { baseDataset: "a/b@1", dataset: null, readDeposits: async () => new Map(), readBlockHash: async () => null, readManifestHash: async () => null, retryPauseMs: 0 }
       assert.equal(await createProofs(query, config).readBlock(5), null)
       const down = (async () => {
         throw new Error("down")
@@ -749,6 +791,42 @@ describe("reading deposits", () => {
     }
     assert.equal(logged.length, 2)
     assert.ok(!logged.join(" ").includes(fake))
+  })
+})
+
+describe("reading a block's hash from Base's node", () => {
+  const answer = (body: unknown) => new Response(JSON.stringify(body), { status: 200 })
+
+  it("asks for that block by number, and gives its hash the way Amp stores it", async () => {
+    const asked: unknown[] = []
+    const send = (async (_url: string, init: RequestInit) => {
+      asked.push(JSON.parse(init.body as string))
+      return answer({ id: 0, result: { hash: "0xABCD" } })
+    }) as unknown as typeof fetch
+    assert.equal(await createBlockHashReader("http://rpc", send)(255), "abcd")
+    assert.deepEqual(asked, [{ jsonrpc: "2.0", id: 0, method: "eth_getBlockByNumber", params: ["0xff", false] }])
+  })
+
+  it("waits out a 429", async () => {
+    let calls = 0
+    const send = (async () => (++calls === 1 ? new Response("", { status: 429 }) : answer({ id: 0, result: { hash: "0xab" } }))) as unknown as typeof fetch
+    assert.equal(await createBlockHashReader("http://rpc", send, 0)(1), "ab")
+    assert.equal(calls, 2)
+  })
+
+  it("is null when the node doesn't have the block or doesn't answer, and never logs its URL", async () => {
+    assert.equal(await createBlockHashReader("http://rpc", (async () => answer({ id: 0, result: null })) as unknown as typeof fetch)(1), null)
+    assert.equal(await createBlockHashReader("http://rpc", (async () => answer({ id: 0, error: { message: "no" } })) as unknown as typeof fetch)(1), null)
+    const logged: string[] = []
+    const original = console.error
+    console.error = (...args: unknown[]) => void logged.push(args.join(" "))
+    try {
+      assert.equal(await createBlockHashReader("http://secret-key.rpc", (async () => new Response("", { status: 500 })) as unknown as typeof fetch)(1), null)
+    } finally {
+      console.error = original
+    }
+    assert.ok(!logged.join(" ").includes("secret-key"))
+    assert.match(logged.join(" "), /status 500/)
   })
 })
 

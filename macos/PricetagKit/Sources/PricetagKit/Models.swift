@@ -227,7 +227,7 @@ public struct PnlPoint: Codable, Sendable, Equatable, Identifiable {
     /// nil when nothing is known at this point, which isn't $0.
     public let pnlMicros: String?
     public let excludedCount: Int
-    /// What its transaction did, in words. The last point has no transaction.
+    /// What its transaction did, in words. The last point has no transaction, and nor do the ones that only read prices between transactions.
     public var summary: String? = nil
     /// What was held right after it, at that moment's prices. Only what's known, and nil when nothing is, which isn't $0.
     public var valueMicros: String? = nil
@@ -237,6 +237,8 @@ public struct PnlPoint: Codable, Sendable, Equatable, Identifiable {
     public var valueExcludedCount: Int? = nil
     /// Only prices moved since the point before: what's held is the same, and so is what's left out. Otherwise there's nothing to join it to.
     public var valueContinues: Bool? = nil
+    /// Prices were read as often as a chart can show all the way from the point before, so what's between them is known and not a guess.
+    public var valueRead: Bool? = nil
     /// What moved, apart from network fees. The rest of these are empty or nil on the last point, which has no transaction.
     public var assets: [String] = []
     /// The one address on the other side, or nil when there's none or more than one.
@@ -257,7 +259,7 @@ public struct PnlPoint: Codable, Sendable, Equatable, Identifiable {
 
 extension PnlPoint {
     private enum CodingKeys: String, CodingKey {
-        case blockNum, timestamp, txHash, pnlMicros, excludedCount, summary, valueMicros, valueBeforeMicros, valueExcludedCount, valueContinues, assets, counterparty, amount, gain, unknownCost, wallets
+        case blockNum, timestamp, txHash, pnlMicros, excludedCount, summary, valueMicros, valueBeforeMicros, valueExcludedCount, valueContinues, valueRead, assets, counterparty, amount, gain, unknownCost, wallets
     }
 
     /// A server from before a transaction had facts still sends the rest.
@@ -273,6 +275,7 @@ extension PnlPoint {
         valueBeforeMicros = try container.decodeIfPresent(String.self, forKey: .valueBeforeMicros)
         valueExcludedCount = try container.decodeIfPresent(Int.self, forKey: .valueExcludedCount)
         valueContinues = try container.decodeIfPresent(Bool.self, forKey: .valueContinues)
+        valueRead = try container.decodeIfPresent(Bool.self, forKey: .valueRead)
         assets = try container.decodeIfPresent([String].self, forKey: .assets) ?? []
         counterparty = try container.decodeIfPresent(String.self, forKey: .counterparty)
         amount = try container.decodeIfPresent(TransactionAmount.self, forKey: .amount)

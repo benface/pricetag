@@ -1,11 +1,12 @@
 import assert from "node:assert/strict"
 import { readdirSync, readFileSync } from "node:fs"
-import { createServer } from "node:http2"
+import { createServer, type Http2ServerResponse } from "node:http2"
 import { createServer as createNetServer, type AddressInfo, type Socket } from "node:net"
 import { describe, it } from "node:test"
 import { createPricetag } from "@pricetag/sdk"
-import { USDC_ADDRESS, buildPortfolio, buildPricedLegs, foldPositions, formatPrice, formatSignedMoney, formatMoney, pnlStatus, sumTotals } from "@pricetag/sdk/core"
+import { TOKEN_FEEDS, USDC_ADDRESS, buildPortfolio, buildPricedLegs, foldPositions, formatPrice, formatSignedMoney, formatMoney, pnlStatus, sumTotals } from "@pricetag/sdk/core"
 import { createQuery, createWallets, datasetReader, datasetSource, pricetagClient, type Query, type ReadL1Fees } from "@pricetag/sdk/internal"
+import { resolvingSource } from "../server/source.ts"
 import { portfolioOf } from "../src/core/portfolio.ts"
 import { DEMO_REFERENCES, DEMO_ROWS, DEMO_WALLET } from "../src/core/fixtures.ts"
 import { fakeAmp, type Tables } from "./support/fake-amp.ts"
@@ -347,6 +348,77 @@ describe("getLatestPrices", () => {
   it("has nothing without a recent read", async () => {
     assert.deepEqual(await fakeAmp({ reference_prices: [] }).client.getLatestPrices(), {})
   })
+
+  const NOW = 1_800_000_000
+  const eth = { block_num: "199", eth_usd: ETH_ANSWER, usdc_usd: USDC_ANSWER }
+
+  it("values every other token at its feed, in one query", async () => {
+    const { client, queries } = fakeAmp({ reference_prices: [eth], feeds: { AERO: { answer: 63_000_000n, updatedAt: NOW - 60 }, wstETH: { answer: 1_250_000_000_000_000_000n, updatedAt: NOW - 60 } } })
+    assert.deepEqual(await client.getLatestPrices(), {
+      ETH: { micros: "2400000000", source: "oracle", blockNum: 199 },
+      USDC: { micros: "1000000", source: "oracle", blockNum: 199 },
+      AERO: { micros: "630000", source: "oracle", blockNum: 200 },
+      wstETH: { micros: "3000000000", source: "oracle", blockNum: 200 },
+    })
+    const feedReads = queries.filter((sql) => sql.includes("latestRoundData()"))
+    assert.equal(feedReads.length, 1)
+    for (const feed of Object.values(TOKEN_FEEDS)) assert.ok(feedReads[0]!.includes(feed!.address))
+    assert.ok(feedReads[0]!.includes("block_num BETWEEN 200 AND 200"), "bounded to the head")
+  })
+
+  it("has no price from an answer that's too old or implausible", async () => {
+    const { client } = fakeAmp({ reference_prices: [eth], feeds: { AERO: { answer: 63_000_000n, updatedAt: NOW - 30 * 3600 }, DAI: { answer: 1n, updatedAt: NOW - 60 } } })
+    assert.deepEqual(Object.keys(await client.getLatestPrices()), ["ETH", "USDC"])
+  })
+
+  it("has no price for a token its feed answers in ETH without ETH's", async () => {
+    const { client } = fakeAmp({ reference_prices: [], feeds: { AERO: { answer: 63_000_000n, updatedAt: NOW - 60 }, wstETH: { answer: 1_250_000_000_000_000_000n, updatedAt: NOW - 60 } } })
+    assert.deepEqual(Object.keys(await client.getLatestPrices()), ["AERO"])
+  })
+
+  it("keeps the oracle's prices when the feeds can't be read, and says so", async () => {
+    const { query } = fakeAmp({ reference_prices: [eth] })
+    const warnings: string[] = []
+    const failing: Query = (sql, timeoutMs) => (sql.includes("latestRoundData()") ? Promise.reject(new Error("boom")) : query(sql, timeoutMs))
+    const client = pricetagClient(failing, { dataset: "benface/pricetag@0.0.1", logger: { warn: (message) => warnings.push(message) } })
+    assert.deepEqual(Object.keys(await client.getLatestPrices()), ["ETH", "USDC"])
+    assert.deepEqual(warnings, ["Feed read failed: boom"])
+  })
+})
+
+describe("getPortfolio's current prices", () => {
+  const NOW = 1_800_000_000
+  const HELD = String(500n * E18)
+  const tables = (feeds: Tables["feeds"]): Tables => ({
+    reference_prices: [{ block_num: "199", eth_usd: ETH_ANSWER, usdc_usd: USDC_ANSWER }],
+    balances: { 49: { AERO: HELD }, 200: { AERO: HELD } },
+    feeds,
+  })
+
+  it("values a token at its feed", async () => {
+    const { client } = fakeAmp(tables({ AERO: { answer: 63_000_000n, updatedAt: NOW - 60 } }))
+    const { positions, totals } = await client.getPortfolio(`0x${ME}`, { from: 50 })
+    const aero = positions.find((p) => p.asset === "AERO")!
+    assert.deepEqual([aero.price?.micros, aero.price?.source, aero.values.valueMicros], ["630000", "oracle", "315000000"])
+    assert.equal(totals.valueMicros, "315000000")
+  })
+
+  it("leaves its value unknown without an answer, never $0", async () => {
+    const { client } = fakeAmp(tables({}))
+    const { positions } = await client.getPortfolio(`0x${ME}`, { from: 50 })
+    const aero = positions.find((p) => p.asset === "AERO")!
+    assert.deepEqual([aero.price, aero.values.valueMicros], [null, null])
+  })
+
+  it("reads the same prices the app's server does", async () => {
+    const answers = tables({ AERO: { answer: 63_000_000n, updatedAt: NOW - 60 } })
+    const { query, client } = fakeAmp(answers)
+    const source = resolvingSource(query, { dataset: "benface/pricetag@0.0.1", baseDataset: "edgeandnode/base_mainnet@0.0.2", startBlock: 50, network: "base_mainnet" })
+    const app = await createWallets(source, async () => ({ blockNum: 200, timestamp: new Date(NOW * 1000).toISOString() }), async () => new Map()).get(`0x${ME}`)
+    const sdk = await client.getPortfolio(`0x${ME}`, { from: 50 })
+    assert.equal(sdk.positions.find((p) => p.asset === "AERO")!.price?.micros, app.prices.AERO?.micros)
+    assert.equal(app.prices.AERO?.micros, "630000")
+  })
 })
 
 describe("buildPortfolio", () => {
@@ -453,6 +525,25 @@ describe("getPortfolio", () => {
     assert.equal(l1Fees, "read")
     assert.notEqual(status, "complete")
     assert.ok(missing.length > 0)
+  })
+
+  it("bounds the first head lookup by the start block, and later ones by the last head", async () => {
+    const heads = (queries: string[]) => queries.filter((q) => q.includes(".blocks") && q.includes("ORDER BY"))
+    const { client, queries } = fakeAmp(TABLES, 200, { startBlock: 50 })
+    await client.getLatestPrices()
+    assert.match(heads(queries)[0]!, /WHERE block_num >= 50 ORDER BY/)
+    queries.length = 0
+    await client.getPortfolio(`0x${ME}`)
+    assert.match(heads(queries)[0]!, /WHERE block_num >= 50 ORDER BY/)
+    queries.length = 0
+    await client.getPortfolio(`0x${ME}`)
+    assert.match(heads(queries)[0]!, /WHERE block_num >= 200 ORDER BY/)
+  })
+
+  it("has no bound for the head without a start block", async () => {
+    const { client, queries } = fakeAmp(TABLES)
+    await client.getLatestPrices()
+    assert.ok(queries.some((q) => q.includes(".blocks  ORDER BY")))
   })
 
   it("gives no totals before anything's been processed, rather than $0", async () => {
@@ -844,16 +935,24 @@ describe("reading through aliases", () => {
   })
 
   it("reads prices from the price dataset, and what happened on the chain from the other", async () => {
-    const { query, queries } = fakeAmp({ legs: [], unlisted_legs: [], priced_legs: [], reference_prices: [] })
+    const { query, queries } = fakeAmp({ legs: [leg("aa", USDC, ME, "credit", "7", "erc20")], unlisted_legs: [], priced_legs: [], reference_prices: [] })
     const reader = datasetReader(query, { baseDataset: "base", dataset: "pricetag", priceDataset: "pricing" })
-    await reader.readWindow("0x" + ME, 1, 2)
+    await reader.readWindow("0x" + ME, 1, 200)
     await reader.readReferences([1])
     await reader.processedThrough(1, 200)
-    const from = (table: string) => [...new Set(queries.filter((sql) => sql.includes(`.${table} `)).map((sql) => /FROM "(\w+)"/.exec(sql)![1]))]
+    const from = (table: string) => [...new Set(queries.flatMap((sql) => [...sql.matchAll(/FROM "(\w+)"\.(\w+)/g)]).filter((match) => match[2] === table).map((match) => match[1]))]
     assert.deepEqual(from("legs"), ["pricetag"])
     assert.deepEqual(from("unlisted_legs"), ["pricetag"])
     assert.deepEqual(from("priced_legs"), ["pricing"])
     assert.deepEqual(from("reference_prices"), ["pricing"])
+  })
+
+  it("asks Amp about both datasets at once, so the slower one sets how far a read goes", async () => {
+    const asked: string[] = []
+    const query: Query = Object.assign(async <T,>() => [] as T[], { snapshotEnd: async (sql: string) => (asked.push(sql), 5) })
+    await datasetReader(query, { baseDataset: "base", dataset: "pricetag", priceDataset: "pricing" }).processedThrough(1, 200)
+    assert.equal(asked.length, 1)
+    for (const table of ['"pricetag".legs', '"pricetag".unlisted_legs', '"pricing".priced_legs', '"pricing".reference_prices']) assert.ok(asked[0]!.includes(table), table)
   })
 
   it("reads everything from one dataset when there's no price dataset", async () => {
@@ -861,4 +960,46 @@ describe("reading through aliases", () => {
     await datasetReader(query, { baseDataset: "base", dataset: "pricetag" }).readWindow("0x" + ME, 1, 2)
     for (const sql of queries) assert.match(sql, /FROM "pricetag"\./)
   })
+})
+
+describe("how many queries run at once", () => {
+  /** A server that holds each query until it's let go, and says how many it's holding. */
+  async function holdingServer() {
+    const held: Http2ServerResponse[] = []
+    const server = createServer((req, res) => {
+      req.resume()
+      held.push(res)
+    })
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const release = () => {
+      for (const res of held.splice(0)) {
+        res.writeHead(200, { "content-type": "application/grpc", "grpc-status": "14", "grpc-message": "not a real Amp" })
+        res.end()
+      }
+    }
+    return { held, release, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, close: () => server.close() }
+  }
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+  async function untilHolding(held: readonly unknown[], count: number) {
+    for (let i = 0; i < 200 && held.length < count; i++) await wait(10)
+  }
+
+  for (const [options, atOnce] of [[{}, 1], [{ maxConcurrent: 3 }, 3]] as const) {
+    it(`runs ${atOnce} with ${JSON.stringify(options)}, and the rest once those are done`, async () => {
+      const { held, release, url, close } = await holdingServer()
+      const query = createQuery(url, undefined, options)
+      const all = Promise.allSettled([1, 2, 3, 4, 5].map((n) => query(`SELECT ${n}`)))
+      await untilHolding(held, atOnce)
+      await wait(50)
+      assert.equal(held.length, atOnce, "no more than that")
+      release()
+      await untilHolding(held, 1)
+      assert.ok(held.length > 0, "the next ones started")
+      const letGo = setInterval(release, 10)
+      const results = await all
+      clearInterval(letGo)
+      close()
+      assert.ok(results.every(({ status }) => status === "rejected"), "a failed query still ends its turn")
+    })
+  }
 })

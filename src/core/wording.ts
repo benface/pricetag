@@ -8,12 +8,14 @@ import type { ValueGaps } from "./attention.ts"
 import type { ReadFailure } from "./read-failure.ts"
 
 export const METHOD_LABELS: Record<Method, string> = { average: "Average", fifo: "Oldest first" }
-export const METHOD_NAME = "How cost is worked out"
+export const METHOD_NAME = "Cost method"
 export const METHOD_HELP = "Average spreads what you paid across all you hold. Oldest first counts what you sell as what you got earliest."
 
 export const AVERAGE_PRICE_PAID = "Average price paid"
 export const AVERAGE_PAID = "Average paid"
 export const NETWORK_FEES = "Network fees"
+/** An answer, an undo or a device's accounts that didn't reach what's stored, so they're back as they were. */
+export const NOT_SAVED = "This browser couldn't save that, so it's back as it was. Try again."
 export const BALANCE_CHECK = "Balance check"
 export const CHECK_LABELS = { reconciled: "Matches", incomplete: "Doesn't match", unchecked: "Not checked" }
 export const STARTING_BALANCE = "Starting balance"
@@ -42,6 +44,14 @@ export const COST_WHY = "Nothing shows what this cost, so PnL leaves it out unti
 export const EXCHANGE_COST_WHY = "You said it came from your exchange account, which knows what you paid. Until you say, PnL leaves it out."
 export const ALL_ANSWERED = "All answered"
 export const NOTHING_LEFT = "That's all for now"
+/** Under what the questions were for, when it still leaves something out. Past the last card, what's still open is what was skipped. */
+export function finishNote({ open, answered, waiting }: { open: number; answered: number; waiting: number }): string {
+  const leftOut = "PnL still leaves some things out."
+  const notAQuestion = "What's left isn't a question, like a balance that doesn't match the chain."
+  if (open > 0) return answered > 0 ? `Not everything's answered, so ${leftOut}` : `Nothing's answered yet, so ${leftOut}`
+  if (waiting > 0) return answered > 0 ? `Every question so far is answered, but ${leftOut}` : `There's nothing to ask so far, but ${leftOut}`
+  return answered > 0 ? `Every question's answered. ${notAQuestion}` : `There's nothing to ask. ${notAQuestion}`
+}
 
 /** The tooltip for a title or sentence that says PnL, or nothing when it doesn't. */
 export const pnlHelp = (text: string): string | undefined => (text.includes("PnL") ? PNL_HELP : undefined)
@@ -145,6 +155,12 @@ export function costTag(label: CostLabel, source: string | null = null): string 
 
 /** How a purchase's provider is named wherever its cost shows up. */
 export const purchaseSource = (provider: "coinbase", paid?: string) => `${{ coinbase: "Bought on Coinbase" }[provider]}${paid ? ` for ${paid}` : ""}`
+
+/** Where a bought cost comes from. That's on this device, so the server's proof can't say. */
+export const costProof = (source: string, label: CostLabel) =>
+  label === "inherited"
+    ? `${source}, by your other wallet. This transaction only moved it here, so the order isn't for this one. What's shown is this amount's share of what you paid, fees included.`
+    : `${source}. The order says what you paid, fees included, and matches this transaction exactly.`
 
 /** A cost's source, to finish "from …". */
 export const COST_WORDS: Record<CostLabel, string> = {

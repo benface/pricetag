@@ -164,19 +164,7 @@ public struct LegRow: View {
                 }
             }
             if isFee {
-                // Two lines at most, with Proof at the end of the second.
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    if let wallet = leg.wallet { Tag(walletNames.walletName(wallet)) }
-                    Tag("\(Format.signedAmount(leg.delta, decimals: leg.decimals)) \(leg.asset)")
-                    if leg.priceMicros == nil {
-                        Tag(Wording.noPrice, isWarning: true)
-                    }
-                    if let unknown = leg.unknown {
-                        Tag("Gain unknown", isWarning: true).help(unknown)
-                    }
-                    Spacer(minLength: 8)
-                    proofButton
-                }
+                feeFacts
             } else {
                 tags
                 if let unknown = leg.unknown {
@@ -269,9 +257,54 @@ public struct LegRow: View {
         }
     }
 
+    /// A fee's facts take one line when they fit. When they don't, the wallet moves up first, because Proof should stay beside the amount for as long as it can.
+    /// A long wallet name gets cut there, rather than pushing everything else onto its own line, and its tooltip has the rest.
+    private var feeFacts: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                walletTag
+                feeTags
+                Spacer(minLength: 8)
+                proofButton
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                walletTag.frame(idealWidth: 0, maxWidth: .infinity, alignment: .leading)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    feeTags
+                    Spacer(minLength: 8)
+                    proofButton
+                }
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                walletTag
+                feeTags
+                proofButton
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var walletTag: some View {
+        if let wallet = leg.wallet {
+            let name = walletNames.walletName(wallet)
+            Tag(name).help(name)
+        }
+    }
+
+    @ViewBuilder
+    private var feeTags: some View {
+        Tag("\(Format.signedAmount(leg.delta, decimals: leg.decimals)) \(leg.asset)")
+        if leg.priceMicros == nil {
+            Tag(Wording.noPrice, isWarning: true)
+        }
+        if let unknown = leg.unknown {
+            Tag("Gain unknown", isWarning: true).help(unknown)
+        }
+    }
+
     @ViewBuilder
     private var tagList: some View {
-        if let wallet = leg.wallet { Tag(walletNames.walletName(wallet)) }
+        walletTag
         Tag("\(Format.signedAmount(leg.delta, decimals: leg.decimals)) \(leg.asset)")
         if let price = leg.priceMicros, let source = leg.priceSource {
             Tag("\(Format.price(price, currency)) · \(Wording.priceSource(source))")

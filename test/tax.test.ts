@@ -276,7 +276,7 @@ describe("taxRows", () => {
       it("pooled, keeps every cost and gain unknown, and says why", () => {
         const report = taxReportOf([late, early], { country: "CA", method: "average", scope: "pooled" })
         const [row] = eventsOf(report)
-        assert.deepEqual([row?.Proceeds, row?.Cost, row?.Gain, row?.Status], ["2000.000000", "unknown", "unknown", "UNRESOLVED"])
+        assert.deepEqual([row?.Proceeds, row?.Cost, row?.Gain, row?.Status], ["2000.000000", "unknown", "unknown", "UNKNOWN GAIN"])
         assert.match(row?.Notes ?? "", /start at different blocks/)
         assert.equal(report.gainMicros, null)
         assert.ok(report.warnings.some((warning) => /start at different blocks/.test(warning)))
@@ -351,14 +351,14 @@ describe("taxReportOf", () => {
 
   it("writes unknown where there's a gap, and never 0", () => {
     const report = taxReportOf([DEMO_WALLET], { country: "US", method: "fifo", scope: "per-wallet" })
-    const unresolved = eventsOf(report).filter((row) => row.Status === "UNRESOLVED")
+    const unresolved = eventsOf(report).filter((row) => row.Status === "UNKNOWN GAIN")
     assert.equal(unresolved.length, report.unresolvedCount)
     assert.ok(report.unresolvedCount > 0)
     for (const row of unresolved) {
       assert.equal(row.Gain, "unknown")
       assert.notEqual(row.Notes, "")
     }
-    assert.match(report.warnings[0] ?? "", /unresolved/)
+    assert.match(report.warnings[0] ?? "", /unknown gain/)
   })
 
   it("adds up only the rows it knows", () => {
@@ -411,7 +411,7 @@ describe("taxReportOf", () => {
 
     const missing = taxReportOf([cad({ rates: { byBlock: { 10: round("50000000", 10) }, latest: rates.latest } })], { country: "CA", method: "average", scope: "pooled" })
     const [gap] = eventsOf(missing)
-    assert.deepEqual([gap?.Proceeds, gap?.Gain, gap?.Status], ["unknown", "unknown", "UNRESOLVED"])
+    assert.deepEqual([gap?.Proceeds, gap?.Gain, gap?.Status], ["unknown", "unknown", "UNKNOWN GAIN"])
     assert.match(gap?.Notes ?? "", /no exchange rate/)
     assert.ok(missing.warnings.some((warning) => /no exchange rate/.test(warning)))
   })
@@ -472,9 +472,9 @@ describe("taxReportOf", () => {
     assert.deepEqual(eventsOf(report).map((row) => [row.Type, row.Status]), [
       ["Network fee", "OK"],
       ["Sold", "OK"],
-      ["Sold", "UNRESOLVED"],
+      ["Sold", "UNKNOWN GAIN"],
       ["Network fee", "OK"],
-      ["Network fee", "UNRESOLVED"],
+      ["Network fee", "UNKNOWN GAIN"],
     ])
     assert.deepEqual([report.soldCount, report.feeCount, report.sentCount, report.unknownCount], [1, 2, 0, 2])
     assert.deepEqual([report.rowCount, report.unresolvedCount], [5, 2], "The file's own counts are still by row")
@@ -546,7 +546,7 @@ describe("the user's answers in a report", () => {
     const book = answering({}, { [costKey(A, wallet.legs[0]?.id as string)]: { micros: usd(1000), currency: "USD" } })
 
     it("fills in what would be unknown, and is marked as the user's word", () => {
-      assert.equal(eventsOf(taxReportOf([wallet], US))[0]?.Status, "UNRESOLVED")
+      assert.equal(eventsOf(taxReportOf([wallet], US))[0]?.Status, "UNKNOWN GAIN")
       const report = taxReportOf([wallet], US, { book })
       const [row] = eventsOf(report)
       assert.deepEqual([row?.Cost, row?.Gain, row?.Status], ["1000.000000", "1500.000000", "SELF-REPORTED"])
@@ -566,7 +566,7 @@ describe("the user's answers in a report", () => {
       const [row] = eventsOf(taxReportOf([{ ...wallet, currency: "CAD", rates }], CA, { book }))
       assert.deepEqual([row?.Cost, row?.Status], ["2000.000000", "SELF-REPORTED"])
       const [gap] = eventsOf(taxReportOf([{ ...wallet, currency: "CAD", rates: { byBlock: { 30: round("50000000", 30) }, latest: rates.latest } }], CA, { book }))
-      assert.deepEqual([gap?.Cost, gap?.Status], ["unknown", "UNRESOLVED"])
+      assert.deepEqual([gap?.Cost, gap?.Status], ["unknown", "UNKNOWN GAIN"])
     })
 
     it("only marks the row that used it", () => {
@@ -724,13 +724,13 @@ describe("the user's answers in a report", () => {
       it(`isn't known when the sender ${name}`, () => {
         const report = taxReportOf([source(), b], US, { book: mine })
         const row = eventsOf(report).find((event) => event.Wallet === B)
-        assert.deepEqual([row?.Proceeds, row?.Cost, row?.Gain, row?.Status], ["2500.000000", "unknown", "unknown", "UNRESOLVED"])
+        assert.deepEqual([row?.Proceeds, row?.Cost, row?.Gain, row?.Status], ["2500.000000", "unknown", "unknown", "UNKNOWN GAIN"])
         assert.ok(report.warnings.some((warning) => /ETH history can't be confirmed/.test(warning)), "and says which wallet")
       })
 
       it(`isn't known when the sender ${name}, and only supplies costs`, () => {
         const report = taxReportOf([b], US, { book: mine, costsFrom: [source()] })
-        assert.deepEqual([eventsOf(report)[0]?.Cost, eventsOf(report)[0]?.Status, report.gainMicros], ["unknown", "UNRESOLVED", null])
+        assert.deepEqual([eventsOf(report)[0]?.Cost, eventsOf(report)[0]?.Status, report.gainMicros], ["unknown", "UNKNOWN GAIN", null])
         assert.ok(report.warnings.some((warning) => /ETH history can't be confirmed/.test(warning)))
       })
 
@@ -740,7 +740,7 @@ describe("the user's answers in a report", () => {
         const last = walletOf(C, [arrived(25, B, C), sell(30, 1n, 2500)])
         const book = answering({ [A]: { kind: "mine" }, [B]: { kind: "mine" }, [C]: { kind: "mine" } })
         const [row] = eventsOf(taxReportOf([last], US, { book, costsFrom: [source(), middle] }))
-        assert.deepEqual([row?.Cost, row?.Status], ["unknown", "UNRESOLVED"])
+        assert.deepEqual([row?.Cost, row?.Status], ["unknown", "UNKNOWN GAIN"])
       })
     }
 
@@ -749,7 +749,7 @@ describe("the user's answers in a report", () => {
       const onScreen = foldBook(bought, [mismatched()], "fifo", mine).positions[0]
       const row = eventsOf(taxReportOf([bought], US, { book: mine, costsFrom: [mismatched()] }))[0]
       assert.deepEqual([onScreen?.values.realizedMicros, onScreen?.reconciliation?.status], [null, "reconciled"])
-      assert.deepEqual([row?.Cost, row?.Status], ["unknown", "UNRESOLVED"])
+      assert.deepEqual([row?.Cost, row?.Status], ["unknown", "UNKNOWN GAIN"])
     })
 
     it("goes by the last read that worked, like the screen, when the latest one failed", () => {
@@ -764,7 +764,7 @@ describe("the user's answers in a report", () => {
     it("only touches what came from there", () => {
       const legs = [buy(5, 1n, 500), arrived(hop, A, B), sell(30, 1n, 2500), sell(40, 1n, 2500)]
       const rows = eventsOf(taxReportOf([walletOf(B, legs)], US, { book: mine, costsFrom: [mismatched()] }))
-      assert.deepEqual(rows.map((row) => [row.Cost, row.Status]), [["500.000000", "OK"], ["unknown", "UNRESOLVED"]])
+      assert.deepEqual(rows.map((row) => [row.Cost, row.Status]), [["500.000000", "OK"], ["unknown", "UNKNOWN GAIN"]])
     })
 
     it("only touches that asset", () => {
@@ -785,7 +785,7 @@ describe("the user's answers in a report", () => {
       const elsewhere = () => walletOf(A, [buy(10, 1n, 1000), sent(hop, C)], { balances: { blockNum: 1000, amounts: { ETH: E18.toString() } } })
       const book = answering({ [A]: { kind: "mine" }, [C]: { kind: "mine" } })
       const unrelated = taxReportOf([walletOf(B, [arrived(hop, SELLER, B), sell(30, 1n, 2500)])], US, { book, costsFrom: [elsewhere(), walletOf(C, [arrived(hop, A, C)])] })
-      assert.equal(eventsOf(unrelated)[0]?.Status, "UNRESOLVED", "it has an unknown cost of its own")
+      assert.equal(eventsOf(unrelated)[0]?.Status, "UNKNOWN GAIN", "it has an unknown cost of its own")
       assert.ok(!unrelated.warnings.some((warning) => /history can't be confirmed/.test(warning)))
       const reached = taxReportOf([walletOf(C, [arrived(hop, A, C)])], US, { book, costsFrom: [elsewhere()] })
       assert.ok(reached.warnings.some((warning) => /ETH history can't be confirmed/.test(warning)), "the wallet it did reach still says so")
@@ -795,7 +795,7 @@ describe("the user's answers in a report", () => {
       const self = walletOf(A, [buy(10, 1n, 1000), sell(30, 1n, 2500)], { balances: { blockNum: 1000, amounts: { ETH: E18.toString() } } })
       const report = taxReportOf([self], US)
       assert.ok(!report.warnings.some((warning) => /history can't be confirmed/.test(warning)))
-      assert.equal(eventsOf(report)[0]?.Status, "UNRESOLVED")
+      assert.equal(eventsOf(report)[0]?.Status, "UNKNOWN GAIN")
     })
   })
 
@@ -816,7 +816,7 @@ describe("the user's answers in a report", () => {
 
     it("still warns when what moved has no cost to carry", () => {
       const report = taxReportOf([a(leg(10, E18)), b], US)
-      assert.equal(eventsOf(report)[0]?.Status, "UNRESOLVED")
+      assert.equal(eventsOf(report)[0]?.Status, "UNKNOWN GAIN")
       assert.ok(report.warnings.some((warning) => /no known cost to carry over/.test(warning)))
     })
 
@@ -852,7 +852,7 @@ describe("the user's answers in a report", () => {
       assert.deepEqual(report.wallets, [A])
       assert.deepEqual(eventsOf(report).map((row) => [row.Cost, row.Wallet]), [["1000.000000", A]])
       const notTheirs = taxReportOf([here], US, { book: answering({ [B]: { kind: "mine" } }), costsFrom: [giver] })
-      assert.deepEqual(eventsOf(notTheirs).map((row) => [row.Cost, row.Status]), [["unknown", "UNRESOLVED"]], "being paid by their wallet doesn't make it theirs")
+      assert.deepEqual(eventsOf(notTheirs).map((row) => [row.Cost, row.Status]), [["unknown", "UNKNOWN GAIN"]], "being paid by their wallet doesn't make it theirs")
     })
   })
 
@@ -984,7 +984,7 @@ describe("POST /api/tax-report on real wallets", () => {
   it("without answers, a wallet on its own doesn't know what came to it cost", async () => {
     const report = await post(B, { country: "US" })
     assert.deepEqual(report.wallets, [B])
-    assert.deepEqual([sale(report)?.Cost, sale(report)?.Status], ["unknown", "UNRESOLVED"])
+    assert.deepEqual([sale(report)?.Cost, sale(report)?.Status], ["unknown", "UNKNOWN GAIN"])
   })
 
   it("adds the wallets the answers say are the user's, and carries their costs", async () => {
@@ -1014,7 +1014,7 @@ describe("POST /api/tax-report on real wallets", () => {
     assert.equal(report.rowCount, 0)
     assert.ok(!report.notes.some((note) => /wallets you've said are yours/.test(note)))
     const stranger = await post(B, { country: "US", book: { senders: { [A]: { kind: "mine" }, [C]: { kind: "mine" } } } })
-    assert.deepEqual([stranger.wallets, sale(stranger)?.Cost, sale(stranger)?.Status], [[B], "unknown", "UNRESOLVED"])
+    assert.deepEqual([stranger.wallets, sale(stranger)?.Cost, sale(stranger)?.Status], [[B], "unknown", "UNKNOWN GAIN"])
   })
 
   it("doesn't let an answered demo wallet in", async () => {
