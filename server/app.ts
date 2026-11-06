@@ -2,8 +2,8 @@
 // Used by `pnpm start` and, inside Vite, by `pnpm dev`.
 
 import type { IncomingMessage, ServerResponse } from "node:http"
-import { currentRateMicros, hasStarted, isAddress, isCurrencyCode, isMainCurrency, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
-import { DEFAULT_RPC_URL, createL1FeeReader, createQuery, createRangeStream, createRates, createRowStream, createWallets, describeError, feedRounds, followChain, followRawSql, followSql, followedWallets, followedWindowSql, readBlockHashes, readHeadMark, sharedMarket, updateRounds, type AmpQuery, type FollowConfig, type ReadRates, type Source } from "@pricetag/sdk/internal"
+import { OldestFirstTooBigError, WalletsTooBigError, limitFolds, currentRateMicros, hasStarted, isAddress, isCurrencyCode, isMainCurrency, latestPrices, type CurrencyCode, type Method } from "@pricetag/sdk/core"
+import { WalletTooBigError, WalletsBusyError, createRowBudget, foldBytesThatFit, rowsThatFit, DEFAULT_RPC_URL, createL1FeeReader, createOtherTokens, createQuery, createRangeStream, createRates, createRowStream, createWallets, describeError, feedRounds, followChain, followRawSql, followSql, followedWallets, followedWindowSql, readBlockHashes, readHeadMark, sharedMarket, updateRounds, type AmpQuery, type FollowConfig, type ReadRates, type Source } from "@pricetag/sdk/internal"
 import type { Head, WalletResponse } from "../src/core/api.ts"
 import { emptyBook, linkedWallets, parseBook, walletsBehind, type Book } from "../src/core/book.ts"
 import { parseCoinbaseCsv } from "../src/core/exchange-import.ts"
@@ -11,6 +11,8 @@ import { exportCsv } from "../src/core/export.ts"
 import { DEMO_ADDRESS, DEMO_WALLET, demoRates, demoWallet } from "../src/core/fixtures.ts"
 import { foldBook, previewBook } from "../src/core/resolve.ts"
 import { CAUTIOUS_RULE_ID, MARKET_RULE_ID, RULE_TEXT, ruleNote, type PricingRule } from "../src/core/rules.ts"
+import { refuse, type CheckoutRefusal } from "./hosting.ts"
+import { forEveryone } from "./lanes.ts"
 import { verifyLink } from "./links.ts"
 import { ALL_YOURS, combinedPortfolioOf, explainCombined, exportCombined, previewCombined, type AllYoursRead, type Unread } from "../src/core/combined.ts"
 import { compareRules, explainPortfolio, parseExplainTarget, portfolioOf } from "../src/core/portfolio.ts"
@@ -22,6 +24,7 @@ import { warnOfNewAggregators, warnOfNewRateAggregators, warnOfNewTokenAggregato
 import { createManifestReader, createProofs, currentProofOf, currentRevision, currentVerificationOf, feedBehind, isSeed, proofOf, verificationOf, type BlockRead, type CheckedUpdate, type PriceBehind, type Proofs } from "./proof.ts"
 import { rawSource, resolvingSource, settledL1Fees, sharedReads, type SharedReads } from "./source.ts"
 import { createApprovals, demoApprovals, type Approvals } from "./approvals.ts"
+import { createContractCheck } from "./contract.ts"
 import { TAX_COUNTRIES, isTaxCountryCode, parseTaxYear, taxReportOf, type TaxScope } from "../src/core/tax.ts"
 
 type Env = Record<string, string | undefined>
@@ -76,11 +79,20 @@ function pinned(dataset: string, hash: string | undefined): string {
   return `${dataset.split("@")[0]}@${hash}`
 }
 
+/** The most rows of wallet history this server holds at once: `PRICETAG_MAX_WALLET_ROWS`, or what fits in its heap. */
+function maxWalletRowsOf(env: Env): number {
+  if (!env.PRICETAG_MAX_WALLET_ROWS) return rowsThatFit()
+  const rows = Number(env.PRICETAG_MAX_WALLET_ROWS)
+  if (!Number.isSafeInteger(rows) || rows <= 0) throw new Error("PRICETAG_MAX_WALLET_ROWS must be a positive whole number")
+  return rows
+}
+
 /** A wallet read's rows, closing balance and latest price run side by side, and the head or another wallet needn't wait behind them. Few enough to be fair to a shared Amp. */
 const QUERIES_AT_ONCE = 3
 
 export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_URL ? createQuery(env.AMP_QUERY_URL, env.AMP_QUERY_TOKEN || undefined, { maxConcurrent: QUERIES_AT_ONCE }) : null): { source: Source; rules?: RuleSource[]; readRates: ReturnType<typeof createRates>; proofs: Proofs; follow: FollowConfig; shared?: SharedReads; approvals?: Approvals } | null {
   if (!query) return null
+  const maxWalletRows = maxWalletRowsOf(env)
   const baseDataset = env.PRICETAG_BASE_DATASET || "edgeandnode/base_mainnet@0.0.2"
   const network = env.PRICETAG_RPC_NETWORK || "base_mainnet"
   const feedsDataset = env.PRICETAG_FEEDS_DATASET || undefined
@@ -113,11 +125,11 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
       // The same SQL for both. The header alone says which prices it reads, and the transactions always come from the
       // first, so they can't differ.
       const followed = followedOf(pin)
-      const shared = sharedReads(query.aliased({ pricetag: pin }), { baseDataset, dataset: "pricetag", network, followed })
+      const shared = sharedReads(query.aliased({ pricetag: pin }), { baseDataset, dataset: "pricetag", network, followed, maxWalletRows })
       const ruleSource = (id: string, name: string, hash: string | undefined, priceDataset: string): RuleSource => ({
         rule: { id, ...RULE_TEXT[id]!, dataset: name, hash: hash as string },
         // The stream reads the default rule's prices, so only that rule can use them.
-        source: resolvingSource(query.aliased({ pricetag: pin, pricing: priceDataset }), { baseDataset, dataset: "pricetag", priceDataset: "pricing", feedsDataset, startBlock, network, followed: priceDataset === pin ? followed : undefined }, shared),
+        source: resolvingSource(query.aliased({ pricetag: pin, pricing: priceDataset }), { baseDataset, dataset: "pricetag", priceDataset: "pricing", feedsDataset, startBlock, network, tokensDataset: env.PRICETAG_TOKENS_DATASET, followed: priceDataset === pin ? followed : undefined, maxWalletRows }, shared),
       })
       const rules = [
         ruleSource(MARKET_RULE_ID, env.PRICETAG_DATASET, env.PRICETAG_DATASET_HASH, pin),
@@ -127,13 +139,13 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
       return { source: rules[0]!.source, rules, readRates, proofs, follow: followOf(followSql(pin), startBlock), shared, approvals }
     }
     const followed = followedOf(env.PRICETAG_DATASET)
-    const shared = sharedReads(query, { baseDataset, dataset: env.PRICETAG_DATASET, network, followed })
+    const shared = sharedReads(query, { baseDataset, dataset: env.PRICETAG_DATASET, network, followed, maxWalletRows })
     const approvals = createApprovals(query, { baseDataset, dataset: { reference: env.PRICETAG_DATASET, name: env.PRICETAG_DATASET }, network, historyFrom: () => startBlock })
-    return { source: resolvingSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, feedsDataset, startBlock, network, followed }, shared), readRates, proofs, follow: followOf(followSql(env.PRICETAG_DATASET), startBlock), shared, approvals }
+    return { source: resolvingSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, feedsDataset, startBlock, network, tokensDataset: env.PRICETAG_TOKENS_DATASET, followed, maxWalletRows }, shared), readRates, proofs, follow: followOf(followSql(env.PRICETAG_DATASET), startBlock), shared, approvals }
   }
   const historyBlocks = env.PRICETAG_HISTORY_BLOCKS ? Number(env.PRICETAG_HISTORY_BLOCKS) : null
   if (historyBlocks !== null && (!Number.isSafeInteger(historyBlocks) || historyBlocks <= 0)) throw new Error("PRICETAG_HISTORY_BLOCKS must be a positive number")
-  const source = rawSource(query, { baseDataset, network, historyBlocks })
+  const source = rawSource(query, { baseDataset, network, historyBlocks, maxWalletRows })
   const approvals = createApprovals(query, { baseDataset, dataset: null, network, historyFrom: (head) => source.historyFrom?.(head) ?? head })
   return { source, readRates, proofs, follow: followOf(followRawSql(baseDataset)), approvals }
 }
@@ -165,6 +177,10 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
 
 /** Query errors can quote our SQL or the endpoint. The browser gets a fixed message, and the detail stays in the server log. */
 function sendAmpError(res: ServerResponse, error: unknown, message = "Couldn't read this wallet's data.") {
+  if (error instanceof WalletTooBigError) return sendJson(res, 413, { error: "This wallet has too much history for this server to read, so there are no numbers to show for it." })
+  if (error instanceof OldestFirstTooBigError) return sendJson(res, 413, { error: "There's too much history here to work out by oldest first on this server. Average cost still works." })
+  if (error instanceof WalletsTooBigError) return sendJson(res, 413, { error: "These wallets have too much history to add up on this server. Each one can still be read on its own." })
+  if (error instanceof WalletsBusyError) return sendJson(res, 429, { error: "This server is busy reading other very large wallets. Try again in a minute." })
   console.error("Amp query failed:", describeError(error))
   sendJson(res, 502, { error: message })
 }
@@ -223,10 +239,13 @@ export type ApiOptions = {
   clientIp?: (req: IncomingMessage) => string | null
   /** How many wallets each rule keeps read. A shared server has more people's wallets than one Mac, and one pushed out is read again in full. */
   maxWallets?: number
+  /** Counts a valid checkout just before it reaches the provider, or says why it can't go. */
+  limitCheckout?: (req: IncomingMessage) => CheckoutRefusal | null
 }
 
-export function createApi(env: Env, created: Created | null = createSource(env), onramp: Onramp | null = createCoinbase(env), { clientIp = () => null, maxWallets }: ApiOptions = {}) {
+export function createApi(env: Env, created: Created | null = createSource(env), onramp: Onramp | null = createCoinbase(env), { clientIp = () => null, maxWallets, limitCheckout = () => null }: ApiOptions = {}) {
   const source = created?.source ?? null
+  limitFolds(foldBytesThatFit())
 
   let head: Head | null = null
   let headReadAt = 0
@@ -238,7 +257,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
   async function pollHead(): Promise<Head> {
     if (!source) throw new Error("No Amp source")
     const startedAt = headRewinds
-    const next = await source.head(head?.blockNum ?? null)
+    const next = await forEveryone(() => source.head(head?.blockNum ?? null))
     // What it found can be the replaced chain's, and higher than the new one, so its height says nothing. Only `rewindTo` changes this, so it can't go on for long.
     if (startedAt !== headRewinds) return pollHead()
     // Reads overlap, so one that started first can finish last. A reorg lowers the head through `rewindTo`, not here.
@@ -295,10 +314,14 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     if (subscribers.size > 0) void followLoop()
   }
 
+  const isContract = createContractCheck(env.BASE_RPC_URL || DEFAULT_RPC_URL)
   const readL1Fees = settledL1Fees(createL1FeeReader(env.BASE_RPC_URL || DEFAULT_RPC_URL, fetch, undefined, console, Number(env.BASE_RPC_RATE_LIMIT) || undefined), () => head?.blockNum ?? null)
-  const wallets = source ? createWallets(source, walletHead, readL1Fees, console, { maxWallets, priceSamples: true }) : null
+  // Shared by the rules, since no rule changes what a token says about itself or what a wallet holds of it.
+  const otherTokens = source?.readTokenFacts && createOtherTokens(source.readTokenFacts)
+  const budget = createRowBudget(maxWalletRowsOf(env))
+  const wallets = source ? createWallets(source, walletHead, readL1Fees, console, { maxWallets, priceSamples: true, otherTokens, budget }) : null
   // Each rule keeps its own, so a rule nobody's looking at costs nothing, and what no rule changes is only read once. The first rule is the same as having none.
-  const rules = (created?.rules ?? []).map(({ rule, source }, i) => ({ rule, source, note: i === 0 ? null : ruleNote(rule), wallets: i === 0 ? wallets! : createWallets(source, walletHead, readL1Fees, console, { maxWallets, priceSamples: true }) }))
+  const rules = (created?.rules ?? []).map(({ rule, source }, i) => ({ rule, source, note: i === 0 ? null : ruleNote(rule), wallets: i === 0 ? wallets! : createWallets(source, walletHead, readL1Fees, console, { maxWallets, priceSamples: true, otherTokens, budget }) }))
 
   /**
    * Reads a wallet, or answers the request with why it can't.
@@ -426,6 +449,8 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     const ruled = (wallet: WalletResponse): WalletResponse => (rule ? { ...wallet, rule: rule.rule.id, ruleNote: rule.note } : wallet)
     const failed = new Set<string>()
     const done = new Map<string, WalletResponse>()
+    /** Why a wallet was refused, which says more than that it failed. */
+    let refusal: unknown = null
     const job = async (address: string): Promise<void> => {
       let wallet: WalletResponse | null
       try {
@@ -433,6 +458,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
         if (fresh) linkedFailures.delete(address)
       } catch (error) {
         console.error("Wallet read failed:", describeError(error))
+        if (error instanceof WalletTooBigError || error instanceof WalletsBusyError) refusal = error
         linkedFailures.add(address)
         failed.add(address)
         return
@@ -483,7 +509,8 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     const read = addresses.flatMap((address) => answer.get(address) ?? [])
     const unread = { reading: addresses.filter((address) => !answer.has(address) && !failed.has(address)), failed: addresses.filter((address) => !answer.has(address) && failed.has(address)) }
     if (read.length === 0 && fresh && unread.reading.length === 0) {
-      sendJson(res, 502, { error: "None of your wallets could be read." })
+      if (refusal) sendAmpError(res, refusal)
+      else sendJson(res, 502, { error: "None of your wallets could be read." })
       return null
     }
     return { read, unread }
@@ -516,8 +543,10 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     }
     if (action === "preview") return sendJson(res, 200, { previews: previewCombined(read, method, candidates as Book[], unread) })
     if (action === "export") {
+      // Worked out first, because it can be refused, and a refusal can't follow a 200.
+      const csv = exportCombined(read, method, book)
       res.writeHead(200, { "content-type": "text/csv; charset=utf-8", "cache-control": "no-store" })
-      res.end(exportCombined(read, method, book))
+      res.end(csv)
       return
     }
     if (target) {
@@ -560,6 +589,8 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       if (typeof cryptoAmount !== "string" || !/^\d{1,12}(\.\d{1,18})?$/.test(cryptoAmount) || !/[1-9]/.test(cryptoAmount)) return sendJson(res, 400, { error: "That isn't an amount." })
       const typed = fiat === undefined || fiat === null ? null : fiatOf(fiat)
       if (typed === undefined) return sendJson(res, 400, { error: "That isn't an amount." })
+      const refusal = limitCheckout(req)
+      if (refusal) return refuse(res, 429, refusal.error, refusal.retryAfter)
       return onrampAnswer(res, () => onramp.checkout({ address, asset, cryptoAmount, fiat: typed, clientIp: clientIp(req) }))
     }
 
@@ -756,6 +787,17 @@ export function createApi(env: Env, created: Created | null = createSource(env),
   }
 
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+    try {
+      return await route(req, res)
+    } catch (error) {
+      // Folds aren't all inside a read's `try`, and every one of them can ask for this.
+      if (!(error instanceof OldestFirstTooBigError || error instanceof WalletsTooBigError)) throw error
+      sendAmpError(res, error)
+      return true
+    }
+  }
+
+  async function route(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const path = pathOf(req)
     if (path === null) {
       sendJson(res, 400, { error: "Bad request" })
@@ -780,7 +822,8 @@ export function createApi(env: Env, created: Created | null = createSource(env),
         subscribers.delete(res)
         if (subscribers.size === 0) following?.abort()
       })
-      void followLoop()
+      // It outlives this request, and reads for everyone watching.
+      forEveryone(() => void followLoop())
       return true
     }
 
@@ -796,6 +839,15 @@ export function createApi(env: Env, created: Created | null = createSource(env),
         return true
       }
       await answerRate(currency, res)
+      return true
+    }
+
+    const progressMatch = /^\/api\/wallet\/([^/]+)\/progress$/.exec(path)
+    if (progressMatch) {
+      const address = (progressMatch[1] as string).toLowerCase()
+      if (address === "demo" || address === DEMO_ADDRESS || demoWallet(address)) sendJson(res, 200, { stage: "costs", transfers: null, isContract: false })
+      else if (!isAddress(address)) sendJson(res, 400, { error: "That isn't a Base address." })
+      else sendJson(res, 200, { ...(wallets?.progress(address) ?? { stage: "waiting", transfers: null }), isContract: await isContract(address) })
       return true
     }
 

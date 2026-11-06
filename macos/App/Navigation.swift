@@ -9,6 +9,11 @@ enum AppSection: String, CaseIterable, Identifiable {
 
     var id: Self { self }
 
+    /// Security is about what Spending Money can do, and what a site was allowed to, and a watch-only build can act on none of it.
+    static var shown: [AppSection] {
+        Build.isWatchOnly ? allCases.filter { $0 != .security } : allCases
+    }
+
     var title: String {
         switch self {
         case .overview: "Overview"
@@ -68,6 +73,8 @@ final class Navigation {
     /// A wallet's name while it's being typed. Closing the list keeps it, whichever way the list closes, and only Esc cancels.
     let pendingWalletName = PendingWalletName()
     @ObservationIgnored var onSwitcherClosed: (() -> Void)?
+    /// Welcome was chosen in the Help menu, with a wallet already showing.
+    var isShowingWelcomeAgain = false
     /// The extension's Top Up button was pressed. Spending Money's page takes it from here.
     var wantsTopUp = false
     /// The menu bar's Send button was pressed. Spending Money's page takes it from here.
@@ -110,6 +117,17 @@ final class Navigation {
 
     func switchWallet() {
         isSwitchingWallet = true
+    }
+
+    /// Asked for from the Help menu, from whichever section this is on.
+    func showWelcome(_ firstRun: FirstRun) {
+        let hasWallet = store.address != nil
+        firstRun.showAgain(hasWallet: hasWallet)
+        if hasWallet {
+            isShowingWelcomeAgain = true
+        } else {
+            section = .overview
+        }
     }
 
     /// Spending Money is a wallet like any other, so this chooses it and goes to its page, or offers to make one.
@@ -181,7 +199,7 @@ final class Navigation {
     /// A wallet with nothing to show has neither, and no field to take it.
     var canFind: Bool {
         guard let portfolio = store.portfolio else { return false }
-        return portfolio.progress.started && !portfolio.isEmpty
+        return portfolio.progress.started && !portfolio.isEmpty && !portfolio.holdsOnlyOtherTokens
     }
 
     /// Puts the cursor in the holdings' search field on the overview. From anywhere else, goes to the transactions and puts it in theirs.

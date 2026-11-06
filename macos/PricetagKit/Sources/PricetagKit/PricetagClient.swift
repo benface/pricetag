@@ -13,6 +13,12 @@ public enum FetchError: Error, Equatable, Sendable {
     case noAmpConfigured(String)
     /// The server refused the request, or sent something this version can't read.
     case rejected(String)
+    /// The wallet has more history than the server can hold. Trying again won't change that.
+    case tooBig(String)
+    /// The server only answers people it invited, and this request had no invite it takes.
+    case needsInvite(String)
+    /// The server is holding this client back, and says how many seconds until there's room. It clears by itself.
+    case rateLimited(String, retryAfter: Int)
     /// The server's price or update isn't the one a proof is about.
     case priceChanged(String)
 }
@@ -29,6 +35,8 @@ public protocol PortfolioSource: Sendable {
     func importCoinbase(csv: String) async throws -> ExchangeImport
     /// Empty when the server has only one, so there's nothing to choose.
     func rules() async throws -> [PricingRule]
+    /// How far a wallet's first read has got. Nil when this source can't tell, like a server from before it could.
+    func readProgress(address: String) async throws -> FirstReadProgress?
     func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> RuleComparison
     func taxReport(_ request: TaxReportRequest) async throws -> TaxReport
     func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof
@@ -60,6 +68,7 @@ extension PortfolioSource {
     public func priceVerification(asset: String, revision: String?, address: String, currency: CurrencyCode, rule: String?) async throws -> Verification { throw FetchError.unreachable }
     public func approvals(address: String) async throws -> WalletApprovals { throw FetchError.unreachable }
     public func rules() async throws -> [PricingRule] { [] }
+    public func readProgress(address: String) async throws -> FirstReadProgress? { nil }
     public func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> RuleComparison { throw FetchError.rejected("There's only one pricing rule here.") }
     public func onrampCheckout(address: String, asset: String, cryptoAmount: String, fiat: Money?) async throws -> OnrampCheckout { throw FetchError.unreachable }
     public func currentRate(currency: CurrencyCode) async throws -> String? { throw FetchError.unreachable }
@@ -93,7 +102,9 @@ public struct PricetagClient: PortfolioSource {
             let task = Task {
                 do {
                     let (bytes, response) = try await session.bytes(for: request)
-                    guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw FetchError.unreachable }
+                    let answer = response as? HTTPURLResponse
+                    if answer?.statusCode == 429 { throw FetchError.rateLimited("Too many requests.", retryAfter: Self.retryAfter(answer)) }
+                    guard answer?.statusCode == 200 else { throw FetchError.unreachable }
                     for try await line in bytes.lines where line == "event: head" {
                         continuation.yield()
                     }
@@ -177,6 +188,10 @@ public struct PricetagClient: PortfolioSource {
         return body.rules
     }
 
+    public func readProgress(address: String) async throws -> FirstReadProgress? {
+        try await get("/api/wallet/\(address)/progress", query: [], timeout: .seconds(8))
+    }
+
     public func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> RuleComparison {
         // It reads the wallet by both rules, and a first read can take a minute each.
         try await decoded(post("/api/portfolio/\(address)/compare", body: FoldBody(method: method, currency: currency, rule: nil, linked: linked, book: book), timeout: .seconds(180)))
@@ -252,9 +267,17 @@ public struct PricetagClient: PortfolioSource {
         switch status {
         case 502: throw FetchError.ampUnavailable(message)
         case 503: throw FetchError.noAmpConfigured(message)
+        case 413: throw FetchError.tooBig(message)
+        case 401: throw FetchError.needsInvite(message)
+        case 429: throw FetchError.rateLimited(message, retryAfter: Self.retryAfter(response as? HTTPURLResponse))
         case 412: throw FetchError.priceChanged(message)
         default: throw FetchError.rejected(message)
         }
+    }
+
+    /// In seconds, as this server sends it. Anything else waits a minute, which is as long as its shortest limit lasts.
+    private static func retryAfter(_ response: HTTPURLResponse?) -> Int {
+        response?.value(forHTTPHeaderField: "Retry-After").flatMap(Int.init).flatMap { $0 > 0 ? $0 : nil } ?? 60
     }
 
     private struct CheckoutBody: Encodable {

@@ -187,6 +187,38 @@
       "text": "Couldn't read 2 of your other wallets, so what came from them may show an unknown cost."
     }
   ],
+  "imported": [
+    {
+      "found": 0,
+      "skipped": 0,
+      "text": "That file has no withdrawals, so nothing changed."
+    },
+    {
+      "found": 0,
+      "skipped": 1,
+      "text": "Found 1 withdrawal with no usable cost, so nothing changed."
+    },
+    {
+      "found": 0,
+      "skipped": 2,
+      "text": "Found 2 withdrawals with no usable cost, so nothing changed."
+    },
+    {
+      "found": 1,
+      "skipped": 0,
+      "text": "Found 1 withdrawal."
+    },
+    {
+      "found": 2,
+      "skipped": 0,
+      "text": "Found 2 withdrawals."
+    },
+    {
+      "found": 2,
+      "skipped": 1,
+      "text": "Found 2 withdrawals. 1 more had no usable cost."
+    }
+  ],
   "withheld": "0x1234…5678's ETH history can't be confirmed, so what it sent has an unknown cost where it arrived.",
   "answerQuestions": [
     {

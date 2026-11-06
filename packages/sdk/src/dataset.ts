@@ -4,10 +4,11 @@
 
 import { asIso, asNumber, decimalString, hexOf, isNotStarted, prefixed, type BlockMark, type Query } from "./amp.ts"
 import { blockBefore } from "./chain.ts"
-import { MULTICALL3, decodeEthBalance, encodeEthBalanceCall, readBalancesAt } from "./balances.ts"
+import { MULTICALL3, decodeEthBalance, encodeEthBalanceCall, readBalancesAt, readTokenFactsAt } from "./balances.ts"
 import type { RateRound } from "./currency.ts"
 import type { Followed } from "./followed.ts"
 import type { LegRow, PayoutTx, PricedRow, Reference } from "./legs.ts"
+import { WalletTooBigError } from "./memory.ts"
 import type { FeedRound, Head } from "./portfolio.ts"
 import { TOKEN_FEEDS, type PriceFeed } from "./tokens.ts"
 import type { Source } from "./wallets.ts"
@@ -173,7 +174,8 @@ export function followedWindowSql(address: string, dataset: string, { counterpar
   }
 }
 
-export function datasetReader(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined; startBlock?: number | null | undefined; counterparties?: boolean | undefined; followed?: Followed<StreamedTable> | undefined }) {
+/** `maxWalletRows`: a wallet with more rows than this is refused, without loading more of them than that. */
+export function datasetReader(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined; startBlock?: number | null | undefined; counterparties?: boolean | undefined; followed?: Followed<StreamedTable> | undefined; maxWalletRows?: number | undefined }) {
   const ds = `"${config.dataset}"`
   // Only `legs` has a counterparty, so `unlisted_legs` needs a null of the same type to share its query.
   const listedLegColumns = config.counterparties ? `${LEG_COLUMNS}, counterparty` : LEG_COLUMNS
@@ -190,9 +192,14 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
   async function readLegs(address: string, from: number, to: number) {
     const me = hexOf(address)
     const where = `WHERE block_num BETWEEN ${from} AND ${to} AND account = X'${me}'`
+    const max = config.maxWalletRows
+    // One past the most it can use, which is how it knows there's more without loading it all.
+    const limit = max === undefined ? "" : ` LIMIT ${max + 1}`
     const listed = await config.followed?.read(address, "legs", from, to)
     const unlisted = listed && (await config.followed?.read(address, "unlisted_legs", from, to))
-    const rows = (listed && unlisted ? [...listed, ...unlisted] : await query<Row>(`SELECT ${listedLegColumns} FROM ${ds}.legs ${where} UNION ALL SELECT ${unlistedLegColumns} FROM ${ds}.unlisted_legs ${where}`)).map(toLegRow)
+    const read = listed && unlisted ? [...listed, ...unlisted] : await query<Row>(`SELECT ${listedLegColumns} FROM ${ds}.legs ${where} UNION ALL SELECT ${unlistedLegColumns} FROM ${ds}.unlisted_legs ${where}${limit}`)
+    if (max !== undefined && read.length > max) throw new WalletTooBigError(max)
+    const rows = read.map(toLegRow)
     const isUnlisted = (r: LegRow) => r.kind === "unlisted" || r.kind === "unlisted_nft"
     return {
       // pt_gas leaves the amount empty when the gas can't be worked out, and BigInt can't read that.
@@ -392,12 +399,13 @@ export function readFeedRoundsAt(query: Query, config: { baseDataset: string; ne
   }
 }
 
-export function datasetSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined; startBlock: number | null; network: string }): Source {
+export function datasetSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined; startBlock: number | null; network: string; maxWalletRows?: number | undefined }): Source {
   return {
     mode: "dataset",
     startBlock: config.startBlock,
     historyFrom: null,
     readBalances: (address, block) => readBalancesAt(query, config.network, address, block),
+    readTokenFacts: readTokenFactsAt(query, config.network),
     readEthBalances: (address, blocks) => readEthBalancesAt(query, config.network, config.baseDataset, address, blocks),
     readPayoutTxs: (address, blocks) => readPayoutTxsAt(query, config.baseDataset, address, blocks),
     readFeedRounds: readFeedRoundsAt(query, config),

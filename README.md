@@ -150,15 +150,34 @@ Deploy with `POST /controller/materialized-datasets/benface/pricetag_cautious/ve
 
 The Mac app reads from a server because the server holds what the app can't ship: the Amp token and the Coinbase key. Locally that's `pnpm mac`'s. A shared one is the same server with `PRICETAG_HOSTED=1`, which turns on everything it needs at once:
 
-- **Invites.** Every `/api/` request needs `Authorization: Bearer <invite>`. `pnpm invite <name>` makes one and prints the line for `PRICETAG_INVITES`, which holds only its SHA-256. Remove that line to take it back. It won't start without one.
-- **Limits.** Per invite: requests a minute, live streams at once, and Coinbase checkouts an hour. And checkouts a day for everyone together, so one invite can't use up the account. Past one, it answers 429 with `Retry-After`. One request can name at most 20 other wallets, counting its linked wallets, its answers and every preview, and it's refused before anything is read.
+- **Invites.** Every `/api/` request needs `Authorization: Bearer <invite>`. `pnpm invite <name>` makes one and prints the line for `PRICETAG_INVITES`, which holds only its SHA-256. Remove that line to take it back. It won't start without one, and neither will any server with a `HOST` other machines can reach.
+- **Limits.** Per invite: requests a minute, live streams at once, and Coinbase checkouts an hour. And checkouts a day for everyone together, so one invite can't use up the account. Past one, it answers 429 with `Retry-After`, and the apps wait that long, say so and carry on by themselves. A checkout only counts once it's valid and about to reach Coinbase. An ordinary session is one read a block, so about 30 requests a minute at most. One request can name at most 20 other wallets, counting its linked wallets, its answers and every preview, and it's refused before anything is read.
+- **Client address.** It won't start without `PRICETAG_CLIENT_IP_HEADER`, because Coinbase would otherwise be told the host's proxy's address.
+- **Amp queries take turns.** Each invite's run one at a time, `PRICETAG_AMP_LANES` of them at once, 3 by default, and the head's don't wait for them. So someone's very busy wallet only slows them down. A local server runs 3 queries at once, whoever they're for. `pnpm load:hosted` shows how this holds up with several Macs and one very busy wallet, with Amp replaced by recorded timings.
 - **Logs** are one JSON object a line, with addresses and transaction hashes (as `0x…`, as SQL's `X'…'`, or as any long run of hex), URLs, bearer tokens and the env's secrets taken out. It replaces `console` itself, so the SDK's lines go through it too. It logs no requests.
 - **`GET /healthz`** answers without an invite, with whether Amp and buying are set up and nothing else. It says 503 once a shutdown starts.
 - **SIGTERM** stops taking requests, ends the live streams so clients reconnect, and waits up to `PRICETAG_DRAIN_MS` for the rest.
+- **Wallets that fit.** A wallet with more history than fits in the heap gets a 413 saying so, after loading no more than the limit, and never partial numbers: about 10 KB a row, so about 44,000 rows on the hosted 512 MB heap, and about 420,000 on a Mac. That budget is shared, so kept wallets give way, first reads wait for room before loading anything, and a read that still doesn't fit gets a 429. Oldest first can stop much sooner, at about 6,100 legs hosted when nothing ever leaves, because every lot it holds is held again at every step. Wallets added up together share a limit too, tighter the more of them there are: about 39,000 legs for 2 wallets and 14,000 for 21, hosted. `PRICETAG_MAX_WALLET_ROWS` overrides the row limit.
 - **The client's address** goes to Coinbase only from the header in `PRICETAG_CLIENT_IP_HEADER`, which has to be one the host overwrites, like `fly-client-ip`. Without one it's the socket's. `x-forwarded-for` and the like stop the server from starting, because a client can write them. A private address, or a list, sends nothing, which beats a wrong address.
 - **API only.** It doesn't serve the web app, so Top Up and Publish from a device still need one on the Mac. `PRICETAG_SERVE_APP=1` serves it anyway.
 
-`Dockerfile` builds it, and `fly.toml` runs it on Fly.io, on **one machine**: the wallet reads, the limits and the day's checkouts are counted in its memory, so a second one would split them. Fly starts two on a first deploy unless told otherwise, so deploy with `fly deploy --ha=false`, then check that `fly machine list` shows one. The app reads it when its build names it: `PATINA_SERVER_HOST` in `macos/Config/App.xcconfig`, which is empty, so builds read the Mac's own server. Its invite goes in Settings. It's saved for that server alone, so it never goes to another one, and it's only sent over HTTPS. See `.env.example` for the rest.
+`Dockerfile` builds it, and `fly.toml` runs it on Fly.io, on **one machine**: the wallet reads, the limits and the day's checkouts are counted in its memory, so a second one would split them. Fly starts two on a first deploy unless told otherwise, so deploy with `fly deploy --ha=false`, then check that `fly machine list` shows one. It's live at `patina-server.fly.dev`, with the secrets in `fly secrets`. The app reads it when its build names it: `PATINA_SERVER_HOST` in `macos/Config/App.xcconfig`, which is empty, so `pnpm mac` reads the Mac's own server. The tester build sets it to `PATINA_HOSTED_SERVER_HOST`, next to it. Its invite goes in Settings. It's saved for that server alone, so it never goes to another one, and it's only sent over HTTPS. See `.env.example` for the rest.
+
+The invites live in `~/.config/pricetag/invites.txt`, mode 600, outside any repo, one a line: the name, the invite, and its `name:sha256`. The host only has the hashes, and `fly secrets` can't be read back, so that file is the list:
+
+- **To add one,** run `pnpm invite <name>`, add its line to the file, and push the list.
+- **To revoke one,** delete its line, and push the list.
+- **To push the list,** which replaces the whole of it, so it never drops the others:
+
+  ```sh
+  printf 'PRICETAG_INVITES=%s\n' "$(awk '!/^#/ && NF {print $3}' ~/.config/pricetag/invites.txt | paste -sd, -)" | fly secrets import -a patina-server
+  ```
+
+That restarts the machine, so wallet reads start over, the limits reset and the apps reconnect. Nothing else is lost, because it keeps nothing else. The dataset settings are secrets too, so when `.env.local` moves to a new version, set the same ones with `fly secrets import`, and only after that version reaches head. Code changes reach it with `fly deploy --ha=false`.
+
+### The watch-only build
+
+`pnpm mac:watch-only` builds the copy colleagues can install: a Developer ID `.dmg` with no key code in it and its own bundle ID, which reads `PATINA_HOSTED_SERVER_HOST` in `macos/Config/App.xcconfig`, notarized and stapled. It tells you what to do if this Mac has no notarytool profile yet. `pnpm check:watch-only` checks a built one, and `macos/WATCH-ONLY.md` is what to send people. `pnpm mac` never uses any of this.
 
 ## How it's put together
 
@@ -288,6 +307,11 @@ A token's price goes oracle, swap, then `market`: the median of its last few tra
 
 What's held now is valued at its Chainlink feed first, then at `market`. The dataset only has ETH and USDC's feeds, so the SDK reads the rest (`TOKEN_FEEDS`) directly, for what a wallet holds. They only set current prices and the chart's marks, read at each point's 5-minute bucket, not what a past transaction was worth. An answer that's too old or outside the token's bounds is no price, and no price from a feed doesn't make it "no market". A feed that gives no answer for a chart point is asked again over about half an hour, and the market prices that point in the meantime.
 
+**Other tokens** are any token off the allowlist that moved through a wallet since the dataset's start and that the chain says it still holds, with its balance, name, symbol and decimals. They have no price, so they're in no total, and they're in a list of their own, not in `positions`: the fold, the cap and sweeps never see them, and the hot wallet never sends them. A token that was already there and hasn't moved since can't be found, because there's no row to find it by. Their contracts are read with `eth_call`, and they can say anything, so names are cleaned up, always shown with the address, and never used to identify a token. A contract that won't answer says so, and one using up all the gas can't take others down with it.
+
+- **Possible spam** is tucked away, one click from the rest, and never called worthless. The rule, in `tuckedReason`: it copies a token we know, its name points to a website, its contract doesn't answer properly, or nothing this wallet sent moved it.
+- **Read time.** A wallet read never waits for these, so a token says "Reading…" until the next read after its answer arrives. Each read starts at most 2 queries of up to 25 tokens, one at a time, and none while another wallet read is waiting. A query that hangs gives up after 8 s and pauses them for a minute. A wallet lists at most 300, what it moved itself and what's newest first, and says how many it left out. What a contract says about itself is kept until the server restarts, and a balance is read again when the token moves, or after 5 minutes.
+
 **Answers stay on the device.** The Mac app and the browser keep them, and send them with each request (`POST /api/portfolio/<address>`, with `/explain`, `/preview`, `/export`, `/compare` and `/last`, which folds what was last read without waiting on a new read, and the pricing rule when one is chosen). The server folds with them and keeps nothing. Costs are kept in the currency they were entered in, and converted at the rate when they arrived. Without that rate, they stay unknown.
 
 A transfer's cost goes to the wallets it actually went to, whichever wallet is open: oldest lots first for the first transfer, or the same mix for each by average cost. An entered exchange cost covers only what had arrived when it was answered, so anything later is asked about in turn. One withdrawal in an exchange history explains one arrival, and when more than one fits, none of them is resolved from it. Native ETH bought in a swap can be an unwrap the account never received, so those `priced_legs` rows never set a market price.
@@ -331,6 +355,30 @@ The Mac app's Security page (⌘5) has a short checklist, each item checked wher
 - **Revoking** is only for Spending Money, through the same review and Touch ID as any send, with its fee read first. Each token is one transaction (`approve(spender, 0)`), and everything Permit2 holds is one `lockdown`, up to 20 at once. Only a tracked token or Permit2 is ever called, so an untracked token's or an NFT collection's approval is listed with a pointer to revoke it elsewhere. A savings wallet's approvals are from before Patina, because its flow only signs plain transfers, so the page points to revoking them with the device in a browser wallet. A watched wallet's are only shown.
 - **This Mac.** A login password is what `LAContext` says, and FileVault is what `fdesetup isactive` says. When it can't run, which the sandbox may prevent, it says it couldn't check, never that it's on.
 
+## Pricing any token
+
+`PRICETAG_TOKENS_DATASET` turns this on, and it's off until that's set. `dataset/tokens.json` is its own dataset, so adding it replaces nothing, like the feeds and exchange rates. It reads `pricetag`'s tables and adds `token_trades`: every trade of any token against ETH, WETH or USDC, as the pool saw it. Amounts stay in a token's smallest unit, so there's no list and no decimals, and a token can't change what it's worth by lying about them. The USD comes from the ETH or USDC side.
+
+`tokenMarketPrice` in `packages/sdk/src/token-market.ts` decides when those trades are a market. Over the last 24 hours, it needs at least 10 senders buying and 10 selling, $2,000 on each side, no sender above half of it all, and both sides trading in 6 separate hours. The price is the middle of the last hour's trades, from at least 3 senders, with the highest and lowest within 25% of each other. Trades under $10 don't count. Otherwise there's no price, for a stated reason, and it's never $0.
+
+What each one is for:
+
+| Attack | What stops it |
+|---|---|
+| Two wallets paying each other any rate | Only a contract that emits a swap event can be a row's pool |
+| One bot washing its own pool | Counting senders, and the limit on any one sender's share |
+| Many wallets faking volume with dust | Trades under $10 don't count, and $2,000 on each side |
+| A token that can be bought but not sold | Sellers count separately from buyers |
+| A token made an hour ago | 6 separate hours of trading on both sides |
+| A pool so thin that each trade moves the price | The 25% limit on the last hour's trades, which stands in for depth |
+| One odd trade | The middle of the trades, ignoring the highest and lowest tenth |
+
+**None of this can make faking impossible.** Wallets are free to make, and fees in a pool you own come back to you, so someone determined could pass these for a few dollars of gas a day. That's why **a price only ever says a swap happened.** When one token off the list left and one on the list arrived, or the other way around, with nothing else moving, and the market says they were worth within 25% of each other, what arrived costs what the listed side was worth at its own feed. It's labeled as an estimate. A fake market can't raise that number, because it doesn't come from the market. It can only stop a question being asked about a real payment.
+
+A price rests on its whole 24 hours, and only what `token_trades` has processed counts as read. So a token whose dataset is behind, or still replaying a reorg, has no price until it's caught up, and the swap keeps asking until then. Its trades are grouped by the same 5-minute buckets prices are worked out at, and a price only uses the groups inside its own blocks, so it doesn't depend on which wallet was read first or how far that read went.
+
+It doesn't give these tokens a position or a value, so they're still listed with no price and left out of totals. Nothing here changes what's swept, the cap, what's signed or what's sent: a sweep never acts on a realized gain that rests on an estimate, and only ever moves allowlisted tokens.
+
 ## Known gaps
 
 - Sending only covers ETH and the tokens the app tracks, so nothing else in a wallet can be moved from here.
@@ -338,7 +386,7 @@ The Mac app's Security page (⌘5) has a short checklist, each item checked wher
 - The hardware wallet flows haven't run against a real device yet. See [the checklist](HARDWARE-WALLETS.md#checklist-for-a-real-device).
 - Exchange names are only as good as the list in `src/core/senders.ts`. Each comes from a Basescan name tag or a confirmed withdrawal. A withdrawal from an address not on the list won't say where it came from, and that includes some from Coinbase and any from another exchange. An imported history still matches them.
 - A cost entered in CAD can't be shown in USD for a wallet read in USD, because that read has no rates. It shows as unresolved there, and never as the wrong number.
-- Only the allowlist in `packages/sdk/src/tokens.ts` gets a position and a price. A transaction that also moves another token is never valued as a swap, because its payment can't be split: what arrived has an unknown cost, and what left has unknown proceeds. Internal ETH isn't seen without traces, so it can't trigger this.
+- Only the allowlist in `packages/sdk/src/tokens.ts` gets a position and a price. A transaction that also moves another token isn't valued as a swap, because its payment can't be split: what arrived has an unknown cost, and what left has unknown proceeds. The exception, with `PRICETAG_TOKENS_DATASET` set, is one token for one listed token whose market agrees (see [Pricing any token](#pricing-any-token)). Internal ETH isn't seen without traces, so it can't trigger this.
 - Market prices need the Pricetag dataset, so reading the raw dataset, a past transfer of a token with no oracle reads has no price.
 - The dataset nets per token, then only prices an account's single pair. A split route that nets to one token out and one in gets a price. A token that mostly cancels out (under half of what moved is left) is what a router or pool kept, so it gets no price. Paying with ETH and WETH together makes two pairs, so the other token has no price, though the app still knows what was paid. A pair gets no price either when something off the allowlist moved with it, unless that token netted to zero.
 - There are no traces: a WETH `Withdrawal` is only a claim that ETH reached the transaction's sender, because a contract can send it elsewhere or keep a cut. The server settles each claim against the wallet's ETH balance before and after its block (`settleUnwraps`). When that can't say how much arrived, the swap's cost and proceeds stay unknown, even if its other token's balance matches.

@@ -6,6 +6,7 @@ import type { IncomingMessage, ServerResponse } from "node:http"
 import { BlockList, isIP } from "node:net"
 import { format } from "node:util"
 import { pathOf } from "./app.ts"
+import { inLane } from "./lanes.ts"
 
 type Env = Record<string, string | undefined>
 
@@ -21,6 +22,8 @@ export type Hosting = {
   /** Whether it also serves the web app. A hosted one doesn't by default: see "Hosting" in the README. */
   servesApp: boolean
   limits: Limits
+  /** How many people's Amp queries run at once. Each person's own run one at a time, and the head's don't count. */
+  ampLanes: number
   /** How long a shutdown waits for requests to finish before closing what's left. */
   drainMs: number
 }
@@ -37,6 +40,9 @@ export type Limits = {
 }
 
 const DEFAULT_LIMITS: Limits = { perMinute: 120, streams: 4, checkoutsPerHour: 10, checkoutsPerDay: 100 }
+
+/** A short read takes 7 queries and about 2 s, so with fewer than this a few people watching at once fall behind the chain. */
+const DEFAULT_AMP_LANES = 3
 
 const INVITE = /^([a-z0-9][a-z0-9_-]{0,31}):([0-9a-f]{64})$/
 
@@ -59,6 +65,9 @@ function positive(env: Env, name: string, fallback: number): number {
   return number
 }
 
+/** Whether only this machine can reach an address. */
+const staysOnThisMachine = (host: string) => host === "localhost" || host === "::1" || /^127\.\d+\.\d+\.\d+$/.test(host)
+
 /** A client can send these itself, and a proxy adds to them instead of replacing them, so they say nothing about who's asking. */
 const FORWARDED_HEADERS = new Set(["x-forwarded-for", "forwarded", "x-real-ip", "x-client-ip", "true-client-ip"])
 
@@ -66,12 +75,15 @@ export function hostingOf(env: Env): Hosting {
   const hosted = env.PRICETAG_HOSTED === "1"
   const invites = parseInvites(env.PRICETAG_INVITES)
   if (hosted && invites.size === 0) throw new Error("A hosted server needs PRICETAG_INVITES, or anyone could use its Amp token and Coinbase key.")
+  // A host's proxy reaches the server from outside the machine. A local one stays on it.
+  const host = env.HOST || (hosted ? "0.0.0.0" : "127.0.0.1")
+  if (invites.size === 0 && !staysOnThisMachine(host)) throw new Error(`HOST=${host} needs PRICETAG_INVITES, or anyone who can reach it could use its Amp token and Coinbase key.`)
   const header = env.PRICETAG_CLIENT_IP_HEADER?.trim().toLowerCase() || null
+  if (hosted && !header) throw new Error("A hosted server needs PRICETAG_CLIENT_IP_HEADER, like fly-client-ip, or Coinbase would be told the host's proxy's address instead of the buyer's.")
   if (header && FORWARDED_HEADERS.has(header)) throw new Error(`PRICETAG_CLIENT_IP_HEADER can't be ${header}, because a client can write its own. Use the one the host overwrites, like fly-client-ip.`)
   return {
     hosted,
-    // A host's proxy reaches the server from outside the machine. A local one stays on it.
-    host: env.HOST || (hosted ? "0.0.0.0" : "127.0.0.1"),
+    host,
     port: positive(env, "PORT", 8787),
     invites,
     clientIpHeader: header,
@@ -82,6 +94,7 @@ export function hostingOf(env: Env): Hosting {
       checkoutsPerHour: positive(env, "PRICETAG_LIMIT_CHECKOUTS_PER_HOUR", DEFAULT_LIMITS.checkoutsPerHour),
       checkoutsPerDay: positive(env, "PRICETAG_LIMIT_CHECKOUTS_PER_DAY", DEFAULT_LIMITS.checkoutsPerDay),
     },
+    ampLanes: positive(env, "PRICETAG_AMP_LANES", DEFAULT_AMP_LANES),
     drainMs: positive(env, "PRICETAG_DRAIN_MS", 10_000),
   }
 }
@@ -128,7 +141,7 @@ export function createCounter(windowMs: number, now: () => number = Date.now) {
   }
 }
 
-function refuse(res: ServerResponse, status: number, error: string, retryAfter?: number) {
+export function refuse(res: ServerResponse, status: number, error: string, retryAfter?: number) {
   res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store", ...(retryAfter ? { "retry-after": String(retryAfter) } : {}) })
   res.end(JSON.stringify({ error }))
 }
@@ -137,14 +150,34 @@ const SLOW_DOWN = "Too many requests from this invite. Try again in a minute."
 
 type Handle = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>
 
+/** Why a Coinbase checkout has to wait, and for how many seconds. */
+export type CheckoutRefusal = { error: string; retryAfter: number }
+
+/**
+ * Counts a checkout that's about to reach Coinbase, or says why it can't. The API asks once a request is valid, so a bad one
+ * costs nobody their purchases.
+ */
+export function checkoutLimit(hosting: Hosting, now: () => number = Date.now) {
+  const hours = createCounter(3_600_000, now)
+  const days = createCounter(86_400_000, now)
+  return (req: IncomingMessage): CheckoutRefusal | null => {
+    const who = inviteOf(req, hosting.invites)
+    if (!who) return null
+    const hourly = hours.take(who, hosting.limits.checkoutsPerHour)
+    if (hourly !== null) return { error: "That's a lot of purchases for one hour. Try again later.", retryAfter: hourly }
+    const daily = days.take("everyone", hosting.limits.checkoutsPerDay)
+    if (daily === null) return null
+    console.error("The day's Coinbase checkouts are used up.")
+    return { error: "Buying is paused for today. Try again tomorrow.", retryAfter: daily }
+  }
+}
+
 /**
  * The API behind its gate. `/healthz` answers anyone, with nothing private, and turns away the host's checks once a shutdown
  * starts. Everything else under `/api/` needs an invite when there's a list of them, and stays within its limits.
  */
 export function gate(handle: Handle, hosting: Hosting, health: () => Record<string, boolean>, now: () => number = Date.now) {
   const minutes = createCounter(60_000, now)
-  const hours = createCounter(3_600_000, now)
-  const days = createCounter(86_400_000, now)
   const streams = new Map<string, Set<ServerResponse>>()
   let draining = false
 
@@ -170,19 +203,6 @@ export function gate(handle: Handle, hosting: Hosting, health: () => Record<stri
       refuse(res, 429, SLOW_DOWN, wait)
       return true
     }
-    if (path === "/api/onramp/checkout" && req.method === "POST") {
-      const hourly = hours.take(who, hosting.limits.checkoutsPerHour)
-      if (hourly !== null) {
-        refuse(res, 429, "That's a lot of purchases for one hour. Try again later.", hourly)
-        return true
-      }
-      const daily = days.take("everyone", hosting.limits.checkoutsPerDay)
-      if (daily !== null) {
-        console.error("The day's Coinbase checkouts are used up.")
-        refuse(res, 429, "Buying is paused for today. Try again tomorrow.", daily)
-        return true
-      }
-    }
     if (path === "/api/events" && req.method === "GET") {
       if (draining) {
         refuse(res, 503, "Shutting down.")
@@ -200,7 +220,7 @@ export function gate(handle: Handle, hosting: Hosting, health: () => Record<stri
         if (open.size === 0) streams.delete(who)
       })
     }
-    return handle(req, res)
+    return inLane(who, () => handle(req, res))
   }
 
   return Object.assign(handler, {
