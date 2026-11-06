@@ -77,6 +77,11 @@ export const READING = "Reading this wallet. The first read can take a minute."
 export const READING_ALL = "Reading your wallets. The first read can take a minute."
 export const ALL_YOURS_TITLE = "All Yours"
 export const IN_EACH_WALLET = "In Each Wallet"
+/** A piece of the page that couldn't load or crashed. The likeliest reason is a new version replacing the old one's files. */
+export const LOAD_FAILED = "This part of the page didn't load, which can happen right after an update. Reloading usually fixes it."
+export const LOADING = "Loading…"
+/** Where answers go. They only leave this browser for a moment, for the sums that run on the server. */
+export const ANSWERS_STAY = "Your answers are saved in this browser. A tax report or a comparison sends them to the server to work out its numbers, and the server doesn't keep them. Publishing a cost onchain would tie your wallets together in public, so that's never done without asking."
 export const NOT_AN_ADDRESS = "That isn't a Base address. It should start with 0x, then 40 letters and numbers."
 
 export const RULES_TITLE = "Pricing rule"
@@ -303,6 +308,18 @@ export function importedSentence(found: number, skipped: number): string {
   return skipped === 0 ? `Found ${withdrawals(found)}.` : `Found ${withdrawals(found)}. ${skipped} more had no usable cost.`
 }
 
+export const IMPORT_QUESTION = "Does this file have your whole Coinbase history?"
+export const IMPORT_NOT_WHOLE = "Nothing changed. These costs need your whole history, so download it from Coinbase going back to the start, and import that."
+export const IMPORT_STARTS_LATE = "This file starts after a withdrawal you've already imported, so part of your history is missing. Nothing changed. Download your whole history from Coinbase, and import that."
+
+const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+/** Takes the date as the file has it, in UTC, so the Mac and the web say the same day. */
+export function importWhySentence(startsAt: string): string {
+  const [year, month, day] = startsAt.slice(0, 10).split("-").map(Number) as [number, number, number]
+  return `It starts on ${SHORT_MONTHS[month - 1]} ${day}, ${year}. What you bought before then changes what these cost, so if anything's missing, they'd be wrong.`
+}
+
 export function linkedFailedSentence(count: number): string {
   return count === 1 ? "Couldn't read your other wallet, so what came from it may show an unknown cost." : `Couldn't read ${count} of your other wallets, so what came from them may show an unknown cost.`
 }
@@ -322,6 +339,9 @@ export const allYoursReadingSentence = (wallets: readonly string[]) => `Still re
 
 /** Wallets in All Yours whose read failed, which aren't in its numbers. */
 export const allYoursFailedSentence = (wallets: readonly string[]) => `Couldn't read ${walletList(wallets)}, so ${wallets.length === 1 ? "it isn't" : "they aren't"} in these numbers.`
+
+/** Wallets in All Yours that an export can't include, because they aren't read. */
+export const exportLeavesOutSentence = (wallets: readonly string[]) => `This export leaves out ${walletList(wallets)}, because ${wallets.length === 1 ? "it isn't" : "they aren't"} read yet.`
 
 /** Wallets in All Yours being read again, whose last read is what these numbers use. */
 export const allYoursUpdatingSentence = (wallets: readonly string[]) => `Updating ${walletList(wallets)}. These numbers use ${wallets.length === 1 ? "its" : "their"} last read until then.`

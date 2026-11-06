@@ -5,9 +5,9 @@ import { combinedPortfolioOf, previewCombined, type Unread } from "../core/combi
 import { answerSender, enterExchangeCosts, walletsBehind, type Book, type BookChange, type Money, type SenderAnswer } from "../core/book.ts"
 import { readCheckedAccounts } from "../core/device-accounts.ts"
 import { noteLinkFor, type DeviceLink } from "../core/device-link.ts"
-import { mergeWithdrawals, parseCoinbaseCsv, type ExchangeImport } from "../core/exchange-import.ts"
-import { foldBook, isBalanced, microsOf, previewBook, type Question } from "../core/resolve.ts"
-import { ALL_ANSWERED, ANSWER_QUESTIONS, COST_QUESTION, COST_WHY, EXCHANGE_COST_WHY, NOT_SAVED, NOTHING_LEFT, SENDER_QUESTION, SENDER_WHY, finishNote, importedSentence, linkedFailedSentence } from "../core/wording.ts"
+import { importStart, keepingImport, parseCoinbaseCsv, startsAfterImported, type ExchangeImport } from "../core/exchange-import.ts"
+import { answersOffered, foldBook, isBalanced, microsOf, previewBook, type Question } from "../core/resolve.ts"
+import { ALL_ANSWERED, ANSWERS_STAY, ANSWER_QUESTIONS, COST_QUESTION, COST_WHY, EXCHANGE_COST_WHY, NOT_SAVED, NOTHING_LEFT, SENDER_QUESTION, SENDER_WHY, finishNote, IMPORT_NOT_WHOLE, IMPORT_QUESTION, IMPORT_STARTS_LATE, importedSentence, importWhySentence, linkedFailedSentence } from "../core/wording.ts"
 import { linkByProof, type Ethereum } from "./link-proof.ts"
 
 type Ownership = "mine" | "my-exchange" | "someone-else"
@@ -47,7 +47,8 @@ type Props = {
   book: Book
   /** Which holding Resolve was clicked on, so its questions come first. */
   firstAsset: string | null
-  onChange: (change: BookChange) => void
+  /** `onSaved` hears what the change was made to, since that can be more than what's on screen. */
+  onChange: (change: BookChange, onSaved?: (before: Book) => void) => void
   onUndo: () => void
   canUndo: boolean
   /** The last answer or undo couldn't be saved. */
@@ -68,8 +69,16 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
   const [message, setMessage] = useState<string | null>(null)
   // Apart from the message, which goes with its card, because an import can answer the card it was made from.
   const [lastImport, setLastImport] = useState<ExchangeImport | null>(null)
+  const [pendingImport, setPendingImport] = useState<ExchangeImport | null>(null)
+  const [importRefusal, setImportRefusal] = useState<string | null>(null)
+  const importAsk = useRef<HTMLDivElement>(null)
   const [drag, setDrag] = useState<{ x: number; y: number } | null>(null)
   const start = useRef<{ x: number; y: number } | null>(null)
+
+  // It's below the card, which can put it out of sight in a short window, and then picking a file looks like it did nothing.
+  useEffect(() => {
+    if (pendingImport || importRefusal) importAsk.current?.scrollIntoView({ block: "nearest" })
+  }, [pendingImport, importRefusal])
 
   useLayoutEffect(() => {
     const element = dialog.current
@@ -107,14 +116,17 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
   const balanced = isBalanced(fold.meter) && linkedFailed.length === 0 && fold.withheld.length === 0
   const progress = fold.meter.open + fold.meter.answered === 0 ? 1 : fold.meter.answered / (fold.meter.open + fold.meter.answered)
 
-  useEffect(() => onCurrentSender(sender), [sender, onCurrentSender])
+  const offered = current ? answersOffered(current, book) : []
+  const options = OWNERSHIP.filter(({ kind }) => offered.includes(kind))
+  const offersMine = offered.includes("mine")
+
+  // With no My wallet to say anything about, there's no reason to read that address.
+  useEffect(() => onCurrentSender(offersMine ? sender : null), [offersMine, sender, onCurrentSender])
   useEffect(() => {
     setCosts({})
     setMessage(null)
   }, [current?.id])
 
-  // What's already said to be a wallet can't also be an exchange account, and what's asked here is about the wallet it reached.
-  const options = sender && book.senders[sender]?.kind === "mine" ? OWNERSHIP.filter(({ kind }) => kind !== "my-exchange") : OWNERSHIP
   const answer = (next: SenderAnswer) => sender && onChange(answerSender(book, focus, sender, next))
   /** What a book would make the headline say. A sender that would join All Yours hasn't been read yet, so it says that rather than leave it out. */
   const previewOf = (next: Book) => {
@@ -131,6 +143,7 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
   }
   const undo = () => {
     setLastImport(null)
+    setImportRefusal(null)
     onUndo()
   }
   const skip = () => {
@@ -141,17 +154,22 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
   const previews = useMemo(() => {
     if (!sender || takingCost) return null
     const preview = (kind: "mine" | "someone-else") => previewOf(answerSender(book, focus, sender, { kind }))
-    return { mine: preview("mine"), "someone-else": preview("someone-else") }
-  }, [sender, focus, takingCost, wallet, others, all, method, book, failed])
+    return { mine: offersMine ? preview("mine") : null, "someone-else": preview("someone-else") }
+  }, [sender, focus, takingCost, offersMine, wallet, others, all, method, book, failed])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // With a dialog open over this one, like the device's, keys are its business, wherever its focus has gone.
+      if (document.querySelector("dialog:modal:not(.resolve)")) return
+      // Whatever's pressed in a field is the field's, including undoing what's been typed.
+      if (e.target instanceof HTMLInputElement) return
       if ((e.metaKey || e.ctrlKey) && e.key === "z") {
         e.preventDefault()
         undo()
         return
       }
-      if (e.target instanceof HTMLInputElement || !current) return
+      // With a modifier it's someone else's shortcut, like Alt+Left for Back. Holding a key down is one answer, not one per card.
+      if (!current || e.repeat || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return
       if (e.key === "ArrowDown") return skip()
       if (takingCost) return
       const kind = options[Number(e.key) - 1]?.kind ?? ({ ArrowRight: "mine", ArrowUp: "my-exchange", ArrowLeft: "someone-else" } as Record<string, Ownership>)[e.key]
@@ -178,11 +196,29 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
   const importFile = async (file: File | undefined) => {
     if (!file) return
     const imported = parseCoinbaseCsv(await file.text())
-    setLastImport(imported)
+    setPendingImport(null)
+    setImportRefusal(null)
+    setLastImport(null)
     if (!imported) return setMessage("That doesn't look like a Coinbase transaction history.")
     setMessage(null)
-    onChange((latest) => ({ ...latest, withdrawals: mergeWithdrawals(latest.withdrawals, imported.withdrawals) }))
-    setAsking(false)
+    if (imported.withdrawals.length === 0) return setLastImport(imported)
+    if (startsAfterImported(book.withdrawals, imported)) return setImportRefusal(IMPORT_STARTS_LATE)
+    setPendingImport(imported)
+  }
+  const keepImport = (imported: ExchangeImport) => {
+    setPendingImport(null)
+    onChange(
+      (latest) => keepingImport(latest, imported),
+      (before) => {
+        if (startsAfterImported(before.withdrawals, imported)) return setImportRefusal(IMPORT_STARTS_LATE)
+        setLastImport(imported)
+        setAsking(false)
+      },
+    )
+  }
+  const declineImport = () => {
+    setPendingImport(null)
+    setImportRefusal(IMPORT_NOT_WHOLE)
   }
 
   const onPointerUp = (e: ReactPointerEvent) => {
@@ -207,7 +243,7 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
       <div className="meter" role="progressbar" aria-label="Questions left" aria-valuenow={Math.round(progress * 100)}>
         <div className={balanced ? "meter-fill done" : "meter-fill"} style={{ width: `${progress * 100}%` }} />
       </div>
-      <p className="small">
+      <p className="small" role="status">
         <span className="muted">Now </span>
         {pnlWords(fold.totals.pnlMicros, fold.totals.estimatedMicros, fold.totals.unresolvedMicros, currency)}
         {BigInt(fold.totals.estimatedMicros) > 0n ? ` · ${formatMoney(fold.totals.estimatedMicros, currency)} estimated` : ""}
@@ -225,6 +261,10 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
           }}
           onPointerMove={(e) => start.current && setDrag({ x: e.clientX - start.current.x, y: e.clientY - start.current.y })}
           onPointerUp={onPointerUp}
+          onPointerCancel={() => {
+            start.current = null
+            setDrag(null)
+          }}
         >
           {current.arrivals.map((arrival) => (
             <strong key={arrival.asset} className="arrived">
@@ -255,7 +295,7 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
                 </label>
               ))}
               {costBook ? <p className="small">That would make it {consequence(previewOf(costBook), currency)}</p> : null}
-              {current.arrivals.length === 1 && looksOff(microsOf(costs[(current.arrivals[0] as { asset: string }).asset] ?? "", currency), current.valueMicros) ? <p className="small warn-text">⚠ That's far from what it was worth when it arrived, about {formatMoney(current.valueMicros as string, currency)}. Double-check it.</p> : null}
+              {current.arrivals.length === 1 && looksOff(microsOf(costs[(current.arrivals[0] as { asset: string }).asset] ?? "", currency), current.valueMicros) ? <p className="small warn-text" role="status">⚠ That's far from what it was worth when it arrived, about {formatMoney(current.valueMicros as string, currency)}. Double-check it.</p> : null}
               <div className="cost-actions">
                 <button type="button" onClick={saveCost}>
                   Save
@@ -264,7 +304,7 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
                   <>
                     <label className="file-button">
                       Import Coinbase history
-                      <input type="file" accept=".csv,text/csv" hidden onChange={(e) => void importFile(e.target.files?.[0])} />
+                      <input type="file" accept=".csv,text/csv" className="visually-hidden" onChange={(e) => { void importFile(e.target.files?.[0]); e.target.value = "" }} />
                     </label>
                     <button type="button" title="An estimate, and it's always shown as one" onClick={() => choose("someone-else")}>
                       Use the price when it arrived
@@ -277,14 +317,14 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
                   </button>
                 ) : null}
               </div>
-              <p className="small muted">This stays in this browser. Publishing a cost onchain would tie your wallets together in public, so that's never done without asking.</p>
+              <p className="small muted">{ANSWERS_STAY}</p>
             </div>
           ) : (
             <div className="answers">
               {options.map(({ kind, title, swipe }, i) => (
                 <button key={kind} type="button" onClick={() => choose(kind)}>
                   <span className="answer-title">{title}</span>
-                  <span className="muted small">{kind === "my-exchange" ? "Then asks what you paid" : previews ? consequence(previews[kind], currency) : "…"}</span>
+                  <span className="muted small">{kind === "my-exchange" ? "Then asks what you paid" : previews?.[kind] ? consequence(previews[kind], currency) : "…"}</span>
                   <span className="muted small key">
                     {i + 1} {swipe}
                   </span>
@@ -292,14 +332,14 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
               ))}
             </div>
           )}
-          {message ? <p className="small warn-text">{message}</p> : null}
+          {message ? <p className="small warn-text" role="alert">{message}</p> : null}
         </div>
       ) : (
         <div className="finish">
-          <div className={balanced ? "seal done" : "seal"}>{balanced ? "✓" : "…"}</div>
+          <div className={balanced ? "seal done" : "seal"} aria-hidden="true">{balanced ? "✓" : "…"}</div>
           {linkedFailed.length > 0 ? (
             <>
-              <p className="small warn-text">⚠ {linkedFailedSentence(linkedFailed.length)}</p>
+              <p className="small warn-text" role="alert">⚠ {linkedFailedSentence(linkedFailed.length)}</p>
               <button type="button" onClick={onRetry}>
                 Try again
               </button>
@@ -323,6 +363,23 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
           {importedSentence(lastImport.withdrawals.length, lastImport.skipped)}
         </p>
       ) : null}
+
+      <div ref={importAsk}>
+        {importRefusal ? <p className="small warn-text" role="status">{importRefusal}</p> : null}
+        {pendingImport ? (
+          <div role="group" aria-label="Importing a file">
+            <p className="small"><strong>{IMPORT_QUESTION}</strong> {importWhySentence(importStart(pendingImport) as string)}</p>
+            <div className="cost-actions">
+              <button type="button" onClick={() => keepImport(pendingImport)}>
+                Yes, use it
+              </button>
+              <button type="button" onClick={declineImport}>
+                No, don't use it
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
 
       <LinkByProof current={wallet.address} book={book} onChange={onChange} />
 
@@ -362,7 +419,7 @@ function LinkByProof({ current, book, onChange }: { current: string; book: Book;
       <button type="button" className="link" onClick={() => void prove()}>
         Link this browser's wallet by signing
       </button>{" "}
-      It can't move funds, and it's for hot wallets only. {status}
+      It can't move funds, and it's for hot wallets only. <span role="status">{status}</span>
     </p>
   )
 }

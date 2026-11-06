@@ -4,7 +4,7 @@ import ApplicationServices
 import SwiftUI
 
 /// What VoiceOver would find in a view, as text, from a window that's never shown. It's for tests and `macos/shot.sh --accessibility`,
-/// and isn't in a release build. It's the tree macOS builds for assistive apps, so it shows labels, values and order, but not how VoiceOver speaks them.
+/// and isn't in a release build. It's the tree macOS builds for assistive apps, so it shows labels, values and order, and what's marked to be said a character at a time, but not how VoiceOver speaks them.
 @MainActor
 public enum AccessibilityTree {
     public struct Element: Sendable, Equatable {
@@ -14,12 +14,14 @@ public enum AccessibilityTree {
         public var help: String
         public var depth: Int
         public var isEnabled: Bool
+        /// The parts of the label VoiceOver says a character at a time.
+        public var spelledOut: [String] = []
 
         /// One line, as VoiceOver would roughly put it: what it is, what it says, and what kind of thing it is.
         public var line: String {
             let parts = [label, value].filter { !$0.isEmpty }
             let text = parts.isEmpty ? "(nothing to read)" : parts.joined(separator: ", ")
-            return String(repeating: "  ", count: depth) + "\(text) [\(role)\(isEnabled ? "" : ", dimmed")]" + (help.isEmpty ? "" : " — \(help)")
+            return String(repeating: "  ", count: depth) + "\(text) [\(role)\(isEnabled ? "" : ", dimmed")]" + (help.isEmpty ? "" : " — \(help)") + spelledOut.map { " {spelled out: \($0)}" }.joined()
         }
     }
 
@@ -73,6 +75,14 @@ public enum AccessibilityTree {
             let role = text(#selector(NSAccessibilityProtocol.accessibilityRole))
             let label = [text(#selector(NSAccessibilityProtocol.accessibilityLabel)), text(#selector(NSAccessibilityProtocol.accessibilityTitle))].first { !$0.isEmpty } ?? ""
             let value = text(#selector(NSAccessibilityProtocol.accessibilityValue))
+            // Not in the protocol, and only SwiftUI's own elements answer it. That's where the plain label's marks went.
+            var spelledOut: [String] = []
+            let attributedLabel = NSSelectorFromString("accessibilityAttributedLabel")
+            if node.responds(to: attributedLabel), let answer = node.perform(attributedLabel)?.takeUnretainedValue() as? NSAttributedString {
+                answer.enumerateAttribute(NSAttributedString.Key("AXSpellOut"), in: NSRange(location: 0, length: answer.length)) { mark, range, _ in
+                    if (mark as? Bool) == true { spelledOut.append(answer.attributedSubstring(from: range).string) }
+                }
+            }
             let help = text(#selector(NSAccessibilityProtocol.accessibilityHelp))
             let isElement = node.isAccessibilityElement?() ?? false
             // Only controls say whether they're enabled. Everything else says it isn't.
@@ -80,7 +90,7 @@ public enum AccessibilityTree {
             let readable = !label.isEmpty || !value.isEmpty || isElement && role != NSAccessibility.Role.group.rawValue
             var next = depth
             if readable {
-                result.append(Element(role: role.replacingOccurrences(of: "AX", with: ""), label: label, value: value, help: help, depth: depth, isEnabled: isEnabled))
+                result.append(Element(role: role.replacingOccurrences(of: "AX", with: ""), label: label, value: value, help: help, depth: depth, isEnabled: isEnabled, spelledOut: spelledOut))
                 next += 1
             }
             let children = (node.accessibilityChildren?() as [Any]??).flatMap { $0 } ?? []

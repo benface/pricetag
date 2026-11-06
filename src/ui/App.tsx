@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useId, useMemo, useState, type FormEvent, type ReactNode } from "react"
+import { lazy, useCallback, useEffect, useId, useMemo, useState, type FormEvent, type ReactNode } from "react"
 import { CURRENCIES, MAIN_CURRENCY_CODES, TOKENS, formatAmount, formatMoney, formatPrice, formatReturn, formatSignedMoney, formatTime, isAddress, isMainCurrency, msBetweenBlocks, normalizeAddress, returnBps, shortHash, sumTotals, type CurrencyCode, type HoldComparison, type Method, type OtherToken, type Position } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type WalletResponse } from "../core/api.ts"
 import { ALL_YOURS, combinedPortfolioOf, explainAcross, exportCombined, feedBadge, type CombinedPortfolioResponse, type CombinedPosition, type PositionPart } from "../core/combined.ts"
@@ -41,6 +41,7 @@ import {
   answerQuestionsLabel,
   behindSentence,
   coverageSentence,
+  exportLeavesOutSentence,
   feedDetail,
   holdCaveatSentence,
   feedProblem,
@@ -67,6 +68,7 @@ import { useRules } from "./useRules.ts"
 import type { TaxYear } from "../core/tax.ts"
 import { TaxPanel } from "./TaxPanel.tsx"
 import { useAllYours, useWallet } from "./useWallet.ts"
+import { LazyPanel } from "./LoadBoundary.tsx"
 import { ProblemNotice } from "./ProblemNotice.tsx"
 import type { Problem } from "../core/wording.ts"
 import { currenciesIn, walletsBehind, walletsToRead, yourWallets } from "../core/book.ts"
@@ -99,8 +101,10 @@ function readCurrency(): CurrencyCode {
 }
 
 function Num({ onClick, label, children, tone }: { onClick: () => void; label: string; children: ReactNode; tone?: "gain" | "loss" | "quiet" | null }) {
+  // In the text rather than an `aria-label`, which would take the place of the number.
   return (
-    <button type="button" className={`num-button ${tone ?? ""}`} onClick={onClick} aria-label={label}>
+    <button type="button" className={`num-button ${tone ?? ""}`} onClick={onClick}>
+      <span className="visually-hidden">{label}: </span>
       {children}
     </button>
   )
@@ -371,6 +375,8 @@ export function App() {
   const [address, setAddress] = useState(readAddress)
   const [input, setInput] = useState(() => (isAddress(readAddress() ?? "") ? (readAddress() as string) : ""))
   const [inputError, setInputError] = useState<string | null>(null)
+  const inputErrorId = useId()
+  const exportNoteId = useId()
   const [method, setMethod] = useState<Method>("average")
   const [target, setTarget] = useState<ExplainTarget | null>(null)
   const [taxOpen, setTaxOpen] = useState(false)
@@ -493,11 +499,12 @@ export function App() {
   /** How many questions each wallet on screen has. A wallet that isn't read yet isn't here, since that isn't known. */
   const questionsIn = useMemo(() => {
     const counts = new Map<string, number>()
-    if (!together) return single ? counts.set(single.toLowerCase(), questions.length) : counts
+    // By its address, as a tax report names it, which isn't how the demo wallet is asked for.
+    if (!together) return wallet ? counts.set(wallet.address.toLowerCase(), questions.length) : counts
     for (const { address: one } of together.read) counts.set(one.toLowerCase(), 0)
     for (const { wallet: where } of questions) counts.set(where, (counts.get(where) ?? 0) + 1)
     return counts
-  }, [together, single, questions])
+  }, [together, wallet, questions])
   const listed = positions.filter((p) => !p.noMarket)
   const attention = showing && pnlStatus ? attentionOf({ positions, unread, totals, pnlStatus, gasUnknownTxs: showing.gasUnknownTxs, l1FeeUnknownTxs: showing.l1FeeUnknownTxs, withheld, currency, missingRateTxs, hasCurrentRate: !noCurrentRate }) : null
   const pastCosts = pastCostsNote(attention, questions.length)
@@ -540,6 +547,18 @@ export function App() {
     </button>
   )
   const openTotal = (metric: TotalMetric) => setTarget({ kind: "total", metric })
+  const closeDevice = () => {
+    // A link has done its job, and reloading shouldn't start it over.
+    if (parseDeviceLink(window.location.search)) window.history.replaceState(null, "", window.location.pathname)
+    setDevice(null)
+  }
+  const showingTitle = !showing ? null : isAll ? ALL_YOURS_TITLE : showing.mode === "demo" ? "Demo wallet" : `Wallet ${shortHash(showing.address)}`
+  // Still or finished reading, for whoever can't see the page change. It's always here, because that's how a change in it gets read out.
+  const readingStatus = loading ? (isAll ? READING_ALL : READING) : showingTitle ? `${showingTitle} is ready.` : ""
+  const statusProblem = showing && error ? feedProblem(error, location.origin, started ? staleSentence(formatTime(showing.latest.timestamp)) : null) : null
+  // The status stays folded, and nothing in there gets read out, so whoever can't see its badge change hears what went wrong from here.
+  const statusAlert = [statusProblem?.message, combined && combined.linkedFailed.length > 0 ? allYoursFailedSentence(combined.linkedFailed) : null, linkedFailed.length > 0 ? linkedFailedSentence(linkedFailed.length) : null].filter(Boolean).join(" ")
+  const leftOfExport = [...(combined?.linkedReading ?? []), ...(combined?.linkedFailed ?? [])]
 
   return (
     <div className="page">
@@ -550,6 +569,8 @@ export function App() {
         <form className="address" onSubmit={submit}>
           <input
             aria-label="Base address"
+            aria-invalid={inputError !== null}
+            aria-describedby={inputError ? inputErrorId : undefined}
             placeholder="Paste any Base address, 0x…"
             value={input}
             spellCheck={false}
@@ -592,8 +613,10 @@ export function App() {
           Buy
         </button>
       </header>
-      {showing ? <LiveBadge wallet={showing} problem={error ? feedProblem(error, location.origin, started ? staleSentence(formatTime(showing.latest.timestamp)) : null) : null} lastUpdate={started ? formatTime(showing.latest.timestamp) : null} all={combined} lines={statusLines} failedWallets={linkedFailed.length + (combined?.linkedFailed.length ?? 0)} retry={retryEverything} /> : null}
-      {inputError ? <p className="notice warn">⚠ {inputError}</p> : null}
+      {showing ? <LiveBadge wallet={showing} problem={statusProblem} lastUpdate={started ? formatTime(showing.latest.timestamp) : null} all={combined} lines={statusLines} failedWallets={linkedFailed.length + (combined?.linkedFailed.length ?? 0)} retry={retryEverything} /> : null}
+      {inputError ? <p id={inputErrorId} className="notice warn" role="alert">⚠ {inputError}</p> : null}
+      <p className="visually-hidden" role="status">{readingStatus}</p>
+      <p className="visually-hidden" role="alert">{statusAlert}</p>
       {notSaved ? <p className="notice warn" role="alert">⚠ {NOT_SAVED}</p> : null}
       {rules.length > 1 ? <RulesPanel rules={rules} chosen={chosenRule} choose={chooseRule} current={rule} address={isAll ? null : single} method={method} currency={currency} book={book} /> : null}
 
@@ -619,6 +642,7 @@ export function App() {
 
       {showing ? (
         <main>
+          <h1 className="visually-hidden">{showingTitle}</h1>
           {isBehind(showing) && !started ? <p className="notice warn">⚠ {NOT_STARTED}</p> : null}
           {showing.mode === "demo" ? <p className="notice">{DEMO_NOTICE}</p> : null}
 
@@ -677,7 +701,7 @@ export function App() {
               {/* Last, because they're read after everything else, and can arrive without moving anything above them. */}
               <OtherTokens tokens={showing?.otherTokens ?? []} leftOut={showing?.otherTokensLeftOut ?? 0} />
               <p className="exports">
-                <button type="button" className="link" onClick={download}>
+                <button type="button" className="link" aria-describedby={leftOfExport.length > 0 ? exportNoteId : undefined} onClick={download}>
                   Export as CSV
                 </button>
                 <button
@@ -691,6 +715,7 @@ export function App() {
                   Export a tax report…
                 </button>
               </p>
+              {leftOfExport.length > 0 ? <p id={exportNoteId} className="small warn-text exports-note">⚠ {exportLeavesOutSentence(leftOfExport)}</p> : null}
             </>
           )}
         </main>
@@ -700,7 +725,7 @@ export function App() {
       {resolving && together ? <ResolvePanel wallet={together.read[0] as WalletResponse} others={together.read.slice(1)} all={together.unread} failed={together.unread.failed} onRetry={allRead.retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} notSaved={notSaved} onPublish={(link) => setDevice({ link })} onCurrentSender={setCardSender} onClose={closeResolve} /> : null}
       {resolving && !together && wallet ? <ResolvePanel wallet={wallet} others={others} failed={failed} onRetry={retry} method={method} book={book} firstAsset={resolving.asset} onChange={change} onUndo={undo} canUndo={canUndo} notSaved={notSaved} onPublish={(link) => setDevice({ link })} onCurrentSender={setCardSender} onClose={closeResolve} /> : null}
       {buying ? (
-        <Suspense fallback={null}>
+        <LazyPanel label="Buy" onClose={() => setBuying(false)}>
           <BuyPanel
             currency={chosenCurrency}
             onBegin={beginPurchase}
@@ -710,10 +735,10 @@ export function App() {
             }}
             onClose={() => setBuying(false)}
           />
-        </Suspense>
+        </LazyPanel>
       ) : null}
       {device ? (
-        <Suspense fallback={null}>
+        <LazyPanel label="Hardware wallet" onClose={closeDevice}>
           <DevicePanel
             link={device.link}
             book={book}
@@ -725,13 +750,9 @@ export function App() {
               setDevice(null)
               go(next)
             }}
-            onClose={() => {
-              // A link has done its job, and reloading shouldn't start it over.
-              if (parseDeviceLink(window.location.search)) window.history.replaceState(null, "", window.location.pathname)
-              setDevice(null)
-            }}
+            onClose={closeDevice}
           />
-        </Suspense>
+        </LazyPanel>
       ) : null}
       {taxOpen && (isAll || single) ? <TaxPanel
           // All of them is the first with the rest alongside, since a device account isn't always in the answers.

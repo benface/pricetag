@@ -55,7 +55,7 @@ struct FirstRunWelcome: View {
     private var step: Step {
         if store.needsInvite { return .invite }
         // A build with its own server can't do anything until that answers. Any other can still make a wallet.
-        return Build.isWatchOnly && store.serverCheck == .checking ? .checking : .choices
+        return Build.isForOtherPeople && store.serverCheck == .checking ? .checking : .choices
     }
 
     var body: some View {

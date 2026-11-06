@@ -27,16 +27,36 @@ build_app() {
 configuration=${CONFIGURATION:-Release}
 app="$build/Build/Products/$configuration/$name.app"
 
+# What Xcode says when this Mac can't provision the build. It puts these on the project or on no file at all, so a compile error can't match,
+# whatever it says.
+provisioning_error='^(.*\.xcodeproj: )?error: (No Accounts?[: ]|No profiles for |No signing certificate |Signing for .* requires a development team|Provisioning profile |Unable to log in with account )'
+
+# Xcode stops at these errors before it runs any build command, and exits 65. So a kill or a crash (any other exit code), another error alongside them,
+# or a command that failed means something else went wrong too. So does not reaching Apple, which can come with the same errors.
+cant_provision() { # build's exit code, build's output
+  [ "$1" -eq 65 ] &&
+    grep -Eq "$provisioning_error" "$2" &&
+    ! grep -E '(^|[[:space:]])error:' "$2" | grep -Evq "$provisioning_error" &&
+    ! grep -Eq 'The following build commands failed:|Communication with Apple failed|timed out|appears to be offline|hostname could not be found' "$2"
+}
+
 # The hot wallet's key needs the device-only Keychain, and only a provisioned build can reach it. Without that team signed in to
-# Xcode, this still builds a working app, which says it can't hold a key. Everything else works.
+# Xcode, this still builds a working app, which says it can't hold a key. Everything else works. Any other failure stops here, so
+# something that only hit this one build can't end with an app that can't hold a key.
 #
 # Leaving out the base entitlements drops get-task-allow, so a debugger can't attach to a release build and read its memory.
+mkdir -p "$build"
+output="$build/provisioned-build.log"
 if build_app -allowProvisioningUpdates \
   APP_SIGN_STYLE=Automatic APP_TEAM="$team" APP_SIGN_IDENTITY="Apple Development" \
   APP_ENTITLEMENTS=Config/HotWallet.entitlements BRIDGE_ENTITLEMENTS=Config/BridgeHost.entitlements \
-  APP_INJECT_BASE_ENTITLEMENTS="$([ "$configuration" = Release ] && echo NO || echo YES)"; then
+  APP_INJECT_BASE_ENTITLEMENTS="$([ "$configuration" = Release ] && echo NO || echo YES)" >"$output" 2>&1; then
+  cat "$output"
   echo "Signed for team $team, so this build can hold a hot wallet."
 else
+  status=$?
+  cat "$output"
+  cant_provision "$status" "$output" || exit "$status"
   echo "Couldn't provision this build, so it can't hold a hot wallet. To fix that, sign in to Xcode with the account for team $team." >&2
   build_app APP_SIGN_IDENTITY="${identity:--}"
 fi

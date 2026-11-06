@@ -79,16 +79,7 @@ struct ConfirmationView<Footer: View>: View {
             .fixedSize(horizontal: false, vertical: true)
             // A scroll bar only shows once it's scrolling, and what's out of sight is part of what's being approved.
             .overlay(alignment: .bottom) {
-                if hasMoreBelow {
-                    Label("More below", systemImage: "chevron.down")
-                        .font(.caption.weight(.medium))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(.regularMaterial, in: Capsule())
-                        .shadow(radius: 2, y: 1)
-                        .padding(.bottom, 8)
-                        .allowsHitTesting(false)
-                }
+                if hasMoreBelow { MoreBelowHint() }
             }
             VStack(spacing: 20) {
                 if !warnings.isEmpty {
@@ -183,7 +174,7 @@ struct ConfirmationView<Footer: View>: View {
 
     /// The amount and every row, with each address a character at a time. The button that lets Touch ID ask says all of it again.
     private var spokenSummary: Text {
-        rows.reduce(Text(heroSpoken)) { $0 + Text(". ") + RowView.spoken($1) }
+        rows.reduce(Text(heroSpoken)) { Text("\($0). \(RowView.spoken($1))") }
     }
 
     private var heroSpoken: String {
@@ -279,7 +270,7 @@ private struct RowView: View {
     /// What it's called, whose it is, then what it says. An address goes a character at a time, because that's what's being checked.
     static func spoken(_ row: ConfirmationRow) -> Text {
         guard row.isAddress else { return Text("\(row.label), \(Spoken.text(row.value))") }
-        return Text(([row.label, row.name].compactMap { $0 } + [""]).joined(separator: ", ")) + Text(Spoken.address(row.value)).speechSpellsOutCharacters()
+        return Spoken.address(row.value, after: ([row.label, row.name].compactMap { $0 } + [""]).joined(separator: ", "))
     }
 
     private var label: some View {
@@ -442,7 +433,7 @@ struct TouchIDFooter: View {
     /// A button that lets Touch ID ask, then the warning it says yes to, then everything being approved.
     private func spokenLabel(_ title: String, warning: String) -> Text {
         let lead = Text(warning.isEmpty ? "\(title): " : "\(title). Warning: \(warning) Approving: ")
-        return summary.map { lead + $0 } ?? Text(title)
+        return summary.map { Text("\(lead)\($0)") } ?? Text(title)
     }
 
     /// Calls off the prompt before anything else, so nothing the user's just left can still go through.
@@ -592,6 +583,20 @@ private struct TouchIDGlyph: NSViewRepresentable {
 
     final class Holder: NSView {
         var glyph: LAAuthenticationView?
+    }
+}
+
+/// Over the bottom of something that scrolls, and never in the way of a click.
+struct MoreBelowHint: View {
+    var body: some View {
+        Label("More below", systemImage: "chevron.down")
+            .font(.caption.weight(.medium))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(.regularMaterial, in: Capsule())
+            .shadow(radius: 2, y: 1)
+            .padding(.bottom, 8)
+            .allowsHitTesting(false)
     }
 }
 

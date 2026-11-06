@@ -74,7 +74,7 @@ export function ProofPanel({ address, target, currency, rule, costNote = null }:
       </div>
     )
   }
-  if (!proof) return <div className="proof small muted">Reading…</div>
+  if (!proof) return <div className="proof small muted" role="status">Reading…</div>
   return (
     <div className="proof small">
       <div>
@@ -109,7 +109,7 @@ export function ProofPanel({ address, target, currency, rule, costNote = null }:
               <li key={dataset.name}>
                 {dataset.title}: {dataset.name}
                 {dataset.hash ? (
-                  <div className="hash muted" title="This dataset's fingerprint">
+                  <div className="hash muted" title="Its fingerprint">
                     {dataset.hash}
                   </div>
                 ) : (
@@ -130,7 +130,7 @@ export function ProofPanel({ address, target, currency, rule, costNote = null }:
           {verifyFailure ? <ProblemNotice problem={panelProblem(verifyFailure, location.origin)} className="warn-text" /> : null}
           {verification ? (
             <div>
-              <p className={`proof-result ${verification.status}`}>{verification.summary}</p>
+              <p className={`proof-result ${verification.status}`} role="status">{verification.summary}</p>
               <ul>
                 {verification.checks.map((check) => (
                   <li key={check.title} className={`check ${check.status}`}>

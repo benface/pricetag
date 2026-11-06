@@ -1,13 +1,16 @@
 // Reads a Coinbase transaction history CSV, to find what each withdrawal cost. A withdrawal it can't price exactly is left
-// out rather than guessed: it stays a question.
+// out rather than guessed: it stays a question. Nothing in a file says whether it starts at the account's beginning, and what
+// was bought before it changes every cost in it, so only the person who downloaded it can vouch for that.
 
 import { ASSETS, decimalsOf, isAddress, normalizeAddress, type CurrencyCode } from "@pricetag/sdk/core"
-import type { ExchangeWithdrawal } from "./book.ts"
+import type { Book, ExchangeWithdrawal } from "./book.ts"
 
 export type ExchangeImport = {
   withdrawals: ExchangeWithdrawal[]
   /** Withdrawals with no usable cost: bought in a currency this can't read, in several at once, or with a history it can't follow. */
   skipped: number
+  /** When each asset first shows up in the file, since what came before that is out of its sight. */
+  firstSeen: Record<string, string>
 }
 
 function parseCsvLine(line: string): string[] {
@@ -64,6 +67,7 @@ export function parseCoinbaseCsv(text: string): ExchangeImport | null {
     .map((cells) => ({ cells, time: Date.parse((cells[at.time] ?? "").replace(" UTC", "Z").replace(" ", "T")) }))
 
   const pools = new Map<string, Pool>()
+  const firstSeen: Record<string, string> = {}
   const withdrawals: ExchangeWithdrawal[] = []
   let skipped = 0
   const assetOf = (cells: string[]) => {
@@ -85,6 +89,7 @@ export function parseCoinbaseCsv(text: string): ExchangeImport | null {
   for (const { cells, time } of parsed.filter((row) => !Number.isNaN(row.time)).sort((a, b) => a.time - b.time)) {
     const asset = assetOf(cells)
     if (!ASSETS.includes(asset)) continue
+    firstSeen[asset] ??= new Date(time).toISOString()
     const decimals = decimalsOf(asset)
     const units = unitsOf(cells[at.qty] ?? "", decimals)
     const type = typeOf(cells)
@@ -125,8 +130,15 @@ export function parseCoinbaseCsv(text: string): ExchangeImport | null {
       pool.units += units
     }
   }
-  return { withdrawals, skipped }
+  return { withdrawals, skipped, firstSeen }
 }
+
+/** Where the file starts: the first date to ask someone about. */
+export const importStart = ({ firstSeen }: ExchangeImport): string | null => Object.values(firstSeen).sort()[0] ?? null
+
+/** A withdrawal already imported from before the file starts proves the file isn't the whole history, whatever anyone says about it. */
+export const startsAfterImported = (earlier: readonly ExchangeWithdrawal[], { withdrawals, firstSeen }: ExchangeImport): boolean =>
+  withdrawals.some(({ asset }) => earlier.some((withdrawal) => withdrawal.asset === asset && Date.parse(withdrawal.at) < Date.parse(firstSeen[asset] as string)))
 
 const withdrawalKey = ({ exchange, asset, units, at, toAddress }: ExchangeWithdrawal) => JSON.stringify([exchange, asset, units, at, toAddress])
 
@@ -138,6 +150,12 @@ export function mergeWithdrawals(earlier: readonly ExchangeWithdrawal[], found: 
   const again = new Set(found.map(withdrawalKey))
   return [...earlier.filter((withdrawal) => !again.has(withdrawalKey(withdrawal))), ...found]
 }
+
+/**
+ * What the book becomes once someone vouches for a file. It's checked against the book as it is now, since what proves the file
+ * partial can have been saved while it waited for an answer, and then the book stays as it is.
+ */
+export const keepingImport = (latest: Book, imported: ExchangeImport): Book => (startsAfterImported(latest.withdrawals, imported) ? latest : { ...latest, withdrawals: mergeWithdrawals(latest.withdrawals, imported.withdrawals) })
 
 const MATCH_BEFORE_MS = 5 * 60_000
 const MATCH_AFTER_MS = 60 * 60_000
