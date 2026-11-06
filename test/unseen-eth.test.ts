@@ -2,10 +2,11 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { ASSETS, ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, creditUnseenEth, foldPositions, openingLegs, payerOf, unseenEthSearchBlocks, worth, type EthPayer, type LegRow, type PayoutTx, type PricedLeg, type Reference } from "@pricetag/sdk/core"
 import { createWallets, readPayoutTxsAt, type Query, type ReadL1Fees, type Source } from "@pricetag/sdk/internal"
-import { portfolioOf } from "../server/portfolio.ts"
+import { portfolioOf } from "../src/core/portfolio.ts"
 import { costKey, emptyBook } from "../src/core/book.ts"
 import { describeEffect } from "../src/core/explain.ts"
 import { foldBook } from "../src/core/resolve.ts"
+import { knownSender } from "../src/core/senders.ts"
 import { taxReportOf, taxRows } from "../src/core/tax.ts"
 import type { WalletResponse } from "../src/core/api.ts"
 
@@ -225,6 +226,35 @@ describe("who's named", () => {
   it("asks about nobody when the transaction called the wallet itself or created a contract", () => {
     assert.equal(payerOf([tx({ to: ME })], ME, amount)?.sender, null)
     assert.equal(payerOf([tx({ to: null })], ME, amount)?.sender, null)
+  })
+})
+
+// A real ETH deposit to Base. It calls the L2 messenger, and the wallet and amount are in a message nested in the calldata.
+describe("a deposit through the Base bridge", () => {
+  const MESSENGER = "0x4200000000000000000000000000000000000007"
+  const DEPOSITOR = "0xdedb0e722e69d7794cbae19bac32da650849490a"
+  const DEPOSIT: PayoutTx = {
+    blockNum: 53678602,
+    txHash: "0xcefbf81b2f2d240541dc0cf41dd7a8ff77e95994cf7c35e3d4ebe4579ab25e5c",
+    from: "0x977f82a600a1414e583f7f13623f1ac5d58b1c0b",
+    to: MESSENGER,
+    input:
+      "d764ad0b000100000000000000000000000000000000000000000000000000000009b4670000000000000000000000003154cf16ccdb4c6d922629664174b904d80f2c350000000000000000000000004200000000000000000000000000000000000010000000000000000000000000000000000000000000000003c7d422af799d06f30000000000000000000000000000000000000000000000000000000000030d4000000000000000000000000000000000000000000000000000000000000000c000000000000000000000000000000000000000000000000000000000000000a41635f5fd000000000000000000000000dedb0e722e69d7794cbae19bac32da650849490a000000000000000000000000dedb0e722e69d7794cbae19bac32da650849490a000000000000000000000000000000000000000000000003c7d422af799d06f30000000000000000000000000000000000000000000000000000000000000080000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+  }
+
+  it("names the messenger it called, from the wallet and amount in its calldata", () => {
+    const other = { ...PAYOUT, txHash: "0xother", input: `a9059cbb${DEPOSITOR.slice(2).padStart(64, "0")}` }
+    assert.deepEqual(payerOf([other, DEPOSIT], DEPOSITOR, "69739404266793928435"), { txHash: DEPOSIT.txHash, sender: MESSENGER })
+  })
+
+  it("is recognized as the bridge, so it's valued at its block's price with nothing to ask", async () => {
+    const wallet = await chain({ readPayoutTxs: async () => [{ ...DEPOSIT, blockNum: PAYOUT_BLOCK }] }).wallets.get(ME)
+    assert.equal(unseenLeg(wallet).parts[0]!.counterparty, MESSENGER)
+    assert.equal(knownSender(MESSENGER)?.name, "the Base bridge")
+    const { positions, questions } = foldBook(wallet as WalletResponse, [], "average", emptyBook())
+    assert.deepEqual(questions, [])
+    const { leg } = positions.find((p) => p.asset === "ETH")!.effects.find((effect) => effect.leg.id === `unseen:${PAYOUT_BLOCK}:ETH`)!
+    assert.deepEqual([leg.costLabel, leg.costMicros], ["received at market", worth(PAYOUT_AMOUNT, 2424450000n, 18).toString()])
   })
 })
 

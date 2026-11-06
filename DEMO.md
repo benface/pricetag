@@ -108,7 +108,7 @@ A real card purchase on stage can fail, and a real delivery can take minutes, so
 |---|---|---|
 | **Public RPC rate limit** (WORK-336's failed swap) | A send or site approval fails, or a balance says not checked. Verify's Transactions says not checked. Shared wifi makes it worse | Set `BASE_RPC_URL=https://base-rpc.publicnode.com` in `.env.local`, restart the server, and paste the URL into the **Network** field in Settings. WORK-396 may change this choice Thursday at 13:30 |
 | **Base's block switch**, Thu 13:00 | WORK-406 reports at 13:25 and WORK-396 at 13:30 | Rehearse only after both. If Base delays it, they say so. If `edgeandnode/base_mainnet` stalls, that isn't ours to fix: ask in `#amp-hackathon` and use the recording |
-| **Staging dataset behind** | The app says "Catching up", and the 8:00 health checks report it | A few seconds is fine: keep going, it's the honest behavior. If it's stuck, use the recording. Don't run `pnpm amp:start`: it starts with empty history, so this wallet would have none |
+| **Staging dataset behind** | The app says "Catching up", and the 8:00 health checks report it | A few seconds is fine: keep going, it's the honest behavior. If it's stuck, [restart its job](#if-the-dataset-is-stuck). If that doesn't clear it in a minute, use the recording. Don't run `pnpm amp:start`: it starts with empty history, so this wallet would have none |
 | **Only the fork fails** | The rule switch or Compare errors | Stay on Market price and skip steps 7 and 8 |
 | **Admin token** expires Fri 12:46 | Only a write fails | Reads don't use it. The read token lasts until April 2027 (*checked*, not printed). So no `dataset/` merges after Thursday 18:00. A replacement or stopping the jobs after 12:46 needs a new token |
 | **Slow reads** | A cold read took 19–22 s, warm 3–4 s (*measured*). They may grow by Friday, and the app's query timeout is 60 s. A read past 5 s shows how long it's been going | Don't restart the server on stage, since a restart means a cold read. Read the wallet before you go on. The health checks measure this |
@@ -124,6 +124,17 @@ A real card purchase on stage can fail, and a real delivery can take minutes, so
 **Thursday, right after the first clean rehearsal.** Redo it Friday morning if the app has changed.
 - **Screen:** all 10 steps with no voice, about 4 minutes, saved locally and on your phone.
 - **Stills:** Verify's passed checks, the chart once answered, Compare on this wallet, and Compare on a busy public wallet. Read that wallet ahead of time.
+
+
+### If the dataset is stuck
+
+**Don't stop any staging job from Friday 8:00 until the demo's over.** Deploying is fine. Stopping a job that runs JS functions (`pricetag`, `pricetag_cautious`, `pricetag_control`, `pricetag_bloom`) can kill another such job on the same worker, including the one the app reads. That froze the app's dataset for 13 minutes on Thursday night (WORK-575). It's rare, one in 14 stops, but the job doesn't come back by itself.
+
+If the numbers stop moving, restart it. This is safe on a healthy job, which it leaves alone. A restart keeps the history and caught up 13 minutes in under a minute (*measured*). `pricetag_cautious` follows by itself. It needs the admin token, so it stops working Friday at 12:46. If `PRICETAG_DATASET` has moved past `0.2.0`, change the version at the end:
+
+```sh
+curl -sS -X POST -H @<(printf 'authorization: Bearer %s' "$(cat ~/.config/pricetag/staging.jwt)") -H 'content-type: application/json' -d '{}' https://gateway.amp.staging.edgeandnode.com/controller/materialized-datasets/benface/pricetag/versions/0.2.0
+```
 
 ## Rehearsal checklist, Thursday November 5
 

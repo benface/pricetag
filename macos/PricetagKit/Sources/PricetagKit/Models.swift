@@ -229,11 +229,88 @@ public struct PnlPoint: Codable, Sendable, Equatable, Identifiable {
     public let excludedCount: Int
     /// What its transaction did, in words. The last point has no transaction.
     public var summary: String? = nil
+    /// What was held right after it, at that moment's prices. Only what's known, and nil when nothing is, which isn't $0.
+    public var valueMicros: String? = nil
+    /// What was held right before it, at the same prices, so a deposit is a jump. nil when it leaves out other things than `valueMicros`.
+    public var valueBeforeMicros: String? = nil
+    /// What `valueMicros` leaves out.
+    public var valueExcludedCount: Int? = nil
+    /// Only prices moved since the point before: what's held is the same, and so is what's left out. Otherwise there's nothing to join it to.
+    public var valueContinues: Bool? = nil
+    /// What moved, apart from network fees. The rest of these are empty or nil on the last point, which has no transaction.
+    public var assets: [String] = []
+    /// The one address on the other side, or nil when there's none or more than one.
+    public var counterparty: String? = nil
+    public var amount: TransactionAmount? = nil
+    /// nil when nothing was sold.
+    public var gain: TransactionGain? = nil
+    /// What arrived with a cost nobody can work out yet.
+    public var unknownCost: [String] = []
     /// Which of the user's wallets its transaction is in, when several are shown as one.
     public var wallets: [String]? = nil
 
     public var id: String { "\(blockNum):\(txHash ?? "latest")" }
     public var date: Date? { parseTimestamp(timestamp) }
+}
+
+extension PnlPoint {
+    private enum CodingKeys: String, CodingKey {
+        case blockNum, timestamp, txHash, pnlMicros, excludedCount, summary, valueMicros, valueBeforeMicros, valueExcludedCount, valueContinues, assets, counterparty, amount, gain, unknownCost, wallets
+    }
+
+    /// A server from before a transaction had facts still sends the rest.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        blockNum = try container.decode(Int.self, forKey: .blockNum)
+        timestamp = try container.decode(String.self, forKey: .timestamp)
+        txHash = try container.decodeIfPresent(String.self, forKey: .txHash)
+        pnlMicros = try container.decodeIfPresent(String.self, forKey: .pnlMicros)
+        excludedCount = try container.decode(Int.self, forKey: .excludedCount)
+        summary = try container.decodeIfPresent(String.self, forKey: .summary)
+        valueMicros = try container.decodeIfPresent(String.self, forKey: .valueMicros)
+        valueBeforeMicros = try container.decodeIfPresent(String.self, forKey: .valueBeforeMicros)
+        valueExcludedCount = try container.decodeIfPresent(Int.self, forKey: .valueExcludedCount)
+        valueContinues = try container.decodeIfPresent(Bool.self, forKey: .valueContinues)
+        assets = try container.decodeIfPresent([String].self, forKey: .assets) ?? []
+        counterparty = try container.decodeIfPresent(String.self, forKey: .counterparty)
+        amount = try container.decodeIfPresent(TransactionAmount.self, forKey: .amount)
+        gain = try container.decodeIfPresent(TransactionGain.self, forKey: .gain)
+        unknownCost = try container.decodeIfPresent([String].self, forKey: .unknownCost) ?? []
+        wallets = try container.decodeIfPresent([String].self, forKey: .wallets)
+    }
+}
+
+/// What a transaction moved, in the portfolio's currency.
+public struct TransactionAmount: Codable, Sendable, Equatable {
+    public enum Direction: String, Codable, Sendable {
+        /// Something only arrived, or only left.
+        case `in`, out
+        /// Things went both ways.
+        case trade
+        /// Only a network fee was paid.
+        case fee
+    }
+
+    public let direction: Direction
+    /// nil when part of it has no price, which isn't $0.
+    public let micros: String?
+
+    public init(direction: Direction, micros: String?) {
+        self.direction = direction
+        self.micros = micros
+    }
+}
+
+/// The gain or loss a sale in a transaction realized.
+public struct TransactionGain: Codable, Sendable, Equatable {
+    /// nil when what was sold has an unknown cost or price.
+    public let micros: String?
+    public let estimated: Bool
+
+    public init(micros: String?, estimated: Bool) {
+        self.micros = micros
+        self.estimated = estimated
+    }
 }
 
 public struct ReadProgress: Codable, Sendable, Equatable {
@@ -354,13 +431,18 @@ public struct Portfolio: Codable, Sendable, Equatable {
     /// Nothing moved in the blocks read, which says nothing about what this wallet made or lost.
     /// A balance that couldn't be read doesn't count as nothing.
     public var isEmpty: Bool { positions.isEmpty && unreadAssets.isEmpty }
-    public var hasChartableData: Bool { points.contains { $0.pnlMicros != nil } }
+    public var hasChartableData: Bool { hasChartableData(.pnl) }
+    public var isTooNewToChart: Bool { isTooNewToChart(.pnl) }
+
+    public func hasChartableData(_ metric: ChartMetric) -> Bool { points.contains { metric.micros($0) != nil } }
     /// A line says nothing with a transaction or two, or across a few minutes: it's an empty box with a flat line in it.
-    public var isTooNewToChart: Bool {
-        let known = points.filter { $0.txHash != nil && $0.pnlMicros != nil }.compactMap(\.date)
+    public func isTooNewToChart(_ metric: ChartMetric) -> Bool {
+        let known = points.filter { $0.txHash != nil && metric.micros($0) != nil }.compactMap(\.date)
         guard known.count >= 3, let first = known.min(), let last = known.max() else { return true }
         return last.timeIntervalSince(first) < 5 * 60
     }
+    /// There's a chart to show, and not a placeholder.
+    public func canChart(_ metric: ChartMetric) -> Bool { hasChartableData(metric) && !isTooNewToChart(metric) }
     /// Every point with a transaction behind it, newest first.
     public var transactions: [PnlPoint] { points.filter { $0.txHash != nil }.reversed() }
 }

@@ -56,6 +56,8 @@ public struct SweepPreview: Equatable, Sendable {
     public let transfers: [PlannedTransfer]
     public let feeWei: UInt128
     public let feeUsdMicros: UInt128?
+    /// Why it wouldn't move anything, if it wouldn't.
+    public let whyNothing: String?
 
     /// What it's all worth, unless something in it has no price, which isn't counted as $0.
     public var valueUsdMicros: UInt128? {

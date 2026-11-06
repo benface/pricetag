@@ -164,7 +164,9 @@ const common = {
 
 /** USD for one Canadian dollar, moving enough that converting at the wrong moment would show. */
 const CAD_USD: [blockOffset: number, usd: number][] = [
+  [SAVINGS_FROM - 1 - START_BLOCK, 0.746],
   [-300, 0.745],
+  [-1, 0.743],
   [0, 0.742],
   [150, 0.741],
   [300, 0.738],

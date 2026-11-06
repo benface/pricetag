@@ -38,7 +38,7 @@ private struct SendForm: View {
         VStack(spacing: 18) {
             Label(HotWalletWording.title, systemImage: "banknote")
                 .font(.headline)
-                .foregroundStyle(.secondary)
+                .secondaryText()
             VStack(spacing: 6) {
                 amountField
                 HStack(spacing: 10) {
@@ -102,7 +102,8 @@ private struct SendForm: View {
 
     private var amountField: some View {
         @Bindable var model = model
-        return TextField(model.unit == .money ? "Amount in \(model.moneySymbol)" : "Amount in \(model.token.symbol)", text: $model.amountText, prompt: Text("0"))
+        let title = model.unit == .money ? "Amount in \(model.moneySymbol)" : "Amount in \(model.token.symbol)"
+        return TextField(title, text: $model.amountText, prompt: Text("0"))
             .labelsHidden()
             .textFieldStyle(.plain)
             .font(.displayLarge)
@@ -110,6 +111,8 @@ private struct SendForm: View {
             .multilineTextAlignment(.center)
             .focused($focus, equals: .amount)
             .onSubmit(next)
+            // Its label is hidden, so a field that only said "12.50" would say nothing about what it's for.
+            .accessibilityLabel(title)
             .overlay {
                 // The symbol sits just before the centered digits: a hidden copy of them on each side keeps them where the field draws them.
                 if model.unit == .money {
@@ -140,15 +143,17 @@ private struct SendForm: View {
             }
             .buttonStyle(.plain)
             .font(.title3)
-            .foregroundStyle(.secondary)
+            .secondaryText()
             .monospacedDigit()
+            .accessibilityLabel(other.map { model.unit == .token ? "Worth \(Spoken.text($0))" : Spoken.text($0) } ?? "Type in \(model.unit == .token ? model.moneySymbol : model.token.symbol)")
             .help(model.unit == .token ? "Type the amount in money" : "Type the amount in \(model.token.symbol)")
             .accessibilityHint(model.unit == .token ? "Types the amount in money instead" : "Types the amount in \(model.token.symbol) instead")
         } else if let worth = model.worthText {
             Text(worth)
                 .font(.title3)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .monospacedDigit()
+                .accessibilityLabel("Worth \(Spoken.text(worth))")
         }
     }
 
@@ -162,6 +167,8 @@ private struct SendForm: View {
                     .font(.callout)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(Text("Sending to, ") + Text(Spoken.address(address.checksummed)).speechSpellsOutCharacters())
             }
             Spacer(minLength: 0)
             Button("Change Address", systemImage: "xmark.circle.fill") {
@@ -250,7 +257,7 @@ struct SendConfirmation: View {
     let done: () -> Void
 
     static func gate(for model: SendModel) -> ApprovalPrompt {
-        ApprovalPrompt(notBefore: { model.nextPromptAt }) { prompt, _ in
+        ApprovalPrompt(needsReview: ApprovalPrompt.needsReview, notBefore: { model.nextPromptAt }) { prompt, _ in
             await model.sendConfirmed(in: prompt)
         }
     }
@@ -300,7 +307,7 @@ struct SweepSheet: View {
 
     init(wallet: HotWallet, gate: ApprovalPrompt? = nil) {
         self.wallet = wallet
-        _gate = State(initialValue: gate ?? ApprovalPrompt(notBefore: { wallet.nextPromptAt }) { prompt, _ in
+        _gate = State(initialValue: gate ?? ApprovalPrompt(needsReview: ApprovalPrompt.needsReview, notBefore: { wallet.nextPromptAt }) { prompt, _ in
             await wallet.sweepConfirmed(in: prompt)
         })
     }
@@ -328,7 +335,7 @@ struct SweepSheet: View {
             switch phase {
             case .working, .done: if approved == nil { approved = wallet.sweepPreview }
             // Asking again is about what it would move now.
-            case .needsAcknowledgment, .waiting, .asking: approved = nil
+            case .needsReview, .needsAcknowledgment, .waiting, .asking: approved = nil
             case .stopped: break
             }
         }
