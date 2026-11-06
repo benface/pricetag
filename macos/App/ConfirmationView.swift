@@ -545,7 +545,7 @@ struct ProgressFooter: View {
         case .finished:
             Image(systemName: "checkmark.circle.fill")
                 .font(.title2)
-                .foregroundStyle(.green)
+                .foregroundStyle(Tone.gain.style)
                 .transition(.symbolEffect(.drawOn))
         case .didntLand:
             Image(systemName: "exclamationmark.triangle.fill")

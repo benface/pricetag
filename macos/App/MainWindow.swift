@@ -108,8 +108,8 @@ struct MainWindow: View {
         } message: {
             Text(exportError ?? "")
         }
-        // The menu asks for it. The file's written only once the server has answered.
-        .onChange(of: navigation.isExporting) { _, asked in
+        // The menu asks for it, which opens the window if it's closed. The file's written only once the server has answered.
+        .onChange(of: navigation.isExporting, initial: true) { _, asked in
             guard asked else { return }
             navigation.isExporting = false
             Task {
@@ -596,7 +596,7 @@ private struct CompactHolding: View {
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 1) {
-                LiveNumber(position.isHeld ? position.values.valueMicros.map { Format.estimate(Format.money($0, currency), position.estimates.value) } ?? "No price" : "—", tone: position.values.valueMicros == nil ? .secondary : .neutral)
+                LiveNumber(position.isHeld ? position.values.valueMicros.map { Format.estimate(Format.money($0, currency), position.estimates.value) } ?? Wording.noPrice : "—", tone: position.values.valueMicros == nil ? .secondary : .neutral)
                     .updatingMark()
                 LiveNumber(howItsDone, tone: position.pnlMicros == nil ? .secondary : isLive ? Tone(signed: position.pnlMicros) : .neutral)
                     .font(.caption)
@@ -729,7 +729,7 @@ private struct HoldingsTable: View {
             .alignment(.numeric)
             TableColumn("Price", sortUsing: HoldingsSort(.price)) { position in
                 let price = position.price
-                number(position, .price, price.map { Format.estimate(Format.price($0.micros, currency), position.estimates.value) } ?? "No price", tone: price == nil ? .secondary : .neutral)
+                number(position, .price, price.map { Format.estimate(Format.price($0.micros, currency), position.estimates.value) } ?? Wording.noPrice, tone: price == nil ? .secondary : .neutral)
             }
             .width(min: Column.price, ideal: Column.price, max: Column.price + Column.comebackRoom)
             .alignment(.numeric)
@@ -749,7 +749,7 @@ private struct HoldingsTable: View {
             TableColumn("Value", sortUsing: HoldingsSort(.value)) { position in
                 if position.isHeld {
                     let value = position.values.valueMicros
-                    number(position, .value, value.map { Format.estimate(Format.money($0, currency), position.estimates.value) } ?? "No price", tone: value == nil ? .secondary : .neutral)
+                    number(position, .value, value.map { Format.estimate(Format.money($0, currency), position.estimates.value) } ?? Wording.noPrice, tone: value == nil ? .secondary : .neutral)
                         .updatingMark()
                 } else {
                     dash.updatingMark()
@@ -853,7 +853,7 @@ private struct HoldingsTable: View {
     private func returnText(_ position: Position) -> String {
         if let bps = position.returnBps { return Format.estimate(Format.percent(bps: bps), position.estimates.unrealized) }
         if position.values.costMicros == nil { return Wording.unknown }
-        return position.values.valueMicros == nil ? "No price" : "—"
+        return position.values.valueMicros == nil ? Wording.noPrice : "—"
     }
 
     private func balanceCheck(_ position: Position) -> some View {
