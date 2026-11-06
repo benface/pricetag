@@ -2,12 +2,13 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEven
 import { formatAmount, formatMoney, formatSignedMoney, shortHash, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import type { BookPreview, WalletResponse } from "../core/api.ts"
 import { combinedPortfolioOf, previewCombined, type Unread } from "../core/combined.ts"
-import { answerSender, enterExchangeCosts, linkMessage, proofOwner, walletsBehind, type Book, type Money, type SenderAnswer } from "../core/book.ts"
+import { answerSender, enterExchangeCosts, walletsBehind, type Book, type BookChange, type Money, type SenderAnswer } from "../core/book.ts"
 import { readCheckedAccounts } from "../core/device-accounts.ts"
 import { noteLinkFor, type DeviceLink } from "../core/device-link.ts"
 import { parseCoinbaseCsv } from "../core/exchange-import.ts"
 import { foldBook, isBalanced, microsOf, previewBook, type Question } from "../core/resolve.ts"
 import { ALL_ANSWERED, ANSWER_QUESTIONS, COST_QUESTION, COST_WHY, EXCHANGE_COST_WHY, NOTHING_LEFT, SENDER_QUESTION, SENDER_WHY, linkedFailedSentence } from "../core/wording.ts"
+import { linkByProof, type Ethereum } from "./link-proof.ts"
 
 type Ownership = "mine" | "my-exchange" | "someone-else"
 
@@ -46,7 +47,7 @@ type Props = {
   book: Book
   /** Which holding Resolve was clicked on, so its questions come first. */
   firstAsset: string | null
-  onChange: (book: Book) => void
+  onChange: (change: BookChange) => void
   onUndo: () => void
   canUndo: boolean
   /** Publishing a cost takes a device, which has its own panel. */
@@ -170,7 +171,7 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
     if (!file) return
     const imported = parseCoinbaseCsv(await file.text())
     if (!imported) return setMessage("That doesn't look like a Coinbase transaction history.")
-    onChange({ ...book, withdrawals: imported.withdrawals })
+    onChange((latest) => ({ ...latest, withdrawals: imported.withdrawals }))
     setMessage(`Found ${imported.withdrawals.length} withdrawals.${imported.skipped > 0 ? ` ${imported.skipped} had no usable cost.` : ""}`)
     setAsking(false)
   }
@@ -328,28 +329,16 @@ export function ResolvePanel({ wallet, others, all, failed, onRetry, method, boo
   )
 }
 
-type Ethereum = { request(args: { method: string; params?: unknown[] }): Promise<unknown> }
-
 /** Signing with a browser wallet proves it's yours, so it links without a question, and only that wallet. Hot wallets only: cold ones never connect to a site. */
-function LinkByProof({ current, book, onChange }: { current: string; book: Book; onChange: (book: Book) => void }) {
+function LinkByProof({ current, book, onChange }: { current: string; book: Book; onChange: (change: BookChange) => void }) {
   const [status, setStatus] = useState<string | null>(null)
+  const latest = useRef(book)
+  latest.current = book
   const ethereum = (window as unknown as { ethereum?: Ethereum }).ethereum
   if (!ethereum) return null
   const prove = async () => {
-    try {
-      const [address] = (await ethereum.request({ method: "eth_requestAccounts" })) as string[]
-      if (!address) return
-      const owner = proofOwner(book, address, current)
-      const message = linkMessage(owner, address)
-      const signature = await ethereum.request({ method: "personal_sign", params: [message, address] })
-      const response = await fetch("/api/links/verify", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ owner, address, signature }) })
-      const { verified } = (await response.json()) as { verified?: boolean }
-      if (!verified) return setStatus("That signature isn't from this wallet.")
-      onChange(answerSender(book, null, address, { kind: "mine" }))
-      setStatus(`Linked ${shortHash(address)}.`)
-    } catch {
-      setStatus("Didn't link it. Nothing changed.")
-    }
+    const said = await linkByProof(ethereum, current, () => latest.current, onChange)
+    if (said) setStatus(said)
   }
   return (
     <p className="small muted">
