@@ -207,7 +207,6 @@ describe("swift-queue", { skip: process.platform !== "darwin" }, () => {
     const first = start(stubborn(file), {}, true)
     await until(() => first.output().includes("holding") && existsSync(file) && readFileSync(file, "utf8").endsWith("\n"))
     const helper = Number(readFileSync(file, "utf8"))
-    await until(() => isTracked(helper))
     const next = start(`kill -0 ${helper} 2>/dev/null && echo OVERLAP || echo CLEAR`)
     await until(() => next.output().includes("Waiting"))
     process.kill(watcherPid(), "SIGKILL")

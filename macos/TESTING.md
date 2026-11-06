@@ -125,10 +125,9 @@ What you'll see, on lines starting with `[swift-queue]`:
 
 When a run ends or is killed, even with `kill -9` on its whole process group, it stops everything it started, and the next run doesn't start until that's done. That usually takes under a second, and about 5 for something that ignores SIGTERM. Nothing else is touched, including other worktrees' runs.
 
-A few things can get past that, and none of the Swift tools do them:
+Two things can get past that, and none of the Swift tools do them:
 
 - A process that starts its own session and whose parent exits within a second, before the run lists it, isn't found.
-- If `kill -9` also hits the run's watcher (a detached `swift-queue.sh`), the next run stops what the watcher had listed, which can miss something from the last second.
 - If something can't be stopped after about 7 seconds, the run says `Couldn't stop …` and the queue moves on, so one stuck process can't block every build. Treat that line as a real problem.
 
 The lock is at `~/Library/Caches/patina-swift-queue/`, outside the repo so that every worktree shares it. Don't delete it: a run waiting on the old file wouldn't see the new one.

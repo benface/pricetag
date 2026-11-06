@@ -28,14 +28,15 @@ elapsed() { # seconds
 }
 
 # Lists everything alive that's in the job, which also goes in its list: in the command's session, descended from the command, or already
-# on the list. Fails if it couldn't find out, which isn't the same as finding nothing. Without a root, it only trusts the list: the root's
-# PID could belong to something else by the time another run is cleaning up an old job.
-job_pids() { # root
+# on the list. Fails if it couldn't find out, which isn't the same as finding nothing. A session's ID stays taken while anything's in it,
+# so if the root's PID belongs to something else now, the session is over and only the list counts.
+job_pids() { # root, by PID and start time
   [ -d "$run" ] || return 0
   list=$(mktemp "$run/pids.XXXXXX") || return 1
   # 310 is getsid, which Perl doesn't wrap. ps doesn't show sessions on macOS.
   if perl -e '
-    my ($known, $root) = @ARGV;
+    my ($known, $root_key) = @ARGV;
+    my ($root) = split " ", $root_key;
     my @rows = `ps -axo pid=,ppid=,stat=,lstart=`;
     exit 1 if $? or !@rows;
     my (%listed, %parent, %key, %zombie, %job);
@@ -45,7 +46,10 @@ job_pids() { # root
       $parent{$pid} = $ppid;
       $key{$pid} = "$pid @start";
       $zombie{$pid} = $stat =~ /^Z/;
-      $job{$pid} = 1 if exists $listed{$key{$pid}} or ($root and ($pid == $root or syscall(310, 0 + $pid) == $root));
+      $job{$pid} = 1 if exists $listed{$key{$pid}};
+    }
+    if ($root and (!exists $key{$root} or $key{$root} eq $root_key)) {
+      for (keys %key) { $job{$_} = 1 if $_ == $root or syscall(310, 0 + $_) == $root }
     }
     for (my $changed = 1; $changed;) {
       $changed = 0;
@@ -88,7 +92,7 @@ stop_job() { # root
   done
 }
 
-root_pid() {
+root_key() {
   [ ! -r "$run/root" ] || cat "$run/root"
 }
 
@@ -96,8 +100,8 @@ root_pid() {
 abort() {
   [ -d "$run" ] || return 0
   touch "$run/stop" 2>/dev/null
-  root=$(root_pid)
-  [ -z "$root" ] || kill -TERM "$root" 2>/dev/null
+  root=$(root_key)
+  [ -z "$root" ] || kill -TERM "${root%% *}" 2>/dev/null
 }
 
 watcher_alive() { # job folder
@@ -109,7 +113,7 @@ watcher_alive() { # job folder
 await_clean() {
   until [ -e "$run/clean" ] || [ ! -d "$run" ]; do
     if ! watcher_alive "$run"; then
-      stop_job "$(root_pid)"
+      stop_job "$(root_key)"
       touch "$run/clean" 2>/dev/null
       return
     fi
@@ -123,7 +127,7 @@ settle() { # job folder
     if ! watcher_alive "$1"; then
       (
         run=$1
-        stop_job
+        stop_job "$(root_key)"
       )
       rm -rf "$1"
       return
@@ -160,9 +164,12 @@ if [ "${1:-}" = --turn ]; then
   # The command says who it is before it starts, then checks it wasn't stopped. The watcher does the opposite, so one of them finds out.
   SWIFT_QUEUE_TURN=1 perl -MPOSIX -e '
     my ($root, $stop) = splice(@ARGV, 0, 2);
-    open(my $file, ">", $root) or exit 70;
-    print $file "$$\n";
+    my @start = split " ", `ps -o lstart= -p $$`;
+    @start or exit 70;
+    open(my $file, ">", "$root.new") or exit 70;
+    print $file "$$ @start\n";
     close $file;
+    rename("$root.new", $root) or exit 70;
     exit 70 if -e $stop;
     POSIX::setsid() != -1 or die "Could not start a session: $!\n";
     exec { $ARGV[0] } @ARGV or die "Could not run $ARGV[0]: $!\n";
@@ -220,7 +227,7 @@ watch() {
       parent=1
     fi
     if [ -e "$run/turn" ]; then
-      [ $((ticks % 10)) -ne 0 ] || job_pids "$(root_pid)" >/dev/null
+      [ $((ticks % 10)) -ne 0 ] || job_pids "$(root_key)" >/dev/null
     elif [ $((ticks % 300)) -eq 10 ]; then
       waiting_message
     fi
@@ -229,7 +236,7 @@ watch() {
   done
   [ -d "$run" ] || return
   [ -e "$run/stop" ] || abort
-  stop_job "$(root_pid)"
+  stop_job "$(root_key)"
   touch "$run/clean" 2>/dev/null
   while [ -d "$run" ] && kill -0 "$script" 2>/dev/null; do sleep 0.1 </dev/null >/dev/null 2>&1; done
   [ -d "$run" ] || return
