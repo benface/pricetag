@@ -160,12 +160,11 @@ struct WalletSwitcher: View {
     var displayRoom: CGFloat?
     @State private var room = WalletSwitcher.roomOnDisplay
     @State private var rows = ListRows()
-    /// How tall the list's rows really are, once it has laid them out.
-    @State private var contentHeight: CGFloat?
     @State private var scrolled = ScrolledEdges()
     @State private var highlighted: String?
     /// Where the pointer was when the arrows last moved. Rows scrolling under a still pointer report a hover that nobody made.
     @State private var pointerAtLastKey: CGPoint?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focus: Field?
 
     private enum Field: Hashable {
@@ -202,10 +201,13 @@ struct WalletSwitcher: View {
 
     /// The list is as tall as its rows, until there's no more room. Then it stops at the end of a row.
     private var listHeight: CGFloat {
-        let limit = displayRoom ?? room
-        let height = contentHeight ?? estimatedHeight
-        return height <= limit ? height : rows.heightEndingOnARow(atMost: limit)
+        isCapped ? rows.heightEndingOnARow(atMost: displayRoom ?? room) : contentHeight
     }
+
+    private var contentHeight: CGFloat { rows.contentHeight ?? estimatedHeight }
+    private var isCapped: Bool { contentHeight > displayRoom ?? room }
+    /// Not while the list is still growing to fit a row that came back.
+    private var hasMoreBelow: Bool { isCapped && scrolled.hasMoreBelow }
 
     /// Which rows are in which section, and in what order. It's what the list slides on, so it does whatever moved them: a row's actions, Undo, or the Edit menu.
     private var rowsBySection: [[String]] {
@@ -256,14 +258,15 @@ struct WalletSwitcher: View {
                 .scrollBounceBehavior(.basedOnSize)
                 .scrollIndicators(.visible)
                 .scrollIndicatorsFlash(onAppear: true)
-                .onScrollGeometryChange(for: CGFloat.self) { ($0.contentSize.height + $0.contentInsets.top + $0.contentInsets.bottom).rounded(.up) } action: { contentHeight = $1 }
+                // Rows that have been laid out can turn out taller than a first guess.
+                .onScrollGeometryChange(for: CGFloat.self, of: \.contentSize.height) { _, _ in rows.measure() }
                 .onScrollGeometryChange(for: ScrolledEdges.self) { ScrolledEdges(hasMoreAbove: $0.visibleRect.minY > 4, hasMoreBelow: $0.visibleRect.maxY < $0.contentSize.height - 4) } action: { scrolled = $1 }
                 .frame(height: listHeight)
                 .mask { edgeFades }
                 // A scroll bar only shows once it's scrolling, and what's out of sight might be the wallet someone came for.
                 .overlay(alignment: .bottomTrailing) {
                     // On the line below, where it's never over a row's name or its actions.
-                    if scrolled.hasMoreBelow { MoreBelowHint().padding(.trailing, 12).offset(y: 19) }
+                    if hasMoreBelow { MoreBelowHint().padding(.trailing, 12).offset(y: 19) }
                 }
                 .zIndex(1)
                 Divider()
@@ -277,6 +280,13 @@ struct WalletSwitcher: View {
         }
         .frame(width: 340)
         .motion(Motion.state, value: rowsBySection)
+        // The table takes its new rows after this update, and the list changes height along with them.
+        .onChange(of: rowsBySection) {
+            Task {
+                await Task.yield()
+                withAnimation(reduceMotion ? nil : Motion.state) { rows.measure() }
+            }
+        }
         .onAppear {
             highlighted = nil
             focus = pendingName.address == nil ? .add : .rename
@@ -293,7 +303,7 @@ struct WalletSwitcher: View {
             LinearGradient(colors: [scrolled.hasMoreAbove ? .clear : .black, .black], startPoint: .top, endPoint: .bottom)
                 .frame(height: Self.fadeHeight)
             Color.black
-            LinearGradient(colors: [.black, scrolled.hasMoreBelow ? .clear : .black], startPoint: .top, endPoint: .bottom)
+            LinearGradient(colors: [.black, hasMoreBelow ? .clear : .black], startPoint: .top, endPoint: .bottom)
                 .frame(height: Self.fadeHeight)
         }
     }
@@ -561,6 +571,8 @@ private struct ScrolledEdges: Equatable {
 @Observable
 private final class ListRows {
     private(set) var scrollView: NSScrollView?
+    /// How tall the rows really are, once there's a table to ask.
+    private(set) var contentHeight: CGFloat?
     @ObservationIgnored private var observers: [any NSObjectProtocol] = []
     @ObservationIgnored private var isScrolling = false
     @ObservationIgnored private var lastOffset: CGFloat = 0
@@ -571,7 +583,18 @@ private final class ListRows {
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
     }
 
+    /// From what the rows take up, because the table and its content size never get shorter than what's showing, and what's showing is sized from this.
+    func measure() {
+        guard let scrollView, let table = scrollView.documentView as? NSTableView else { return }
+        let rows = table.intrinsicContentSize.height
+        guard rows > 0 else { return }
+        let insets = scrollView.contentView.contentInsets
+        let height = (rows + insets.top + insets.bottom).rounded(.up)
+        if height != contentHeight { contentHeight = height }
+    }
+
     func attach(to scrollView: NSScrollView) {
+        defer { measure() }
         guard self.scrollView !== scrollView else { return }
         self.scrollView = scrollView
         let center = NotificationCenter.default
@@ -599,7 +622,7 @@ private final class ListRows {
         guard let table = scrollView?.documentView as? NSTableView, table.numberOfRows > 0 else { return limit }
         let showing = table.rows(in: table.visibleRect)
         guard let row = (showing.lowerBound..<showing.upperBound).map({ table.rect(ofRow: $0).height }).max(), row > 0 else { return limit }
-        let under = table.frame.height - table.rect(ofRow: table.numberOfRows - 1).maxY
+        let under = table.intrinsicContentSize.height - table.rect(ofRow: table.numberOfRows - 1).maxY
         return ((limit - under) / row).rounded(.down) * row + under
     }
 
@@ -661,7 +684,11 @@ private struct ListRowsReader: NSViewRepresentable {
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            guard window != nil, let scrollView = enclosingScrollView else { return }
+            guard window != nil, let scrollView = enclosingScrollView else {
+                // A row leaving, which the table may only just have caught up with.
+                DispatchQueue.main.async { [rows] in rows.measure() }
+                return
+            }
             // Later, because this can run in the middle of a SwiftUI update.
             DispatchQueue.main.async { [rows] in rows.attach(to: scrollView) }
         }
