@@ -7,9 +7,10 @@
 
 import { decodeFunctionResult, encodeFunctionData, parseAbi, type Hex } from "viem"
 import { APPROVAL_LOGS, PERMIT2, UNLIMITED, USDC_ADDRESS, WETH_ADDRESS, candidateKey, candidatesFromLogs, formatAmount, isActive, knownSpenderCandidates, mergeCandidates, spenderName, tokenByAddress, type ApprovalLog, type Candidate, type CheckedApproval, type Head } from "@pricetag/sdk/core"
-import { MULTICALL3, asIso, asNumber, describeError, hexOf, isNotStarted, type Query, type Row } from "@pricetag/sdk/internal"
+import { MULTICALL3, asIso, asNumber, hexOf, isNotStarted, type Query, type Row } from "@pricetag/sdk/internal"
 import type { ApprovalsResponse, ApprovalView } from "../src/core/api.ts"
 import { DEMO_SAVINGS_ADDRESS } from "../src/core/book.ts"
+import { isMissingTable, walletTurns } from "./shared.ts"
 
 const MULTICALL_ABI = parseAbi(["function aggregate3((address target, bool allowFailure, bytes callData)[] calls) payable returns ((bool success, bytes returnData)[] returnData)"])
 const ERC20_ABI = parseAbi(["function allowance(address owner, address spender) view returns (uint256)"])
@@ -154,8 +155,6 @@ const toLog = (row: Row): ApprovalLog => ({
 
 const LOG_COLUMNS = "block_num, timestamp, tx_hash, log_index, address, topic0, topic1, topic2, topic3"
 
-const isMissingTable = (error: unknown) => /table .*not found|not found.*table|does not exist|unknown table/i.test(describeError(error))
-
 export type ApprovalsConfig = {
   baseDataset: string
   /** The Pricetag dataset as queries name it, and as it's shown. Null reads only the raw dataset. */
@@ -171,15 +170,9 @@ type Held = { from: number; through: number; candidates: Candidate[] }
 export function createApprovals(query: Query, config: ApprovalsConfig) {
   const base = `"${config.baseDataset}"`
   const held = new Map<string, Held>()
-  const turns = new Map<string, Promise<unknown>>()
+  const inTurn = walletTurns()
   /** Whether the dataset has the table, once a read has said. */
   let hasTable: boolean | null = config.dataset ? null : false
-
-  function inTurn<T>(address: string, read: () => Promise<T>): Promise<T> {
-    const turn = (turns.get(address) ?? Promise.resolve()).then(read, read)
-    turns.set(address, turn.catch(() => {}))
-    return turn
-  }
 
   async function readTable(owner: string, from: number, to: number): Promise<{ logs: ApprovalLog[]; through: number } | null> {
     if (!config.dataset || hasTable === false) return null
@@ -204,7 +197,7 @@ export function createApprovals(query: Query, config: ApprovalsConfig) {
     const logs: ApprovalLog[] = []
     for (let start = from; start <= to; start += RAW_BLOCKS_PER_QUERY) {
       const end = Math.min(to, start + RAW_BLOCKS_PER_QUERY - 1)
-      const rows = await query<Row>(`SELECT ${LOG_COLUMNS} FROM ${base}.logs WHERE block_num BETWEEN ${start} AND ${end} AND topic1 = X'${owner.padStart(64, "0")}' AND ${APPROVAL_LOGS}`, 300_000)
+      const rows = await query<Row>(`SELECT ${LOG_COLUMNS} FROM ${base}.logs WHERE block_num BETWEEN ${start} AND ${end} AND topic1 = X'${owner.padStart(64, "0")}' AND ${APPROVAL_LOGS}`)
       logs.push(...rows.map(toLog))
     }
     return logs

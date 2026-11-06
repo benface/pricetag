@@ -8,6 +8,7 @@ import { applyLegTaking, assertFoldFits, emptyPosition, firstMarks, foldWallet, 
 import { NO_FACTS, legsByTransaction, transactionFacts } from "./activity.ts"
 import type { BookPoint, BookPreview, WalletResponse } from "./api.ts"
 import { costKey, isDemoWallet, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type ExchangeWithdrawal, type Money, type Purchase, type Receipt, type SenderAnswer } from "./book.ts"
+import { unitsOfDecimal } from "./decimal.ts"
 import { matchWithdrawals, type ExchangeArrival } from "./exchange-import.ts"
 import { MINT_ADDRESS, knownSender, type KnownSender } from "./senders.ts"
 import { describeTransaction, purchaseSource } from "./wording.ts"
@@ -16,8 +17,7 @@ import { describeTransaction, purchaseSource } from "./wording.ts"
 export function microsOf(text: string, currency: CurrencyCode = "USD"): string | null {
   const clean = plainAmount(withoutCurrency(text, currency))
   if (clean === null || !/^(\d+(\.\d*)?|\.\d+)$/.test(clean)) return null
-  const [whole = "", fraction = ""] = clean.split(".")
-  return BigInt(`${whole || "0"}${fraction.slice(0, 6).padEnd(6, "0")}`).toString()
+  return unitsOfDecimal(clean, 6).toString()
 }
 
 /** What arrived with no cost, and who could say. A null sender means there's no one to ask about, only what it cost. */
@@ -169,7 +169,6 @@ function exchangeShare(costs: readonly ExchangeCost[], wallet: string, legId: st
   return null
 }
 
-/** A credit the chain hasn't confirmed yet stays unknown: its amount is only what the transaction claims, so nothing can rest on it, and there's nothing to ask until it settles. */
 /**
  * Whether a note about this leg's transaction and asset would be about more than this leg. A note gives one cost for what
  * arrived in a transaction, and what its balance says arrived may not be part of that, so it can't be shared out or given to either.
@@ -190,6 +189,7 @@ function arrivalsIn(legs: readonly PricedLeg[]): Map<string, number> {
   return counts
 }
 
+/** A credit the chain hasn't confirmed yet stays unknown: its amount is only what the transaction claims, so nothing can rest on it, and there's nothing to ask until it settles. */
 const isOpenCredit = (leg: PricedLeg) => BigInt(leg.delta) > 0n && leg.costLabel === "unknown" && !leg.unsettledCredit
 
 const sum = (pieces: readonly CostPiece[]) => pieces.reduce((total, p) => total + BigInt(p.costMicros ?? "0"), 0n)

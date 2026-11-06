@@ -1,12 +1,11 @@
-import { useLayoutEffect, useRef, useState } from "react"
+import { useRef, useState } from "react"
 import { formatPrice, formatSignedAmount, formatTime, shortHash, type CurrencyCode, type LegEffect } from "@pricetag/sdk/core"
 import type { CombinedExplanation } from "../core/combined.ts"
 import { describeConversion, describeEffect, describeNetting, priceProofKey, type Explanation } from "../core/explain.ts"
 import { IN_EACH_WALLET, STARTING_BALANCE, actionLabel, activityTitle, costProof, costTag, pnlHelp, priceSourceLabel } from "../core/wording.ts"
+import { MAX_LEGS } from "../core/portfolio.ts"
 import { ProofPanel } from "./ProofPanel.tsx"
-
-/** A busy wallet has thousands of legs, and the newest are the ones anyone reads. */
-const MAX_LEGS_SHOWN = 200
+import { useModal } from "./useModal.ts"
 
 /** `wallet` is which of several wallets this is in, when there are several. */
 function LegRow({ effect, currency, address, wallet, rule }: { effect: LegEffect; currency: CurrencyCode; address: string; wallet: string | null; rule: string | null }) {
@@ -73,18 +72,7 @@ export function ExplainPanel({ explanation, address, rule, onClose }: { explanat
   const close = useRef<HTMLButtonElement>(null)
   const [showsPriceProof, setShowsPriceProof] = useState(false)
 
-  // A native modal keeps focus inside and makes the page behind it inert. Closing by unmounting doesn't restore focus.
-  useLayoutEffect(() => {
-    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    const element = dialog.current
-    if (!element) return
-    if (!element.open) element.showModal()
-    close.current?.focus()
-    return () => {
-      element.close()
-      opener?.focus()
-    }
-  }, [])
+  useModal(dialog, close)
 
   return (
     <dialog
@@ -144,9 +132,9 @@ export function ExplainPanel({ explanation, address, rule, onClose }: { explanat
             </ul>
           </>
         ) : null}
-        <h3>{activityTitle(explanation.effects.length, Math.min(explanation.effects.length, MAX_LEGS_SHOWN))}</h3>
+        <h3>{activityTitle(explanation.effects.length, Math.min(explanation.effects.length, MAX_LEGS))}</h3>
         <ul className="legs">
-          {explanation.effects.slice(0, MAX_LEGS_SHOWN).map((effect) => {
+          {explanation.effects.slice(0, MAX_LEGS).map((effect) => {
             // A move between two of the wallets is the same leg in both.
             const wallet = across?.walletOf(effect.leg) || null
             return <LegRow key={`${wallet}:${effect.leg.id}`} effect={effect} currency={explanation.currency} address={address} wallet={wallet} rule={rule} />

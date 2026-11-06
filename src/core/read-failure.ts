@@ -29,6 +29,9 @@ export function retryAfterOf(response: Response): number {
   return Number.isSafeInteger(seconds) && seconds > 0 ? seconds : 60
 }
 
+/** How this app posts to its server, which refuses anything that isn't JSON. */
+export const jsonPost = (body: unknown, signal?: AbortSignal): RequestInit => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal })
+
 /** A response's JSON body, or a `ReadError` that says why there isn't one. */
 export async function readResponse<T>(response: Response): Promise<T> {
   const body = (await response.json().catch(() => null)) as { error?: unknown } | null

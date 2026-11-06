@@ -1,8 +1,8 @@
-// How the panel reaches devices. Each one loads only when it's needed, so looking at a wallet never pulls in any of this. The panel
-// takes these as a prop, which is how a test page gives it a stand-in without anything in the app knowing about one.
+// How the panel reaches devices. Each one loads only when it's needed, so opening the panel doesn't pull in any of their code. The
+// panel takes these as a prop, which is how a test page gives it a stand-in without anything in the app knowing about one.
 
 import type { PublicClient } from "viem"
-import type { ColdSend, DeviceSigner, WalletSigner } from "../../core/cold.ts"
+import { publicClient, sendFromCold, type ColdSend, type DeviceSigner, type WalletSigner } from "../../core/cold.ts"
 import type { BrowserWallet } from "./browser.ts"
 import type { ExchangeCodes, ScannedCode } from "./keystone.ts"
 
@@ -25,7 +25,7 @@ export const realConnectors: Connectors = {
   findWallets: async () => (await import("./browser.ts")).findBrowserWallets(),
   wallet: async (wallet) => (await import("./browser.ts")).connectBrowserWallet(wallet),
   keystone: async (code, exchange) => (await import("./keystone.ts")).connectKeystone(code, exchange),
-  client: async () => (await import("../../core/cold.ts")).publicClient() as unknown as PublicClient,
-  send: async (send) => (await import("../../core/cold.ts")).sendFromCold(send),
+  client: async () => publicClient() as unknown as PublicClient,
+  send: sendFromCold,
 }
 

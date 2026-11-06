@@ -5,6 +5,9 @@
 import { TOKENS, formatAmount, formatMoney, formatPaid, isAddress, isCurrencyCode, normalizeAddress, plainAmount, type CurrencyCode } from "@pricetag/sdk/core"
 import type { OnrampOrder } from "./api.ts"
 import { parseBook, type Money, type Purchase } from "./book.ts"
+import { unitsOfDecimal } from "./decimal.ts"
+import { jsonPost } from "./read-failure.ts"
+import { recordOf } from "./record.ts"
 import type { PurchaseState } from "./resolve.ts"
 import type { KeptIn, Shelf } from "./shelf.ts"
 
@@ -155,8 +158,7 @@ export function typedAmount(text: string): string | null {
 
 /** Those digits as millionths. */
 export function microsOf(amount: string): string {
-  const [whole = "", fraction = ""] = amount.split(".")
-  return BigInt(`${whole}${fraction.padEnd(6, "0")}`).toString()
+  return unitsOfDecimal(amount, 6).toString()
 }
 
 export type CheckoutRequest = { address: string; asset: string; cryptoAmount: string; fiat: { amount: string; currency: CurrencyCode } | null }
@@ -167,7 +169,7 @@ const refusal = (body: Record<string, unknown>, fallback: string) => new Error(t
 
 /** Asks the server for a page. Throws with something to say about why, when there's none to open. */
 export async function startCheckout(request: CheckoutRequest, send: typeof fetch = fetch): Promise<{ page: string; ref: string }> {
-  const response = await send("/api/onramp/checkout", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request) })
+  const response = await send("/api/onramp/checkout", jsonPost(request))
   const body = await answerOf(response)
   if (!response.ok) throw refusal(body, "Couldn't start this purchase.")
   const page = pageOf(body.url)
@@ -184,14 +186,13 @@ export async function readOrder(ref: string, signal: AbortSignal, send: typeof f
   return Array.isArray(body.orders) ? ((body.orders[0] as OnrampOrder | undefined) ?? null) : null
 }
 
-const plainRecord = (value: unknown): Record<string, unknown> | null => (typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null)
 
 function parseTracked(value: unknown): TrackedPurchase | null {
-  const row = plainRecord(value)
-  const typed = plainRecord(row?.typed)
+  const row = recordOf(value)
+  const typed = recordOf(row?.typed)
   if (!row || typeof row.ref !== "string" || typeof row.wallet !== "string" || !isAddress(row.wallet) || typeof row.asset !== "string" || typeof row.startedAt !== "number") return null
   if (typeof typed?.micros !== "string" || !/^\d+$/.test(typed.micros) || typeof typed.currency !== "string" || !isCurrencyCode(typed.currency)) return null
-  const order = plainRecord(row.order)
+  const order = recordOf(row.order)
   return { ref: row.ref, wallet: normalizeAddress(row.wallet), asset: row.asset, typed: { micros: typed.micros, currency: typed.currency }, startedAt: row.startedAt, order: order ? (order as OnrampOrder) : null }
 }
 
