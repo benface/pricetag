@@ -519,7 +519,7 @@ struct HotWalletDetails<Overview: View>: View {
             ForEach(wallet.records) { record in
                 HStack {
                     VStack(alignment: .leading) {
-                        Text(record.reason == .note ? "What you paid for \(record.symbol)" : "\(Format.amount(record.amount, decimals: record.decimals)) \(record.symbol)")
+                        Text(recordTitle(record))
                             .monospacedDigit()
                         Text("\(reasonText(record)) · \(Format.time(record.createdAt))")
                             .font(.caption)
@@ -568,6 +568,15 @@ struct HotWalletDetails<Overview: View>: View {
         case .site: record.site.map(siteName) ?? "A site"
         case .sent: "Sent to \(Format.shortHash(record.to.checksummed))"
         case .note: "Published for anyone to read"
+        case .revoke: "Revoked, for \(Format.shortHash(record.to.checksummed))"
+        }
+    }
+
+    private func recordTitle(_ record: SignedRecord) -> String {
+        switch record.reason {
+        case .note: "What you paid for \(record.symbol)"
+        case .revoke: "Approval for \(record.symbol)"
+        default: "\(Format.amount(record.amount, decimals: record.decimals)) \(record.symbol)"
         }
     }
 

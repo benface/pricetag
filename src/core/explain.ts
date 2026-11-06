@@ -1,6 +1,6 @@
 // What a click on a number explains: a sentence for how it's worked out, and the legs behind it.
 
-import { CURRENCIES, TOKENS, TOKEN_FEEDS, foldPositions, formatAmount, formatMoney, formatPrice, formatRate, formatReturn, returnBps, orderMatters, formatSignedMoney, holdEffects, pnlOverTime, shortHash, sumTotals, tokenByAddress, unconfirmedAssets, unreadAssets, usdView, type CostLabel, type CurrencyCode, type HoldComparison, type LegEffect, type Method, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { CURRENCIES, TOKENS, TOKEN_FEEDS, foldPositions, formatAmount, formatMoney, formatPrice, formatRate, formatReturn, returnBps, orderMatters, formatSignedMoney, holdEffects, pnlOverTime, shortHash, sumTotals, tokenByAddress, unconfirmedAssets, unreadAssets, usdView, worth, type CostLabel, type CurrencyCode, type HoldComparison, type LegEffect, type Method, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import type { WalletResponse } from "./api.ts"
 import { COST_WORDS, AVERAGE_PRICE_PAID, BALANCE_CHECK, CHECK_LABELS, HOLD_ETH, HOLD_PAST, METHOD_LABELS, NETWORK_FEES, currentPriceSource, holdCaveatSentence, holdDifferenceSentence, tokenLabel, unseenEthCause } from "./wording.ts"
 
@@ -129,6 +129,56 @@ export function describeEffect({ leg, before, after }: LegEffect, currency: Curr
   if (shortfall > 0n) parts.push(`${formatAmount(shortfall, leg.decimals)} ${leg.asset} more than we saw arrive`)
   if (leg.orderUnknown && orderMatters(leg, before.method)) return `${parts.join(", ")}. ${ORDER_UNKNOWN[leg.orderUnknown]}`
   return parts.join(", ")
+}
+
+/** What a leg did, in one plain sentence led by its amount in money, what about it isn't known, and whether answering a question could fix that. `describeEffect` has the rest. */
+export function summarizeEffect({ leg, before, after }: LegEffect, currency: CurrencyCode): { summary: string; unknown: string | null; answerable: boolean } {
+  const money = (micros: string | bigint) => formatMoney(micros, currency)
+  const qty = BigInt(leg.delta.replace("-", ""))
+  const amount = (units: bigint) => `${formatAmount(units, leg.decimals)} ${leg.asset}`
+  const value = leg.priceMicros === null ? null : worth(qty, BigInt(leg.priceMicros), leg.decimals)
+  // Money first, as people count it. Without a price, the amount is all there is to say.
+  const what = (micros: bigint | string | null, about = false) => (micros === null ? amount(qty) : `${about ? "about " : ""}${money(micros)} of ${leg.asset}`)
+  // Nobody can answer which came first, or what the chain hasn't confirmed yet.
+  const orderUnknown = orderMatters(leg, before.method)
+  if (BigInt(leg.delta) > 0n) {
+    const unknown = leg.costMicros !== null ? null : leg.pieces?.some((p) => p.costMicros !== null) ? "What part of this cost isn't known yet." : "What this cost isn't known yet."
+    const facts = { unknown, answerable: unknown !== null && !orderUnknown && !leg.unsettledCredit }
+    if (leg.opening) return { summary: `Already held ${what(value)} when this history starts.`, ...facts }
+    // Bought and then moved here keeps what was paid as its cost, but this movement is the move.
+    if (leg.costLabel !== "inherited" && (leg.kind === "swap" || leg.purchaseSource)) {
+      // Money after "Bought" reads as what was paid, so a price's worth says so when that's all there is.
+      if (leg.costMicros === null) return { summary: `Bought ${amount(qty)}${value === null ? "" : `, worth ${money(value)}`}.`, ...facts }
+      return { summary: `Bought ${what(leg.costMicros, leg.estimated)}${leg.purchaseSource ? ", fees included" : ""}.`, ...facts }
+    }
+    return { summary: `Received ${what(value)}${leg.costLabel === "inherited" ? " from your other wallet" : ""}.`, ...facts }
+  }
+  const realized = diff(after.realizedMicros, before.realizedMicros)
+  const unresolved = diff(after.unresolvedDisposedQty, before.unresolvedDisposedQty)
+  const shortfall = diff(after.shortfallQty, before.shortfallQty)
+  if (leg.kind === "transfer") {
+    const unknown = shortfall > 0n ? `${amount(shortfall)} more left than we saw arrive, so what it cost isn't known.` : null
+    return { summary: `Sent ${what(value)}, with no gain or loss.`, unknown, answerable: false }
+  }
+  // A shortfall is also an unknown cost, but it isn't one any question is about, since nothing is known to have arrived.
+  const missingCost = diff(after.unknownCostDisposedQty, before.unknownCostDisposedQty) - shortfall
+  const causes = [
+    ...(shortfall > 0n ? [`${amount(shortfall)} more left than we saw arrive`] : []),
+    ...(missingCost > 0n ? [`what ${missingCost < unresolved ? "some of it" : "it"} cost isn't known yet`] : []),
+    ...(diff(after.unknownProceedsQty, before.unknownProceedsQty) > 0n ? [leg.kind === "gas" ? "it has no price at this block" : "what you received has no usable value"] : []),
+  ]
+  const unknown = unresolved > 0n ? `The gain on ${amount(unresolved)} isn't known, because ${causes.join(", and ")}.` : null
+  const answerable = missingCost > 0n && !orderUnknown
+  if (leg.kind === "gas") {
+    const fee = diff(after.gasMicros, before.gasMicros)
+    return { summary: leg.priceMicros === null ? `Paid ${amount(qty)} in network fees.` : `Paid ${money(fee)} in network fees.`, unknown, answerable }
+  }
+  if (leg.proceedsMicros === null) return { summary: `Sold ${amount(qty)}, for something with no usable value.`, unknown, answerable }
+  const sold = `Sold ${what(leg.proceedsMicros, leg.estimated)}`
+  const gain = `a ${money(realized < 0n ? -realized : realized)} ${realized < 0n ? "loss" : "gain"}`
+  if (unknown) return { summary: realized === 0n ? `${sold}.` : `${sold}, ${gain} on part of it.`, unknown, answerable }
+  if (realized === 0n) return { summary: `${sold}, with no gain or loss.`, unknown, answerable }
+  return { summary: `${sold}, ${gain}.`, unknown, answerable }
 }
 
 /** Why what we saw and the chain might disagree, by which way they do. */
@@ -355,18 +405,20 @@ export function explainTotal(positions: readonly Position[], totals: Totals, met
   }
 }
 
-export function explainHold(positions: readonly Position[], comparison: HoldComparison, { view, source }: ExplainContext): Explanation {
+/** `combined` is for several of the user's wallets at once, where moving between them is neither putting in nor taking out. */
+export function explainHold(positions: readonly Position[], comparison: HoldComparison, { view, source }: ExplainContext, { combined = false } = {}): Explanation {
   const { currency } = view
   const money = (micros: string) => formatMoney(micros, currency)
   const signed = (micros: string | null) => (micros === null ? "unavailable" : formatSignedMoney(micros, currency))
   const { holdMicros, ethValueMicros, ethPriceMicros, ethQty, putInMicros, takenOutMicros, walletMicros, gainThatLeftMicros, differenceMicros, ranOut } = comparison
   const caveat = holdCaveatSentence(comparison, currency)
+  const [here, these] = combined ? ["your wallets", "Your wallets"] : ["this wallet", "This wallet"]
   const lines = [
-    "Takes each amount put in this wallet, turns it into ETH at that moment's price, and values that ETH at today's price.",
-    "Put in means whatever arrived from outside this wallet, at what it cost you, or at its price when it arrived if that's all that's known. Exchanges inside the wallet aren't put in.",
-    ...(BigInt(takenOutMicros) > 0n ? [`${money(takenOutMicros)} left this wallet, so it leaves the ETH too, at its price when it left.${ranOut ? " Holding ETH would have run out before all of it could leave." : ""}`] : []),
+    `Takes each amount put in ${here}, turns it into ETH at that moment's price, and values that ETH at today's price.`,
+    `Put in means whatever arrived from outside ${here}, at what it cost you, or at its price when it arrived if that's all that's known. Exchanges inside ${combined ? "them" : "the wallet"} aren't put in${combined ? ", and neither are moves between them" : ""}.`,
+    ...(BigInt(takenOutMicros) > 0n ? [`${money(takenOutMicros)} left ${here}, so it leaves the ETH too, at its price when it left.${ranOut ? " Holding ETH would have run out before all of it could leave." : ""}`] : []),
     ...(ethValueMicros !== null && ethPriceMicros !== null ? [`${money(putInMicros)} put in leaves ${formatAmount(ethQty, 18)} ETH, worth ${money(ethValueMicros)} at today's ${formatPrice(ethPriceMicros, currency)}.`] : []),
-    `This wallet: ${signed(walletMicros)}. That's its total PnL after network fees${BigInt(gainThatLeftMicros) === 0n ? "" : `, and ${signed(gainThatLeftMicros)} on what left it, which total PnL doesn't count because a transfer isn't a sale`}. Holding ETH pays no fees.`,
+    `${these}: ${signed(walletMicros)}. That's ${combined ? "their" : "its"} total PnL after network fees${BigInt(gainThatLeftMicros) === 0n ? "" : `, and ${signed(gainThatLeftMicros)} on what left ${combined ? "them" : "it"}, which total PnL doesn't count because a transfer isn't a sale`}. Holding ETH pays no fees.`,
     `${HOLD_ETH}: ${signed(holdMicros)}.`,
     ...(differenceMicros !== null ? [holdDifferenceSentence(differenceMicros, currency)] : []),
     ...(caveat ? [caveat] : []),

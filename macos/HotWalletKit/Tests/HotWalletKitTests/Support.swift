@@ -262,14 +262,14 @@ actor ScriptedPortfolios: PortfolioSource {
 }
 
 /// A portfolio as the server would send it, from JSON, so the test uses the same decoding as the app.
-func portfolio(address: EthereumAddress = hotAddress, toBlock: UInt64 = 1000, outgoing: [String] = [], realized: String? = "0", realizedMissing: Int = 0, estimatedRealized: Bool = false, linkedFailed: [String] = [], positions: [String] = [], unlisted: [String] = []) -> Portfolio {
+func portfolio(address: EthereumAddress = hotAddress, toBlock: UInt64 = 1000, outgoing: [String] = [], realized: String? = "0", realizedMissing: Int = 0, estimatedRealized: Bool = false, linkedFailed: [String] = [], positions: [String] = [], unlisted: [String] = [], started: Bool = true) -> Portfolio {
     let realizedText = realized.map { "\"\($0)\"" } ?? "null"
     let json = """
     {
       "address": "\(address.lowercased)", "mode": "raw", "method": "average", "currency": "USD", "exchange": null,
       "coverage": { "fromBlock": 1, "toBlock": \(toBlock) }, "trackedTokens": 10,
       "latest": { "blockNum": 1000, "timestamp": "2026-11-04T00:00:00.000Z" },
-      "progress": { "started": true, "behindBlocks": 0 },
+      "progress": { "started": \(started), "behindBlocks": 0 },
       "gasUnknownTxs": [], "l1FeeUnknownTxs": [], "openingUnread": [], "unreadAssets": [], "outgoingTxs": [\(outgoing.map { "\"\($0)\"" }.joined(separator: ","))],
       "unlisted": [\(unlisted.map { "{ \"token\": \"\($0)\", \"transfers\": 1 }" }.joined(separator: ","))],
       "positions": [\(positions.joined(separator: ","))],
