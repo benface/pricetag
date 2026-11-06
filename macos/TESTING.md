@@ -111,6 +111,43 @@ Don't do it yourself. Finish, and put a short checklist for benface in your hand
 - `shot.sh` builds without the sandbox. A sandboxed build's container is tied to its signature, and macOS stops the launch to ask about it when that changes.
 - A real window quits itself after 60 seconds if `shot.sh` is gone by then.
 
+## Compiling Swift takes turns
+
+Only one thing compiles Swift or runs its tests at a time, across every worktree on this Mac. `pnpm check:mac`, `pnpm mac:build`, `pnpm check:keychain`, `pnpm check:extension`, `pnpm check:anvil` and the build in `shot.sh` all queue by themselves, in the order they started, and only hold the lock while compiling or testing. `pnpm mac` never waits. Run anything else through the queue, like one test:
+
+```sh
+macos/swift-queue.sh swift test --package-path macos/PricetagKit --filter FeedTests
+```
+
+From an agent, a foreground command can hit the tool's time limit while it queues, so:
+
+- Use the tool's longest limit (10 minutes for Claude Code's Bash tool, `timeout: 600000`), not its default of 2 minutes.
+- Write the output to a file and filter it afterward, because a pipe to `grep` hides the queue's messages until it's over. Use a path in your own task folder, and take the exit code from the command, not the filter.
+
+```sh
+pnpm check:mac > ../check-mac.log 2>&1; echo "exit $?"; grep -E '^\[swift-queue\]|error:|Test run with' ../check-mac.log | tail -n 20
+```
+
+- If the tool moves the command to the background when its limit runs out, as Claude Code's does, it's still queued or running, and it isn't a failure. Don't start a second copy. If your turn can wait, read its output file until the final `[swift-queue]` line appears. Multica ends a run's background work with the turn, so never finish a turn on one of these. If the tool kills it instead, there's no result, so run it again.
+
+What you'll see, on lines starting with `[swift-queue]`:
+
+- **`Waiting … not hung: pnpm check:mac from <worktree> has been running for 2m3s`**, every 30 seconds. It's in the queue, behind that.
+- **`… passed in 3m12s`** or **`… failed with exit 1 in 3m12s`**: the result. A failing check still fails with its own exit code.
+- **Exit 75 and `… did not run: it was still waiting`**: the queue was too long, so it gave up after 4 minutes to leave time for the run itself. This isn't a failed check, and nothing's left behind. Run it again. At a terminal it waits as long as it takes, and `SWIFT_QUEUE_WAIT=<seconds>` sets another limit (empty for none).
+- **Exit 69 and `… isn't a pass` or `… did not run: an earlier run's processes can't be verified gone`**: see below. Don't report either as a pass or a failed check.
+- **`… was stopped while waiting`** or **`… was stopped partway`**: there's no result. It didn't pass or fail, so don't report it as either. Run it again. Whatever it had compiled is kept, so the next run goes faster.
+
+When a run ends or is killed, even with `kill -9` on its whole process group, it stops everything it started, and the next run doesn't start until that's done. That usually takes under a second, and about 5 for something that ignores SIGTERM. Nothing else is touched, including other worktrees' runs.
+
+A process that starts its own session and whose parent exits within a second, before the run lists it, isn't found, and none of the Swift tools do that. And a run's cleanup comes from a watcher outside its process group, so if that's killed along with the run, what's left keeps running until the next run stops it.
+
+If what a run started can't be verified gone after about 7 seconds, because something can't be killed or `ps` keeps failing, the run says `Couldn't stop …` and `… isn't a pass`, and exits with 69 unless the command had already failed with its own code. It keeps its job folder in the queue folder, with the list of what's left in `pids`. Each later run tries again for about 7 seconds, and starts once they're gone. Until then it exits with 69 and `… did not run`, without running anything, so waiting runs don't hang and nothing overlaps. Run it again once `ps` works. If a process really can't be killed, restart the Mac, which clears it. Only delete that job folder once you've checked its processes are gone, because the queue forgets them when you do.
+
+The lock is at `~/Library/Caches/patina-swift-queue/`, outside the repo so that every worktree shares it. Don't delete it: a run waiting on the old file wouldn't see the new one.
+
+A test that waits for something needs a deadline. If it spins forever and `swift test` is killed outside the queue, its `swiftpm-testing-helper` keeps using a whole core with nobody to stop it.
+
 ## Adding a scene
 
 Add a case to `TestScene` in `App/TestMode/TestMode.swift`, give it a feed and a view, and it's in `shot.sh list` and `all`. Set `needsRealWindow` only if a render gets it wrong. A hot wallet state goes in `HotWalletFixture`, and another currency needs its `demo-portfolio-xyz.json` and `demo-explanation-xyz.json`: put them in `PricetagKit/Tests/PricetagKitTests/Resources`, with a symlink in `App/TestMode` like the others, so the tests read the same files the app does.

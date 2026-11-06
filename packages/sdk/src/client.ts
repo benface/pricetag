@@ -158,7 +158,7 @@ export function pricetagClient(query: Query, config: ClientConfig) {
   if (startBlock !== undefined && !isBlock(startBlock)) throw new Error(`Bad start block: ${startBlock}. It's the block number the dataset starts from.`)
   const baseDataset = config.baseDataset ?? "edgeandnode/base_mainnet@0.0.2"
   const source = datasetSource(query, { dataset: config.dataset, baseDataset, startBlock: startBlock ?? null, network: config.network ?? DEFAULT_NETWORK })
-  const reader = datasetReader(query, { dataset: config.dataset, baseDataset })
+  const reader = datasetReader(query, { dataset: config.dataset, baseDataset, startBlock })
 
   // Read just before a wallet is. A wallet's history stays in memory between calls, so each call only reads what's new.
   let chainHead: Head | null = null
@@ -229,7 +229,7 @@ export function pricetagClient(query: Query, config: ClientConfig) {
       resolveRange({ from })
       const stop = new AbortController()
       const stopping = signal ? AbortSignal.any([signal, stop.signal]) : stop.signal
-      const ticks = followChain({ stream: config.stream ?? null, sql: followSql(config.dataset), readMark: (after) => readHeadMark(query, baseDataset, after), readHashes: (blocks) => readBlockHashes(query, baseDataset, blocks), logger, ...config.follow }, stopping)
+      const ticks = followChain({ stream: config.stream ?? null, sql: followSql(config.dataset), readMark: (after) => readHeadMark(query, baseDataset, after ?? startBlock ?? null), readHashes: (blocks) => readBlockHashes(query, baseDataset, blocks), logger, ...config.follow }, stopping)
       // Following starts before the first read, which can take a while, so no block or reorg goes by unseen.
       let next = ticks.next()
       let via: Via | null = null
