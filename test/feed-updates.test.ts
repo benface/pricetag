@@ -311,6 +311,7 @@ describe("the proof and verify routes, for a current price", () => {
   }
   const behind: CurrentPriceBehind = { asset: "AERO", blockNum: BLOCK + 60, updates: [{ feed: aero, update: logged, agrees: "yes", byRule: false }] }
   const REVISION = currentRevision(behind, { micros: "630000", source: "oracle", blockNum: BLOCK + 60 }, undefined, null)
+  const REPLACED_TX = `0x${"11".repeat(32)}`
 
   it("proves a held token's price from its update, and checks that block", async () => {
     const { get, asked, blocksRead, close } = await serve(async () => behind)
@@ -398,6 +399,28 @@ describe("the proof and verify routes, for a current price", () => {
     assert.notEqual(currentRevision(wsteth(90), price, { ...ethPrice, micros: "3100000000" }, null), original, "ETH's price")
     assert.notEqual(currentRevision(wsteth(95), price, ethPrice, null), original, "ETH's update")
     assert.notEqual(currentRevision(wsteth(90), price, ethPrice, "cautious"), original, "its rule")
+    const replaced = (index: number): CurrentPriceBehind => ({ ...wsteth(90), updates: wsteth(90).updates.map((current, i) => (i === index ? { ...current, update: { ...logged, block_num: current.update?.block_num ?? 0, tx_hash: REPLACED_TX } } : current)) })
+    assert.notEqual(currentRevision(replaced(0), price, ethPrice, null), original, "its update's transaction")
+    assert.notEqual(currentRevision(replaced(1), price, ethPrice, null), original, "the transaction of ETH's update")
+  })
+
+  it("won't check a different transaction than the proof on screen links to, when a reorg replaces it in the same place at the same price", async () => {
+    let update = { ...logged, tx_hash: REPLACED_TX }
+    const { get, blocksRead, close } = await serve(async () => ({ ...behind, updates: [{ feed: aero, update, agrees: "yes", byRule: false }] }))
+    const proof = await get<ProofResponse>("proof", "AERO")
+    assert.ok(proof.body.links.some(({ url }) => url.includes(REPLACED_TX)))
+    update = logged
+    const stale = await get<{ error: string }>("verify", "AERO", `&revision=${proof.body.revision}`)
+    assert.equal(stale.status, 412)
+    assert.deepEqual(blocksRead, [], "it reads no block for a check it won't make")
+    const fresh = await get<ProofResponse>("proof", "AERO")
+    const checked = await get<VerificationResponse>("verify", "AERO", `&revision=${fresh.body.revision}`)
+    close()
+    assert.ok(fresh.body.links.some(({ url }) => url.includes(logged.tx_hash)))
+    assert.ok(!fresh.body.links.some(({ url }) => url.includes(REPLACED_TX)))
+    assert.equal(checked.status, 200)
+    assert.equal(checked.body.status, "passed")
+    assert.deepEqual(blocksRead, [BLOCK])
   })
 
   it("answers without a block to check when no log is behind it", async () => {
