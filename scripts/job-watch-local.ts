@@ -8,7 +8,7 @@ import { strict as assert } from "node:assert"
 import { createServer } from "node:http"
 import { CHECK_EVERY_MS, createJobWatch } from "./job-watch.ts"
 
-const { ADMIN_URL, ANVIL_URL, MAIN_RPC_PORT, FORK_RPC_PORT } = process.env as Record<string, string>
+const { ADMIN_URL, ANVIL_URL, MAIN_RPC_PORT, FORK_RPC_PORT } = process.env as Record<string, string> & { ADMIN_URL: string; ANVIL_URL: string; MAIN_RPC_PORT: string; FORK_RPC_PORT: string }
 const MAIN = "benface/watch_main@0.0.1"
 const FORK = "benface/watch_fork@0.0.1"
 const TIMEOUT_MS = 180_000
@@ -54,14 +54,19 @@ async function until(what: string, check: (status: Status) => boolean, ref: stri
   }
 }
 
-const eventCount = async (ref: string) => ((await (await fetch(`${versionUrl(ref)}/events`)).json()) as { events: unknown[] }).events.length
+// Only the version's own jobs, because its other jobs, like the one that compacts, log events all the time.
+async function eventCount(ref: string) {
+  const { id, jobId } = await statusOf(ref)
+  const { events } = (await (await fetch(`${versionUrl(ref)}/events`)).json()) as { events: { job_id: number }[] }
+  return events.filter((event) => event.job_id === id || event.job_id === jobId).length
+}
 
 async function deploy(ref: string, provider: string) {
   const response = await fetch(versionUrl(ref), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider, retry_strategy: { strategy: "none" } }) })
   assert.equal(response.status, 202, `deploying ${ref}: ${await response.text()}`)
 }
 
-const rpcs = { [MAIN]: switchableRpc(Number(MAIN_RPC_PORT)), [FORK]: switchableRpc(Number(FORK_RPC_PORT)) }
+const rpcs: Record<string, { broken: boolean }> = { [MAIN]: switchableRpc(Number(MAIN_RPC_PORT)), [FORK]: switchableRpc(Number(FORK_RPC_PORT)) }
 await deploy(MAIN, "main")
 await deploy(FORK, "fork")
 await until("it's running and has blocks", (status) => status.job === "RUNNING" && status.block > 3, MAIN)
@@ -107,10 +112,10 @@ async function killAndRecover(ref: string, other: string) {
   const otherBefore = await statusOf(other)
   const { jobId, startBlock } = await statusOf(ref)
 
-  rpcs[ref].broken = true
+  rpcs[ref]!.broken = true
   say(`${ref}: its RPC is broken`)
   await until("it errors", (status) => status.job === "ERROR", ref)
-  rpcs[ref].broken = false
+  rpcs[ref]!.broken = false
   say(`${ref}: job errored, RPC fixed, nothing has been restarted`)
 
   const dead = await until("Amp marks it FATAL", (status) => status.job === "FATAL" && status.composite === "FATAL", ref)
@@ -121,7 +126,7 @@ async function killAndRecover(ref: string, other: string) {
   const back = await until("it runs again", (status) => status.job === "RUNNING", ref)
   const seconds = (Date.now() - diedAt) / 1000
   assert.equal(restarts.length, sent + 1, "expected exactly one restart")
-  assert(restarts[sent].endsWith(`/materialized-datasets/${ref.replace("@", "/versions/")}`), `restarted the wrong job: ${restarts[sent]}`)
+  assert(restarts[sent]!.endsWith(`/materialized-datasets/${ref.replace("@", "/versions/")}`), `restarted the wrong job: ${restarts[sent]}`)
   assert.equal(back.jobId, jobId, "the restart should resume the same job")
   assert(seconds <= CHECK_EVERY_MS / 1000 + 5, `took ${seconds} s, with a check every ${CHECK_EVERY_MS / 1000} s`)
   say(`${ref}: RUNNING ${seconds.toFixed(1)} s after going FATAL, same job ${jobId}, from 1 restart`)

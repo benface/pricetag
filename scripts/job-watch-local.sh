@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Kills real jobs on a real local Amp and checks that the job watch brings them back (WORK-577). See scripts/job-watch-local.ts.
-#   scripts/job-watch-local.sh   Takes about 5 minutes. KEEP_LOGS=<dir> keeps the logs there.
+#   scripts/job-watch-local.sh   Takes about 3 minutes. KEEP_LOGS=<dir> keeps the logs there.
 # Everything it starts is in a temporary folder and its own Postgres container, and it all goes when it exits. It uses other
 # ports than scripts/amp and scripts/reorg-local.sh, so they can keep running. It never talks to staging.
 set -euo pipefail

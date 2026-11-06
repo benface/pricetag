@@ -29,6 +29,7 @@ All times are Montréal. Numbers marked *measured* come from the real server aga
 
 About 5 minutes. **Before you start:**
 - The server has been running for at least 5 minutes, with the wallet already read once under each rule, so nothing's a cold read.
+- [The job watch](#the-job-watch) is running, and its log shows no `ALERT` you haven't dealt with.
 - USD, Average cost, and the Market price rule. The menu bar shows Value, the default: right-click it to check.
 - The Coinbase question is **unanswered**, and what you paid is on a sticky note.
 - The main window and Settings are arranged side by side.
@@ -131,16 +132,30 @@ A real card purchase on stage can fail, and a real delivery can take minutes, so
 
 **Don't stop any staging job from Friday 8:00 until the demo's over.** Deploying is fine. Stopping a job that runs JS functions (`pricetag`, `pricetag_cautious`, `pricetag_control`, `pricetag_bloom`) can kill another such job on the same worker, including the one the app reads. That froze the app's dataset for 13 minutes on Thursday night (WORK-575). It's rare, one in 14 stops, but the job doesn't come back by itself.
 
-If the numbers stop moving, restart it. This is safe on a healthy job, which it leaves alone. A restart keeps the history and caught up 13 minutes in under a minute (*measured*). `pricetag_cautious` follows by itself. It needs the admin token, so it stops working Friday at 12:46. If `PRICETAG_DATASET` has moved past `0.2.0`, change the version at the end:
+[The job watch](#the-job-watch) does this by itself within about 15 s. If the numbers stop moving anyway, restart it by hand. This is safe on a healthy job, which it leaves alone. A restart keeps the history and caught up 13 minutes in under a minute (*measured*). `pricetag_cautious` is a separate job, so if the fork is stuck too, run this again with its name. It needs the admin token, so it stops working Friday at 12:46. If `PRICETAG_DATASET` has moved past `0.2.0`, change the version at the end:
 
 ```sh
 curl -sS -X POST -H @<(printf 'authorization: Bearer %s' "$(cat ~/.config/pricetag/staging.jwt)") -H 'content-type: application/json' -d '{}' https://gateway.amp.staging.edgeandnode.com/controller/materialized-datasets/benface/pricetag/versions/0.2.0
 ```
 
+### The job watch
+
+A small background service checks every dataset `.env.local` names every 15 s, including the fork. When a job is `FATAL`, it restarts it and shows a notification. It restarted real dead jobs on a local Amp about 3 s after they went `FATAL` (*measured*, WORK-577). It runs on this Mac, so it only works while the Mac is awake and online. After Friday 12:46 it can still check but can't restart, and it says so.
+
+To check it, this should print `state = running`, and the log shows each dataset's status:
+
+```sh
+launchctl print gui/$(id -u)/com.benface.pricetag-job-watch | grep -m1 'state ='
+tail ~/Library/Logs/pricetag-job-watch.log
+```
+
+If it isn't running, start it with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.benface.pricetag-job-watch.plist`. If that fails, run `node scripts/job-watch.ts` from the repo in its own terminal. Stop it after the demo with `launchctl bootout gui/$(id -u)/com.benface.pricetag-job-watch`.
+
 ## Rehearsal checklist, Thursday November 5
 
 **Morning**
 - [ ] Read the 8:00 health check on this issue.
+- [ ] [Check the job watch](#the-job-watch) is running. Do it again on Friday morning, after opening the Mac.
 - [ ] Fund and buy, as above.
 - [ ] Right after the buys, answer the Coinbase card. There should be no other question and no line saying what PnL leaves out. If it does, read what it leaves out, and see above. Then remove the Coinbase answer in Settings > **Answers**.
 - [ ] Review WORK-426, then 431 and 432. Merging 426 starts WORK-449's test on real data, so read its results if they're in by 14:00.
@@ -170,4 +185,4 @@ curl -sS -X POST -H @<(printf 'authorization: Bearer %s' "$(cat ~/.config/pricet
 
 ## After the demo
 
-Say on WORK-448 that it's over. If you agree, the run there stops the staging jobs (`benface/pricetag@0.1.0`, `benface/pricetag_cautious@0.1.0`, and any older ones still running). After Friday 12:46 that needs a new admin token. Then turn **Sweep realized gains to savings** back on, and move what you want off the hot wallet.
+Say on WORK-448 that it's over, and stop [the job watch](#the-job-watch) first, so it doesn't restart a job that stopping another one kills. If you agree, the run there stops the staging jobs (`benface/pricetag@0.1.0`, `benface/pricetag_cautious@0.1.0`, and any older ones still running). After Friday 12:46 that needs a new admin token. Then turn **Sweep realized gains to savings** back on, and move what you want off the hot wallet.
