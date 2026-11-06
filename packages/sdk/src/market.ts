@@ -65,6 +65,9 @@ export function marketPrice(trades: readonly MarketTrade[], asset: string, block
 /** What a wallet's tokens without oracle reads were worth, in USD, by block and then asset: by their feed, or else their market. One with neither isn't in it. */
 export type MarketMarks = Record<string, Record<string, string>>
 
+/** Which of `MarketMarks` came from a feed, by block. The rest came from a market, which makes them estimates. */
+export type FeedMarks = Record<string, string[]>
+
 /**
  * Each market-priced token at each block where it's held after one of this wallet's transactions, because each of those
  * gets a chart point. In the order the fold reads them, since a token can arrive and leave in different transactions of

@@ -101,14 +101,14 @@ describe("portfolioOf", () => {
     assert.equal(aero.returnBps, "1202")
     const aeroReturn = explainPortfolio(DEMO_WALLET, "average", { kind: "asset", asset: "AERO", metric: "return" })!
     assert.equal(aeroReturn.title, "AERO: Return")
-    assert.equal(aeroReturn.value, "+12.0%")
-    assert.match(aeroReturn.lines.join(" "), /\+\$75\.13 unrealized ÷ \$624\.88 cost/)
+    assert.equal(aeroReturn.value, "≈+12.0%")
+    assert.match(aeroReturn.lines.join(" "), /≈\+\$75\.13 unrealized ÷ ≈?\$624\.88 cost/)
     const daiReturn = explainPortfolio(DEMO_WALLET, "average", { kind: "asset", asset: "DAI", metric: "return" })!
     assert.equal(daiReturn.value, null)
     assert.match(daiReturn.lines.join(" "), /unknown cost, so there's no return/)
     const price = explainPortfolio(DEMO_WALLET, "average", { kind: "asset", asset: "AERO", metric: "price" })!
     assert.equal(price.title, "AERO: Price")
-    assert.equal(price.value, "$1.40")
+    assert.equal(price.value, "≈$1.40")
     assert.match(price.lines[0] as string, /^Current price: \$1\.40/)
     for (const metric of ["price", "return"]) assert.deepEqual(parseExplainTarget(new URLSearchParams({ asset: "AERO", metric })), { kind: "asset", asset: "AERO", metric })
   })
@@ -189,7 +189,7 @@ describe("portfolioOf", () => {
   })
 
   it("still explains a total that's only partial, with its value", () => {
-    assert.equal(explainPortfolio(DEMO_WALLET, "average", { kind: "total", metric: "pnl" })?.value, "+$149.30")
+    assert.equal(explainPortfolio(DEMO_WALLET, "average", { kind: "total", metric: "pnl" })?.value, "≈+$149.30")
   })
 
   it("leads each movement with a plain sentence in money, and says what isn't known", () => {
@@ -203,7 +203,7 @@ describe("portfolioOf", () => {
     assert.ok(eth.some(([summary]) => summary === "Paid $0.10 in network fees."))
     assert.ok(eth.some(([summary, unknown]) => summary === "Received $47.84 of ETH." && unknown === "What this cost isn't known yet."))
     // Money after "Bought" would read as what was paid, which isn't known here.
-    assert.deepEqual(legs("VIRTUAL"), [["Bought 50 VIRTUAL, worth $105.00.", "What this cost isn't known yet."]])
+    assert.deepEqual(legs("VIRTUAL"), [["Bought 50 VIRTUAL, worth about $105.00.", "What this cost isn't known yet."]])
   })
 
   describe("says what's actually missing when a gain isn't known", () => {
