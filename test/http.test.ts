@@ -8,7 +8,8 @@ import { after, before, describe, it } from "node:test"
 import { createApi } from "../server/app.ts"
 import { createHandler } from "../server/http.ts"
 import { createWallets, datasetSource, describeError, isNotStarted, settledThrough, type Query, type ReadL1Fees, type Source, type StreamRange, type StreamRanges } from "@pricetag/sdk/internal"
-import { resolvingSource, settledL1Fees, sharedReads } from "../server/source.ts"
+import type { Approvals } from "../server/approvals.ts"
+import { resolvingSource, settledL1Fees, sharedReads, type SharedReads } from "../server/source.ts"
 import { ETH_ADDRESS, encodeNote, marketPrice } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../src/core/api.ts"
 import { eachPart } from "./support/fake-amp.ts"
@@ -839,5 +840,159 @@ describe("head reads that overlap", () => {
     await first
     assert.equal((await read("c")).latest.blockNum, 1010)
     server.close()
+  })
+
+  /** An API following a chain the test controls, with one head read it can hold, and every head a request went on to use. */
+  async function reorging(shared?: SharedReads) {
+    const at = (blockNum: number) => ({ blockNum, timestamp: "2026-11-04T00:00:00.000Z" })
+    let tip = 110
+    let held: { answer: number; gate: Promise<void> } | null = null
+    const asked: (number | null)[] = []
+    const used: number[] = []
+    const source: Source = {
+      mode: "raw",
+      startBlock: null,
+      historyFrom: (head) => head - 100,
+      head: async (after) => {
+        asked.push(after)
+        const read = held
+        held = null
+        if (read) await read.gate
+        const answer = read?.answer ?? tip
+        return answer >= (after ?? 0) ? at(answer) : null
+      },
+      processedThrough: async (_, head) => head,
+      readWindow: async () => ({ rows: [], priced: null, gasUnknown: [] }),
+      readReferences: async () => [],
+      readLatestReference: async () => null,
+      readBalances: async () => null,
+      readEthBalances: async () => new Map(),
+    }
+    const hand = { send: (_: StreamRange) => {} }
+    const queued: StreamRange[] = []
+    const stream: StreamRanges = async function* (_sql, _resume, signal) {
+      while (!signal.aborted) {
+        const next = queued.shift()
+        if (next) yield next
+        else await new Promise<void>((resolve) => {
+          hand.send = (range) => {
+            queued.push(range)
+            resolve()
+          }
+          signal.addEventListener("abort", () => resolve())
+        })
+      }
+    }
+    const api = createApi({}, {
+      source,
+      readRates: async (_, { latest }) => {
+        used.push((latest as { blockNum: number }).blockNum)
+        return { byBlock: {}, latest: null }
+      },
+      proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null },
+      follow: { stream, sql: "SELECT 1", readMark: async () => ({ blockNum: tip, hash: `0x${tip}` }), logger: { warn() {} }, pollMs: 1, tickMs: 0 },
+      approvals: {
+        read: async (_, head) => {
+          used.push(head.blockNum)
+          return { spenders: [] } as unknown as Awaited<ReturnType<Approvals["read"]>>
+        },
+      },
+      ...(shared ? { shared } : {}),
+    }, null)
+    const server = createServer((req, res) => void api(req, res))
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+    const stop = new AbortController()
+    const events = (await fetch(`${base}/api/events`, { signal: stop.signal })).body!.getReader()
+    return {
+      asked,
+      used,
+      base,
+      /** Replaces the chain from block 100 on with a shorter one that ends at 105. */
+      reorg() {
+        tip = 105
+        hand.send({ start: 100, end: 105, hash: "0xnew", complete: true })
+      },
+      /** The next head read answers `answer`, from the old chain, once `gate` lets it. */
+      hold(answer: number, gate: Promise<void>) {
+        held = { answer, gate }
+      },
+      async headEvent(): Promise<number> {
+        for (let seen = ""; ; ) {
+          seen += new TextDecoder().decode((await events.read()).value)
+          const head = /event: head\ndata: (\{.*\})\n\n/.exec(seen)
+          if (head) return (JSON.parse(head[1]!) as { blockNum: number }).blockNum
+        }
+      },
+      close() {
+        stop.abort()
+        server.closeAllConnections()
+        server.close()
+      },
+    }
+  }
+
+  for (const [name, path] of [
+    ["an approvals read", `/api/approvals/0x${"a".repeat(40)}`],
+    ["an exchange rate read", "/api/rate?currency=EUR"],
+  ] as const) {
+    it(`throws away the old chain's head when ${name} spans a reorg`, async () => {
+      const chain = await reorging()
+      try {
+        assert.equal((await fetch(chain.base + path)).status, 200)
+        assert.equal(chain.used.at(-1), 110)
+
+        let release = () => {}
+        chain.hold(120, new Promise<void>((resolve) => (release = resolve)))
+        const spanning = fetch(chain.base + path)
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        chain.reorg()
+        assert.equal(await chain.headEvent(), 105)
+
+        release()
+        assert.equal((await spanning).status, 200)
+        assert.equal(chain.used.at(-1), 105, "the request reads the head again")
+        assert.equal((await fetch(chain.base + path)).status, 200)
+        assert.equal(chain.used.at(-1), 105, "and so does the next")
+        assert.equal(chain.asked.at(-1), 105, "the next head read starts from the replacement chain")
+      } finally {
+        chain.close()
+      }
+    })
+  }
+
+  it("throws away the old chain's head when it lands while a reorg is still being applied", async () => {
+    let applied = () => {}
+    const applying = new Promise<void>((resolve) => (applied = resolve))
+    let rewinding = () => {}
+    const started = new Promise<void>((resolve) => (rewinding = resolve))
+    const chain = await reorging({
+      rewind: () => {
+        rewinding()
+        return applying
+      },
+    } as unknown as SharedReads)
+    const path = `/api/approvals/0x${"a".repeat(40)}`
+    try {
+      assert.equal((await fetch(chain.base + path)).status, 200)
+
+      let release = () => {}
+      chain.hold(120, new Promise<void>((resolve) => (release = resolve)))
+      const spanning = fetch(chain.base + path)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      chain.reorg()
+      await started
+
+      release()
+      assert.equal((await spanning).status, 200)
+      assert.equal(chain.used.at(-1), 110, "the old chain's newer head isn't taken up, though the reorg hasn't lowered the last one yet")
+
+      applied()
+      assert.equal(await chain.headEvent(), 105)
+      assert.equal((await fetch(chain.base + path)).status, 200)
+      assert.equal(chain.used.at(-1), 105)
+    } finally {
+      chain.close()
+    }
   })
 })

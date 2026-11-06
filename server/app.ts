@@ -218,12 +218,17 @@ export function createApi(env: Env, created: Created | null = createSource(env),
 
   let head: Head | null = null
   let headReadAt = 0
+  /** Goes up when a reorg starts and when it's been applied, so a read of the head can tell it spanned one. */
+  let headRewinds = 0
   const subscribers = new Set<ServerResponse>()
   let following: AbortController | null = null
 
   async function pollHead(): Promise<Head> {
     if (!source) throw new Error("No Amp source")
+    const startedAt = headRewinds
     const next = await source.head(head?.blockNum ?? null)
+    // What it found can be the replaced chain's, and higher than the new one, so its height says nothing. Only `rewindTo` changes this, so it can't go on for long.
+    if (startedAt !== headRewinds) return pollHead()
     // Reads overlap, so one that started first can finish last. A reorg lowers the head through `rewindTo`, not here.
     if (next && (!head || next.blockNum >= head.blockNum)) {
       head = next
@@ -242,6 +247,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
 
   /** Blocks some already-read wallets hold were replaced. The next read of each replaces them, however far back it was. */
   async function rewindTo(block: number, tip: number) {
+    headRewinds += 1
     const oldTip = Math.max(head?.blockNum ?? 0, tip)
     readL1Fees.rewind(block, oldTip)
     await Promise.all([created?.shared?.rewind(block, oldTip), ...[...new Set([wallets, ...rules.map((r) => r.wallets)])].map((w) => w?.rewind(block, oldTip))])
@@ -249,6 +255,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     // The new chain can be shorter, and the head is only read from the last one on.
     if (head && head.blockNum >= block) head = { ...head, blockNum: block - 1 }
     headReadAt = 0
+    headRewinds += 1
   }
 
   // Only follows the chain while something is watching.
