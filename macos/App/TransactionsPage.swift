@@ -104,7 +104,7 @@ struct TransactionsPage<Notices: View>: View {
             Spacer(minLength: 8)
             Text(count(of: log))
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .monospacedDigit()
         }
         .padding(.horizontal, 12)
@@ -311,7 +311,7 @@ private struct TransactionsTable: View {
         HStack(spacing: 6) {
             switch item.status {
             case .pending:
-                Text("On its way").font(.caption).foregroundStyle(.secondary)
+                Text("On its way").font(.caption).secondaryText()
             case .failed:
                 Text("Failed").font(.caption.weight(.medium)).foregroundStyle(Tone.warning.style)
                     .help("It didn't go through. Its network fee was still spent.")
@@ -339,7 +339,7 @@ private struct TransactionsTable: View {
             if !(isNarrow || showsWallets) || fixable == nil {
                 Text("Cost unknown")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .lineLimit(1)
                     .fixedSize()
                     .help("What you paid for \(list(item.unknownCost)) is unknown, so it isn't in your PnL.")

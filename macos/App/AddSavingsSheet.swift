@@ -69,7 +69,7 @@ struct AddColdWalletSheet: View {
         case .ledgerPlugIn: StepPage(page: page, picture: .ledger(screen: "Enter PIN"), model: model, showsTrouble: showsTrouble)
         case .ledgerApp: StepPage(page: page, picture: .ledger(screen: "Ethereum\napp is ready"), model: model, showsTrouble: showsTrouble)
         case .ledgerQuit: LedgerQuitStep(page: page, model: model, isOpen: mac.ledgerWalletIsOpen)
-        case .ledgerBrowser: LedgerBrowserStep(page: page, model: model, showsTrouble: showsTrouble, browsers: mac.browsers, open: { browser in
+        case .ledgerBrowser: LedgerBrowserStep(page: page, model: model, server: server, showsTrouble: showsTrouble, browsers: mac.browsers, open: { browser in
             if let link = DeviceFlow.addSavingsFromLedger(server: server) { mac.browsers.open(link, browser) }
         })
         case .keystoneUnlock: StepPage(page: page, picture: .keystone(showsCode: false), model: model, showsTrouble: showsTrouble)
@@ -144,7 +144,7 @@ private struct PickDevice: View {
                                 .font(.headline)
                             Text(AddSavingsWording.deviceSubtitle(device))
                                 .font(.callout)
-                                .foregroundStyle(.secondary)
+                                .secondaryText()
                         }
                         Spacer(minLength: 0)
                         Image(systemName: "chevron.right")
@@ -158,7 +158,7 @@ private struct PickDevice: View {
             }
             Label(AddSavingsWording.neverAsked, systemImage: "lock.shield")
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -259,7 +259,7 @@ private struct TroubleList: View {
                     ForEach(troubles, id: \.when) { trouble in
                         VStack(alignment: .leading, spacing: 1) {
                             Text(trouble.when).fontWeight(.medium)
-                            Text(trouble.then).foregroundStyle(.secondary)
+                            Text(trouble.then).secondaryText()
                         }
                         .fixedSize(horizontal: false, vertical: true)
                     }
@@ -285,7 +285,7 @@ private struct LedgerQuitStep: View {
             } else {
                 Label("It's closed.", systemImage: "checkmark.circle.fill")
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
             }
         }
         .onAppear { isStillOpen = isOpen() }
@@ -297,6 +297,7 @@ private struct LedgerQuitStep: View {
 private struct LedgerBrowserStep: View {
     let page: AddSavingsWording.Page
     let model: AddSavingsModel
+    let server: URL
     let showsTrouble: Bool
     let browsers: DeviceBrowsers
     let open: (InstalledBrowser?) -> Void
@@ -362,9 +363,9 @@ private struct LedgerBrowserStep: View {
             }
             Text("This page moves on by itself when the address arrives.")
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .secondaryText()
             Button("Open \(browser.name) Again") { open(browser) }
-            TroubleList(troubles: AddSavingsWording.browserTroubles, isExpanded: showsTrouble)
+            TroubleList(troubles: AddSavingsWording.browserTroubles(server: server), isExpanded: showsTrouble)
         }
     }
 }
@@ -396,7 +397,7 @@ private struct KeystoneScanStep: View {
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     Text(AddSavingsWording.camera)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                     if let problem = model.scanProblem {
                         WarningText(problem).font(.callout)
                     }
@@ -480,7 +481,7 @@ private struct CheckStep: View {
             }
             Text(AddSavingsWording.checkWarning)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .fixedSize(horizontal: false, vertical: true)
             if !model.suggestedAccounts.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
@@ -497,7 +498,7 @@ private struct CheckStep: View {
                     }
                     Text("Costs will follow what moves to and from the ones you tick, and no money is sent there. Leave out any you don't recognize.")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }

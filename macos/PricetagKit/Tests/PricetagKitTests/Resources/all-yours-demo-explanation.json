@@ -1,17 +1,18 @@
 {
   "currency": "USD",
   "title": "Total PnL",
-  "value": "+$149.30",
+  "value": "≈+$149.30",
   "sourceValue": null,
   "lines": [
-    "Realized +$74.99, unrealized +$75.13, less $0.81 of network fees."
+    "Realized +$74.99, unrealized ≈+$75.13, less $0.81 of network fees.",
+    "This is an estimate, because part of it rests on a market price or an exchange rate."
   ],
   "parts": [
     {
       "wallet": "0x00000000000000000000000000000000000de300",
-      "value": "+$149.30",
+      "value": "≈+$149.30",
       "lines": [
-        "Realized +$74.99, unrealized +$75.13, less $0.81 of network fees.",
+        "Realized +$74.99, unrealized ≈+$75.13, less $0.81 of network fees.",
         "Not included: DAI (unknown cost).",
         "Not included: USDC (sold or spent at an unknown cost).",
         "Not included: USDC (sold or spent at an unknown price).",
@@ -19,7 +20,8 @@
         "Not included: ETH (sold or spent at an unknown cost).",
         "Not included: ETH (unknown cost).",
         "Not included: cbBTC (doesn't match its actual balance).",
-        "Not included: VIRTUAL (unknown cost)."
+        "Not included: VIRTUAL (unknown cost).",
+        "This is an estimate, because part of it rests on a market price or an exchange rate."
       ]
     },
     {
@@ -76,9 +78,9 @@
       "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000c",
       "opening": false,
       "summary": "Sent $5.24 of ETH, with no gain or loss.",
-      "unknown": null,
-      "answerable": false,
-      "effect": "Sent out with $4.71 of known cost, so no gain or loss",
+      "unknown": "What part of this cost isn't known yet.",
+      "answerable": true,
+      "effect": "Sent out with $4.71 of known cost, and 0.0000391 ETH at an unknown cost, so no gain or loss",
       "netting": null,
       "conversion": null,
       "wallet": "0x00000000000000000000000000000000000de300"
@@ -250,7 +252,7 @@
       "timestamp": "2026-11-04T10:20:00.000Z",
       "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000a",
       "opening": false,
-      "summary": "Bought 50 VIRTUAL, worth $105.00.",
+      "summary": "Bought 50 VIRTUAL, worth about $105.00.",
       "unknown": "What this cost isn't known yet.",
       "answerable": true,
       "effect": "Adds 50 VIRTUAL at an unknown cost",
@@ -350,7 +352,7 @@
       "timestamp": "2026-11-04T09:40:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000008",
       "opening": false,
-      "summary": "Received $1,360.00 of cbBTC.",
+      "summary": "Received about $1,360.00 of cbBTC.",
       "unknown": "What this cost isn't known yet.",
       "answerable": true,
       "effect": "Adds 0.02 cbBTC at an unknown cost",
@@ -475,7 +477,7 @@
       "timestamp": "2026-11-04T08:40:00.000Z",
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000005",
       "opening": false,
-      "summary": "Received $199.98 of USDT.",
+      "summary": "Received about $199.98 of USDT.",
       "unknown": null,
       "answerable": false,
       "effect": "Adds 200 USDT for about $199.98, from the price when it arrived",
@@ -701,9 +703,9 @@
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000001",
       "opening": false,
       "summary": "Sent $4,999.00 of USDC, with no gain or loss.",
-      "unknown": null,
-      "answerable": false,
-      "effect": "Sent out with $3,990.00 of known cost, so no gain or loss",
+      "unknown": "What part of this cost isn't known yet.",
+      "answerable": true,
+      "effect": "Sent out with $3,990.00 of known cost, and 1,000 USDC at an unknown cost, so no gain or loss",
       "netting": null,
       "conversion": null,
       "wallet": "0x00000000000000000000000000000000000de301"

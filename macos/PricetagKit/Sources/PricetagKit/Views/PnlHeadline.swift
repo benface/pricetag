@@ -48,6 +48,7 @@ public struct PortfolioSummary: View {
             statLabel("Value · \(portfolio.currency.rawValue)")
                 .help(portfolio.partialValueReason ?? "")
                 .updatingMark(.trailing)
+                .staleMark(.trailing)
                 // The number's own label says all of this.
                 .accessibilityHidden(true)
             Button { onOpen(.value) } label: {
@@ -64,6 +65,7 @@ public struct PortfolioSummary: View {
             statLabel("Total PnL")
                 .help(Wording.pnlHelp)
                 .updatingMark(.trailing)
+                .staleMark(.trailing)
                 .accessibilityHidden(true)
             Button { onOpen(.pnl) } label: {
                 big(pnl, size: size * 0.6, tone: isLive ? portfolio.totalPnlTone : .neutral)

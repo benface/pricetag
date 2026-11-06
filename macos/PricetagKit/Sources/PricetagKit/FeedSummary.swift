@@ -37,6 +37,7 @@ public struct FeedSummary: Equatable, Sendable {
         case .rejected: (text, isWarning) = ("Can't read", true)
         case .tooBig: (text, isWarning) = ("Too much history", true)
         case .rateLimited: (text, isWarning) = ("Slowed down", true)
+        case .walletsOutdated: (text, isWarning) = ("Can't update", true)
         case .live:
             guard let portfolio else {
                 (text, isWarning) = ("Reading…", false)
@@ -82,6 +83,13 @@ public struct FeedProblem: Equatable, Sendable {
     public let detail: String?
 }
 
+extension URL {
+    /// Where saying "on this Mac" and "start it" is true.
+    public var isOnThisMac: Bool {
+        ["127.0.0.1", "localhost", "::1"].contains(host()?.lowercased() ?? "")
+    }
+}
+
 extension FeedState {
     /// How long a read goes before it's worth saying how long it's been. Most finish sooner.
     public static let longReadSeconds = 5
@@ -90,13 +98,14 @@ extension FeedState {
     public func problem(serverURL: URL, portfolio: Portfolio?) -> FeedProblem? {
         let title: String, what: String, next: String, detail: String?
         switch self {
-        case .noWallet, .reading, .live, .catchingUp: return nil
+        // Each wallet's notice says this, by name.
+        case .noWallet, .reading, .live, .catchingUp, .walletsOutdated: return nil
         case .behind(let seconds):
             title = "Prices Are Running Behind"
             what = "Prices are \(Self.age(seconds)) behind the network, so the newest transactions may be missing."
             next = "This usually catches up by itself."
             detail = "The newest block in the data is \(Self.age(seconds)) old."
-        case .serverUnreachable where Self.isOnThisMac(serverURL):
+        case .serverUnreachable where serverURL.isOnThisMac:
             title = "The Price Service Isn't Running"
             what = "The price service on this Mac isn't running."
             next = "Start it, then try again."
@@ -119,12 +128,12 @@ extension FeedState {
         case .noAmpConfigured(let message):
             title = "No Price Data Set Up"
             what = "The price service has no data source, so only the demo wallet works."
-            next = "Set one up, then restart the price service."
-            detail = "The price service said: \(message) Its data source goes in .env.local."
+            next = serverURL.isOnThisMac ? "Set one up, then restart the price service." : "Whoever runs it needs to set one up."
+            detail = "The price service said: \(message)" + (serverURL.isOnThisMac ? " Its data source goes in .env.local." : "")
         case .rejected(let message):
             title = "Couldn't Read This Wallet"
             what = "The price service turned this request down."
-            next = "Try again. If it keeps happening, restart the price service."
+            next = serverURL.isOnThisMac ? "Try again. If it keeps happening, restart the price service." : "Try again. If it keeps happening, let whoever runs the price service know."
             detail = "The price service said: \(message)"
         case .tooBig(let message):
             title = "Too Much History to Read"
@@ -151,7 +160,7 @@ extension FeedState {
     /// `problem` in a few words, for the menu bar's view. nil when nothing is wrong.
     public func shortProblem(portfolio: Portfolio?) -> String? {
         switch self {
-        case .noWallet, .reading, .live: nil
+        case .noWallet, .reading, .live, .walletsOutdated: nil
         case .catchingUp: portfolio.flatMap(Wording.shortCatchingUp)
         case .behind(let seconds): "Prices are \(Self.age(seconds)) behind"
         case .serverUnreachable: "Price service is down"
@@ -162,11 +171,6 @@ extension FeedState {
         case .tooBig: "Too much history to read"
         case .rateLimited: "Slowed down for a moment"
         }
-    }
-
-    /// Where saying "on this Mac" and "start it" is true.
-    private static func isOnThisMac(_ url: URL) -> Bool {
-        ["127.0.0.1", "localhost", "::1"].contains(url.host() ?? "")
     }
 
     private static func age(_ seconds: Int) -> String {

@@ -6,12 +6,12 @@
 // once, in the wallet that paid it. Only what counts money in and out of the user's wallets, like the comparison with
 // holding ETH, has to leave moves out by name.
 
-import { CHECK_LABELS } from "./wording.ts"
+import { CHECK_LABELS, ESTIMATE_LINE, est } from "./wording.ts"
 import { NO_FACTS, combinedFacts, type TransactionFacts } from "./activity.ts"
-import { assertFoldsFit, combineOtherTokens, compareWithHoldingEth, formatAmount, formatMoney, formatPrice, formatReturn, formatSignedMoney, hasStarted, pnlOverTime, pnlStatus as statusOf, returnBps, sumTotals, unconfirmedAssets, type CurrencyCode, type Exclusion, type HoldComparison, type LatestPrices, type LegEffect, type MarkPrice, type Method, type PnlPoint, type Position, type PricedLeg, type Reconciliation, type Totals } from "@pricetag/sdk/core"
-import type { BookPoint, BookPreview, ExplanationLeg, ExplanationResponse, PortfolioPosition, PortfolioResponse, WalletResponse } from "./api.ts"
+import { assertFoldsFit, combineOtherTokens, compareWithHoldingEth, firstMarks, formatAmount, formatMoney, formatPrice, formatReturn, formatSignedMoney, hasStarted, pnlOverTime, pnlStatus as statusOf, returnBps, sumTotals, unconfirmedAssets, type CurrencyCode, type Exclusion, type HoldComparison, type LatestPrices, type LegEffect, type MarkPrice, type Method, type PnlPoint, type Position, type PricedLeg, type Reconciliation, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { isBehind, type BookPoint, type BookPreview, type ExplanationLeg, type ExplanationResponse, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "./api.ts"
 import type { Book } from "./book.ts"
-import { explainHold, explainPoint, explainTarget, explainTotal, type ExplainTarget, type Explanation, type Metric } from "./explain.ts"
+import { explainHold, explainPoint, explainTarget, explainTotal, metricIsEstimate, totalIsEstimate, type ExplainTarget, type Explanation, type Metric } from "./explain.ts"
 import { exportCsv } from "./export.ts"
 import { foldBook, meterOf, type BookFold, type Question } from "./resolve.ts"
 import { isMove, movesBetween } from "./tax.ts"
@@ -21,8 +21,11 @@ import { MAX_LEGS, bookContext, legOf, responseOf } from "./portfolio.ts"
 /** What a client asks for in place of an address, for all of its user's wallets at once. */
 export const ALL_YOURS = "all"
 
-/** How far each wallet's read has got. One that's still reading or failed isn't in the numbers yet. */
-export type CombinedWallet = { address: string; state: "read" | "reading" | "failed" }
+/**
+ * How far each wallet's read has got. One that's still reading or failed isn't in the numbers yet. One that's updating, or
+ * outdated because its latest read failed, is in them as it was last read, and so is every other wallet, at that same block.
+ */
+export type CombinedWallet = { address: string; state: "read" | "reading" | "failed" | "updating" | "outdated" }
 
 /** One wallet's share of a holding, so an unknown can say where it is. */
 export type PositionPart = Pick<PortfolioPosition["values"], "qty" | "unknownCostQty" | "costMicros" | "valueMicros"> & { wallet: string; pnlMicros: string | null; resolvable: boolean; reconciliation: Reconciliation["status"] | null }
@@ -36,13 +39,48 @@ export type CombinedPortfolioResponse = Omit<PortfolioResponse, "positions" | "p
   totals: Omit<Totals, "excluded"> & { excluded: (Exclusion & { wallet: string })[] }
   points: CombinedPoint[]
   wallets: CombinedWallet[]
+  /** Wallets being read again, whose last read is what's in the numbers. */
+  linkedUpdating: string[]
+  /** Wallets whose latest read failed, whose last good read is what's in the numbers. */
+  linkedOutdated: string[]
 }
 
-/** Which wallets aren't in the numbers yet. */
-export type Unread = { reading: readonly string[]; failed: readonly string[] }
+/** Which wallets aren't in the numbers yet, and which are only in them as they were last read. */
+export type Unread = { reading: readonly string[]; failed: readonly string[]; updating?: readonly string[]; outdated?: readonly string[] }
 
 /** Every wallet that could be read, all at one block so a move between them is in both or neither, for a client that runs the fold itself. */
 export type AllYoursRead = { wallets: WalletResponse[]; unread: Unread }
+
+/**
+ * What to show after `next`, given that `last` is on screen and asks the same thing. The server keeps the last answer too, but
+ * it can run out of room for it. So when a wallet that's in `last` isn't in `next`, `last` stands, whole and at its one block
+ * so a move can't count twice, with that wallet updating or outdated. A wallet that's no longer one of them takes `next`.
+ */
+export function holdLastRead(last: AllYoursRead, next: AllYoursRead): AllYoursRead {
+  const kept = new Set(last.wallets.map((wallet) => wallet.address.toLowerCase()))
+  const { reading, failed, updating = [], outdated = [] } = next.unread
+  const asked = new Set([...next.wallets.map((wallet) => wallet.address.toLowerCase()), ...reading, ...failed])
+  const isGone = [...kept].some((address) => !asked.has(address))
+  if (isGone || ![...reading, ...failed].some((address) => kept.has(address))) return next
+  const isNew = (address: string) => !kept.has(address)
+  return {
+    wallets: last.wallets,
+    unread: {
+      reading: [...asked].filter((address) => isNew(address) && !failed.includes(address)),
+      failed: failed.filter(isNew),
+      updating: [...kept].filter((address) => reading.includes(address) || updating.includes(address)),
+      outdated: [...kept].filter((address) => failed.includes(address) || outdated.includes(address)),
+    },
+  }
+}
+
+/** What the badge by the numbers says. Numbers that are only as they were last read aren't live, even when the server answered fine. `all` is All Yours' answer, when that's what's showing. */
+export function feedBadge(wallet: Pick<WalletResponse, "mode" | "coverage" | "latest">, failing: boolean, all: Pick<CombinedPortfolioResponse, "linkedReading" | "linkedUpdating" | "linkedOutdated"> | null): "Demo data" | "Not updating" | "Updating" | "Catching up" | "Live" {
+  if (wallet.mode === "demo") return "Demo data"
+  if (failing || (all?.linkedOutdated.length ?? 0) > 0) return "Not updating"
+  if ((all?.linkedReading.length ?? 0) + (all?.linkedUpdating.length ?? 0) > 0) return "Updating"
+  return isBehind(wallet) ? "Catching up" : "Live"
+}
 
 type Folded = { address: string; wallet: WalletResponse; others: WalletResponse[]; fold: BookFold }
 
@@ -61,12 +99,6 @@ function foldAll(read: readonly WalletResponse[], method: Method, book: Book): F
 }
 
 const unique = <T>(values: Iterable<T>) => [...new Set(values)]
-
-/** The first that has a price, since each wallet's reads only have the blocks it was read at. */
-const markOf =
-  (folded: readonly Folded[]): MarkPrice =>
-  (blockNum, asset) =>
-    folded.map(({ fold }) => fold.view.markPrice(blockNum, asset)).find((price) => price !== null) ?? null
 
 const noTotals = (): Totals => ({ ...sumTotals([]), valueMicros: null, realizedMicros: null, unrealizedMicros: null, gasMicros: null, pnlMicros: null })
 
@@ -94,6 +126,7 @@ function combinedCheck(checks: readonly (Reconciliation | null)[]): Reconciliati
     computedQty: sum(counted.map((check) => check.computedQty)),
     actualQty: sum(counted.map((check) => check.actualQty)),
     differenceQty: sum(counted.map((check) => check.differenceQty)),
+    ...(counted.some((check) => check.unrecordedQty) ? { unrecordedQty: sum(counted.map((check) => check.unrecordedQty ?? "0")) } : {}),
     ...(counted.some((check) => check.unseenEth) ? { unseenEth: counted.flatMap((check) => check.unseenEth ?? []) } : {}),
   }
 }
@@ -150,7 +183,7 @@ function combinedPositions(parts: readonly { wallet: string; position: Portfolio
  * and all of them marked at that moment's prices. Adding up each wallet's own points wouldn't do: they're marked at the prices
  * of their own transactions, not each other's.
  */
-function combinedPoints(started: readonly Folded[], mark: MarkPrice, latest: { blockNum: number; timestamp: string }, method: Method): PnlPoint[] {
+function combinedPoints(started: readonly Folded[], { markPrice, markEstimated }: Pick<WalletView, "markPrice" | "markEstimated">, latest: { blockNum: number; timestamp: string }, method: Method): PnlPoint[] {
   const key = (address: string, asset: string) => `${address}|${asset}`
   const assetOf = (keyed: string) => keyed.slice(keyed.indexOf("|") + 1)
   // Sorting is stable, so each wallet's order holds inside a transaction, and one transaction's legs stay together.
@@ -159,7 +192,7 @@ function combinedPoints(started: readonly Folded[], mark: MarkPrice, latest: { b
   for (const { address, fold } of started) for (const position of fold.positions) prices[key(address, position.asset)] = fold.view.prices[position.asset]
   const unconfirmed = new Set(started.flatMap(({ address, fold }) => [...unconfirmedAssets(fold.positions, fold.unread)].map((asset) => key(address, asset))))
   const noMarket = new Set(started.flatMap(({ address, fold }) => fold.totals.noMarket.map((asset) => key(address, asset))))
-  return pnlOverTime(legs, method, prices, (blockNum, keyed) => mark(blockNum, assetOf(keyed)), latest, unconfirmed, noMarket, started.flatMap(({ wallet }) => (wallet.priceSamples ?? []).map((sample) => sample.blockNum)))
+  return pnlOverTime(legs, method, prices, (blockNum, keyed) => markPrice(blockNum, assetOf(keyed)), latest, unconfirmed, noMarket, started.flatMap(({ wallet }) => (wallet.priceSamples ?? []).map((sample) => sample.blockNum)), (blockNum, keyed) => markEstimated(blockNum, assetOf(keyed)))
 }
 
 /** What a transaction did across the wallets. A move between them says so, rather than that one sent and another received. */
@@ -203,7 +236,7 @@ function combine(read: readonly WalletResponse[], method: Method, book: Book, { 
   const totals = { ...summed, excluded: started.flatMap(({ address, fold }) => fold.totals.excluded.map((exclusion) => ({ ...exclusion, wallet: address }))) }
   const status = statusOf(summed, gasUnknownTxs)
   const moves = movesBetween(started.map(({ wallet, fold }) => ({ wallet, view: { ...fold.view, legs: fold.legs } })))
-  const mark = markOf(folded)
+  const marks = firstMarks(folded.map(({ fold }) => fold.view))
   const latest = read.reduce((newest, wallet) => (wallet.latest.blockNum > newest.blockNum ? wallet.latest : newest), (read[0] as WalletResponse).latest)
 
   const walletOf = new Map<PricedLeg, string>()
@@ -222,7 +255,7 @@ function combine(read: readonly WalletResponse[], method: Method, book: Book, { 
     }
   }
   const everyWallet = new Set(started.map(({ address }) => address))
-  const points = combinedPoints(started, mark, latest, method).map((point): CombinedPoint => {
+  const points = combinedPoints(started, marks, latest, method).map((point): CombinedPoint => {
     const entries = point.txHash ? (byTx.get(point.txHash) ?? []) : []
     const legs = entries.map(({ leg }) => leg)
     const facts = point.txHash ? combinedFacts(legs, factsIn.get(point.txHash) ?? [], everyWallet) : NO_FACTS
@@ -232,19 +265,19 @@ function combine(read: readonly WalletResponse[], method: Method, book: Book, { 
   const holdPositions = walletPositions.map((position) => ({ ...position, effects: position.effects.filter(({ leg }) => !isMove(leg, moves)) }))
   // Each wallet's own latest prices, first one first, for the ETH that holding would have.
   const prices: LatestPrices = Object.assign({}, ...folded.map(({ fold }) => fold.view.prices).reverse())
-  const holdComparison = compareWithHoldingEth(holdPositions, summed, status, prices, mark)
+  const holdComparison = compareWithHoldingEth(holdPositions, summed, status, prices, marks.markPrice)
 
   // Each wallet's fold already asks about what arrived in any of them, so this only takes out the repeats.
   const questions = [...new Map(folded.flatMap(({ fold }) => fold.questions).map((question) => [question.id, question])).values()].sort((a, b) => {
     const [x, y] = [BigInt(a.valueMicros ?? "0"), BigInt(b.valueMicros ?? "0")]
     return x === y ? a.id.localeCompare(b.id) : x > y ? -1 : 1
   })
-  return { folded, started, responses, positions, walletPositions, totals, points, moves, holdPositions, holdComparison, questions, walletOf, mark }
+  return { folded, started, responses, positions, walletPositions, totals, points, moves, holdPositions, holdComparison, questions, walletOf, mark: marks.markPrice }
 }
 
 /**
  * The portfolio of every wallet in `read`, as one. `unread` is the wallets asked about that aren't read yet, or failed, which
- * aren't in the numbers, so they're listed apart. `read` needs at least one wallet, all in the same currency and by the same rule.
+ * aren't in the numbers, so they're listed apart, and which of `read` are only as they were last read. `read` needs at least one wallet, all in the same currency and by the same rule.
  */
 export function combinedPortfolioOf(read: readonly WalletResponse[], method: Method, book: Book, unread: Unread = { reading: [], failed: [] }): CombinedPortfolioResponse {
   const linking = linkingAll(book, [...read.map((wallet) => wallet.address), ...unread.reading, ...unread.failed])
@@ -279,13 +312,15 @@ export function combinedPortfolioOf(read: readonly WalletResponse[], method: Met
     points,
     holdComparison,
     questions,
-    meter: { ...meterOf(questions, linking, (folded[0] as Folded).wallet, waiting), waiting },
+    meter: { ...meterOf(questions, linking, (folded[0] as Folded).wallet, read, waiting), waiting },
     linkedReading: [...unread.reading],
     linkedFailed: [...unread.failed],
     withheld: [...withheld.values()],
     purchases: first.purchases,
     marketChecked: responses.every((r) => r.marketChecked),
-    wallets: [...read.map((wallet) => ({ address: wallet.address.toLowerCase(), state: "read" as const })), ...unread.reading.map((address) => ({ address, state: "reading" as const })), ...unread.failed.map((address) => ({ address, state: "failed" as const }))],
+    linkedUpdating: [...(unread.updating ?? [])],
+    linkedOutdated: [...(unread.outdated ?? [])],
+    wallets: [...read.map((wallet) => ({ address: wallet.address.toLowerCase(), state: unread.updating?.includes(wallet.address.toLowerCase()) ? ("updating" as const) : unread.outdated?.includes(wallet.address.toLowerCase()) ? ("outdated" as const) : ("read" as const) })), ...unread.reading.map((address) => ({ address, state: "reading" as const })), ...unread.failed.map((address) => ({ address, state: "failed" as const }))],
   }
 }
 
@@ -299,24 +334,24 @@ export type CombinedExplanation = Explanation & { parts: ExplanationPart[]; wall
 export type CombinedExplanationResponse = Omit<ExplanationResponse, "legs"> & { parts: ExplanationPart[]; legs: (ExplanationLeg & { wallet: string })[] }
 
 /** A holding's number across the wallets, the same way a wallet's own explanation shows it. */
-function assetValue({ asset, decimals, price, values, returnBps: bps, reconciliation }: CombinedPosition, metric: Metric, currency: CurrencyCode): string | null {
+function assetValue({ asset, decimals, price, values, returnBps: bps, reconciliation, estimates }: CombinedPosition, metric: Metric, currency: CurrencyCode): string | null {
   const unconfirmed = reconciliation !== null && reconciliation.status !== "reconciled"
   if (unconfirmed && (metric === "average" || metric === "return" || metric === "realized" || metric === "unrealized")) return null
   switch (metric) {
     case "amount":
       return `${formatAmount(values.qty, decimals)} ${asset}`
     case "average":
-      return values.averageCostMicros && formatPrice(values.averageCostMicros, currency)
+      return values.averageCostMicros && est(formatPrice(values.averageCostMicros, currency), estimates.cost)
     case "price":
-      return price && formatPrice(price.micros, currency)
+      return price && est(formatPrice(price.micros, currency), estimates.value)
     case "value":
-      return values.valueMicros && formatMoney(values.valueMicros, currency)
+      return values.valueMicros && est(formatMoney(values.valueMicros, currency), estimates.value)
     case "return":
-      return bps && formatReturn(bps)
+      return bps && est(formatReturn(bps), estimates.unrealized)
     case "realized":
-      return values.realizedMicros && formatSignedMoney(values.realizedMicros, currency)
+      return values.realizedMicros && est(formatSignedMoney(values.realizedMicros, currency), estimates.realized)
     case "unrealized":
-      return values.unrealizedMicros && formatSignedMoney(values.unrealizedMicros, currency)
+      return values.unrealizedMicros && est(formatSignedMoney(values.unrealizedMicros, currency), estimates.unrealized)
     case "onchain":
       return reconciliation?.status === "reconciled" ? `✓ ${CHECK_LABELS.reconciled}` : reconciliation?.status === "incomplete" ? `⚠ ${CHECK_LABELS.incomplete}` : CHECK_LABELS.unchecked
   }
@@ -350,22 +385,23 @@ export function explainAcross(read: readonly WalletResponse[], method: Method, t
 
   if (target.kind === "total") {
     const whole = explainTotal(walletPositions, totals as Totals, target.metric, usdLess)
-    return { currency, title: whole.title, value: whole.value, sourceValue: null, lines: target.metric === "pnl" ? whole.lines.slice(0, 1) : [], parts: partsOut, effects, walletOf: whose }
+    return { currency, title: whole.title, value: whole.value, sourceValue: null, lines: [...(target.metric === "pnl" ? whole.lines.slice(0, 1) : []), ...(whole.value !== null && totalIsEstimate(totals as Totals, target.metric) ? [ESTIMATE_LINE] : [])], parts: partsOut, effects, walletOf: whose }
   }
   if (target.kind === "asset") {
     const position = positions.find((p) => p.asset === target.asset)
     if (!position || parts.length === 0) return null
     const { title } = (parts[0] as (typeof parts)[number]).explanation
-    const lines = parts.length > 1 ? [`Across ${parts.length} of your wallets.`] : []
+    const value = assetValue(position, target.metric, currency)
+    const lines = [...(parts.length > 1 ? [`Across ${parts.length} of your wallets.`] : []), ...(value !== null && metricIsEstimate(position, target.metric) ? [ESTIMATE_LINE] : [])]
     // The same price in every wallet that holds it, so any of them can show where it comes from.
     const priced = parts.find(({ explanation }) => explanation.priceProof)
     const priceProof = priced?.explanation.priceProof ? { priceProof: { ...priced.explanation.priceProof, wallet: priced.wallet } } : {}
-    return { currency, title, value: assetValue(position, target.metric, currency), sourceValue: null, lines, ...priceProof, parts: partsOut, effects, walletOf: whose }
+    return { currency, title, value, sourceValue: null, lines, ...priceProof, parts: partsOut, effects, walletOf: whose }
   }
   const point = points.find((p) => p.txHash === target.txHash)
   if (!point) return null
   const whole = explainPoint(walletPositions, point, usdLess)
-  const lines = [`Total PnL across your wallets after this transaction.${point.excludedCount > 0 ? ` Leaves out ${point.excludedCount} unknown ${point.excludedCount === 1 ? "amount" : "amounts"}.` : ""}`]
+  const lines = [`Total PnL across your wallets after this transaction.${point.excludedCount > 0 ? ` Leaves out ${point.excludedCount} unknown ${point.excludedCount === 1 ? "amount" : "amounts"}.` : ""}`, ...(point.pnlMicros !== null && point.pnlEstimated ? [ESTIMATE_LINE] : [])]
   return { currency, title: whole.title, value: whole.value, sourceValue: null, lines, parts: partsOut, effects, walletOf: whose }
 }
 

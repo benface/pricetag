@@ -70,6 +70,15 @@ struct ContrastTests {
         if !dark { #expect(try rendered(Text("8888").font(big).foregroundStyle(.secondary), dark: false) < 4.5) }
     }
 
+    /// A selected row's accent color isn't what the quiet color was measured on, so there it's the text color, the same as a number.
+    @Test(arguments: [false, true])
+    func secondaryTextOnASelectedRowIsTheTextColor(dark: Bool) throws {
+        let text = Text("8888").font(.system(size: 60, weight: .bold))
+        let selected = try rendered(text.secondaryText().environment(\.backgroundProminence, .increased), dark: dark)
+        let expected = try rendered(text.foregroundStyle(.primary).environment(\.backgroundProminence, .increased), dark: dark)
+        #expect(abs(selected - expected) < 0.01, "measured \(selected), and the text color measured \(expected)")
+    }
+
     /// At the biggest and smallest sizes it's really used, where thin strokes come out lighter: the worth under an amount, and "Leaves out 2 unknown".
     /// Faded, with Increase Contrast on, and on the chart tooltip's material. It yields between renders, because other tests wait on the main thread against a deadline.
     @Test(arguments: [false, true])

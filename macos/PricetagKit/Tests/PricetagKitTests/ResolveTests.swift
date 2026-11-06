@@ -31,7 +31,7 @@ actor BookSource: PortfolioSource {
         return portfolios.count > 1 ? portfolios.removeFirst() : portfolios[0]
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation {
         throw FetchError.unreachable
     }
 
@@ -42,7 +42,7 @@ actor BookSource: PortfolioSource {
         return previewAnswers
     }
 
-    func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> String {
+    func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> String {
         books.append(book)
         return ""
     }

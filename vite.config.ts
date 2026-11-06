@@ -3,6 +3,8 @@ import { createApi } from "./server/app.ts"
 
 export default defineConfig(({ command, mode }) => ({
   server: { host: "127.0.0.1", port: 5173 },
+  // What the Mac app carries, for when it reads a hosted server: `macos/device-pages.sh`.
+  ...(mode === "device-pages" ? { build: { outDir: "macos/build/device-pages", emptyOutDir: true, rollupOptions: { input: "device.html" } } } : {}),
   // Keystone's packages expect Node's. The trailing slashes are what pick the packages over the built-ins.
   resolve: { alias: { buffer: "buffer/", events: "events/", stream: "readable-stream" } },
   plugins: [
