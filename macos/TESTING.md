@@ -46,7 +46,7 @@ macos/shot.sh all some-folder --accessibility        # every scene, one file eac
 
 This writes the tree macOS builds for VoiceOver, from the same offscreen render: each element's label, value and role, in reading order. It needs Accessibility in System Settings for whatever runs the script, because SwiftUI only builds the tree once an assistive app has asked. `AccessibilityTree` does the same in a Swift test, and those tests only run when it's allowed (see `AccessibilityTests.swift`).
 
-It shows what's said and in what order, not how VoiceOver pronounces it or where its cursor goes. It also leaves out a table's rows, which an offscreen table doesn't make, and the route-* scenes, which need a real window. Both stay on benface's checklist.
+It shows what's said and in what order, and ends a line with `{spelled out: …}` for any part that's marked to be said a character at a time. It doesn't show how VoiceOver pronounces it or where its cursor goes. It also leaves out a table's rows, which an offscreen table doesn't make, and the route-* scenes, which need a real window. Both stay on benface's checklist.
 
 macOS doesn't give other apps Dynamic Type: SwiftUI's text styles stay the same size whatever `dynamicTypeSize` says. Larger text on a Mac comes from the display's "Larger Text" setting, which makes the screen smaller, so the small-window scenes (`main-smallest`, `settings-small-display` and the like) are the check for it.
 

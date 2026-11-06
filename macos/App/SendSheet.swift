@@ -168,7 +168,7 @@ private struct SendForm: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(Text("Sending to, ") + Text(Spoken.address(address.checksummed)).speechSpellsOutCharacters())
+                    .accessibilityLabel(Spoken.address(address.checksummed, after: "Sending to, "))
             }
             Spacer(minLength: 0)
             Button("Change Address", systemImage: "xmark.circle.fill") {
