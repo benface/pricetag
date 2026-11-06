@@ -359,6 +359,8 @@
   "withheld": [],
   "purchases": [],
   "marketChecked": true,
+  "linkedUpdating": [],
+  "linkedOutdated": [],
   "wallets": [
     {
       "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

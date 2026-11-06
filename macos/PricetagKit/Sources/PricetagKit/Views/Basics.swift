@@ -113,9 +113,10 @@ extension [String: String] {
 
 extension PortfolioStore {
     /// nil unless there are numbers on screen that this read may change. All Yours also changes when a wallet that's still
-    /// being read is done, so it says so until then.
+    /// being read, or read again, is done, so it says so until then.
     public var updatingNote: String? {
         guard let portfolio else { return nil }
+        if portfolio.isAllYours, let updating = portfolio.linkedUpdating, !updating.isEmpty, !feed.isStale { return Wording.updatingLastRead(updating.count) }
         if feed == .reading { return Wording.updating(lastUpdate: portfolio.latest.date.map(Format.time) ?? portfolio.latest.timestamp) }
         if portfolio.isAllYours, !portfolio.linkedReading.isEmpty, !feed.isStale { return Wording.updatingWallets(portfolio.linkedReading.count) }
         return nil
@@ -161,6 +162,12 @@ extension PortfolioStore {
         if !portfolio.linkedReading.isEmpty {
             messages.append(portfolio.isAllYours ? Wording.allYoursReading(portfolio.linkedReading.map(names.walletName)) : Wording.linkedReading(portfolio.linkedReading.count))
         }
+        if let outdated = portfolio.linkedOutdated, !outdated.isEmpty {
+            messages.append(Wording.allYoursOutdated(outdated.map(names.walletName)))
+        }
+        if let updating = portfolio.linkedUpdating, !updating.isEmpty {
+            messages.append(Wording.allYoursUpdating(updating.map(names.walletName)))
+        }
         return messages
     }
 
@@ -171,7 +178,7 @@ extension PortfolioStore {
 
     /// Whether trying again could change what `statusMessages` says. Catching up and still reading are on their way already.
     public var canRetryStatus: Bool {
-        statusFeed.problem(serverURL: serverURL, portfolio: portfolio) != nil || portfolio?.linkedFailed.isEmpty == false
+        statusFeed.problem(serverURL: serverURL, portfolio: portfolio) != nil || portfolio?.linkedFailed.isEmpty == false || portfolio?.linkedOutdated?.isEmpty == false
     }
 
     fileprivate func lastUpdate(_ portfolio: Portfolio) -> String {

@@ -179,6 +179,8 @@ struct MainWindow: View {
                 do {
                     exportDocument = CSVDocument(text: try await store.exportCSV())
                     exporting = true
+                } catch FetchError.notCaughtUp(let message) {
+                    exportError = message
                 } catch {
                     exportError = "The price service couldn't make this file."
                 }

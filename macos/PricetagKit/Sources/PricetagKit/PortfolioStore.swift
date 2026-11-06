@@ -39,7 +39,8 @@ private struct WalletStep {
 
 public enum FeedState: Equatable, Sendable {
     case noWallet
-    /// Waiting on an answer, which the first time for a wallet can take a minute. Numbers on screen are the last answer, and may be old.
+    /// Waiting on an answer, which the first time for a wallet can take a minute, or on one of All Yours' wallets being read again.
+    /// Numbers on screen are the last answer, and may be old.
     case reading
     case live
     /// The server and Amp both answer, but Amp's newest block is old.
@@ -56,6 +57,8 @@ public enum FeedState: Equatable, Sendable {
     case tooBig(String)
     /// The server is holding this client back for now, which clears by itself.
     case rateLimited(String)
+    /// The server answers, but it couldn't update some of All Yours' wallets, so the numbers stay as they were last read. Those wallets' notices say which.
+    case walletsOutdated
 
     /// Only this state may show a number as current.
     public var isLive: Bool { self == .live }
@@ -64,7 +67,7 @@ public enum FeedState: Equatable, Sendable {
     public var isStale: Bool {
         switch self {
         case .noWallet, .reading, .live, .catchingUp: false
-        case .behind, .serverUnreachable, .tooSlow, .ampUnavailable, .noAmpConfigured, .rejected, .tooBig, .rateLimited: true
+        case .behind, .serverUnreachable, .tooSlow, .ampUnavailable, .noAmpConfigured, .rejected, .tooBig, .rateLimited, .walletsOutdated: true
         }
     }
 
@@ -85,6 +88,8 @@ public struct ExplanationRequest: Hashable, Sendable {
     public let currency: CurrencyCode
     public let rule: String?
     public let linked: [String]
+    /// All Yours' wallets in the numbers on screen, which the explanation can't leave out.
+    public let shown: [String]?
     public let serverURL: URL
     public let book: Book
 }
@@ -368,7 +373,7 @@ public final class PortfolioStore {
             return
         }
         // While All Yours still has wallets on their way, they could be done by the next read, block or not.
-        let isWaitingOnWallets = portfolio?.isAllYours == true && portfolio?.linkedReading.isEmpty == false
+        let isWaitingOnWallets = portfolio?.isAllYours == true && (portfolio?.linkedReading.isEmpty == false || portfolio?.linkedUpdating?.isEmpty == false)
         let duration = isPushed && delay == reachableDelay && !feed.isStale && !isWaitingOnWallets ? pushedDelay : delay
         let sleeping = Task { _ = try? await Task.sleep(for: duration) }
         sleeper = sleeping
@@ -962,7 +967,7 @@ public final class PortfolioStore {
     /// Every movement as a spreadsheet, marked so an estimate or an unknown can't pass for an exact number.
     public func exportCSV() async throws -> String {
         guard let address else { throw FetchError.unreachable }
-        return try await source.exportCSV(address: address, method: method, currency: currency, rule: selectedRule, linked: linked(for: address), book: bookToSend(book, for: address))
+        return try await source.exportCSV(address: address, method: method, currency: currency, rule: selectedRule, linked: linked(for: address), shown: walletsShown, book: bookToSend(book, for: address))
     }
 
     /// Reads an exchange's history, and adds what it found to what's on this device. Says how many withdrawals had no usable cost.
@@ -974,13 +979,18 @@ public final class PortfolioStore {
 
     /// nil with no wallet, when there's nothing to explain.
     public func explanationRequest(for target: ExplainTarget) -> ExplanationRequest? {
-        address.map { ExplanationRequest(target: target, address: $0, method: method, currency: currency, rule: selectedRule, linked: linked(for: $0), serverURL: serverURL, book: bookToSend(book, for: $0)) }
+        address.map { ExplanationRequest(target: target, address: $0, method: method, currency: currency, rule: selectedRule, linked: linked(for: $0), shown: walletsShown, serverURL: serverURL, book: bookToSend(book, for: $0)) }
     }
 
     public func explanation(for request: ExplanationRequest) async throws -> Explanation {
         // A request from before a change has nothing to say about what's on screen now.
         guard request == explanationRequest(for: request.target) else { throw CancellationError() }
-        return try await source.explanation(of: request.target, address: request.address, method: request.method, currency: request.currency, rule: request.rule, linked: request.linked, book: request.book)
+        return try await source.explanation(of: request.target, address: request.address, method: request.method, currency: request.currency, rule: request.rule, linked: request.linked, shown: request.shown, book: request.book)
+    }
+
+    /// What can't be left out of an answer about what's on screen. Nil for what's about one wallet, or with nothing on screen.
+    private var walletsShown: [String]? {
+        portfolio.flatMap { $0.address == address ? $0.walletsInNumbers : nil }
     }
 
     /// Whether a leg in this wallet belongs to what's on screen.
@@ -1055,8 +1065,9 @@ public final class PortfolioStore {
             let last = try? await source.lastRead(address: address, method: method, currency: currency, rule: rule, linked: linked, book: bookToSend(book, for: address))
             guard isCurrent() else { return .zero }
             if let last, shouldShow(last) {
-                portfolio = last
-                cache.remember(last, of: address, on: serverURL, at: now())
+                let shown = holdingWhatsShown(last)
+                portfolio = shown
+                cache.remember(shown, of: address, on: serverURL, at: now())
             }
         }
         let isOtherRule = rule != nil && portfolio?.rule != rule
@@ -1067,8 +1078,9 @@ public final class PortfolioStore {
             try await source.portfolio(address: address, method: method, currency: currency, rule: rule, linked: linked, book: bookToSend(book, for: address), timeout: timeout)
         }
         do {
-            let next = try await patiently(read, timeout: timeout, isCurrent: isCurrent)
+            let answer = try await patiently(read, timeout: timeout, isCurrent: isCurrent)
             guard isCurrent() else { return .zero }
+            let next = holdingWhatsShown(answer)
             portfolio = next
             updatedAt = now()
             needsInvite = false
@@ -1090,6 +1102,10 @@ public final class PortfolioStore {
             }
             return feed == .serverUnreachable ? unreachableDelay : reachableDelay
         }
+    }
+
+    private func holdingWhatsShown(_ answer: Portfolio) -> Portfolio {
+        portfolio.map(answer.holding) ?? answer
     }
 
     /// Not when it's behind numbers on screen that answer the same question, as it can be after a reorg or if the app has seen further.
@@ -1181,7 +1197,11 @@ public final class PortfolioStore {
     }
 
     private func state(of portfolio: Portfolio) -> FeedState {
-        guard portfolio.mode != .demo, let newest = portfolio.latest.date else { return .live }
+        guard portfolio.mode != .demo else { return .live }
+        // First, because they're why these numbers have stopped moving, however old that's made them.
+        if portfolio.linkedOutdated?.isEmpty == false { return .walletsOutdated }
+        if portfolio.linkedUpdating?.isEmpty == false { return .reading }
+        guard let newest = portfolio.latest.date else { return .live }
         let age = Int(now().timeIntervalSince(newest))
         if age > Self.behindAfterSeconds { return .behind(seconds: age) }
         return portfolio.progress.started && portfolio.progress.behindBlocks == 0 ? .live : .catchingUp
@@ -1192,7 +1212,7 @@ public final class PortfolioStore {
         return switch error as? FetchError {
         case .ampUnavailable(let message): .ampUnavailable(message)
         case .noAmpConfigured(let message): .noAmpConfigured(message)
-        case .rejected(let message), .needsInvite(let message), .priceChanged(let message): .rejected(message)
+        case .rejected(let message), .needsInvite(let message), .priceChanged(let message), .notCaughtUp(let message): .rejected(message)
         case .tooBig(let message): .tooBig(message)
         case .rateLimited(let message, _): .rateLimited(message)
         case .unreachable, .timedOut, nil: .serverUnreachable
