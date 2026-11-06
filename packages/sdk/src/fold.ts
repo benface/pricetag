@@ -74,6 +74,8 @@ export type CostPiece = {
   wholeCostOnly?: true
   /** When an exchange says this was bought, which can be well before it reached a wallet, and is what oldest first goes by. */
   boughtAt?: string
+  /** Which exchange says so. */
+  boughtFrom?: string
   /** It has no cost because of a lot only known as a whole, so no answer about where it came from can fix that. */
   unanswerable?: true
 }
@@ -101,10 +103,15 @@ export type Lot = {
   acquiredAt?: string
   /** When a position tracks it: what this lot mixes together. Missing means all of it at `acquiredBlock`. */
   paidAt?: PaidAt[]
-  /** Its cost is only known for all of it, so part of it has no known cost, and neither does the rest. */
+  /**
+   * Its cost is only known for all of it, so part of it has no known cost, and neither does the rest. It stays this way once that's
+   * happened, because with no date, what's left still could have been bought before anything ahead of it.
+   */
   wholeCostOnly?: true
   /** When an exchange says this was bought, which can be well before it reached a wallet, and is what oldest first goes by. */
   boughtAt?: string
+  /** Which exchange says so. */
+  boughtFrom?: string
   /** It has no cost because of a lot only known as a whole, so no answer about where it came from can fix that. */
   unanswerable?: true
 }
@@ -224,6 +231,13 @@ const unconfirmed = (...wallets: readonly (readonly string[] | undefined)[]): Pi
   return all.length > 0 ? { unconfirmedBy: all } : {}
 }
 
+/** What says where this goes among the rest, which stays true whatever becomes of its cost. Only what's there, so a lot with none looks the way it always has. */
+export const ranking = ({ wholeCostOnly, boughtAt, boughtFrom }: Pick<CostPiece, "wholeCostOnly" | "boughtAt" | "boughtFrom">): Pick<CostPiece, "wholeCostOnly" | "boughtAt" | "boughtFrom"> => ({
+  ...(wholeCostOnly ? { wholeCostOnly } : {}),
+  ...(boughtAt ? { boughtAt } : {}),
+  ...(boughtFrom ? { boughtFrom } : {}),
+})
+
 function lotOf({ tracksPaidAt }: PositionState, piece: CostPiece, legId: string): Lot {
   const known = piece.label !== "unknown" && piece.costMicros !== null
   const estimated = known ? BigInt(piece.estimatedCostMicros) : 0n
@@ -239,13 +253,14 @@ function lotOf({ tracksPaidAt }: PositionState, piece: CostPiece, legId: string)
     ...(piece.acquiredBlock === undefined ? {} : { acquiredBlock: piece.acquiredBlock, acquiredAt: piece.acquiredAt as string }),
     // Otherwise every leg's state would keep a copy of it, and the leg already has it for whoever needs it.
     ...(tracksPaidAt && known && piece.paidAt ? { paidAt: piece.paidAt } : {}),
-    ...(known && piece.wholeCostOnly ? { wholeCostOnly: true as const } : {}),
-    ...(piece.boughtAt ? { boughtAt: piece.boughtAt } : {}),
+    ...ranking(piece),
     ...(!known && piece.unanswerable ? { unanswerable: true as const } : {}),
   }
 }
 
 const estimatedOf = (lot: Lot) => BigInt(lot.estimatedCostMicros ?? "0")
+
+const dateOf = ({ boughtAt, acquiredAt }: Pick<Lot, "boughtAt" | "acquiredAt">) => boughtAt ?? acquiredAt
 
 /**
  * Whether this was acquired after that. Blocks say, unless an exchange's date is involved, which only has a time. Every time here
@@ -253,7 +268,7 @@ const estimatedOf = (lot: Lot) => BigInt(lot.estimatedCostMicros ?? "0")
  */
 function isLater(lot: Lot, than: Lot): boolean {
   if (!lot.boughtAt && !than.boughtAt) return lot.acquiredBlock !== undefined && than.acquiredBlock !== undefined && lot.acquiredBlock > than.acquiredBlock
-  const [a, b] = [lot.boughtAt ?? lot.acquiredAt, than.boughtAt ?? than.acquiredAt]
+  const [a, b] = [dateOf(lot), dateOf(than)]
   return a !== undefined && b !== undefined && a > b
 }
 
@@ -291,7 +306,9 @@ export const orderMatters = ({ orderUnknown }: Pick<FoldLeg, "orderUnknown">, me
 
 function credit(state: PositionState, leg: FoldLeg, qty: bigint): Lot[] {
   const dated = leg.blockNum === undefined ? {} : { acquiredBlock: leg.blockNum, acquiredAt: leg.timestamp as string }
-  if (orderMatters(leg, state.method)) return addLot(state, state.lots, lotOf(state, { qty: qty.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0", ...dated }, leg.id))
+  // No cost, but what says where its pieces go among the rest is still true.
+  const parts: readonly (Pick<CostPiece, "qty" | "wholeCostOnly" | "boughtAt" | "boughtFrom">)[] = leg.pieces ?? [{ qty: qty.toString() }]
+  if (orderMatters(leg, state.method)) return parts.reduce<Lot[]>((lots, piece) => addLot(state, lots, lotOf(state, { qty: piece.qty, costMicros: null, label: "unknown", estimatedCostMicros: "0", ...dated, ...ranking(piece) }, leg.id)), state.lots)
   const estimated = (leg.estimated || leg.costLabel === "received at market") && leg.costMicros !== null ? leg.costMicros : "0"
   // A piece with its own date got it from the wallet that first acquired it. Any other was acquired here and now.
   const pieces = leg.pieces?.map((piece) => ({ ...dated, ...piece })) ?? [{ qty: qty.toString(), costMicros: leg.costMicros, label: leg.costLabel, estimatedCostMicros: estimated, ...(leg.purchaseSource ? { purchaseSource: leg.purchaseSource } : {}), ...dated }]
@@ -323,25 +340,53 @@ function shrink(lot: Lot, qty: bigint): { rest: Lot | null; cost: bigint; estima
   return { rest, cost, estimated, given, ...(paidAt ? { paidAt } : {}) }
 }
 
+type Ranked = Pick<Lot, "qty" | "costMicros" | "wholeCostOnly" | "boughtAt" | "boughtFrom" | "acquiredAt">
+
+/** Who says when this was acquired. The chain puts its own in order, and so does one exchange's file, which keeps what it can't as one lot. */
+const dateSource = ({ boughtAt, boughtFrom }: Ranked) => (boughtAt ? `exchange:${boughtFrom ?? ""}` : "chain")
+
+/** Whether either's order would change what part of them costs. Dividing a cost can round by a millionth each way, which isn't a different cost. */
+function costsDiffer(a: Ranked, b: Ranked): boolean {
+  if (a.costMicros === null || b.costMicros === null) return a.costMicros !== b.costMicros
+  const [aQty, bQty] = [BigInt(a.qty), BigInt(b.qty)]
+  const gap = BigInt(a.costMicros) * bQty - BigInt(b.costMicros) * aQty
+  return (gap < 0n ? -gap : gap) > aQty + bQty
+}
+
+/** Lots next to each other with the same date from different sources and different costs, since nothing says which came first. Any other lot is on its own. */
+function runsInOrder<T extends Ranked>(lots: readonly T[]): T[][] {
+  const runs: T[][] = []
+  for (const lot of lots) {
+    const run = runs.at(-1)
+    const date = dateOf(lot)
+    if (run && date !== undefined && dateOf(run[0] as T) === date) run.push(lot)
+    else runs.push([lot])
+  }
+  return runs.flatMap((run) => (new Set(run.map(dateSource)).size > 1 && run.some((lot) => costsDiffer(run[0] as T, lot)) ? [run] : run.map((lot) => [lot])))
+}
+
 /**
- * The lots with no known cost once this much is taken. A lot only known as a whole loses its cost when part of it stays behind.
- * One with no purchase date could have been bought before anything ahead of it too, so what's taken could be either, and unless
- * all of them go, none of them has a known cost.
+ * The lots with no known cost once this much is taken. A lot only known as a whole loses its cost when part of it stays behind,
+ * and so do lots tied with each other, when only some of them go. One with no purchase date could have been bought before anything
+ * ahead of it too, so what's taken could be either, and unless all of them go, none of them has a known cost.
  */
-export function lotsSplitBy({ lots }: Pick<PositionState, "lots">, qty: bigint): Lot[] {
+export function lotsSplitBy<T extends Ranked>({ lots }: { lots: readonly T[] }, qty: bigint): T[] {
   if (qty <= 0n) return []
   let through = 0n
   let last = -1
-  let split: Lot | null = null
-  lots.forEach((lot, i) => {
+  let split: T[] = []
+  let index = 0
+  for (const run of runsInOrder(lots)) {
     const before = through
-    through += BigInt(lot.qty)
-    if (through <= qty || !lot.wholeCostOnly) return
-    if (!lot.boughtAt) last = i
-    else if (before < qty) split = lot
-  })
+    for (const lot of run) {
+      through += BigInt(lot.qty)
+      if (through > qty && lot.wholeCostOnly && !lot.boughtAt) last = index
+      index++
+    }
+    if (before < qty && through > qty && (run.length > 1 || run[0]?.wholeCostOnly)) split = run
+  }
   const ahead = lots.slice(0, last + 1)
-  return split && !ahead.includes(split) ? [...ahead, split] : ahead
+  return [...ahead, ...split.filter((lot) => !ahead.includes(lot))]
 }
 
 /** Whether an answer could fix any of the unknown cost in what this much takes. An average takes from all of what's unknown. */
@@ -357,7 +402,7 @@ export function takesAnswerableCost(state: Pick<PositionState, "lots" | "method"
 }
 
 /** This lot with no cost anyone can rely on, which is where it stays among the rest. */
-const withoutCost = ({ qty, legId, unconfirmedBy, acquiredBlock, acquiredAt, boughtAt, unanswerable }: Lot, lost = unanswerable): Lot => ({ qty, costMicros: null, label: "unknown", legId, ...unconfirmed(unconfirmedBy), ...(acquiredBlock === undefined ? {} : { acquiredBlock, acquiredAt: acquiredAt as string }), ...(boughtAt ? { boughtAt } : {}), ...(lost ? { unanswerable: true as const } : {}) })
+const withoutCost = ({ qty, legId, unconfirmedBy, acquiredBlock, acquiredAt, unanswerable, ...rest }: Lot, lost = unanswerable): Lot => ({ qty, costMicros: null, label: "unknown", legId, ...unconfirmed(unconfirmedBy), ...(acquiredBlock === undefined ? {} : { acquiredBlock, acquiredAt: acquiredAt as string }), ...ranking(rest), ...(lost ? { unanswerable: true as const } : {}) })
 
 /** FIFO takes the oldest lots first. Average takes from the known and unknown pools in proportion. */
 function take(state: PositionState, qty: bigint): Taken {
@@ -366,9 +411,9 @@ function take(state: PositionState, qty: bigint): Taken {
   const result: Taken = { lots: [], pieces: [], knownQty: 0n, knownCost: 0n, estimatedCost: 0n, unknownQty: 0n, shortfall: qty - taking }
 
   let remaining = taking
-  const split = lotsSplitBy(state, taking)
+  const split = new Set(lotsSplitBy(state, taking))
   state.lots.forEach((current, i) => {
-    const lot = split.includes(current) ? withoutCost(current, true) : current
+    const lot = split.has(current) ? withoutCost(current, true) : current
     const lotQty = BigInt(lot.qty)
     let n: bigint
     if (state.method === "fifo") n = remaining < lotQty ? remaining : lotQty
@@ -396,8 +441,7 @@ function take(state: PositionState, qty: bigint): Taken {
       ...unconfirmed(lot.unconfirmedBy),
       ...(lot.acquiredBlock === undefined ? {} : { acquiredBlock: lot.acquiredBlock, acquiredAt: lot.acquiredAt as string }),
       ...(paidAt ? { paidAt } : {}),
-      ...(lot.wholeCostOnly ? { wholeCostOnly: true as const } : {}),
-      ...(lot.boughtAt ? { boughtAt: lot.boughtAt } : {}),
+      ...ranking(lot),
       ...(lot.unanswerable ? { unanswerable: true as const } : {}),
     })
   })
@@ -410,7 +454,7 @@ function take(state: PositionState, qty: bigint): Taken {
 function withoutCosts(taken: Taken): Taken {
   return {
     ...taken,
-    pieces: taken.pieces.map(({ qty, unconfirmedBy, acquiredBlock, acquiredAt, boughtAt, unanswerable }) => ({ qty, costMicros: null, label: "unknown", estimatedCostMicros: "0", ...unconfirmed(unconfirmedBy), ...(acquiredBlock === undefined ? {} : { acquiredBlock, acquiredAt: acquiredAt as string }), ...(boughtAt ? { boughtAt } : {}), ...(unanswerable ? { unanswerable } : {}) })),
+    pieces: taken.pieces.map(({ qty, unconfirmedBy, acquiredBlock, acquiredAt, unanswerable, ...rest }) => ({ qty, costMicros: null, label: "unknown", estimatedCostMicros: "0", ...unconfirmed(unconfirmedBy), ...(acquiredBlock === undefined ? {} : { acquiredBlock, acquiredAt: acquiredAt as string }), ...ranking(rest), ...(unanswerable ? { unanswerable } : {}) })),
     knownQty: 0n,
     knownCost: 0n,
     estimatedCost: 0n,

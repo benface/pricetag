@@ -637,6 +637,57 @@ describe("the user's answers in a report", () => {
       })
     })
 
+    describe("when nothing says which came first", () => {
+      const stamped = (block: number, units: bigint, timestamp: string) => leg(block, units, { kind: "transfer", parts: [part(A, "credit", units, SELLER)], timestamp })
+      const own = stamped(5, E18, "2026-10-01T00:00:00.000Z")
+      const costOfOwn = { [costKey(A, own.id)]: { micros: "2000000000", currency: "USD" as const } }
+      const oldAt = "2026-10-03T00:00:00.000Z"
+      const oldArrival = stamped(10, 2n * E18, oldAt)
+      const oldSaved = file(row("2026-09-20T00:00:00Z", "Buy", "2", "$4000"), row(oldAt, "Send", "2")).withdrawals.map(({ fifoLots: _, ...rest }) => rest)
+      const newAt = "2026-10-05T00:00:00.000Z"
+      const newArrival = stamped(14, E18, newAt)
+      const newer = file(row("2026-10-02T12:00:00Z", "Buy", "1", "$2500"), row(newAt, "Send", "1")).withdrawals
+      const halfOut = leg(12, -E18 / 2n, { kind: "transfer", parts: [part(A, "debit", E18 / 2n, SELLER)] })
+
+      it("stays unknown after the first split, even past a later import", () => {
+        const book = parseBook(JSON.parse(JSON.stringify({ ...emptyBook(), withdrawals: [...oldSaved, ...newer], costs: costOfOwn })))!
+        const legs = [own, oldArrival, halfOut, newArrival, sell(30, 1n, 3000)]
+        const report = taxReportOf([held(legs)], US, { book })
+        assert.deepEqual(eventsOf(report).map((r) => [r.Amount, r.Cost, r.Gain]), [["0.5", "unknown", "unknown"], ["1", "unknown", "unknown"]])
+        const { positions } = foldBook(held(legs), [], "fifo", book)
+        assert.deepEqual([positions[0]?.values.costMicros, positions[0]?.values.unknownCostQty], [null, ((5n * E18) / 2n).toString()])
+      })
+
+      describe("between a wallet's purchase and an exchange's at the same moment", () => {
+        const moment = "2026-10-01T10:00:00.000Z"
+        const tied = stamped(5, E18, moment)
+        const arriving = stamped(10, E18, oldAt)
+        const costs = { [costKey(A, tied.id)]: { micros: "2000000000", currency: "USD" as const } }
+        const book: Book = { ...emptyBook(), costs, withdrawals: file(row(moment, "Buy", "1", "$1000"), row(oldAt, "Send", "1")).withdrawals }
+
+        it("has no cost or gain for part of them, in either order they arrived", () => {
+          assert.deepEqual(eventsOf(taxReportOf([held([tied, arriving, sell(30, 1n, 2500)])], US, { book })).map((r) => [r.Cost, r.Gain]), [["unknown", "unknown"]])
+          // Sold in two parts: the second still isn't known.
+          const twice = [tied, arriving, leg(20, -E18 / 2n, { proceedsMicros: usd(1250) }), leg(30, -E18 / 2n, { proceedsMicros: usd(1250) })]
+          assert.ok(eventsOf(taxReportOf([held(twice)], US, { book })).every((r) => r.Cost === "unknown"))
+        })
+
+        it("has the known total for all of them, and by average", () => {
+          const [all] = eventsOf(taxReportOf([held([tied, arriving, sell(30, 2n, 5000)])], US, { book }))
+          assert.deepEqual([all?.Cost, all?.Gain], ["3000.000000", "2000.000000"])
+          const [average] = eventsOf(taxReportOf([held([tied, arriving, sell(30, 1n, 2500)])], { ...US, method: "average" }, { book }))
+          assert.deepEqual([average?.Cost, average?.Gain], ["1500.000000", "1000.000000"])
+        })
+      })
+
+      it("still goes by a purchase's date when its arrival's place in its block isn't known", () => {
+        const wallet = stamped(5, E18, "2026-10-02T12:00:00.000Z")
+        const uncertain = { ...stamped(10, E18, oldAt), orderUnknown: "fifo" as const }
+        const book: Book = { ...emptyBook(), costs: { [costKey(A, wallet.id)]: { micros: "2000000000", currency: "USD" } }, withdrawals: file(row("2026-10-01T00:00:00Z", "Buy", "1", "$1000"), row(oldAt, "Send", "1")).withdrawals }
+        assert.deepEqual(eventsOf(taxReportOf([held([wallet, uncertain, sell(30, 1n, 2500)])], US, { book })).map((r) => [r.Cost, r.Gain]), [["unknown", "unknown"]])
+      })
+    })
+
     it("keeps the row for what's known when the same sale also splits it", () => {
       const oneThenTied = [row("2026-09-01T10:00:00Z", "Buy", "1", "$500"), ...TIED]
       const threeEth = leg(10, 3n * E18, { kind: "transfer", parts: [part(A, "credit", 3n * E18, SELLER)] })

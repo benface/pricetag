@@ -1833,6 +1833,73 @@ Timestamp,Transaction Type,Asset,Quantity Transacted,Spot Price Currency,Spot Pr
         })
       })
 
+      describe("when nothing says which came first", () => {
+        const undated = () => parseBook({ withdrawals: bookOf(...TWO_DAYS).withdrawals.map(({ fifoLots: _, ...old }) => old) })!
+        const before = { ...move(50, "0x0", A, "credit", E18, STRANGER, ETH_ADDRESS), timestamp: "2026-10-01T00:00:00.000Z" }
+        const costOf = (address: string, rows: LegRow[], usdMicros: string): Book["costs"] => ({ [costKey(address, wallet(address, rows).legs[0]!.id)]: usd(usdMicros) })
+        const transfers = (to: readonly (readonly [string, bigint])[]) => to.map(([recipient, units], i) => ({ ...move(70, "0x2", A, "debit", units, recipient, ETH_ADDRESS), log_index: i }))
+        const receipts = (to: readonly (readonly [string, bigint])[]) => to.map(([recipient, units], i) => ({ ...move(70, "0x2", recipient, "credit", units, A, ETH_ADDRESS), log_index: i }))
+        const delivered = (book: Book, to: readonly (readonly [string, bigint])[], held: LegRow[] = [before, arrival()], method: Method = "fifo") => {
+          const sender = wallet(A, [...held, ...transfers(to)])
+          return [...new Set(to.map(([recipient]) => recipient))].map((recipient) => foldBook(wallet(recipient, receipts(to)), [sender], method, { ...book, senders: { [A]: { kind: "mine" } } }).legs.at(-1)!)
+        }
+        const withCost = (book: Book): Book => ({ ...book, costs: costOf(A, [before], "2000000000") })
+
+        it("gives nobody a known cost when a transfer divides purchases with no dates", () => {
+          const [toB, toC] = delivered(withCost(undated()), [[B, E18], [C, 2n * E18]])
+          assert.deepEqual([toB?.costMicros, toC?.costMicros], [null, null])
+          assert.ok([...toB!.pieces!, ...toC!.pieces!].every((piece) => piece.unanswerable))
+        })
+
+        it("keeps the known total when it all reaches one wallet, however many transfers it takes", () => {
+          assert.deepEqual(delivered(withCost(undated()), [[B, 3n * E18]]).map((leg) => leg.costMicros), ["6000000000"])
+          assert.deepEqual(delivered(withCost(undated()), [[B, E18], [B, 2n * E18]]).map((leg) => leg.costMicros), ["6000000000"])
+        })
+
+        it("still splits costs between recipients when the order is known", () => {
+          assert.deepEqual(delivered(withCost(bookOf(...TWO_DAYS)), [[B, 2n * E18], [C, E18]]).map((leg) => leg.costMicros), ["3000000000", "3000000000"])
+        })
+
+        it("gives each recipient the same mix by average", () => {
+          assert.deepEqual(delivered(withCost(undated()), [[B, E18], [C, 2n * E18]], undefined, "average").map((leg) => leg.costMicros), ["2000000000", "4000000000"])
+        })
+
+        it("doesn't call what's left known when a linked wallet holds what's newer than a withdrawal's unknown purchases", () => {
+          // A spends part, then the rest moves whole to B, where B's own purchase ranks ahead of it.
+          const out = move(65, "0x4", A, "debit", E18 / 2n, STRANGER, ETH_ADDRESS)
+          const moved = send(70, "0x2", A, B, (5n * E18) / 2n, ETH_ADDRESS)
+          const own = { ...move(55, "0x5", B, "credit", E18, STRANGER, ETH_ADDRESS), timestamp: "2026-10-02T12:00:00.000Z" }
+          const book: Book = { ...undated(), costs: { ...costOf(A, [before], "2000000000"), ...costOf(B, [own], "2500000000") }, senders: { [A]: { kind: "mine" } } }
+          const later = move(80, "0x3", B, "debit", E18, STRANGER, ETH_ADDRESS)
+          const { positions } = foldBook(wallet(B, [own, ...moved, later]), [wallet(A, [before, arrival(), out, ...moved])], "fifo", book)
+          assert.deepEqual([positions[0]?.values.costMicros, positions[0]?.values.unknownCostQty], [null, ((5n * E18) / 2n).toString()])
+        })
+
+        describe("purchases tied across sources", () => {
+          const moment = "2026-10-01T10:00:00.000Z"
+          const tiedAt = { ...move(50, "0x0", A, "credit", E18, STRANGER, ETH_ADDRESS), timestamp: moment }
+          const TIED_ACROSS = [row(moment, "Buy", "2", "$2000"), row(day(3), "Send", "2")]
+          const book = (): Book => ({ ...bookOf(...TIED_ACROSS), costs: costOf(A, [tiedAt], "2000000000") })
+          const rows = [tiedAt, arrival()]
+
+          it("stays unknown in part, known in whole, and known by average", () => {
+            assert.equal(left(book(), "fifo", [...rows, spent()])?.costMicros, null)
+            assert.equal(left(book(), "fifo", rows)?.costMicros, "4000000000")
+            assert.equal(left(book(), "fifo", [...rows, spent(E18 * 3n)])?.qty, "0")
+          })
+
+          it("stays that way in a linked wallet, and across a transfer that divides it", () => {
+            const whole = delivered(book(), [[B, 3n * E18]], rows)[0]!
+            assert.equal(whole.costMicros, "4000000000")
+            const moved = send(70, "0x2", A, B, 3n * E18, ETH_ADDRESS)
+            const later = move(80, "0x3", B, "debit", E18 / 2n, STRANGER, ETH_ADDRESS)
+            const { positions } = foldBook(wallet(B, [...moved, later]), [wallet(A, [...rows, ...moved])], "fifo", { ...book(), senders: { [A]: { kind: "mine" } } })
+            assert.equal(positions[0]?.values.costMicros, null)
+            assert.deepEqual(delivered(book(), [[B, E18], [C, 2n * E18]], rows).map((leg) => leg.costMicros), [null, null])
+          })
+        })
+      })
+
       it("doesn't use them over a cost someone entered", () => {
         const key = costKey(A, wallet(A, [arrival()]).legs[0]!.id)
         const book = { ...bookOf(...TWO_DAYS), costs: { [key]: usd("500000000") } }
