@@ -477,11 +477,14 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
   async function loadFixedFeedRounds(assets: readonly string[], bucket: number, head: number): Promise<Record<string, FeedRound>> {
     const due = assets.filter((asset) => isFeedDue({ asset, bucket }, head))
     if (due.length > 0) await readMarkRounds(due, [bucket], head)
-    return Object.fromEntries(assets.flatMap((asset) => {
+    return fixedFeedRounds(assets, bucket)
+  }
+
+  const fixedFeedRounds = (assets: readonly string[], bucket: number): Record<string, FeedRound> =>
+    Object.fromEntries(assets.flatMap((asset) => {
       const round = markRounds.get(marketKey({ asset, bucket }))
       return round ? [[asset, round]] : []
     }))
-  }
 
   /**
    * Reads what's missing, `wanted` first, and says whether all of `wanted` is now known. `chart` only gets the reads left
@@ -631,6 +634,12 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const { wanted } = marketWanted(wallet, wallet.priced, Math.min(wallet.coveredTo, wallet.latest.blockNum), wallet.prices)
     const bucket = bucketOf(wallet.latest.blockNum, MARKET_HEAD_BUCKET_BLOCKS)
     return wanted.some(unread) || assetsHeld(wallet).some((asset) => isFeedDue({ asset, bucket }, head)) || chartReads(address, wallet.rows, wallet.opening).some((read) => isFeedDue(read, head) || (!feedMark(read, markRounds, wallet.references) && unread(read)))
+  }
+
+  /** Whether a feed's kept answer says more than this wallet's current prices do: a chart point or another wallet can read one after this wallet worked out its prices. */
+  function hasNewerFeedPrices(wallet: Cached): boolean {
+    const rounds = fixedFeedRounds(assetsHeld(wallet), bucketOf(wallet.latest.blockNum, MARKET_HEAD_BUCKET_BLOCKS))
+    return Object.entries(feedPrices(rounds, wallet.prices)).some(([asset, price]) => wallet.prices[asset]?.micros !== price?.micros || wallet.prices[asset]?.source !== price?.source)
   }
 
   /** Prices from a reorg's blocks may be from what it replaced. The trades behind one all come before its bucket's end. */
@@ -793,6 +802,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     unreadUnseenBlocks(address, wallet).length === 0 &&
     unreadPayerBlocks(address, wallet).length === 0 &&
     !hasMarketReadsLeft(address, wallet, chain.blockNum) &&
+    !hasNewerFeedPrices(wallet) &&
     !(chain.blockNum > wallet.readAtHead && unreadTokenPrices(address, wallet.rows).length > 0)
 
   async function refresh(address: string, key: string, range: WalletRange, reservation: { release?: () => void }): Promise<Cached> {

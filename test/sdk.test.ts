@@ -415,11 +415,13 @@ describe("getPortfolio's current prices", () => {
     const AERO_FEED = { AERO: { answer: 63_000_000n, updatedAt: NOW - 60 } }
     const fixedTables = (feeds: Tables["feeds"]): Tables => ({ ...tables(feeds), balances: { 49: { AERO: HELD }, 150: { AERO: HELD } } })
     /** A client whose chain has reached `head.block`, with what's asked of the feeds and how many of those should fail. */
-    const fixedClient = (feeds: Tables["feeds"], failures = 0) => {
-      const { query } = fakeAmp(fixedTables(feeds))
+    const fixedClient = (feeds: Tables["feeds"], failures = 0, legs: Tables["legs"] = []) => {
+      const { query } = fakeAmp({ ...fixedTables(feeds), legs })
       const head = { block: 200 }
       const feedReads: string[] = []
+      const reads = { count: 0 }
       const answers: Query = async <T,>(sql: string, timeoutMs?: number) => {
+        reads.count += 1
         if (sql.includes("latestRoundData()")) {
           feedReads.push(sql)
           if (feedReads.length <= failures) throw new Error("boom")
@@ -427,9 +429,9 @@ describe("getPortfolio's current prices", () => {
         const rows = await query<T>(sql, timeoutMs)
         return sql.includes(".blocks") && !sql.includes("latestRoundData()") ? (rows.map((row) => ({ ...row, block_num: String(head.block) })) as T[]) : rows
       }
-      return { client: pricetagClient(answers, { dataset: "benface/pricetag@0.0.1", logger: { warn() {} } }), head, feedReads }
+      return { client: pricetagClient(answers, { dataset: "benface/pricetag@0.0.1", logger: { warn() {} } }), head, feedReads, reads }
     }
-    const aero = async (client: ReturnType<typeof pricetagClient>) => (await client.getPortfolio(`0x${ME}`, RANGE)).positions.find((p) => p.asset === "AERO")!
+    const aero = async (client: ReturnType<typeof pricetagClient>, address = ME) => (await client.getPortfolio(`0x${address}`, RANGE)).positions.find((p) => p.asset === "AERO")!
 
     it("reads a feed again after a failed read, with no new block, and stops once it has the answer", async () => {
       const { client, feedReads } = fixedClient(AERO_FEED, 1)
@@ -449,6 +451,40 @@ describe("getPortfolio's current prices", () => {
       head.block = 5_000
       assert.equal((await aero(client)).values.valueMicros, "315000000")
       assert.equal(feedReads.length, 1)
+    })
+
+    it("picks up an answer another wallet read, without asking the feed again", async () => {
+      const { client, head, feedReads, reads } = fixedClient(AERO_FEED, 1)
+      assert.equal((await aero(client)).price, null)
+      assert.equal((await aero(client, POOL)).price?.micros, "630000")
+      assert.equal(feedReads.length, 2)
+      assert.equal((await aero(client)).values.valueMicros, "315000000")
+      assert.equal(feedReads.length, 2)
+      const readsSoFar = reads.count
+      head.block = 500
+      assert.equal((await aero(client)).values.valueMicros, "315000000")
+      assert.equal(feedReads.length, 2)
+      assert.ok(reads.count <= readsSoFar + 1, "only the head, once it has what's there")
+    })
+
+    it("picks up an answer its own chart read after it worked out its prices", async () => {
+      const { client, feedReads, reads } = fixedClient(AERO_FEED, 1, [{ ...leg("aa", AERO, ME, "credit", "1", "erc20"), block_num: "150" }])
+      assert.equal((await aero(client)).price, null)
+      assert.equal(feedReads.length, 2, "the chart's read came after the one that failed")
+      assert.equal((await aero(client)).price?.micros, "630000")
+      assert.equal(feedReads.length, 2)
+      const readsSoFar = reads.count
+      await aero(client)
+      assert.ok(reads.count <= readsSoFar + 1, "only the head, once it has what's there")
+    })
+
+    it("doesn't read again over an answer it rejected", async () => {
+      const { client, feedReads, reads } = fixedClient({ AERO: { answer: 63_000_000n, updatedAt: NOW - 30 * 3600 } })
+      assert.equal((await aero(client)).price, null)
+      const readsSoFar = reads.count
+      assert.equal((await aero(client)).price, null)
+      assert.equal(feedReads.length, 1)
+      assert.ok(reads.count <= readsSoFar + 1, "only the head")
     })
 
     it("asks a feed that gives no answer less and less, then stops", async () => {
