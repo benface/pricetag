@@ -241,16 +241,39 @@ describe("other tokens", () => {
       assert.equal(queries.length, 2, "tried again later")
     })
 
-    it("keeps the last balance through a failed read", async () => {
+    it("doesn't call an old balance current after a failed read, and has it back once there's an answer", async () => {
       let time = 1_000_000
       const answers: Record<string, TokenAnswer> = { [JACK]: good("JACK", "5") }
       const tokens = createOtherTokens(fakeChain(answers).read, logger, () => time)
       await fill(tokens, rows, 200, 1)
       answers[JACK] = { balance: null }
       time += 6 * 60_000
-      const { otherTokens } = await fill(tokens, rows, 300, 1)
-      assert.equal(otherTokens[0]?.balance, "5")
-      assert.equal(otherTokens[0]?.state, "read")
+      const [failed] = (await fill(tokens, rows, 300, 1)).otherTokens
+      assert.deepEqual([failed?.state, failed?.balance], ["unreadable", null])
+      assert.match(failed?.note ?? "", /isn't known right now/)
+      assert.equal(failed?.tucked, null, "it answered before, so one bad answer doesn't make it look like spam")
+      answers[JACK] = { balance: "6" }
+      time += 11 * 60_000
+      const [back] = (await fill(tokens, rows, 400, 1)).otherTokens
+      assert.deepEqual([back?.state, back?.balance, back?.note], ["read", "6", null])
+    })
+
+    it("still lists what it held when a failed read follows sending it all away", async () => {
+      const answers: Record<string, TokenAnswer> = { [JACK]: good("JACK", "5") }
+      const tokens = createOtherTokens(fakeChain(answers).read, logger)
+      await fill(tokens, rows, 200, 1)
+      answers[JACK] = { balance: null }
+      const sentAll = [...rows, row(JACK, "debit", "7", { block_num: 250, tx_hash: "0xmine" })]
+      const [token] = (await fill(tokens, sentAll, 300, 1)).otherTokens
+      assert.deepEqual([token?.state, token?.balance], ["unreadable", null])
+    })
+
+    it("doesn't call a balance current past a move it hasn't read yet", async () => {
+      const tokens = createOtherTokens(fakeChain({ [JACK]: good("JACK", "5") }).read, logger)
+      await fill(tokens, rows, 200, 1)
+      const moved = [...rows, row(JACK, "debit", "7", { block_num: 250, tx_hash: "0xmine" })]
+      const [token] = tokens.view(ME, moved, none).otherTokens
+      assert.deepEqual([token?.state, token?.balance], ["reading", null])
     })
   })
 
@@ -279,6 +302,65 @@ describe("other tokens", () => {
       tokens.update(ME, rows, none, 200)
       await tokens.idle()
       assert.equal(queries.length, 1)
+    })
+
+    describe("with several wallets", () => {
+      const OTHER = "0x00000000000000000000000000000000000000bb"
+      const addresses = many(100)
+      const rowsFor = (account: string) => addresses.map((t, i) => row(t, "credit", "7", { account, block_num: 100 + i }))
+      const accountsRead = () => {
+        const seen: string[] = []
+        const read = async (account: string, requests: readonly TokenRequest[]) => {
+          seen.push(account)
+          return new Map(requests.map(({ token }) => [token, good("X")]))
+        }
+        return { seen, read }
+      }
+
+      it("gives each its turn when one always finishes while another is still being read", async () => {
+        const { seen, read } = accountsRead()
+        const tokens = createOtherTokens(read, logger)
+        let reading = 2
+        const isBusy = () => reading > 0
+        for (let round = 0; round < 2; round++) {
+          reading = 1
+          tokens.update(ME, rowsFor(ME), none, 500, isBusy)
+          await tokens.idle()
+          assert.equal(seen.length, round * 4, "nothing while a wallet read is waiting")
+          reading = 0
+          tokens.update(OTHER, rowsFor(OTHER), none, 500, isBusy)
+          await tokens.idle()
+          assert.equal(seen.length, (round + 1) * 4, "two queries for each wallet read")
+        }
+        assert.deepEqual(seen, [ME, ME, OTHER, OTHER, ME, ME, OTHER, OTHER])
+        for (const account of [ME, OTHER]) assert.ok(tokens.view(account, rowsFor(account), none).otherTokens.every((t) => t.state === "read"))
+      })
+
+      it("keeps one place in line however often a wallet asks", async () => {
+        const { seen, read } = accountsRead()
+        const tokens = createOtherTokens(read, logger)
+        let busy = true
+        for (const account of [ME, OTHER, ME, ME]) tokens.update(account, rowsFor(account), none, 500, () => busy)
+        await tokens.idle()
+        assert.equal(seen.length, 0)
+        busy = false
+        tokens.resume()
+        await tokens.idle()
+        assert.deepEqual(seen, [ME, ME, OTHER, OTHER])
+      })
+
+      it("doesn't read for a wallet in line what a reorg replaced", async () => {
+        const { seen, read } = accountsRead()
+        const tokens = createOtherTokens(read, logger)
+        let busy = true
+        tokens.update(ME, rowsFor(ME), none, 500, () => busy)
+        await tokens.idle()
+        tokens.forgetFrom(450)
+        busy = false
+        tokens.resume()
+        await tokens.idle()
+        assert.equal(seen.length, 0)
+      })
     })
 
     it("costs nothing once it's read, until a token moves or its balance is old", async () => {
@@ -383,6 +465,55 @@ describe("other tokens", () => {
   it("ignores another account's rows", () => {
     const tokens = createOtherTokens(fakeChain({}).read, logger)
     assert.deepEqual(tokens.view(ME, [row(JACK, "credit", "7", { account: "0x00000000000000000000000000000000000000bb" })], none).otherTokens, [])
+  })
+})
+
+describe("other tokens at an earlier block, as All Yours lines wallets up", () => {
+  const moved = [row(JACK, "credit", "5", { block_num: 100, tx_hash: "0xmine" }), gas("0xmine")]
+  const tokensReadAt = async (block: number) => {
+    const tokens = createOtherTokens(fakeChain({ [JACK]: good("JACK", "5") }).read, logger)
+    tokens.update(ME, moved, none, block)
+    await tokens.idle()
+    return tokens
+  }
+
+  it("keeps a balance read after that block when nothing moved in between", async () => {
+    const tokens = await tokensReadAt(200)
+    assert.deepEqual(tokens.viewAt(ME, moved, none, 150).otherTokens.map((t) => [t.state, t.balance]), [["read", "5"]])
+  })
+
+  it("keeps a balance read before a later move", async () => {
+    const tokens = await tokensReadAt(120)
+    const rows = [...moved, row(JACK, "debit", "5", { block_num: 170 })]
+    assert.deepEqual(tokens.viewAt(ME, rows, none, 150).otherTokens.map((t) => [t.state, t.balance]), [["read", "5"]])
+  })
+
+  it("has no amount for it when a move falls between that block and the read", async () => {
+    const tokens = await tokensReadAt(200)
+    const rows = [...moved, row(JACK, "debit", "5", { block_num: 170 })]
+    assert.deepEqual(tokens.viewAt(ME, rows, none, 150).otherTokens.map((t) => [t.state, t.balance]), [["reading", null]])
+  })
+
+  it("doesn't take a read of nothing after a move to mean there was nothing before it", async () => {
+    const tokens = createOtherTokens(fakeChain({ [JACK]: good("JACK", "0") }).read, logger)
+    const rows = [...moved, row(JACK, "debit", "5", { block_num: 170 })]
+    tokens.update(ME, rows, none, 200)
+    await tokens.idle()
+    assert.deepEqual(tokens.view(ME, rows, none).otherTokens, [])
+    assert.deepEqual(tokens.viewAt(ME, rows, none, 150).otherTokens.map((t) => [t.state, t.balance]), [["reading", null]])
+  })
+
+  it("leaves out what only arrived after that block", async () => {
+    const tokens = await tokensReadAt(200)
+    assert.deepEqual(tokens.viewAt(ME, moved, none, 90).otherTokens, [])
+  })
+
+  it("leaves the sum unknown across wallets when one has no amount at that block", async () => {
+    const tokens = await tokensReadAt(200)
+    const behind = { otherTokens: [{ token: JACK, kind: "token" as const, name: "JACK Token", symbol: "JACK", decimals: 18, balance: "7", state: "read" as const, note: null, tucked: null }], otherTokensLeftOut: 0 }
+    const rows = [...moved, row(JACK, "debit", "5", { block_num: 170 })]
+    const [token] = combineOtherTokens([behind, tokens.viewAt(ME, rows, none, 150)]).otherTokens
+    assert.deepEqual([token?.state, token?.balance], ["reading", null])
   })
 })
 

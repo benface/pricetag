@@ -358,7 +358,7 @@ describe("all your wallets, when one of them can't keep up", () => {
   const move = { [HOT]: [row(15, "0x2", HOT, "credit", ONE, COLD)], [COLD]: [row(15, "0x2", COLD, "debit", ONE, HOT)] }
 
   /** A server over wallets whose rows and head the test moves on, with `trouble` for what one wallet's read or rates, or the price at a block, run into. */
-  function serve(trouble: { read?: (address: string) => Promise<void>; rates?: (address: string, block: number) => Promise<void>; reference?: () => Promise<void>; rollingHistory?: boolean }) {
+  function serve(trouble: { read?: (address: string) => Promise<void>; rates?: (address: string, block: number) => Promise<void>; reference?: () => Promise<void>; rollingHistory?: boolean; tokenReads?: string[] }) {
     const state = { head: 10, rows: structuredClone(before) as Record<string, LegRow[]>, troubled: false }
     const source: Source = {
       mode: "raw",
@@ -378,8 +378,12 @@ describe("all your wallets, when one of them can't keep up", () => {
       readEthBalances: async () => new Map(),
       readBalances: async (address, block) => {
         const amounts: Record<string, string> = Object.fromEntries(ASSETS.map((asset) => [asset, "0"]))
-        for (const r of state.rows[address] ?? []) if (r.block_num <= block) amounts.ETH = (BigInt(amounts.ETH as string) + (r.side === "credit" ? BigInt(r.amount) : -BigInt(r.amount))).toString()
+        for (const r of state.rows[address] ?? []) if (r.kind !== "unlisted" && r.block_num <= block) amounts.ETH = (BigInt(amounts.ETH as string) + (r.side === "credit" ? BigInt(r.amount) : -BigInt(r.amount))).toString()
         return { blockNum: block, amounts }
+      },
+      readTokenFacts: async (address, requests) => {
+        trouble.tokenReads?.push(address)
+        return new Map(requests.map(({ token }) => [token, { balance: "5", name: "Jackfruit", symbol: "JACK", decimals: 0 }]))
       },
     }
     // Rates are read for one wallet at a time, which the server doesn't say here, so it's told apart by its transactions.
@@ -397,7 +401,7 @@ describe("all your wallets, when one of them can't keep up", () => {
       state.head = 20
       state.troubled = true
     }
-    return { post, moveOn, close: () => server.close() }
+    return { post, moveOn, state, close: () => server.close() }
   }
   const ethOf = (all: CombinedPortfolioResponse) => all.positions.find((p) => p.asset === "ETH")?.values.qty
   const stuck = () => new Promise<void>(() => {})
@@ -451,6 +455,52 @@ describe("all your wallets, when one of them can't keep up", () => {
     const all = await api.post("/api/portfolio/all", body)
     assert.deepEqual(all.positions.find((p) => p.asset === "ETH")?.wallets.map((w) => [w.wallet, w.qty]), [[HOT, ONE.toString()], [COLD, "0"]])
     api.close()
+  })
+
+  describe("with a token we have no price for", () => {
+    const JACK = "0x00000000000000000000000000000000000000f1"
+    const jack = (account: string, block_num: number, side: LegRow["side"] = "credit"): LegRow => ({ block_num, timestamp: "2026-11-04T00:00:00.000Z", tx_hash: `0xjack${block_num}`, tx_index: 0, log_index: 0, token: JACK, account, side, amount: "5", kind: "unlisted", counterparty: null }) as LegRow
+    const tokenReadsFinish = () => new Promise((resolve) => setTimeout(resolve, 20))
+    const jackOf = (all: CombinedPortfolioResponse) => all.otherTokens.map((t) => [t.token, t.state, t.balance])
+    /** Both hold it and have been read. Spending money then reads past the move by itself, so All Yours takes it back to savings' block. */
+    async function aligned(afterMove: readonly LegRow[] = []) {
+      const api = serve({})
+      for (const address of [HOT, COLD]) api.state.rows[address]?.push(jack(address, 5))
+      await api.post("/api/portfolio/all", body)
+      await tokenReadsFinish()
+      api.moveOn()
+      api.state.rows[HOT]?.push(...afterMove)
+      await api.post(`/api/portfolio/${HOT}`, { method: "average" })
+      await tokenReadsFinish()
+      return api
+    }
+
+    it("keeps it when one wallet is taken back to an earlier block", async () => {
+      const api = await aligned()
+      assert.deepEqual(jackOf(await api.post("/api/portfolio/all/last", body)), [[JACK, "read", "10"]])
+      api.close()
+    })
+
+    it("has no sum when it moved between that block and the read", async () => {
+      const api = await aligned([jack(HOT, 15, "debit")])
+      assert.deepEqual(jackOf(await api.post("/api/portfolio/all/last", body)), [[JACK, "reading", null]])
+      api.close()
+    })
+
+    it("fills in every wallet from refreshes of them all, with no wallet opened by itself", async () => {
+      const tokenReads: string[] = []
+      const api = serve({ tokenReads })
+      for (const address of [HOT, COLD]) api.state.rows[address]?.push(jack(address, 5))
+      for (let refresh = 0; refresh < 3; refresh++) {
+        api.state.head += 1
+        await api.post("/api/portfolio/all", body)
+        await tokenReadsFinish()
+      }
+      assert.deepEqual([...new Set(tokenReads)].sort(), [COLD, HOT].sort())
+      assert.ok(tokenReads.length <= 2 * 2 * 3, "at most two queries for each wallet read")
+      assert.deepEqual(jackOf(await api.post("/api/portfolio/all/last", body)), [[JACK, "read", "10"]])
+      api.close()
+    })
   })
 
   it("leaves out a wallet whose rates fail or take too long, and answers with the rest", async () => {

@@ -831,7 +831,10 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       const key = keyOf(account, range)
       let pending = inflight.get(key)
       if (!pending) {
-        pending = refresh(account, key, range).finally(() => inflight.delete(key))
+        pending = refresh(account, key, range).finally(() => {
+          inflight.delete(key)
+          otherTokens?.resume()
+        })
         inflight.set(key, pending)
       }
       const wallet = await pending
@@ -901,7 +904,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       if (rowKeys(own.rows.filter((r) => r.block_num <= through)) !== rowKeys(facts.rows)) return null
       // Market prices come from this source's own trades, like the rest of what's priced. A feed comes first, as in a refresh.
       const current = { ...prices, ...marketPricesAt(through, using), ...feedPrices(facts.feedRounds, prices) }
-      return responseOf(
+      const response = responseOf(
         account,
         {
           ...facts,
@@ -915,6 +918,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
         (key) => using.priced.has(key),
         facts.markRounds,
       )
+      return otherTokens ? { ...response, ...otherTokens.viewAt(account, own.rows, facts.gasUnknown, through) } : response
     },
 
     /**

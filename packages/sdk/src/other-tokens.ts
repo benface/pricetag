@@ -232,11 +232,15 @@ function movedTokens(rows: readonly LegRow[], account: string, gasUnknown: Reado
 }
 
 type Details = { name: string | null; symbol: string | null; decimals: number | null; readAt: number; complete: boolean }
-type Balance = { balance: string | null; atBlock: number; readAt: number }
+/** `balance` is the answer at `atBlock`, null if there wasn't one. `lastAnswer` is the last one there was, which says it could answer and that this wallet held it, not what it holds now. */
+type Balance = { balance: string | null; atBlock: number; readAt: number; lastAnswer: string | null }
+/** A wallet that's asked for its tokens to be read and hasn't had its turn. */
+type Waiting = { chosen: readonly Moved[]; block: number; isBusy: () => boolean }
 
 const NOTES = {
   multiple: "This kind of token doesn't report one balance, so this wallet may or may not still hold it.",
   balance: "Its contract didn't answer when asked for this wallet's balance.",
+  refresh: "Its contract answered before but not the last time it was asked, so this wallet's balance isn't known right now.",
   decimals: "Its contract won't say how it divides up, so this counts its smallest unit.",
   name: "Its contract doesn't give a name.",
 }
@@ -253,15 +257,20 @@ export function createOtherTokens(read: ReadTokenFacts, logger: { warn(message: 
   const groupSize = new Map<string, number>()
   let blockedUntil = 0
   let rewinds = 0
-  let passing: Promise<void> | null = null
+  /** Oldest first, so a wallet that keeps asking can't keep another from its turn. One each, so what's kept stays bounded, and each turn was paid for by a read. */
+  const waiting = new Map<string, Waiting>()
+  let draining = false
+  let drained: Promise<void> = Promise.resolve()
+
+  /** The read that holds for this token at its last move and until `nextMove`, its first one after what's being looked at. One from before or after a move says nothing about the other side of it. */
+  function readBetween(account: string, { token, lastBlock }: Moved, nextMove = Number.POSITIVE_INFINITY) {
+    const balance = balances.get(account)?.get(token)
+    return balance && balance.atBlock >= lastBlock && balance.atBlock < nextMove ? balance : undefined
+  }
 
   /** Which ones to bother with, most likely to matter first. A token read as empty and not moved since doesn't use a place. */
-  function select(account: string, moved: readonly Moved[]) {
-    const known = balances.get(account)
-    const live = moved.filter(({ token, lastBlock }) => {
-      const balance = known?.get(token)
-      return !(balance?.balance === "0" && balance.atBlock >= lastBlock)
-    })
+  function select(account: string, moved: readonly Moved[], nextMoves?: ReadonlyMap<string, number>) {
+    const live = moved.filter((one) => readBetween(account, one, nextMoves?.get(one.token))?.balance !== "0")
     const score = ({ sentByThisWallet, net, unreadable }: Moved) => (sentByThisWallet ? 2 : net > 0n || unreadable ? 1 : 0)
     live.sort((a, b) => score(b) - score(a) || b.lastBlock - a.lastBlock || a.token.localeCompare(b.token))
     return { chosen: live.slice(0, MAX_OTHER_TOKENS), leftOut: Math.max(0, live.length - MAX_OTHER_TOKENS) }
@@ -283,8 +292,8 @@ export function createOtherTokens(read: ReadTokenFacts, logger: { warn(message: 
       balances.delete(account)
       balances.set(account, own)
       if (balances.size > MAX_ACCOUNTS_REMEMBERED) balances.delete(balances.keys().next().value as string)
-      // A last answer's better than none, and it's read again soon enough.
-      own.set(request.token, { balance: answer?.balance ?? own.get(request.token)?.balance ?? null, atBlock: block, readAt: at })
+      const balance = answer?.balance ?? null
+      own.set(request.token, { balance, atBlock: block, readAt: at, lastAnswer: balance ?? own.get(request.token)?.lastAnswer ?? null })
     }
     if (request.details) {
       const last = details.get(request.token)
@@ -332,46 +341,81 @@ export function createOtherTokens(read: ReadTokenFacts, logger: { warn(message: 
     }
   }
 
-  function toOtherToken(account: string, moved: Moved): OtherToken | null {
+  /** Gives each waiting wallet its turn, until a wallet read needs the way or a query has failed. What's left waits for the next read to start this again. */
+  async function drain() {
+    try {
+      for (let next = waiting.entries().next().value; next && now() >= blockedUntil && !next[1].isBusy(); next = waiting.entries().next().value) {
+        const [account, { chosen, block, isBusy }] = next
+        waiting.delete(account)
+        await pass(account, chosen, block, isBusy).catch((error: unknown) => logger.warn(`Couldn't read other tokens: ${String(error)}`))
+      }
+    } finally {
+      draining = false
+    }
+  }
+
+  function start() {
+    if (draining) return
+    draining = true
+    drained = drain()
+  }
+
+  function toOtherToken(account: string, moved: Moved, nextMove?: number): OtherToken | null {
     const about = details.get(moved.token)
-    const balance = balances.get(account)?.get(moved.token)
-    const held = moved.net > 0n || moved.unreadable
+    const balance = readBetween(account, moved, nextMove)
+    const lastAnswer = balances.get(account)?.get(moved.token)?.lastAnswer ?? null
+    // Having held it is a reason to say so when its balance isn't known, whatever the rows add up to.
+    const held = moved.net > 0n || moved.unreadable || (lastAnswer !== null && lastAnswer !== "0")
     if (balance?.balance === "0" || (!held && balance?.balance == null)) return null
     const state: OtherToken["state"] = moved.multiple ? "read" : !balance ? "reading" : balance.balance === null ? "unreadable" : "read"
     const decimals = about?.decimals ?? null
-    const note = moved.multiple ? NOTES.multiple : state === "unreadable" ? NOTES.balance : !about ? null : decimals === null ? NOTES.decimals : about.name === null && about.symbol === null ? NOTES.name : null
+    const note = moved.multiple ? NOTES.multiple : state === "unreadable" ? (lastAnswer === null ? NOTES.balance : NOTES.refresh) : !about ? null : decimals === null ? NOTES.decimals : about.name === null && about.symbol === null ? NOTES.name : null
     const facts = { name: about?.name ?? null, symbol: about?.symbol ?? null, state }
-    return { token: moved.token, kind: moved.collectible ? "collectible" : "token", ...facts, decimals, balance: moved.multiple ? null : (balance?.balance ?? null), note, tucked: tuckedReason(facts, moved.sentByThisWallet) }
+    return { token: moved.token, kind: moved.collectible ? "collectible" : "token", ...facts, decimals, balance: moved.multiple ? null : (balance?.balance ?? null), note, tucked: tuckedReason({ ...facts, state: lastAnswer === null ? state : "read" }, moved.sentByThisWallet) }
+  }
+
+  function list(account: string, rows: readonly LegRow[], gasUnknown: ReadonlyMap<string, number>, nextMoves?: ReadonlyMap<string, number>): OtherTokens {
+    const { chosen, leftOut } = select(account, movedTokens(rows, account, gasUnknown), nextMoves)
+    const otherTokens = chosen.flatMap((moved) => toOtherToken(account, moved, nextMoves?.get(moved.token)) ?? [])
+    return { otherTokens: otherTokens.sort(byName), otherTokensLeftOut: leftOut }
   }
 
   return {
     /** What's known now, with no query. */
     view(account: string, rows: readonly LegRow[], gasUnknown: ReadonlyMap<string, number>): OtherTokens {
-      const { chosen, leftOut } = select(account, movedTokens(rows, account, gasUnknown))
-      const otherTokens = chosen.flatMap((moved) => toOtherToken(account, moved) ?? [])
-      return { otherTokens: otherTokens.sort(byName), otherTokensLeftOut: leftOut }
+      return list(account, rows, gasUnknown)
     },
 
-    /** Starts reading what's due at `block`, if nothing else is. `isBusy` says a wallet read is waiting, and that goes first. */
-    update(account: string, rows: readonly LegRow[], gasUnknown: ReadonlyMap<string, number>, block: number, isBusy: () => boolean = () => false) {
-      if (passing || now() < blockedUntil) return
-      const { chosen } = select(account, movedTokens(rows, account, gasUnknown))
-      if (chosen.length === 0) return
-      passing = pass(account, chosen, block, isBusy)
-        .catch((error: unknown) => logger.warn(`Couldn't read other tokens: ${String(error)}`))
-        .finally(() => {
-          passing = null
-        })
+    /** What's known of this wallet at an earlier block, with `rows` being all it has, with no query. A balance read on the far side of a move from `block` isn't its balance there, so that one has none yet. */
+    viewAt(account: string, rows: readonly LegRow[], gasUnknown: ReadonlyMap<string, number>, block: number): OtherTokens {
+      const nextMoves = new Map<string, number>()
+      for (const { block_num, token } of rows) if (block_num > block) nextMoves.set(token, Math.min(block_num, nextMoves.get(token) ?? block_num))
+      return list(account, rows.filter((row) => row.block_num <= block), gasUnknown, nextMoves)
     },
+
+    /** Puts this wallet in line to read what's due at `block`, and starts the line. `isBusy` says a wallet read is waiting, and that goes first. */
+    update(account: string, rows: readonly LegRow[], gasUnknown: ReadonlyMap<string, number>, block: number, isBusy: () => boolean = () => false) {
+      const { chosen } = select(account, movedTokens(rows, account, gasUnknown))
+      if (chosen.length > 0) {
+        // A wallet already in line keeps its place, with what it's just read.
+        waiting.set(account, { chosen, block, isBusy })
+        if (waiting.size > MAX_ACCOUNTS_REMEMBERED) waiting.delete(waiting.keys().next().value as string)
+      }
+      start()
+    },
+
+    /** A wallet read just finished, so whoever was waiting for it can go. */
+    resume: start,
 
     /** When what's been started has finished, for tests. */
     idle: async () => {
-      await passing
+      await drained
     },
 
     /** A reorg replaced every block from `block` on, so what was read there may not be true anymore. */
     forgetFrom(block: number) {
       rewinds += 1
+      for (const [account, { block: at }] of waiting) if (at >= block) waiting.delete(account)
       for (const own of balances.values()) for (const [token, balance] of own) if (balance.atBlock >= block) own.delete(token)
     },
   }
