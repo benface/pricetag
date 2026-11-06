@@ -277,7 +277,7 @@ describe("following the chain", () => {
 
   it("doesn't tick faster than it's asked to, however fast the blocks come, and keeps what it merged", async () => {
     const hand = handStream()
-    const chain = following({ stream: hand.stream, tickMs: 50 })
+    const chain = following({ stream: hand.stream, tickMs: 200 })
     const first = chain.next()
     await new Promise((resolve) => setTimeout(resolve, 2))
     // From before the first tick, since the wait counts from there: a stall after it would shorten what's left to wait.
@@ -287,7 +287,7 @@ describe("following the chain", () => {
     const second = chain.next()
     hand.send(blockOf(102), blockOf(101, 101, "0xnew"), blockOf(102, 102, "0xnew2"), blockOf(103))
     assert.deepEqual(await second, { kind: "block", blockNum: 103, reorgFrom: 101, via: "stream" })
-    assert.ok(Date.now() - started >= 45)
+    assert.ok(Date.now() - started >= 195)
     await chain.stop()
   })
 
