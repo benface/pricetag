@@ -63,6 +63,10 @@ export function txFilters(txs: readonly { block_num: number; tx_hash: string }[]
   return result
 }
 
+/**
+ * The newest block from `after` on. With no newer block to go from, pass the dataset's start block if there is one:
+ * Amp only skips files on a range, and on staging this query took 8 s with no bound and 0.4 s with one.
+ */
 export async function readHead(query: Query, dataset: string, after: number | null): Promise<Head | null> {
   const where = after === null ? "" : `WHERE block_num >= ${after}`
   const rows = await query<Row>(`SELECT block_num, timestamp FROM "${dataset}".blocks ${where} ORDER BY block_num DESC LIMIT 1`, 15_000)
@@ -153,7 +157,7 @@ export const SWAP_TABLES = ["legs", "unlisted_legs", "priced_legs"]
 /** The tables a pricing rule decides. Everything else is what happened on the chain, whichever rule prices it. */
 const PRICE_TABLES = ["priced_legs", "reference_prices"]
 
-export function datasetReader(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined }) {
+export function datasetReader(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string | undefined; startBlock?: number | null | undefined }) {
   const ds = `"${config.dataset}"`
   // A fork of the pricing rule only needs the tables the rule reaches, so these can come from somewhere else.
   const prices = `"${config.priceDataset ?? config.dataset}"`
@@ -185,7 +189,7 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
   }
 
   return {
-    head: (after: number | null) => readHead(query, config.baseDataset, after),
+    head: (after: number | null) => readHead(query, config.baseDataset, after ?? config.startBlock ?? null),
 
     /**
      * The newest block, in `after`..`head`, that all these tables have processed, or null if one has none.
