@@ -3,7 +3,7 @@ import { describe, it } from "node:test"
 import type { OnrampOrder } from "../src/core/api.ts"
 import { currenciesIn, emptyBook, parseBook, recordPurchase, type Purchase } from "../src/core/book.ts"
 import { amountForUsd } from "../src/core/device-read.ts"
-import { checkoutNote, isFollowed, isResolved, microsOf, pageOf, parseTrackedPurchases, phaseOf, purchaseOf, purchaseStatus, purchaseTitle, readOrder, startCheckout, trimmed, typedAmount, type TrackedPurchase } from "../src/core/purchases.ts"
+import { changeStoredPurchases, checkoutNote, isFollowed, isResolved, microsOf, pageOf, parseTrackedPurchases, phaseOf, purchaseOf, purchaseStatus, purchaseTitle, readOrder, settleOrder, startCheckout, storedPurchases, trimmed, typedAmount, type TrackedPurchase } from "../src/core/purchases.ts"
 import { costProof, purchaseSource } from "../src/core/wording.ts"
 import { TOKENS } from "@pricetag/sdk/core"
 
@@ -80,6 +80,34 @@ describe("where a purchase has got to", () => {
     const finished = Array.from({ length: 7 }, (_, i) => tracked({ ref: `done-${i}`, order: order() }))
     const refs = trimmed([tracked({ ref: "open" }), ...finished]).map(({ ref }) => ref)
     assert.deepEqual(refs, ["open", "done-2", "done-3", "done-4", "done-5", "done-6"])
+  })
+
+  it("records an older order that finishes after five newer ones, and keeps its row", () => {
+    const kept = new Map<string, string>()
+    const storage = { getItem: (key: string) => kept.get(key) ?? null, setItem: (key: string, value: string) => void kept.set(key, value) }
+    const newer = Array.from({ length: 5 }, (_, i) => tracked({ ref: `done-${i}`, order: order({ id: `order-done-${i}` }) }))
+    changeStoredPurchases(storage, () => [tracked({ ref: "older", order: order({ id: "older", status: "pending", txHash: null, blockNum: null }) }), ...newer])
+    const recorded: (Purchase & { rowsThen: number })[] = []
+    const rows = settleOrder(storage, "older", order({ id: "older" }), (purchase) => recorded.push({ ...purchase, rowsThen: storedPurchases(storage).length }))
+    assert.equal(recorded[0]?.order, "older")
+    // In the book before anything could take its row away.
+    assert.equal(recorded[0]?.rowsThen, 6)
+    assert.deepEqual(rows.map(({ ref }) => ref), ["older", "done-1", "done-2", "done-3", "done-4"])
+    assert.deepEqual(storedPurchases(storage), rows)
+    // It's only kept while it's the one just read, so five finished rows stay the limit.
+    changeStoredPurchases(storage, (current) => [...current, tracked({ ref: "newest" })])
+    const next = settleOrder(storage, "newest", order({ id: "newest" }), () => {})
+    assert.deepEqual(next.map(({ ref }) => ref), ["done-1", "done-2", "done-3", "done-4", "newest"])
+  })
+
+  it("doesn't record a row or lose one for an order that isn't delivered yet", () => {
+    const kept = new Map<string, string>()
+    const storage = { getItem: (key: string) => kept.get(key) ?? null, setItem: (key: string, value: string) => void kept.set(key, value) }
+    changeStoredPurchases(storage, () => [tracked()])
+    let records = 0
+    const rows = settleOrder(storage, "ref-1", order({ status: "pending", txHash: null, blockNum: null }), () => records++)
+    assert.equal(records, 0)
+    assert.equal(rows[0]?.order?.status, "pending")
   })
 
   it("says it plainly", () => {

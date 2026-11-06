@@ -1,52 +1,55 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import type { CurrencyCode } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../core/api.ts"
-import { emptyBook, linkDeviceAccounts, parseBook, recordPurchase, type Book, type Purchase } from "../core/book.ts"
+import { applyAnswer, changeStoredBook, isBookKey, linkDeviceAccounts, recordPurchase, storedBook, undoAnswer, type Book, type Purchase } from "../core/book.ts"
 import { readKey, readsMatching } from "../core/resolve.ts"
 import { walletUrl } from "./useWallet.ts"
 
-const KEY = "patina.book"
+type Step = { before: Book; after: Book }
 
-function readBook(): Book {
-  try {
-    return parseBook(JSON.parse(localStorage.getItem(KEY) ?? "null")) ?? emptyBook()
-  } catch {
-    return emptyBook()
-  }
-}
-
-/** The user's answers, kept in this browser and nowhere else. Undo goes back one answer at a time. */
+/** The user's answers, kept in this browser and nowhere else. Undo goes back one of this tab's answers at a time, and leaves what other tabs have said. */
 export function useBook() {
-  const [book, setBook] = useState(readBook)
-  const [history, setHistory] = useState<Book[]>([])
+  const [book, setBook] = useState(() => storedBook(localStorage))
+  const [history, setHistory] = useState<Step[]>([])
 
-  useEffect(() => localStorage.setItem(KEY, JSON.stringify(book)), [book])
+  const save = useCallback((update: (latest: Book) => Book) => {
+    const next = changeStoredBook(localStorage, update)
+    if (next) setBook(next)
+  }, [])
+
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (isBookKey(event.key)) setBook(storedBook(localStorage))
+    }
+    window.addEventListener("storage", onStorage)
+    return () => window.removeEventListener("storage", onStorage)
+  }, [])
 
   const change = useCallback(
     (next: Book) => {
-      setHistory((h) => [...h, book])
-      setBook(next)
+      setHistory((h) => [...h, { before: book, after: next }])
+      save((latest) => applyAnswer(latest, book, next))
     },
-    [book],
+    [book, save],
   )
   const undo = useCallback(() => {
-    const previous = history.at(-1)
-    if (!previous) return
+    const step = history.at(-1)
+    if (!step) return
     setHistory(history.slice(0, -1))
-    setBook(previous)
-  }, [history])
+    save((latest) => undoAnswer(latest, step.before, step.after))
+  }, [history, save])
 
   // Not an answer, so undo doesn't take it back, whichever answers came before it.
-  const linkAccounts = useCallback((addresses: readonly string[]) => {
-    setBook((current) => linkDeviceAccounts(current, addresses))
-    setHistory((earlier) => earlier.map((one) => linkDeviceAccounts(one, addresses)))
-  }, [])
+  const linkAccounts = useCallback(
+    (addresses: readonly string[]) => {
+      save((latest) => linkDeviceAccounts(latest, addresses))
+      setHistory((earlier) => earlier.map(({ before, after }) => ({ before: linkDeviceAccounts(before, addresses), after: linkDeviceAccounts(after, addresses) })))
+    },
+    [save],
+  )
 
   // What an order says, and not an answer either.
-  const addPurchase = useCallback((purchase: Purchase) => {
-    setBook((current) => recordPurchase(current, purchase))
-    setHistory((earlier) => earlier.map((one) => recordPurchase(one, purchase)))
-  }, [])
+  const addPurchase = useCallback((purchase: Purchase) => save((latest) => recordPurchase(latest, purchase)), [save])
 
   return { book, change, undo, canUndo: history.length > 0, linkAccounts, addPurchase }
 }

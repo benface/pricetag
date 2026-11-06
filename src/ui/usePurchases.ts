@@ -1,17 +1,10 @@
 import { useCallback, useEffect, useState } from "react"
 import type { Money, Purchase } from "../core/book.ts"
-import { isFollowed, isResolved, parseTrackedPurchases, purchaseOf, readOrder, startCheckout, trimmed, type CheckoutRequest, type TrackedPurchase } from "../core/purchases.ts"
+import { changeStoredPurchases, isFollowed, isPurchasesKey, isResolved, purchaseOf, readOrder, settleOrder, startCheckout, storedPurchases, type CheckoutRequest, type TrackedPurchase } from "../core/purchases.ts"
 
-const KEY = "patina.purchases"
 const POLL_MS = 10_000
 
-function readTracked(): TrackedPurchase[] {
-  try {
-    return parseTrackedPurchases(JSON.parse(localStorage.getItem(KEY) ?? "null"))
-  } catch {
-    return []
-  }
-}
+const readTracked = () => storedPurchases(localStorage)
 
 /**
  * Purchases started from this browser, followed across reloads. Each change starts from what's stored, so a second tab can't
@@ -23,19 +16,18 @@ export function usePurchases(record: (purchase: Purchase) => void) {
   const [problem, setProblem] = useState<string | null>(null)
 
   const update = useCallback((change: (current: TrackedPurchase[]) => TrackedPurchase[]) => {
-    const next = change(readTracked())
-    localStorage.setItem(KEY, JSON.stringify(next))
-    setPurchases(next)
+    setPurchases(changeStoredPurchases(localStorage, change))
   }, [])
 
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
-      if (event.key === KEY) setPurchases(readTracked())
+      if (isPurchasesKey(event.key)) setPurchases(readTracked())
     }
     window.addEventListener("storage", onStorage)
     return () => window.removeEventListener("storage", onStorage)
   }, [])
 
+  // Checking an order records it too. This is for a row saved in another tab or an earlier visit.
   useEffect(() => {
     for (const { order } of purchases) {
       const purchase = order && purchaseOf(order)
@@ -62,7 +54,7 @@ export function usePurchases(record: (purchase: Purchase) => void) {
           const order = await readOrder(ref, abort.signal)
           if (abort.signal.aborted) return
           // A failed read changes nothing, so a purchase can't get lost.
-          if (order) update((current) => trimmed(current.map((one) => (one.ref === ref ? { ...one, order } : one))))
+          if (order) setPurchases(settleOrder(localStorage, ref, order, record))
         } catch (error) {
           if (abort.signal.aborted) return
           failure = error instanceof TypeError || !(error instanceof Error) ? "Can't reach the server." : error.message
@@ -82,7 +74,7 @@ export function usePurchases(record: (purchase: Purchase) => void) {
       clearTimeout(timer)
       document.removeEventListener("visibilitychange", onVisible)
     }
-  }, [unresolved, update])
+  }, [unresolved, record])
 
   /** Asks for a page, and starts following it. Throws when there's no page to open, with something to say about why. */
   const begin = useCallback(

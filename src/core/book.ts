@@ -103,6 +103,38 @@ export function recordPurchase(book: Book, purchase: Purchase): Book {
   return { ...book, purchases: [...earlier.filter(({ order }) => order !== purchase.order), purchase] }
 }
 
+/** Sorted first, because a book that's been saved and read back has the same things in a different order. */
+const canonical = (value: unknown) => JSON.stringify(value, (_, inner) => (plainRecord(inner) ? Object.fromEntries(Object.entries(inner).sort(([a], [b]) => (a < b ? -1 : 1))) : inner))
+const same = (a: unknown, b: unknown) => canonical(a) === canonical(b)
+
+function moveEntries<T>(latest: Readonly<Record<string, T>>, from: Readonly<Record<string, T>>, to: Readonly<Record<string, T>>, keepNewer: boolean): Record<string, T> {
+  const moved = { ...latest }
+  for (const key of new Set([...Object.keys(from), ...Object.keys(to)])) {
+    if (same(from[key], to[key]) || (keepNewer && !same(latest[key], from[key]))) continue
+    const value = to[key]
+    if (value === undefined) delete moved[key]
+    else moved[key] = value
+  }
+  return moved
+}
+
+function moveRows<T>(latest: readonly T[], from: readonly T[], to: readonly T[]): T[] {
+  const keys = (rows: readonly T[]) => new Set(rows.map(canonical))
+  const [was, is] = [keys(from), keys(to)]
+  const kept = latest.filter((row) => !was.has(canonical(row)) || is.has(canonical(row)))
+  const there = keys(kept)
+  return [...kept, ...to.filter((row) => !was.has(canonical(row)) && !there.has(canonical(row)))]
+}
+
+/**
+ * Only what an answer changed, on top of the latest book, so whatever another tab has saved since stays. Purchases and linked
+ * wallets aren't answers, so they're never touched. The latest word on anything the answer changed is the answer, since someone just gave it.
+ */
+export const applyAnswer = (latest: Book, before: Book, after: Book): Book => ({ ...latest, senders: moveEntries(latest.senders, before.senders, after.senders, false), costs: moveEntries(latest.costs, before.costs, after.costs, false), withdrawals: moveRows(latest.withdrawals, before.withdrawals, after.withdrawals) })
+
+/** Takes back only what an answer changed. Anything said about the same thing since, here or in another tab, is newer, so it stays. */
+export const undoAnswer = (latest: Book, before: Book, after: Book): Book => ({ ...latest, senders: moveEntries(latest.senders, after.senders, before.senders, true), costs: moveEntries(latest.costs, after.costs, before.costs, true), withdrawals: moveRows(latest.withdrawals, after.withdrawals, before.withdrawals) })
+
 /** Saying what was paid for a sender's open receipts, by asset. It takes over for those receipts, and any others keep their earlier answers. */
 export function enterExchangeCosts(book: Book, focus: string, sender: string, receipts: readonly Receipt[], amounts: Readonly<Record<string, Money>>): Book {
   const earlier = book.senders[sender]?.kind === "my-exchange" ? (book.senders[sender].costs ?? []) : []
@@ -178,6 +210,30 @@ function parsePurchase(value: unknown): Purchase | null {
   const costUsdMicros = row.costUsdMicros ?? null
   if (!cost || (blockNum !== null && !Number.isSafeInteger(blockNum)) || (costUsdMicros !== null && !isMicros(costUsdMicros))) return null
   return { provider: row.provider, order: row.order, wallet: normalizeAddress(row.wallet), asset: row.asset, units: row.units, txHash: row.txHash.toLowerCase(), blockNum: blockNum as number | null, cost, costUsdMicros: costUsdMicros as string | null }
+}
+
+/** Where a client keeps something. A second tab shares it, so each change starts from what's there, never from what's on screen. */
+export type KeptIn = Pick<Storage, "getItem" | "setItem">
+
+const BOOK_KEY = "patina.book"
+
+export const isBookKey = (key: string | null) => key === null || key === BOOK_KEY
+
+export function storedBook(storage: KeptIn): Book {
+  try {
+    return parseBook(JSON.parse(storage.getItem(BOOK_KEY) ?? "null")) ?? emptyBook()
+  } catch {
+    return emptyBook()
+  }
+}
+
+/** A change to what's stored. Null when it changes nothing, so nothing's written and no other tab hears about it. */
+export function changeStoredBook(storage: KeptIn, change: (latest: Book) => Book): Book | null {
+  const latest = storedBook(storage)
+  const next = change(latest)
+  if (same(next, latest)) return null
+  storage.setItem(BOOK_KEY, JSON.stringify(next))
+  return next
 }
 
 /** A book from a request, or null when it isn't one. Clients can send anything here. */
