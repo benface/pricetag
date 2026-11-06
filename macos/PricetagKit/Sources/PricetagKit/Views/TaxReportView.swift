@@ -62,7 +62,7 @@ public struct TaxReportView: View {
                 } else {
                     Text("Not tax advice.")
                         .font(.callout)
-                        .foregroundStyle(.secondary)
+                        .secondaryText()
                         .help(report?.disclaimer ?? "Check this with an accountant before relying on it.")
                 }
                 Spacer()
@@ -107,7 +107,7 @@ public struct TaxReportView: View {
             if let methodNote {
                 Text(methodNote)
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -299,7 +299,7 @@ public struct TaxReportView: View {
             if report.rowCount > report.preview.count {
                 Text("And \(Format.block(report.rowCount - report.preview.count)) more in the file.")
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
             }
         }
     }

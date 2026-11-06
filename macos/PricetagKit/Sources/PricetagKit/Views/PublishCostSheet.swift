@@ -45,7 +45,7 @@ public struct PublishCostSheet: View {
             }
             Text("It's a transaction from this wallet to itself, so it costs a small network fee and moves nothing else. Touch ID or your password confirms it.")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .secondaryText()
                 .fixedSize(horizontal: false, vertical: true)
             if let shownProblem {
                 WarningText(shownProblem).font(.callout).fixedSize(horizontal: false, vertical: true)
