@@ -34,13 +34,26 @@ public enum Spoken {
     /// The chart in a sentence: how long it covers, where it started and ended, and how high and low it went.
     /// What it can't know is said, never left out: an end that's unknown is "unknown", and an amount that leaves something out is "partial".
     static func chartSummary(_ series: PnlSeries, _ currency: CurrencyCode, isLive: Bool) -> String {
+        chartSummary(.pnl, plotted: series.plotted, hasGaps: !series.gaps.isEmpty, currency, isLive: isLive)
+    }
+
+    static func chartSummary(_ series: ValueSeries, _ currency: CurrencyCode, isLive: Bool) -> String {
+        chartSummary(.value, plotted: series.plotted, hasGaps: !series.gaps.isEmpty, currency, isLive: isLive)
+    }
+
+    static func chartName(_ metric: ChartMetric) -> String {
+        metric == .value ? "Value" : "Total PnL"
+    }
+
+    private static func chartSummary(_ metric: ChartMetric, plotted: [PnlSeries.Plotted], hasGaps: Bool, _ currency: CurrencyCode, isLive: Bool) -> String {
         let freshness = isLive ? "" : " Not updating."
-        guard let first = series.plotted.first, let last = series.plotted.last else { return "Total PnL over time: nothing to show yet.\(freshness)" }
+        let name = chartName(metric)
+        guard let first = plotted.first, let last = plotted.last else { return "\(name) over time: nothing to show yet.\(freshness)" }
         let money = { (point: PnlPoint) in
-            point.pnlMicros.map { Format.signedMoney($0, currency) + (point.excludedCount > 0 ? " (partial)" : "") } ?? "unknown"
+            metric.micros(point).map { chartMoney($0, metric, currency) + (metric.excludedCount(point) > 0 ? " (partial)" : "") } ?? "unknown"
         }
-        var sentence = "Total PnL over time, from \(Format.time(first.date)) to \(Format.time(last.date))."
-        let known = series.plotted.filter { $0.value != nil }
+        var sentence = "\(name) over time, from \(Format.time(first.date)) to \(Format.time(last.date))."
+        let known = plotted.filter { $0.value != nil }
         if known.isEmpty {
             sentence += " It's unknown for all of it."
         } else {
@@ -50,18 +63,23 @@ public enum Spoken {
             }
             sentence += "."
         }
-        let transactions = series.plotted.filter { $0.point.txHash != nil }.count
+        let transactions = plotted.filter { $0.point.txHash != nil }.count
         sentence += " \(transactions == 1 ? "1 transaction" : "\(transactions) transactions")."
-        if !known.isEmpty, !series.gaps.isEmpty { sentence += " Unknown for part of it." }
-        if known.contains(where: { $0.point.excludedCount > 0 }) { sentence += " Some of it leaves out what's unknown." }
+        if !known.isEmpty, hasGaps { sentence += " Unknown for part of it." }
+        if known.contains(where: { metric.excludedCount($0.point) > 0 }) { sentence += " Some of it leaves out what's unknown." }
         return sentence + freshness
     }
 
     /// One transaction on the chart, for stepping through it.
-    static func chartStep(_ plotted: PnlSeries.Plotted, _ currency: CurrencyCode) -> String {
-        var parts = [Format.time(plotted.date), plotted.point.pnlMicros.map { Format.signedMoney($0, currency) } ?? "unknown"]
+    static func chartStep(_ plotted: PnlSeries.Plotted, _ currency: CurrencyCode, metric: ChartMetric = .pnl) -> String {
+        var parts = [Format.time(plotted.date), metric.micros(plotted.point).map { chartMoney($0, metric, currency) } ?? "unknown"]
         if let summary = plotted.point.summary { parts.append(summary) }
-        if plotted.point.excludedCount > 0 { parts.append("leaves out \(plotted.point.excludedCount) unknown") }
+        let excluded = metric.excludedCount(plotted.point)
+        if excluded > 0 { parts.append(metric == .value ? "leaves out \(excluded == 1 ? "1 holding" : "\(excluded) holdings")" : "leaves out \(excluded) unknown") }
         return parts.joined(separator: ", ")
+    }
+
+    private static func chartMoney(_ micros: String, _ metric: ChartMetric, _ currency: CurrencyCode) -> String {
+        metric == .value ? Format.money(micros, currency) : Format.signedMoney(micros, currency)
     }
 }

@@ -18,6 +18,7 @@ Usage:
 --settle <seconds> With --live, how long to wait for what a scene loads after it appears. 6 by default.
 --frames <n>       <output> is a folder: captures n frames from a real window while a motion-* scene plays, as fast as capturing goes.
 --slowdown <x>     With --frames, plays the app's animations x times slower, because capturing takes about 100 ms a frame.
+--chart <metric>   What the Overview chart shows: value or pnl. pnl by default.
 USAGE
   exit 64
 }
@@ -73,6 +74,12 @@ while [ $# -gt 0 ]; do
       live="$live --slowdown $2"
       shift
       ;;
+    --chart)
+      [ $# -ge 2 ] || usage
+      case $2 in value | pnl) ;; *) usage ;; esac
+      live="$live --chart-metric $2"
+      shift
+      ;;
     *) usage ;;
   esac
   shift
@@ -80,7 +87,7 @@ done
 
 # Without the sandbox, there's no container for macOS to stop the launch and ask about when a build's signature changes.
 # Fixtures come from the bundle and PNGs go to the run's folder, so this reads and writes nothing it wouldn't otherwise.
-xcodebuild -quiet \
+"$here/swift-queue.sh" xcodebuild -quiet \
   -project "$here/App.xcodeproj" -scheme App -configuration Debug \
   -derivedDataPath "$here/build/test-mode" -destination 'platform=macOS' \
   -onlyUsePackageVersionsFromResolvedFile ENABLE_APP_SANDBOX=NO build >&2

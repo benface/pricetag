@@ -1,13 +1,15 @@
 import { useLayoutEffect, useRef, useState } from "react"
 import { formatPrice, formatSignedAmount, formatTime, shortHash, type CurrencyCode, type LegEffect } from "@pricetag/sdk/core"
+import type { CombinedExplanation } from "../core/combined.ts"
 import { describeConversion, describeEffect, describeNetting, type Explanation } from "../core/explain.ts"
-import { STARTING_BALANCE, actionLabel, activityTitle, costTag, pnlHelp, priceSourceLabel } from "../core/wording.ts"
+import { IN_EACH_WALLET, STARTING_BALANCE, actionLabel, activityTitle, costTag, pnlHelp, priceSourceLabel } from "../core/wording.ts"
 import { ProofPanel } from "./ProofPanel.tsx"
 
 /** A busy wallet has thousands of legs, and the newest are the ones anyone reads. */
 const MAX_LEGS_SHOWN = 200
 
-function LegRow({ effect, currency, address, rule }: { effect: LegEffect; currency: CurrencyCode; address: string; rule: string | null }) {
+/** `wallet` is which of several wallets this is in, when there are several. */
+function LegRow({ effect, currency, address, wallet, rule }: { effect: LegEffect; currency: CurrencyCode; address: string; wallet: string | null; rule: string | null }) {
   const { leg } = effect
   const [showsProof, setShowsProof] = useState(false)
   const toggleProof = () => setShowsProof((shown) => !shown)
@@ -25,6 +27,7 @@ function LegRow({ effect, currency, address, rule }: { effect: LegEffect; curren
         </span>
       </div>
       <div className="leg-tags">
+        {wallet ? <span className="tag mono">In {shortHash(wallet)}</span> : null}
         <span className="tag">{leg.opening ? STARTING_BALANCE : actionLabel(leg.kind, incoming)}</span>
         {leg.opening ? null : leg.priceMicros !== null && leg.priceSource ? (
           leg.txHash ? (
@@ -59,12 +62,13 @@ function LegRow({ effect, currency, address, rule }: { effect: LegEffect; curren
           </button>
         </div>
       )}
-      {showsProof && !leg.opening && leg.txHash ? <ProofPanel key={`${address}:${currency}:${rule}`} address={address} legId={leg.id} currency={currency} rule={rule} /> : null}
+      {showsProof && !leg.opening && leg.txHash ? <ProofPanel key={`${wallet ?? address}:${currency}:${rule}`} address={wallet ?? address} legId={leg.id} currency={currency} rule={rule} /> : null}
     </li>
   )
 }
 
-export function ExplainPanel({ explanation, address, rule, onClose }: { explanation: Explanation; address: string; rule: string | null; onClose: () => void }) {
+export function ExplainPanel({ explanation, address, rule, onClose }: { explanation: Explanation | CombinedExplanation; address: string; rule: string | null; onClose: () => void }) {
+  const across = "parts" in explanation ? explanation : null
   const dialog = useRef<HTMLDialogElement>(null)
   const close = useRef<HTMLButtonElement>(null)
 
@@ -109,11 +113,33 @@ export function ExplainPanel({ explanation, address, rule, onClose }: { explanat
             {line}
           </p>
         ))}
+        {across && across.parts.length > 0 ? (
+          <>
+            <h3>{IN_EACH_WALLET}</h3>
+            <ul className="wallet-parts">
+              {across.parts.map(({ wallet, value, lines }) => (
+                <li key={wallet}>
+                  <div className="leg-main">
+                    <strong className="mono">{shortHash(wallet)}</strong>
+                    <span>{value ?? <span className="warn-text">⚠ Unavailable</span>}</span>
+                  </div>
+                  {lines.map((line) => (
+                    <p key={line} className="small muted" title={pnlHelp(line)}>
+                      {line}
+                    </p>
+                  ))}
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : null}
         <h3>{activityTitle(explanation.effects.length, Math.min(explanation.effects.length, MAX_LEGS_SHOWN))}</h3>
         <ul className="legs">
-          {explanation.effects.slice(0, MAX_LEGS_SHOWN).map((effect) => (
-            <LegRow key={effect.leg.id} effect={effect} currency={explanation.currency} address={address} rule={rule} />
-          ))}
+          {explanation.effects.slice(0, MAX_LEGS_SHOWN).map((effect) => {
+            // A move between two of the wallets is the same leg in both.
+            const wallet = across?.walletOf(effect.leg) || null
+            return <LegRow key={`${wallet}:${effect.leg.id}`} effect={effect} currency={explanation.currency} address={address} wallet={wallet} rule={rule} />
+          })}
         </ul>
       </div>
     </dialog>

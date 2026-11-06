@@ -69,8 +69,16 @@ actor GatedSource: PortfolioSource {
         throw FetchError.unreachable
     }
 
+    /// A failure rather than a test that spins forever, which keeps going even after `swift test` is killed.
     func waitUntilAsked() async {
-        while waiting == nil { await Task.yield() }
+        let deadline = Date.now.addingTimeInterval(10)
+        while waiting == nil {
+            guard Date.now < deadline else {
+                Issue.record("Nothing asked.")
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(1))
+        }
     }
 
     func answer(_ result: Result<Portfolio, FetchError>) {
@@ -105,8 +113,16 @@ actor TimedOutThenGatedSource: PortfolioSource {
         throw FetchError.unreachable
     }
 
+    /// A failure rather than a test that spins forever, which keeps going even after `swift test` is killed.
     func waitUntilAsked() async {
-        while waiting == nil { await Task.yield() }
+        let deadline = Date.now.addingTimeInterval(10)
+        while waiting == nil {
+            guard Date.now < deadline else {
+                Issue.record("Nothing asked.")
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(1))
+        }
     }
 
     func answer(_ result: Result<Portfolio, FetchError>) {
