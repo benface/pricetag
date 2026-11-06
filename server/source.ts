@@ -3,8 +3,8 @@
 //
 // Every query is bounded by block, because staging is shared.
 
-import { ERC20_ADDRESSES, ETH_ADDRESS, ETH_USD_FEED, MIN_TRADE_USD_MICROS, TOKENS, TOKEN_FEEDS, TOKEN_FEED_WINDOW_SECONDS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, marketTrades, parseNote, type CostNote, type FeedRound, type MarketTrade, type PricedRow } from "@pricetag/sdk/core"
-import { asIso, asNumber, blockFilters, datasetReader, datasetSource, decimalString, decodeRoundAnswer, describeError, hexOf, isNotStarted, prefixed, readBalancesAt, readEthBalancesAt, readFeedRoundsAt, readHead, readPayoutTxsAt, settledThrough, type Followed, type PriceUpdate, type Query, type ReadL1Fees, type Row, type Source, type StreamedTable, type WindowRows } from "@pricetag/sdk/internal"
+import { ERC20_ADDRESSES, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, MIN_TOKEN_TRADE_USD, MIN_TRADE_USD_MICROS, TOKENS, TOKEN_FEEDS, TOKEN_FEED_WINDOW_SECONDS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, marketTrades, parseNote, type TokenActivity, type CostNote, type FeedRound, type MarketTrade, type PricedRow } from "@pricetag/sdk/core"
+import { MARKET_BUCKET_BLOCKS, asIso, asNumber, blockFilters, datasetReader, datasetSource, decimalString, decodeRoundAnswer, describeError, hexOf, isNotStarted, prefixed, readBalancesAt, readTokenFactsAt, readEthBalancesAt, readFeedRoundsAt, readHead, readPayoutTxsAt, settledThrough, type Followed, type PriceUpdate, type Query, type ReadL1Fees, type Row, type Source, type StreamedTable, type WindowRows } from "@pricetag/sdk/internal"
 import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, legRowsFromRaw, type RawLog, type RawTx } from "./raw.ts"
 
 /** One `AnswerUpdated` of a token's feed, in the feeds dataset. */
@@ -124,6 +124,7 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
     readReferences,
     readLatestReference: async (head) => (await readReferences([head]))[0] ?? null,
     readBalances: (address, block) => readBalancesAt(query, config.network, address, block),
+    readTokenFacts: readTokenFactsAt(query, config.network),
     readNotes: (address, blocks) => readNotesAt(query, config.baseDataset, address, blocks),
     readEthBalances: (address, blocks) => readEthBalancesAt(query, config.network, config.baseDataset, address, blocks),
     readPayoutTxs: (address, blocks) => readPayoutTxsAt(query, config.baseDataset, address, blocks),
@@ -369,11 +370,37 @@ export function settledL1Fees(read: ReadL1Fees, tip: () => number | null): ReadL
   })
 }
 
+/** The last block of a pricing bucket's 5 minutes, which is the first block a price can see all of them from. Blocks got 10 times faster, so its buckets did too. A remainder, because this engine's `/` doesn't round. */
+const tokenBinSql = (size: number) => `(block_num + ${size - 1}) - (block_num + ${size - 1}) % ${size}`
+
+/**
+ * A token's trades, one row per sender and side every 5 minutes, so a busy token's still a small read. Each is dated by its last trade, so no
+ * price looks ahead of its time. The 5 minutes are a pricing bucket's rather than the clock's, so a read that goes further leaves these rows as they are.
+ */
+function readTokenActivityFrom(query: Query, dataset: string) {
+  return async (tokens: readonly string[], from: number, to: number): Promise<TokenActivity[]> => {
+    const rows = await query<Row>(
+      `SELECT token, sender, side, CASE WHEN block_num > ${LAST_2S_BLOCK} THEN ${tokenBinSql(MARKET_BUCKET_BLOCKS * 10)} ELSE ${tokenBinSql(MARKET_BUCKET_BLOCKS)} END AS bin, MAX(timestamp) AS at, SUM(CAST(usd_micros AS DOUBLE)) AS usd_micros, SUM(CAST(token_amount AS DOUBLE)) AS raw, COUNT(*) AS trades
+       FROM "${dataset}".token_trades
+       WHERE block_num BETWEEN ${from} AND ${to} AND token IN (${tokens.map((token) => `X'${hexOf(token)}'`).join(", ")}) AND CAST(usd_micros AS DOUBLE) >= ${MIN_TOKEN_TRADE_USD * 1_000_000}
+       GROUP BY token, sender, side, bin`,
+      120_000,
+    )
+    return rows.map((r) => ({ token: prefixed(String(r.token)), bin: Number(r.bin), timeMs: Number(r.at), sender: String(r.sender), side: r.side as "buy" | "sell", usd: Number(r.usd_micros) / 1e6, raw: Number(r.raw), trades: Number(r.trades) }))
+  }
+}
+
+/** How far `token_trades` has got, which is its own, since it's its own dataset with its own job. */
+function tokenTradesThrough(query: Query, baseDataset: string, dataset: string) {
+  const { processedThrough } = datasetReader(query, { baseDataset, dataset })
+  return (after: number, head: number) => processedThrough(after, head, ["token_trades"])
+}
+
 /**
  * The SDK's `datasetSource`, plus what only working out a cost needs: who was on the other side, notes, and market prices.
  * Pricing rules of one wallet history pass the same `shared`, so only what a rule changes is read for each.
  */
-export function resolvingSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string; feedsDataset?: string | undefined; startBlock: number; network: string; followed?: Followed<StreamedTable> | undefined }, shared = sharedReads(query, config)): Source {
+export function resolvingSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string; feedsDataset?: string | undefined; startBlock: number; network: string; tokensDataset?: string | undefined; followed?: Followed<StreamedTable> | undefined }, shared = sharedReads(query, config)): Source {
   const { readPricedOf } = datasetReader(query, config)
   const ds = `"${config.dataset}"`
   // What a fork of the pricing rule changes, so its market prices come from its own trades.
@@ -383,6 +410,7 @@ export function resolvingSource(query: Query, config: { baseDataset: string; dat
     readNotes: shared.readNotes,
     readEthBalances: shared.readEthBalances,
     readFeedRounds: config.feedsDataset ? updateFeedRounds(query, { baseDataset: config.baseDataset, feedsDataset: config.feedsDataset }, readFeedRoundsAt(query, config)) : readFeedRoundsAt(query, config),
+    ...(config.tokensDataset ? { readTokenActivity: readTokenActivityFrom(query, config.tokensDataset), tokenActivityThrough: tokenTradesThrough(query, config.baseDataset, config.tokensDataset) } : {}),
 
     async readWindow(address, from, to) {
       const legs = await shared.readLegs(address, from, to)

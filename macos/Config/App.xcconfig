@@ -4,7 +4,8 @@ APP_NAME = Patina
 PRODUCT_NAME = $(APP_NAME)
 PRODUCT_MODULE_NAME = MacApp
 // Not .mac, which our personal team registered, so no other team can have it. A bundle ID belongs to one team for good.
-PRODUCT_BUNDLE_IDENTIFIER = com.benface.pricetag.macos.wallet
+APP_BUNDLE_ID = com.benface.pricetag.macos.wallet
+PRODUCT_BUNDLE_IDENTIFIER = $(APP_BUNDLE_ID)
 // A debug build gets its own settings and records, so trying things can't touch the real wallet.
 PRODUCT_BUNDLE_IDENTIFIER[config=Debug] = com.benface.pricetag.macos.debug
 MARKETING_VERSION = 0.1.0
@@ -25,7 +26,8 @@ ENABLE_USER_SCRIPT_SANDBOXING = YES
 
 // A menu bar app with no Dock icon until its window opens. See DockPresence.swift.
 GENERATE_INFOPLIST_FILE = YES
-INFOPLIST_FILE = Config/Info.plist
+APP_INFOPLIST = Config/Info.plist
+INFOPLIST_FILE = $(APP_INFOPLIST)
 INFOPLIST_KEY_CFBundleDisplayName = $(APP_NAME)
 INFOPLIST_KEY_LSUIElement = YES
 INFOPLIST_KEY_LSApplicationCategoryType = public.app-category.finance

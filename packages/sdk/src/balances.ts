@@ -2,6 +2,7 @@
 // Encoding is by hand because it's the only ABI this app writes, and it stays pure so a test can run it on real bytes.
 
 import type { Query } from "./amp.ts"
+import { decodeTokenFacts, encodeTokenFacts, type ReadTokenFacts } from "./other-tokens.ts"
 import type { BalanceSnapshot } from "./reconcile.ts"
 import { ETH_ADDRESS, TOKENS, normalizeAddress } from "./tokens.ts"
 
@@ -81,4 +82,15 @@ export async function readBalancesAt(query: Query, network: string, address: str
   const [row] = await query<Record<string, unknown>>(`SELECT rpc.${network}.eth_call(NULL, evm_encode_hex('${MULTICALL3}'), X'${encodeBalanceCalls(address)}', ${block}) AS r`)
   const results = decodeBalanceResults((row?.r as { data?: string } | null | undefined)?.data)
   return results && { blockNum: block, amounts: balancesByAsset(results) }
+}
+
+/** Other tokens' reads wait in line ahead of a wallet's next read, so one that hangs is given up on quickly. */
+const TOKEN_FACTS_TIMEOUT_MS = 8_000
+
+/** One `eth_call` to Multicall3, like `readBalancesAt`. It only reads a contract, with nothing sent or signed. */
+export function readTokenFactsAt(query: Query, network: string): ReadTokenFacts {
+  return async (account, requests, block) => {
+    const [row] = await query<Record<string, unknown>>(`SELECT rpc.${network}.eth_call(NULL, evm_encode_hex('${MULTICALL3}'), X'${encodeTokenFacts(account, requests)}', ${block}) AS r`, TOKEN_FACTS_TIMEOUT_MS)
+    return decodeTokenFacts((row?.r as { data?: string } | null | undefined)?.data, requests)
+  }
 }

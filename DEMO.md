@@ -4,13 +4,41 @@
 
 All times are Montréal. Numbers marked *measured* come from the real server against staging, and say when if they're older than this morning. Button names come from the code on `main` at `a25c96a`, and from its screens rendered with fixtures. Nobody has clicked through this in the real window yet, so the rehearsal is the test.
 
+## The talk
+
+About 3 minutes of speaking, on top of the steps' 5, so about 8 in all. Numbers come from `AMP-ASSESSMENT.md` as of WORK-602's PR #197, and sections 9 and 7 say why it's worded this way.
+
+**Opening, before step 1:**
+
+"A chain records what moved, not what it was worth. So any wallet can show your balance, but what you paid and whether you're up has to be worked out. We wanted to find out how far Amp could take that. Pricetag is one Amp dataset on Base: 16 tables of SQL, with no fork, no contracts and no indexer of ours to run. It reads Chainlink's own logs and each swap's rate, and puts a dollar price on transfers of ETH and 9 other tokens, seconds behind the chain. An SDK turns those priced transfers into positions, cost and PnL for any wallet, back to Wednesday, when the dataset starts. And Patina is the wallet we built on it, to see if it holds up for real money."
+
+**How we used Amp, added to these steps:** steps 4 and 8 have about 10 s of waiting, so talk through it.
+
+| Step | Add |
+|---|---|
+| 2 | "The first version, six tables on a local Amp, reached chain head 29 minutes after we started. Agents did that work." If asked about staging: "3 hours 22, and about 2 of those were waiting for a token that could write." |
+| 4 | "Amp's rows carry almost everything that takes, and the rest comes from an RPC." |
+| 5 | "Finding it takes balances at past blocks. Amp's `rpc.eth_call` reads those, with no archive node of our own." |
+| 6 | "Working out what Coinbase's payouts look like took one query over a day of the whole chain: one sender, 1,437 ETH payouts." |
+| 7 | "A wrong fingerprint fails, instead of showing other numbers." |
+| 8 | "We could try rules like this because being wrong was cheap. On the first day, replacing the whole dataset took about 4 minutes, and we registered about 14 versions in about 5 hours." |
+
+**Close, after step 10:**
+
+"Amp delivered what this depended on. Of the alternatives whose docs we read, it's the only live, hosted SQL with joins. Where it fell short is what we'd improve for this use case. Top of the list: traces. Without them, ETH arriving through a contract is invisible, which is why we check balances and ask you. Second, complete OP Stack receipts, like the L1 fee, so a wallet's cost needs no separate RPC. Third, quick lookups by account. Bloom filters skip most of the data for one wallet, but a quiet wallet's first read was still 13 to 33 seconds this morning. Some of that may be our own queries, and we haven't broken it down. Fourth, reliability: stopping one job can panic another, and it stays down with no read error, so numbers just freeze. It's rare, but we run a small watcher for it today. All of this was on staging, a shared test environment, so it says little about production. The same SQL also ran on Ethereum, but correct gas needs per-chain work, and only some chains' raw data is fresh. We wrote it all up in an assessment, so ask me if you want it."
+
+**If asked:**
+- **Would something else have been better?** "For the whole idea, no. Of what we read, only Amp has live, hosted SQL with joins, though we read docs and tested none of them. For parts, yes. SQD and Allium document traces and the L1 fee on Base, and Goldsky Feeds already sells a price per transfer. For just a PnL number, Zerion's API would've taken an afternoon, but with its rules, and no explanation of a number."
+- **What did Amp do best?** "A small dataset beside the big one. A pricing rule is a 2-table fork, and rates and the other 8 feeds each became their own dataset, so the main one wasn't replaced. And questions about the whole chain took one query."
+- **Does Verify need Amp?** "No. Amp's rows made it easy, but it works on any source that returns complete block rows, including a plain RPC."
+
 ## The story
 
 **The line:** every transfer gets a price, and your wallet finally knows what you paid.
 
-**The problem.** A chain records what moved, not what it was worth. So wallets show a balance, and nobody can say what you paid or whether you're up.
+**The problem.** A chain records what moved, not what it was worth. So wallets can show a balance, but what you paid and whether you're up has to be worked out.
 
-**What we built.** Pricetag is one Amp derived dataset on Base, with no fork, validators or contracts. It reads Chainlink's own logs and each swap's implied rate, then puts a USD price on transfers of ETH and 9 other listed tokens. A token off the list shows up with no price, and it's never guessed. Patina is a self-custody Mac wallet built on those prices.
+**What we built.** Pricetag is one Amp derived dataset on Base, with no fork, validators or contracts. It reads Chainlink's own logs and each swap's implied rate, then puts a USD price on transfers of ETH and 9 other listed tokens. A token off the list shows up with its balance and no price, and it's never guessed. Patina is a self-custody Mac wallet built on those prices.
 
 **Why it needs Amp.** Three things this made easy:
 1. **The dataset is SQL over Base's raw data,** so there's no indexer of ours to run. It's 16 tables, about 5 GB, seconds behind the chain. If asked: "Transfers about 3 seconds, prices about 7." And: "We also run a small script through the demo that restarts a job if it dies."
@@ -22,7 +50,7 @@ All times are Montréal. Numbers marked *measured* come from the real server aga
 **It's not a trading app.** Patina helps you invest, and sometimes trade when the timing is right. Nothing in it rewards trading more.
 
 **Don't claim:**
-- "Every token." It's 10 assets. The rest are listed with no price.
+- "Every token is priced." It's 10 assets. Any other token that's moved since the dataset's start shows its balance with no price, and likely spam is tucked away.
 - "Verify proves the SQL or the chain." It doesn't show that the header is on Base's real chain, that the SQL ran correctly, or that Chainlink's number is right. Say so, because it's more convincing.
 - "Audited." The hot wallet is an unreviewed build, for small funds only.
 - "Tested on a real Ledger or Keystone," until it has been.
@@ -33,6 +61,7 @@ All times are Montréal. Numbers marked *measured* come from the real server aga
 - "Nobody else prices transfers." Goldsky Feeds sells a price per transfer. Ours is an open dataset with source labels, a rule you can fork, and an honest "unknown".
 - "Any EVM chain." Say: "The same SQL ran on Ethereum, but correct gas needs per-chain work, and only some chains' raw data is fresh."
 - "Bloom filters made it fast." The demo wallet's cold read barely moved. A read past the first is what's quick.
+- "Install our SDK." It isn't on npm, so don't tell people to install it.
 
 ## Click by click
 

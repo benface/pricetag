@@ -35,6 +35,31 @@
       "transfers": 1
     }
   ],
+  "otherTokens": [
+    {
+      "token": "0x00000000000000000000000000000000000000f1",
+      "kind": "token",
+      "name": "Jackfruit",
+      "symbol": "JACK",
+      "decimals": 18,
+      "balance": "9000000000000000000",
+      "state": "read",
+      "note": null,
+      "tucked": null
+    },
+    {
+      "token": "0x00000000000000000000000000000000000000f2",
+      "kind": "token",
+      "name": "USD Coin",
+      "symbol": "USDC",
+      "decimals": 6,
+      "balance": "5000000000",
+      "state": "read",
+      "note": null,
+      "tucked": "It calls itself USDC, and it isn't the USDC we know."
+    }
+  ],
+  "otherTokensLeftOut": 0,
   "l1FeeUnknownTxs": [],
   "openingUnread": [],
   "unreadAssets": [],

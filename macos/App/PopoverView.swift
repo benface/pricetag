@@ -36,6 +36,10 @@ struct PopoverView: View {
                 Divider()
                 spendingMoney
             }
+            if Build.isWatchOnly {
+                Divider()
+                WatchOnlyNotice()
+            }
             Divider()
             footer
         }
@@ -102,6 +106,8 @@ struct PopoverView: View {
                     .help(Wording.notStarted)
             case (_, let portfolio?) where portfolio.isEmpty:
                 Text("No activity so far").secondaryText()
+            case (_, let portfolio?) where portfolio.holdsOnlyOtherTokens:
+                Text(Wording.nothingPriced).secondaryText()
             case (_, let portfolio?):
                 headline(portfolio)
             case (.reading, nil):

@@ -325,10 +325,40 @@ public enum Wording {
     /// What isn't listed with the holdings, and why it doesn't matter to the numbers. nil when there's nothing.
     public static func noMarket(_ portfolio: Portfolio) -> String? {
         let listed = portfolio.noMarketPositions.map(\.asset)
-        let total = listed.count + portfolio.unlisted.count
+        return noMarket(listed: listed, others: (portfolio.otherTokens?.count ?? portfolio.unlisted.count) + (portfolio.otherTokensLeftOut ?? 0))
+    }
+
+    static func noMarket(listed: [String], others: Int) -> String? {
+        let total = listed.count + others
         if total == 0 { return nil }
-        let off = portfolio.unlisted.isEmpty ? "" : "\(listed.isEmpty ? "" : ", plus ")\(portfolio.unlisted.count) we don't track"
-        return "\(total) \(total == 1 ? "token" : "tokens") with no market: \(listed.joined(separator: ", "))\(off). Often spam, and not counted in any total."
+        let plus = others > 0 ? ", plus \(others) \(others == 1 ? "other" : "others")" : ""
+        let which = listed.isEmpty ? "" : ": \(listed.joined(separator: ", "))\(plus)"
+        return "\(total) \(total == 1 ? "token" : "tokens") with no price\(which). Not counted in any total."
+    }
+
+    public static let otherTokensTitle = "Other Tokens"
+    public static let nothingPriced = "Nothing Priced"
+    public static let possibleSpamTitle = "Possible Spam"
+    /// The rule, for whoever wonders why something's tucked away. The server is what applies it.
+    public static let possibleSpamRule = "Tucked away if nothing you sent moved it, its name points to a website, it copies a token we know, or its contract doesn't answer properly. This can be wrong: some of these are real, and none of it says what one is worth."
+    /// What's true of every one of them.
+    public static let otherTokensNote = "These have no price, so they aren't in any total. Names are whatever the token's contract claims, so go by its address. This app never moves them."
+
+    public static func otherTokensLeftOut(_ count: Int) -> String? {
+        count > 0 ? "\(count) more \(count == 1 ? "token" : "tokens") moved through this wallet and weren't read. Only the most recent are." : nil
+    }
+
+    public static func otherTokenName(_ token: OtherToken) -> String {
+        token.name ?? token.symbol ?? "Unnamed token"
+    }
+
+    /// How much of it is held, never as $0 or 0 when that isn't known.
+    public static func otherTokenAmount(_ token: OtherToken) -> String {
+        if token.state == .reading { return "Reading…" }
+        guard let balance = token.balance else { return "Unknown" }
+        if token.kind == .collectible { return "\(Format.amount(balance, decimals: 0)) \(balance == "1" ? "item" : "items")" }
+        guard let decimals = token.decimals else { return "\(Format.amount(balance, decimals: 0)) units" }
+        return Format.amount(balance, decimals: decimals)
     }
 
     /// How many wallets All Yours adds up.
@@ -417,6 +447,8 @@ public enum Wording {
     public static let tooNewToChart = "Not enough history for a chart yet."
     public static let reading = "Reading this wallet. The first read can take a minute."
     /// A failed read never touches what's onchain, so this is true of every problem the feed has.
+    /// Always on screen in a watch-only build, so nobody takes it for a wallet that can move money.
+    public static let watchOnlyNotice = "Test version. It only watches wallets: it can't hold a key, sign or send."
     public static let moneyUnaffected = "Your money isn't affected."
     public static let serverTooSlow = "The price service took too long to answer."
     public static let cantReachServer = "Can't reach the price service. Your money isn't affected."

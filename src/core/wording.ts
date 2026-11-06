@@ -2,7 +2,7 @@
 // keep their own names, like `leg`, `oracle` and `fifo`: this is only what people read.
 // `Wording.swift` says the same on the Mac, and a test runs both on the same inputs.
 
-import { formatAmount, formatDuration, formatMoney, msBetweenBlocks, shortHash, worth, type CostLabel, type CurrencyCode, type FoldLeg, type HoldComparison, type Method, type PricedLeg, type PriceSource, type UnseenEth } from "@pricetag/sdk/core"
+import { formatAmount, formatDuration, formatMoney, msBetweenBlocks, shortHash, worth, type OtherToken, type CostLabel, type CurrencyCode, type FoldLeg, type HoldComparison, type Method, type PricedLeg, type PriceSource, type UnseenEth } from "@pricetag/sdk/core"
 import type { Mode } from "./api.ts"
 import type { ValueGaps } from "./attention.ts"
 import type { ReadFailure } from "./read-failure.ts"
@@ -63,7 +63,6 @@ export const ETH_NOTE = "incl. wrapped ETH"
 export const DEMO_NOTICE = "Demo data, not a real wallet."
 export const PNL_UNAVAILABLE = "PnL unavailable"
 export const UNKNOWN = "Unknown"
-export const NO_PRICE = "No price"
 export const UNAVAILABLE = "Unavailable"
 export const ABOUT_THIS_DATA = "What this covers"
 export const MARKET_ESTIMATES = "Some prices are estimates, from the market."
@@ -209,11 +208,36 @@ export function leavesOutSentence({ unresolvedMicros, estimatedMicros }: { unres
 export const unreadBalancesSentence = (assets: readonly string[]) => `Couldn't read the ${assets.join(", ")} ${assets.length === 1 ? "balance" : "balances"}.`
 
 /** What isn't listed with the holdings, and why it doesn't matter to the numbers. null when there's nothing. */
-export function noMarketSentence(listed: readonly string[], unlisted: number): string | null {
-  const total = listed.length + unlisted
+export function noMarketSentence(listed: readonly string[], others: number): string | null {
+  const total = listed.length + others
   if (total === 0) return null
-  const off = unlisted > 0 ? `${listed.length > 0 ? ", plus " : ""}${unlisted} we don't track` : ""
-  return `${total} ${total === 1 ? "token" : "tokens"} with no market: ${listed.join(", ")}${off}. Often spam, and not counted in any total.`
+  const which = listed.length === 0 ? "" : `: ${listed.join(", ")}${others > 0 ? `, plus ${others} ${others === 1 ? "other" : "others"}` : ""}`
+  return `${total} ${total === 1 ? "token" : "tokens"} with no price${which}. Not counted in any total.`
+}
+
+/** The heading's line for tokens with a balance and no price. */
+export const OTHER_TOKENS_TITLE = "Other Tokens"
+export const NO_PRICE = "No price"
+export const POSSIBLE_SPAM_TITLE = "Possible Spam"
+/** The rule, for whoever wonders why something's tucked away. `tuckedReason` in the SDK is what applies it. */
+export const POSSIBLE_SPAM_RULE = "Tucked away if nothing you sent moved it, its name points to a website, it copies a token we know, or its contract doesn't answer properly. This can be wrong: some of these are real, and none of it says what one is worth."
+/** What's true of every one of them. */
+export const OTHER_TOKENS_NOTE = "These have no price, so they aren't in any total. Names are whatever the token's contract claims, so go by its address. This app never moves them."
+
+export function otherTokensLeftOutSentence(count: number): string | null {
+  return count > 0 ? `${count} more ${count === 1 ? "token" : "tokens"} moved through this wallet and weren't read. Only the most recent are.` : null
+}
+
+export function otherTokenName({ name, symbol }: Pick<OtherToken, "name" | "symbol">): string {
+  return name ?? symbol ?? "Unnamed token"
+}
+
+/** How much of it is held, never as $0 or 0 when that isn't known. */
+export function otherTokenAmount({ kind, balance, decimals, state }: Pick<OtherToken, "kind" | "balance" | "decimals" | "state">): string {
+  if (state === "reading") return "Reading…"
+  if (balance === null) return "Unknown"
+  if (kind === "collectible") return `${formatAmount(balance, 0)} ${balance === "1" ? "item" : "items"}`
+  return decimals === null ? `${formatAmount(balance, 0)} units` : formatAmount(balance, decimals)
 }
 
 /** What a total leaves out, or null when it leaves out nothing. */

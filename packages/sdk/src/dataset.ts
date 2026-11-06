@@ -4,7 +4,7 @@
 
 import { asIso, asNumber, decimalString, hexOf, isNotStarted, prefixed, type BlockMark, type Query } from "./amp.ts"
 import { blockBefore } from "./chain.ts"
-import { MULTICALL3, decodeEthBalance, encodeEthBalanceCall, readBalancesAt } from "./balances.ts"
+import { MULTICALL3, decodeEthBalance, encodeEthBalanceCall, readBalancesAt, readTokenFactsAt } from "./balances.ts"
 import type { RateRound } from "./currency.ts"
 import type { Followed } from "./followed.ts"
 import type { LegRow, PayoutTx, PricedRow, Reference } from "./legs.ts"
@@ -393,6 +393,7 @@ export function datasetSource(query: Query, config: { baseDataset: string; datas
     startBlock: config.startBlock,
     historyFrom: null,
     readBalances: (address, block) => readBalancesAt(query, config.network, address, block),
+    readTokenFacts: readTokenFactsAt(query, config.network),
     readEthBalances: (address, blocks) => readEthBalancesAt(query, config.network, config.baseDataset, address, blocks),
     readPayoutTxs: (address, blocks) => readPayoutTxsAt(query, config.baseDataset, address, blocks),
     readFeedRounds: readFeedRoundsAt(query, config),
