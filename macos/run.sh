@@ -28,10 +28,16 @@ configuration=${CONFIGURATION:-Release}
 app="$build/Build/Products/$configuration/$name.app"
 
 # What Xcode says when this Mac can't provision the build. It puts these on the project or on no file at all, so a compile error can't match,
-# whatever it says. Nothing's wrong with this Mac's setup if it couldn't reach Apple, which can come with the same errors, so that doesn't count.
-cant_provision() { # build's output
-  grep -Eq '^(.*\.xcodeproj: )?error: (No Accounts?[: ]|No profiles for |No signing certificate |Signing for .* requires a development team|Provisioning profile |Unable to log in with account )' "$1" &&
-    ! grep -Eq 'error: .*(Communication with Apple failed|timed out|appears to be offline|hostname could not be found)' "$1"
+# whatever it says.
+provisioning_error='^(.*\.xcodeproj: )?error: (No Accounts?[: ]|No profiles for |No signing certificate |Signing for .* requires a development team|Provisioning profile |Unable to log in with account )'
+
+# Xcode stops at these errors before it runs any build command, and exits 65. So a kill or a crash (any other exit code), another error alongside them,
+# or a command that failed means something else went wrong too. So does not reaching Apple, which can come with the same errors.
+cant_provision() { # build's exit code, build's output
+  [ "$1" -eq 65 ] &&
+    grep -Eq "$provisioning_error" "$2" &&
+    ! grep -E '(^|[[:space:]])error:' "$2" | grep -Evq "$provisioning_error" &&
+    ! grep -Eq 'The following build commands failed:|Communication with Apple failed|timed out|appears to be offline|hostname could not be found' "$2"
 }
 
 # The hot wallet's key needs the device-only Keychain, and only a provisioned build can reach it. Without that team signed in to
@@ -50,7 +56,7 @@ if build_app -allowProvisioningUpdates \
 else
   status=$?
   cat "$output"
-  cant_provision "$output" || exit "$status"
+  cant_provision "$status" "$output" || exit "$status"
   echo "Couldn't provision this build, so it can't hold a hot wallet. To fix that, sign in to Xcode with the account for team $team." >&2
   build_app APP_SIGN_IDENTITY="${identity:--}"
 fi

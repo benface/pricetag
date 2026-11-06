@@ -39,6 +39,7 @@ function build(output: string, status: number) {
 }
 
 const project = "/Users/me/pricetag/macos/App.xcodeproj"
+const noProfiles = `${project}: error: No profiles for 'com.benface.pricetag.macos.wallet' were found: Xcode couldn't find any Mac App Development provisioning profiles matching 'com.benface.pricetag.macos.wallet'. (in target 'App' from project 'App')`
 
 describe("the first build of pnpm mac", () => {
   test("signs for the team when it passes", () => {
@@ -53,7 +54,7 @@ describe("the first build of pnpm mac", () => {
   for (const error of [
     `${project}: error: No signing certificate "Mac Development" found: No "Mac Development" signing certificate matching team ID "R7TNNTC382" with a private key was found. (in target 'BridgeHost' from project 'App')`,
     `${project}: error: No Account for Team "R7TNNTC382". Add a new account in Accounts settings or verify that your accounts have valid credentials. (in target 'App' from project 'App')`,
-    `${project}: error: No profiles for 'com.benface.pricetag.macos.wallet' were found: Xcode couldn't find any Mac App Development provisioning profiles matching 'com.benface.pricetag.macos.wallet'. (in target 'App' from project 'App')`,
+    noProfiles,
     "error: No Accounts: Add a new account in Accounts settings.",
     `${project}: error: Signing for "App" requires a development team. Select a development team in the Signing & Capabilities editor. (in target 'App' from project 'App')`,
     `${project}: error: Provisioning profile "Mac Team Provisioning Profile: *" doesn't include the currently selected device "Studio". (in target 'App' from project 'App')`,
@@ -69,15 +70,39 @@ describe("the first build of pnpm mac", () => {
     })
   }
 
+  // What Xcode 27 printed in full for a team that isn't signed in.
+  test("falls back when all of Xcode's output is about signing", () => {
+    const { status, builds, output } = build(
+      [
+        `${project}: error: No Account for Team "R7TNNTC382". Add a new account in Accounts settings or verify that your accounts have valid credentials. (in target 'App' from project 'App')`,
+        noProfiles,
+        `note: Run script build phase 'Copy Device Pages' will be run during every build because the option to run the script phase "Based on dependency analysis" is unchecked. (in target 'App' from project 'App')`,
+        `${project}: error: No signing certificate "Mac Development" found: No "Mac Development" signing certificate matching team ID "R7TNNTC382" with a private key was found. (in target 'BridgeHost' from project 'App')`,
+        "** BUILD FAILED **",
+      ].join("\n"),
+      65,
+    )
+    assert.equal(status, 0)
+    assert.equal(builds.length, 2)
+    assert.match(output, /Couldn't provision this build/)
+  })
+
   for (const [name, error, code] of [
     ["a compile error", "/Users/me/pricetag/macos/App/Wallet.swift:12:5: error: cannot find 'wallet' in scope", 65],
     ["a compile error that sounds like signing", "/Users/me/pricetag/macos/App/Wallet.swift:12:5: error: No profiles for 'wallet' in scope", 65],
     ["a compile error in a file under the project", `${project}/../App/Wallet.swift:12:5: error: No Account for Team`, 65],
     ["a failure to reach Apple", `${project}: error: Communication with Apple failed: The request timed out. (in target 'App' from project 'App')`, 65],
-    ["a failure to reach Apple that also leaves no profile", `${project}: error: The request timed out. (in target 'App' from project 'App')\n${project}: error: No profiles for 'com.benface.pricetag.macos.wallet' were found: Xcode couldn't find any Mac App Development provisioning profiles matching 'com.benface.pricetag.macos.wallet'. (in target 'App' from project 'App')`, 65],
+    ["a failure to reach Apple that also leaves no profile", `${project}: error: The request timed out. (in target 'App' from project 'App')\n${noProfiles}`, 65],
     ["a crash", "Abort trap: 6", 134],
     ["a killed build, which prints nothing", "", 143],
     ["a full disk", "error: unable to write file: No space left on device", 65],
+    ["a signing error, then a kill", noProfiles, 137],
+    ["a signing error, then a crash", noProfiles, 134],
+    ["a signing error and a compile error", `${noProfiles}\n/Users/me/pricetag/macos/App/Wallet.swift:12:5: error: cannot find 'wallet' in scope`, 65],
+    ["a signing error and a full disk", `${noProfiles}\nerror: unable to write file: No space left on device`, 65],
+    ["a signing error and a linker's error", `${noProfiles}\nclang: error: linker command failed with exit code 1 (use -v to see invocation)`, 65],
+    ["a signing error and a fatal error", `${noProfiles}\nfatal error: too many errors emitted`, 65],
+    ["a signing error and a command that failed with no error line", `${noProfiles}\nThe following build commands failed:\n\tCpResource /tmp/App.app/icon.png (in target 'App' from project 'App')\n(1 failure)`, 65],
   ] as const) {
     test(`stops with xcodebuild's own error and exit code on ${name}`, () => {
       const { status, output, builds } = build(error, code)
