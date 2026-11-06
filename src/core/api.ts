@@ -158,6 +158,12 @@ export type ExplanationLeg = {
   txHash: string
   /** What the wallet already held before the first block read. It isn't a transaction, so `txHash` is empty. */
   opening: boolean
+  /** What this leg did, in one plain sentence led by its amount in money. */
+  summary: string
+  /** What about it isn't known, in words, or null when nothing is. */
+  unknown: string | null
+  /** Answering a question about this asset could fix what isn't known. */
+  answerable: boolean
   /** What this leg did to its position, in words. */
   effect: string
   /** The rows this leg nets together, in words, or null when it's just one. */

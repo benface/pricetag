@@ -4,7 +4,7 @@
 import { TOKENS, answerToMicros, returnBps, worth, type CurrencyCode, type WalletView, type LegEffect, type Method, type Position, type PricedLeg, type Reference } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type ExplanationLeg, type ExplanationResponse, type PortfolioExchange, type PortfolioPosition, type PortfolioResponse, type WalletResponse } from "./api.ts"
 import { emptyBook, walletsBehind, type Book } from "./book.ts"
-import { describeConversion, describeEffect, describeNetting, explainTarget, missingRatesLine, rateSource, type ExplainContext, type ExplainTarget, type Metric, type TotalMetric } from "./explain.ts"
+import { describeConversion, describeEffect, describeNetting, explainTarget, summarizeEffect, missingRatesLine, rateSource, type ExplainContext, type ExplainTarget, type Metric, type TotalMetric } from "./explain.ts"
 import { foldBook, missingWallets, type BookFold, type Question } from "./resolve.ts"
 import { differenceOf, whySentence, type PricingRule, type RuleComparison, type RuleRow, type RuleTransaction } from "./rules.ts"
 import { ETH_NOTE, UNPRICED_FEES, estimatedSentence, excludedSentence, feesUnknownSentence, networkFeeUnknownSentence, withheldSentence } from "./wording.ts"
@@ -119,6 +119,7 @@ export function legOf(effect: LegEffect, currency: CurrencyCode): ExplanationLeg
     timestamp: leg.timestamp,
     txHash: leg.txHash,
     opening: leg.opening === true,
+    ...summarizeEffect(effect, currency),
     effect: describeEffect(effect, currency),
     netting: describeNetting(leg),
     conversion: describeConversion(leg, currency),
