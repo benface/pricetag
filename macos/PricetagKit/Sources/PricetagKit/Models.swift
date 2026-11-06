@@ -160,6 +160,8 @@ public struct PositionPart: Codable, Sendable, Equatable, Identifiable {
 public struct CombinedWallet: Codable, Sendable, Equatable {
     public enum State: String, Codable, Sendable {
         case read, reading, failed
+        /// In the numbers as it was last read, while it's read again, or because its latest read failed.
+        case updating, outdated
     }
 
     public let address: String
@@ -444,9 +446,9 @@ public struct Portfolio: Codable, Sendable, Equatable {
     public let questions: [Question]
     public let meter: Meter
     /// Linked wallets that aren't read yet, so what came from them shows as unresolved for now.
-    public let linkedReading: [String]
+    public internal(set) var linkedReading: [String]
     /// Linked wallets whose last read failed. It's tried again with each read, and what they sent stays unresolved or out of date until it works.
-    public let linkedFailed: [String]
+    public internal(set) var linkedFailed: [String]
     /// Other wallets' history that can't be confirmed, which leaves what they sent here with an unknown cost.
     public let withheld: [WithheldCost]
     /// What became of each purchase in the book, among the wallets read.
@@ -454,6 +456,10 @@ public struct Portfolio: Codable, Sendable, Equatable {
     public let marketChecked: Bool
     /// Every wallet in it and how far each one's read has got, when it's all of the user's wallets as one.
     public var wallets: [CombinedWallet]? = nil
+    /// All Yours' wallets being read again, whose last read is what's in the numbers.
+    public var linkedUpdating: [String]? = nil
+    /// All Yours' wallets whose latest read failed, whose last good read is what's in the numbers.
+    public var linkedOutdated: [String]? = nil
     /// What to tell the server this already has, so a busy wallet's next reply leaves it out.
     var marks: LongLists<String>? = nil
     /// How much of each list the server left out, which `PricetagClient` puts back before anything else sees it.
@@ -461,6 +467,32 @@ public struct Portfolio: Codable, Sendable, Equatable {
 
     /// All of the user's wallets as one, rather than one wallet.
     public var isAllYours: Bool { WalletAddress.isAllYours(address) }
+
+    /// All Yours' wallets whose reads are in the numbers, however old those reads are.
+    var walletsInNumbers: [String]? { wallets?.filter { $0.state != .reading && $0.state != .failed }.map(\.address) }
+
+    /// What to show after this answer, given that `last` is on screen. The server keeps the last answer too, but it can run out of room for it.
+    /// So when a wallet that's in `last` isn't in this one, `last` stands, whole and at its one block so a move can't count twice, with that wallet updating or outdated.
+    func holding(_ last: Portfolio) -> Portfolio {
+        guard isAllYours, last.isAllYours, last.method == method, last.currency == currency, last.rule == rule, let asked = wallets, let kept = last.walletsInNumbers else { return self }
+        let states = Dictionary(asked.map { ($0.address, $0.state) }, uniquingKeysWith: { first, _ in first })
+        guard kept.allSatisfy({ states[$0] != nil }), kept.contains(where: { states[$0] == .reading || states[$0] == .failed }) else { return self }
+        let wallets = kept.map { address in
+            switch states[address] {
+            case .failed, .outdated: CombinedWallet(address: address, state: .outdated)
+            case .reading, .updating: CombinedWallet(address: address, state: .updating)
+            default: CombinedWallet(address: address, state: .read)
+            }
+        } + asked.filter { !kept.contains($0.address) }.map { CombinedWallet(address: $0.address, state: $0.state == .failed ? .failed : .reading) }
+        let inState = { (state: CombinedWallet.State) in wallets.filter { $0.state == state }.map(\.address) }
+        var held = last
+        held.wallets = wallets
+        held.linkedReading = inState(.reading)
+        held.linkedFailed = inState(.failed)
+        held.linkedUpdating = inState(.updating)
+        held.linkedOutdated = inState(.outdated)
+        return held
+    }
 
     /// What the holdings table lists. Tokens with no market go in a group of their own, so real warnings stay noticeable.
     public var listedPositions: [Position] { positions.filter { !$0.noMarket } }

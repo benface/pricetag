@@ -144,6 +144,13 @@ describe("what gets tucked away", () => {
     }
   })
 
+  it("sees through the letters real copies use, ahead of a contract that won't answer", () => {
+    // Read from the two contracts at 0x80228d1e… and 0x08779bf3… on Base, which are what a wallet was sent.
+    for (const [name, symbol, copied] of [["\u13AC\u0422\u13BB", "\u0415\u13A2\u13BB", "ETH"], ["\u054D\u054F" + "D \u13DF\u0585i\u0578", "\u144C\u0405D\u03F9", "USDC"]] as const) {
+      assert.equal(tuckedReason({ name, symbol, state: "unreadable" }, false), `It calls itself ${copied}, but it isn't the real ${copied}.`)
+    }
+  })
+
   it("tucks away a name that sends you to a website", () => {
     for (const name of ["Visit usdc-rewards.com", "https://x.co", "claim at example.xyz", "www.free", "Claim your tokens"]) assert.match(tuckedReason(named(name, "X"), true) ?? "", /website/, name)
   })

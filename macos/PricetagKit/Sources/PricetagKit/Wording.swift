@@ -382,6 +382,21 @@ public enum Wording {
         "Couldn't read \(names.formatted(.list(type: .and))), so \(names.count == 1 ? "it isn't" : "they aren't") in these numbers."
     }
 
+    /// Wallets in All Yours being read again, whose last read is what these numbers use.
+    public static func allYoursUpdating(_ names: [String]) -> String {
+        "Updating \(names.formatted(.list(type: .and))). These numbers use \(names.count == 1 ? "its" : "their") last read until then."
+    }
+
+    /// Wallets in All Yours whose latest read failed, whose last good read is what these numbers use.
+    public static func allYoursOutdated(_ names: [String]) -> String {
+        "Couldn't update \(names.formatted(.list(type: .and))), so these numbers use \(names.count == 1 ? "its" : "their") last read."
+    }
+
+    /// What an update says while some of All Yours' wallets are being read again, and are in these numbers as they were.
+    public static func updatingLastRead(_ count: Int) -> String {
+        "Updating. \(count == 1 ? "1 wallet is" : "\(count) wallets are") being read again, and these numbers use \(count == 1 ? "its" : "their") last read until then."
+    }
+
     /// What an update says while some of All Yours' wallets are still being read.
     public static func updatingWallets(_ count: Int) -> String {
         "Updating. \(count == 1 ? "1 wallet is" : "\(count) wallets are") still being read, and \(count == 1 ? "isn't" : "aren't") in these numbers yet."
@@ -392,6 +407,10 @@ public enum Wording {
         func withdrawals(_ count: Int) -> String { count == 1 ? "1 withdrawal" : "\(count) withdrawals" }
         if found == 0 { return skipped == 0 ? "That file has no withdrawals, so nothing changed." : "Found \(withdrawals(skipped)) with no usable cost, so nothing changed." }
         return skipped == 0 ? "Found \(withdrawals(found))." : "Found \(withdrawals(found)). \(skipped) more had no usable cost."
+    }
+
+    public static func linkedReading(_ count: Int) -> String {
+        "Reading your other \(count == 1 ? "wallet" : "wallets"). Until then, what came from \(count == 1 ? "it" : "them") has an unknown cost."
     }
 
     public static func linkedFailed(_ count: Int) -> String {
@@ -424,7 +443,11 @@ public enum Wording {
     public static func holdSummary(_ comparison: HoldComparison, _ currency: CurrencyCode) -> String {
         switch comparison.status {
         case .unavailable: return "Not available yet"
-        case .partial: return "Not comparable yet"
+        case .partial:
+            guard let hold = comparison.holdMicros else { return "Not available yet" }
+            let count = comparison.unknownAmounts
+            let leavesOut = count == 0 ? "and the total PnL leaves some things out" : count == 1 ? "leaving out 1 amount" : "leaving out \(Format.block(count)) amounts"
+            return "Partial: \(comparison.estimated ? "about " : "")\(Format.signedMoney(hold, currency)) holding ETH, \(leavesOut)"
         case .complete:
             guard let difference = comparison.differenceMicros else { return "Not available yet" }
             return holdDifference(difference, currency, estimated: comparison.walletEstimated || comparison.estimated)
