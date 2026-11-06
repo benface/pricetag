@@ -39,11 +39,16 @@ function encodeBalances(amounts: Record<string, string | null>): string {
   return word(32) + word(TOKENS.length) + offsets.join("") + items.join("")
 }
 
+/** Answers each side of a `UNION ALL` on its own, the way Amp does, so a fake only has to know about one table at a time. */
+export const eachPart =
+  (answer: <T>(sql: string) => Promise<T[]>): Query =>
+  async <T>(sql: string) =>
+    (await Promise.all(sql.split(" UNION ALL ").map((part) => answer<T>(part)))).flat()
+
 /** Answers by table, and keeps every query so a test can see what was asked. */
 export function fakeAmp(tables: Tables, through: Through = 200, options: { startBlock?: number | undefined; readL1Fees?: ReadL1Fees } = {}) {
   const queries: string[] = []
-  const query: Query = async <T>(sql: string) => {
-    queries.push(sql)
+  const answer = async <T>(sql: string): Promise<T[]> => {
     if (sql.includes("X'4d2301cc")) {
       const blocks = (/block_num IN \(([^)]*)\)/.exec(sql)?.[1] ?? /, (\d+)\) AS r$/.exec(sql)?.[1] ?? "").split(", ")
       const known = blocks.filter((block) => tables.ethBalances?.[block] !== undefined)
@@ -72,6 +77,11 @@ export function fakeAmp(tables: Tables, through: Through = 200, options: { start
     const range = /block_num BETWEEN (\d+) AND (\d+)/.exec(sql)
     const rows = (tables[table] ?? []) as { block_num?: string | number }[]
     return (range ? rows.filter(({ block_num }) => Number(block_num) >= Number(range[1]) && Number(block_num) <= Number(range[2])) : rows) as T[]
+  }
+  const parts = eachPart(answer)
+  const query: Query = (sql) => {
+    queries.push(sql)
+    return parts(sql)
   }
   return { query, queries, client: pricetagClient(query, { dataset: "benface/pricetag@0.0.1", ...options }) }
 }

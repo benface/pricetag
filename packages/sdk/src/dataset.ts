@@ -171,14 +171,13 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
   /** What moved in a wallet, which no pricing rule changes. */
   async function readLegs(address: string, from: number, to: number) {
     const me = hexOf(address)
-    const range = `block_num BETWEEN ${from} AND ${to}`
-    const legRows = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.legs WHERE ${range} AND account = X'${me}'`)
-    const unlistedRows = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.unlisted_legs WHERE ${range} AND account = X'${me}'`)
-    const rows = legRows.map(toLegRow)
+    const where = `WHERE block_num BETWEEN ${from} AND ${to} AND account = X'${me}'`
+    const rows = (await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.legs ${where} UNION ALL SELECT ${LEG_COLUMNS} FROM ${ds}.unlisted_legs ${where}`)).map(toLegRow)
+    const isUnlisted = (r: LegRow) => r.kind === "unlisted" || r.kind === "unlisted_nft"
     return {
       // pt_gas leaves the amount empty when the gas can't be worked out, and BigInt can't read that.
       // An unlisted row stays either way, because it's evidence that something moved.
-      rows: [...rows.filter((r) => r.amount !== "" && r.amount !== "0"), ...unlistedRows.map(toLegRow)],
+      rows: [...rows.filter((r) => !isUnlisted(r) && r.amount !== "" && r.amount !== "0"), ...rows.filter(isUnlisted)],
       gasUnknown: rows.filter((r) => r.kind === "gas" && r.amount === "").map(({ tx_hash, block_num }) => ({ tx_hash, block_num })),
     }
   }
@@ -188,6 +187,9 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
     const pricedRows = await query<Row>(`SELECT ${PRICED_COLUMNS} FROM ${prices}.priced_legs WHERE block_num BETWEEN ${from} AND ${to} AND account = X'${hexOf(address)}'`)
     return pricedRows.map(toPricedRow)
   }
+
+  /** A priced row only counts through a leg of its transaction, so a range with none, as most re-reads are, has nothing to ask. */
+  const readPricedOf = async (rows: readonly LegRow[], address: string, from: number, to: number) => (rows.length > 0 ? readPriced(address, from, to) : [])
 
   return {
     head: (after: number | null) => readHead(query, config.baseDataset, after ?? config.startBlock ?? null),
@@ -200,26 +202,29 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
       const tableOf = (table: string) => `${PRICE_TABLES.includes(table) ? prices : ds}.${table}`
       // One query matching no rows: Amp says how far all its tables have got, and a table can be done with a block it has no row for.
       const end = await query.snapshotEnd?.(tables.map((table) => `SELECT block_num FROM ${tableOf(table)} WHERE false`).join(" UNION ALL ")).catch((error: unknown) => {
-        if (isNotStarted(error)) return after - 1
+        if (isNotStarted(error)) return null
         throw error
       })
       if (end !== undefined && end !== null) return end < after ? null : Math.min(end, head)
       // Without that, a table's newest row is as far as it can be shown to have got.
-      const newest = await Promise.all(tables.map((table) => readOrEmpty(`SELECT block_num FROM ${tableOf(table)} WHERE block_num >= ${after} ORDER BY block_num DESC LIMIT 1`)))
-      let through = head
-      for (const rows of newest) {
-        if (!rows[0]) return null
-        through = Math.min(through, asNumber(rows[0].block_num))
-      }
-      return through
+      const newestIn = (table: string) => `SELECT block_num FROM ${tableOf(table)} WHERE block_num >= ${after} ORDER BY block_num DESC LIMIT 1`
+      // One query, because this is on every wallet read and a hosted Amp is shared. On staging it took about a third as long.
+      const merged = await query<Row>(tables.map((table) => `SELECT block_num FROM (${newestIn(table)})`).join(" UNION ALL ")).catch(async (error: unknown) => {
+        if (!isNotStarted(error)) throw error
+        // This error is about what tables have in common, so only asking each on its own says one really hasn't started.
+        return (await Promise.all(tables.map((table) => readOrEmpty(newestIn(table))))).flat()
+      })
+      if (merged.length < tables.length) return null
+      return Math.min(head, ...merged.map((row) => asNumber(row.block_num)))
     },
 
     readLegs,
 
-    readPriced,
+    readPricedOf,
 
     async readWindow(address: string, from: number, to: number) {
-      return { ...(await readLegs(address, from, to)), priced: await readPriced(address, from, to) }
+      const legs = await readLegs(address, from, to)
+      return { ...legs, priced: await readPricedOf(legs.rows, address, from, to) }
     },
 
     async readReferences(blocks: readonly number[]): Promise<Reference[]> {

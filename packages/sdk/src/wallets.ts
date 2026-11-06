@@ -667,21 +667,33 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const ethBalances = new Map(cached?.ethBalances ?? [])
     const ethPayers = new Map(cached?.ethPayers ?? [])
     let replacedFrom = Number.POSITIVE_INFINITY
-    if (coveredTo >= fromBlock && (!cached || coveredTo > cached.coveredTo || reorgable)) {
-      const readFrom = cached ? Math.max(fromBlock, Math.min(settledThrough(cached.coveredTo) + 1, unsettled ?? Infinity)) : fromBlock
-      replacedFrom = readFrom
-      const window = await source.readWindow(address, readFrom, coveredTo)
-      rows = [...rows.filter((r) => r.block_num < readFrom), ...window.rows]
-      for (const block of known.keys()) if (block >= readFrom) known.delete(block)
-      for (const block of knownSamples.keys()) if (block >= readFrom) knownSamples.delete(block)
-      for (const block of ethBalances.keys()) if (block >= readFrom) ethBalances.delete(block)
-      for (const block of ethPayers.keys()) if (block >= readFrom) ethPayers.delete(block)
-      const missing = [...new Set(rows.map((r) => r.block_num))].filter((b) => !known.has(b))
-      for (const reference of await source.readReferences(missing)) known.set(reference.blockNum, reference)
-      priced = window.priced ? [...priced.filter((p) => p.block_num < readFrom), ...window.priced] : derivePricedRows(rows, [...known.values()])
-      for (const [tx, block] of gasUnknown) if (block >= readFrom) gasUnknown.delete(tx)
-      for (const { tx_hash, block_num } of window.gasUnknown) gasUnknown.set(tx_hash, block_num)
+    const readNewRows = async () => {
+      if (coveredTo >= fromBlock && (!cached || coveredTo > cached.coveredTo || reorgable)) {
+        const readFrom = cached ? Math.max(fromBlock, Math.min(settledThrough(cached.coveredTo) + 1, unsettled ?? Infinity)) : fromBlock
+        replacedFrom = readFrom
+        const window = await source.readWindow(address, readFrom, coveredTo)
+        rows = [...rows.filter((r) => r.block_num < readFrom), ...window.rows]
+        for (const block of known.keys()) if (block >= readFrom) known.delete(block)
+        for (const block of knownSamples.keys()) if (block >= readFrom) knownSamples.delete(block)
+        for (const block of ethBalances.keys()) if (block >= readFrom) ethBalances.delete(block)
+        for (const block of ethPayers.keys()) if (block >= readFrom) ethPayers.delete(block)
+        const missing = [...new Set(rows.map((r) => r.block_num))].filter((b) => !known.has(b))
+        for (const reference of await source.readReferences(missing)) known.set(reference.blockNum, reference)
+        priced = window.priced ? [...priced.filter((p) => p.block_num < readFrom), ...window.priced] : derivePricedRows(rows, [...known.values()])
+        for (const [tx, block] of gasUnknown) if (block >= readFrom) gasUnknown.delete(tx)
+        for (const { tx_hash, block_num } of window.gasUnknown) gasUnknown.set(tx_hash, block_num)
+      }
     }
+    const readsBalances = coveredTo >= fromBlock
+    const openingIsOld = readsBalances && (!isComplete(cached?.opening ?? null) || openingMayChange(cached, chain))
+    const closingIsOld = readsBalances && (cached?.closing?.blockNum !== coveredTo || !isComplete(cached.closing) || reorgable)
+    // None of these needs what another finds, and they're most of a read with nothing new, so they don't wait for each other.
+    const [, openingRead, closing, latestReference] = await Promise.all([
+      readNewRows(),
+      openingIsOld ? readBalances(address, fromBlock - 1) : null,
+      closingIsOld ? readBalances(address, coveredTo) : (cached?.closing ?? null),
+      source.readLatestReference(head.blockNum),
+    ])
 
     const l1Fees = new Map([...(cached?.l1Fees ?? [])].filter(([, fee]) => unsettled === null || fee.blockNum < unsettled))
     const claimBlocks = new Set(unwrapBalanceBlocks(rows))
@@ -713,18 +725,12 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const unreadEth = unwrapBalanceBlocks(rows).filter((block) => !ethBalances.has(block)).slice(0, MAX_ETH_BALANCES_PER_READ)
     await readEthBalances(address, unreadEth, ethBalances)
 
-    let opening = cached?.opening ?? null
+    const opening = mergeOpening(cached?.opening ?? null, openingRead)
     const openingReadAt = { ...cached?.openingReadAt }
-    let closing = cached?.closing ?? null
+    for (const asset of Object.keys(openingRead?.amounts ?? {})) openingReadAt[asset] = chain.blockNum
     const lastBalances = { ...cached?.lastBalances }
     let lastCheckableEth = cached?.lastCheckableEth ?? null
-    if (coveredTo >= fromBlock) {
-      if (!isComplete(opening) || openingMayChange(cached, chain)) {
-        const read = await readBalances(address, fromBlock - 1)
-        opening = mergeOpening(opening, read)
-        for (const asset of Object.keys(read?.amounts ?? {})) openingReadAt[asset] = chain.blockNum
-      }
-      if (closing?.blockNum !== coveredTo || !isComplete(closing) || reorgable) closing = await readBalances(address, coveredTo)
+    if (readsBalances) {
       for (const [asset, amount] of Object.entries(closing?.amounts ?? {})) lastBalances[asset] = { blockNum: coveredTo, amount }
       if (closing?.amounts.ETH !== undefined && gasUnknown.size === 0 && l1FeeRows(rows, l1Fees).unknownTxs.length === 0 && !(rows.some(isUnwrapClaim) && settle({ rows, priced, references: known, ethBalances, gasUnknown, l1Fees, staleFeeTxs }).rows.some(isUnwrapClaim))) {
         lastCheckableEth = { blockNum: coveredTo, amount: closing.amounts.ETH }
@@ -737,7 +743,7 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     }
 
     const samples = priceSamples ? await readSamples({ rows, latest: head, coveredTo, references: known }, knownSamples) : null
-    const prices = latestPrices(await source.readLatestReference(head.blockNum))
+    const prices = latestPrices(latestReference)
 
     if (unsettled !== null) forgetPricesFrom(unsettled)
     const wallet = { rows, opening, closing, lastBalances }
