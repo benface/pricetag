@@ -6,6 +6,8 @@ import PricetagKit
 
 /// The hot wallet, kept to its rules for as long as the app runs: reads the chain, sweeps what's above the cap to savings, and
 /// compares what happened onchain with what it signed. The vault does the signing, and this never sees a key.
+///
+/// `signer` is private to this file, so everything that signs or touches a key is here, and the extensions in `HotWallet+*.swift` can't.
 @MainActor
 @Observable
 public final class HotWallet {
@@ -16,20 +18,9 @@ public final class HotWallet {
         case unavailable(String)
     }
 
-    public enum RotationHold: Equatable, Sendable {
-        case notEnoughGas
-        /// Tokens that gas makes too costly to move right now. They move if that changes, and until then they're
-        /// still the user's, so only the user can say to leave them.
-        case notWorthTheGas([String])
-        /// Tokens off the allowlist, which this app never calls, so they can't be moved from here.
-        case otherTokens(Int)
-        /// Amp is the only way to see those tokens, and it isn't answering.
-        case cantCheckOtherTokens
-    }
-
     public private(set) var availability: Availability = .ready
     public private(set) var settings: WalletSettings
-    public private(set) var state: DeviceWalletState
+    public internal(set) var state: DeviceWalletState
     public private(set) var snapshot: ChainSnapshot?
     public private(set) var portfolio: Portfolio?
     public private(set) var plan: SweepPlan?
@@ -38,8 +29,9 @@ public final class HotWallet {
     public private(set) var ampProblem = false
     /// The address whose history Amp last answered for, with history in it. The alarm only compares once there's one.
     public private(set) var historyReadFor: EthereumAddress?
-    /// Why the last sweep didn't go out. Automatic sweeps wait a while before trying again.
-    public private(set) var sweepProblem: String?
+    /// Why the last thing this did didn't work, whether a sweep, a send, a note, a revoke or a site's transaction, or a setting that didn't get confirmed.
+    /// After a sweep, automatic ones wait a while before trying again.
+    public private(set) var lastActionProblem: String?
     /// What's on disk is behind what's here, which a restart would lose. See `persistOrSayWhy`.
     public private(set) var hasUnsavedRecords = false
     /// Every transaction the last send or sweep asked for put on its way, in order, a rebroadcast of one it had before included.
@@ -56,7 +48,10 @@ public final class HotWallet {
     }
     public private(set) var isWorking = false
     /// What's keeping a rotation from deleting the old key. The user can still choose to leave it behind.
-    public private(set) var rotationHold: RotationHold?
+    public internal(set) var rotationHold: RotationHold?
+    /// What the last check of `signedPermits` found. One it hasn't looked at has no answer here.
+    public internal(set) var permitChecks: [String: SignedPermit.Check] = [:]
+    public internal(set) var isCheckingPermits = false
     public var onLinkedWalletsChange: (([String]) -> Void)?
     /// A key is gone, and this one took over from it, if any did. A rotation can finish with nothing open, so this isn't left to a view.
     public var onKeyRetired: ((EthereumAddress, EthereumAddress?) -> Void)?
@@ -78,27 +73,27 @@ public final class HotWallet {
     @ObservationIgnored private let costMethod: @MainActor () -> CostMethod
     @ObservationIgnored private let moneyDisplay: @MainActor () -> MoneyDisplay
     @ObservationIgnored private let makeChain: @Sendable (URL) -> any ChainClient
-    @ObservationIgnored private let now: @Sendable () -> Date
+    @ObservationIgnored let now: @Sendable () -> Date
     @ObservationIgnored private let tickDelay: Duration
     @ObservationIgnored private let readDelay: Duration
     @ObservationIgnored private let readRetryDelay: Duration
     @ObservationIgnored private let receiptDelay: Duration
-    @ObservationIgnored private var chain: any ChainClient
+    @ObservationIgnored private(set) var chain: any ChainClient
     @ObservationIgnored private var tickTask: Task<Void, Never>?
     @ObservationIgnored private var readTask: Task<Void, Never>?
     @ObservationIgnored private var receiptTask: Task<Void, Never>?
     @ObservationIgnored private var missedReceipts: [String: Int] = [:]
     @ObservationIgnored private var nonceAheadTicks = 0
-    @ObservationIgnored private var emptyReads = 0
+    @ObservationIgnored var emptyReads = 0
     @ObservationIgnored private var catchUpReads = 0
     @ObservationIgnored private var pausedUntil: Date?
     @ObservationIgnored private var lastInLine: Task<Void, Never>?
     /// When the old key first read as empty in a rotation. History has to reach that block before it can say there's nothing else.
-    @ObservationIgnored private var rotationEmptySince: (block: UInt64, date: Date)?
+    @ObservationIgnored var rotationEmptySince: (block: UInt64, date: Date)?
     /// Whether the vault's been checked for keys already retired, since the last launch or the last time one failed to delete.
     @ObservationIgnored private var retiredKeysAreGone = false
     /// The active key is one this device still had, with something on it, after its wallet was deleted. Only said until the next restart.
-    private var cameBackWithSomethingOnIt = false
+    private(set) var cameBackWithSomethingOnIt = false
 
     /// How long a sweep that didn't work waits before trying again.
     static let pauseAfterFailure: TimeInterval = 300
@@ -231,7 +226,7 @@ public final class HotWallet {
         } catch let error as KeychainSealedKeyStore.Failure where error == .notProvisioned {
             availability = .notProvisioned
         } catch {
-            sweepProblem = HotWalletWording.problem(error)
+            lastActionProblem = HotWalletWording.problem(error)
         }
     }
 
@@ -266,7 +261,7 @@ public final class HotWallet {
             } catch is ChainError {
                 // The next tick says so if it's more than a moment.
             } catch {
-                sweepProblem = HotWalletWording.problem(error)
+                lastActionProblem = HotWalletWording.problem(error)
             }
         }
     }
@@ -352,60 +347,16 @@ public final class HotWallet {
     private func act(address: EthereumAddress, snapshot: ChainSnapshot) async throws {
         if (state.records[address] ?? []).contains(where: { $0.status == .pending }) { return }
         if let rotation = state.rotation, rotation.from == address {
-            let everything = SweepPlanner.everything(holdings: holdings, fees: snapshot.fees, destination: rotation.destination)
-            guard everything.transfers.isEmpty else {
-                resetEmptyReads()
-                rotationHold = everything.blockers.contains(.notEnoughGas) ? .notEnoughGas : everything.notWorthTheGas.isEmpty ? nil : .notWorthTheGas(everything.notWorthTheGas.map(\.symbol))
-                try await execute(everything, from: address, to: rotation.destination, reason: .rotation, snapshot: snapshot)
-                return
+            switch nextStep(in: rotation, snapshot: snapshot) {
+            case .move(let everything): try await execute(everything, from: address, to: rotation.destination, reason: .rotation, snapshot: snapshot)
+            case .wait: break
+            case .finish: try await retire(rotation.from, activating: rotation.to)
             }
-            guard !everything.blockers.contains(.notEnoughGas) else {
-                resetEmptyReads()
-                rotationHold = .notEnoughGas
-                return
-            }
-            guard everything.notWorthTheGas.isEmpty else {
-                resetEmptyReads()
-                rotationHold = .notWorthTheGas(everything.notWorthTheGas.map(\.symbol))
-                return
-            }
-            let emptySince = rotationEmptySince ?? (snapshot.blockNumber, now())
-            rotationEmptySince = emptySince
-            guard let tokens = otherTokens(on: address, emptySinceBlock: emptySince.block, snapshot: snapshot) else {
-                // A normal rotation waits here for the next read of its history, so that's not worth a warning until it's been a while.
-                emptyReads = 0
-                rotationHold = ampProblem || now().timeIntervalSince(emptySince.date) > Self.historyGrace ? .cantCheckOtherTokens : nil
-                return
-            }
-            guard tokens == 0 else {
-                emptyReads = 0
-                rotationHold = .otherTokens(tokens)
-                return
-            }
-            rotationHold = nil
-            // Deleting a key can't be undone, so one read saying it's empty isn't enough.
-            emptyReads += 1
-            if emptyReads >= Self.readsBeforeAlarm { try await retire(rotation.from, activating: rotation.to) }
             return
         }
         if let pausedUntil, now() < pausedUntil { return }
         guard !isKeyMissing, let plan, !plan.transfers.isEmpty, let destination = settings.sweepDestination else { return }
         try await execute(plan, from: address, to: destination, reason: .aboveCap, snapshot: snapshot)
-    }
-
-    /// How many tokens off the allowlist this key holds, or nil when there's no answer that can be trusted to delete a key on.
-    /// This app can't see them itself, so it has to be from history that reaches the block where the key first read as empty,
-    /// and that's close to now. What a history read says stops being true as new blocks go by.
-    private func otherTokens(on address: EthereumAddress, emptySinceBlock: UInt64, snapshot: ChainSnapshot) -> Int? {
-        guard !ampProblem, let portfolio, portfolio.address == address.lowercased, portfolio.progress.started else { return nil }
-        let reached = UInt64(max(portfolio.coverage.toBlock, 0))
-        guard reached >= emptySinceBlock, reached >= BlockTime.blockBefore(Int(snapshot.blockNumber), ms: Self.historyFreshnessMs) else { return nil }
-        return portfolio.unlisted.count
-    }
-
-    private func resetEmptyReads() {
-        emptyReads = 0
-        rotationEmptySince = nil
     }
 
     // MARK: - What's here
@@ -420,7 +371,7 @@ public final class HotWallet {
         }
     }
 
-    private func price(of token: Token, snapshot: ChainSnapshot) -> UInt128? {
+    func price(of token: Token, snapshot: ChainSnapshot) -> UInt128? {
         switch token.asset {
         case "ETH": return snapshot.ethUsdMicros
         case "USDC": return snapshot.usdcUsdMicros
@@ -440,9 +391,6 @@ public final class HotWallet {
 
     /// Not during a rotation. What's been moved may already be on the new key, which would take over on the next tick anyway.
     public var canDelete: Bool { address != nil && rotation == nil }
-
-    /// Whether a rotation is waiting on the user. Without the old key it can't move anything, so that always is.
-    public var canLeaveOldKeyBehind: Bool { rotation != nil && (rotationHold != nil || isKeyMissing) }
 
     /// Holdings it can't value, which the cap can't see.
     public var unpricedSymbols: [String] {
@@ -474,39 +422,6 @@ public final class HotWallet {
         return realized.subtractingClamped(state.sweptGains[address].flatMap { UInt128($0) } ?? 0)
     }
 
-    /// Everything worth telling the user right now, worst first. The alarm has its own banner.
-    public var notices: [Notice] {
-        guard address != nil, availability == .ready else { return [] }
-        var notices: [Notice] = []
-        if isKeyMissing { notices.append(.init(.warning, HotWalletWording.keyMissing, short: HotWalletWording.shortKeyMissing)) }
-        if hasUnsavedRecords { notices.append(.init(.warning, HotWalletWording.cantSaveRecordsYet, short: HotWalletWording.shortCantSaveRecords)) }
-        if cameBackWithSomethingOnIt { notices.append(.init(.info, HotWalletWording.keyCameBack)) }
-        switch rotationHold {
-        case .otherTokens(let count): notices.append(.init(.warning, HotWalletWording.rotationHeldByOtherTokens(count), short: HotWalletWording.shortOldKeyHolds))
-        case .cantCheckOtherTokens: notices.append(.init(.warning, HotWalletWording.rotationCantCheck, short: HotWalletWording.shortOldKeyUnchecked))
-        case .notWorthTheGas(let symbols): notices.append(.init(.warning, HotWalletWording.rotationHeldByGas(symbols), short: HotWalletWording.shortOldKeyHolds))
-        case .notEnoughGas, nil:
-            if rotation != nil, !isKeyMissing { notices.append(.init(.info, HotWalletWording.rotating)) }
-        }
-        if let chainProblem { notices.append(.init(.warning, chainProblem == .rateLimited ? HotWalletWording.networkBusy : HotWalletWording.cantReachChain, short: chainProblem == .rateLimited ? HotWalletWording.shortNetworkBusy : HotWalletWording.shortCantReachChain)) }
-        if let snapshot, snapshot.chainID != Base.chainID { notices.append(.init(.warning, HotWalletWording.wrongChain, short: HotWalletWording.shortWrongChain)) }
-        if let sweepProblem { notices.append(.init(.warning, sweepProblem, short: HotWalletWording.shortLastActionFailed)) }
-        if let plan {
-            if plan.blockers.contains(.notEnoughGas) || rotationHold == .notEnoughGas { notices.append(.init(.warning, HotWalletWording.noGas, short: HotWalletWording.shortNoGas)) }
-            if plan.excessUsdMicros > 0, !plan.excessIsDust || plan.blockers.contains(.noDestination) {
-                notices.append(.init(.warning, HotWalletWording.overCap(by: plan.excessUsdMicros, hasDestination: settings.sweepDestination != nil, in: display), short: HotWalletWording.shortOverCap(by: plan.excessUsdMicros, in: display), asksForSavings: settings.sweepDestination == nil))
-            } else if plan.excessIsDust {
-                notices.append(.init(.info, HotWalletWording.excessIsDust))
-            }
-        }
-        if snapshot != nil, snapshot?.ethUsdMicros == nil { notices.append(.init(.warning, HotWalletWording.noEthPrice, short: HotWalletWording.shortNoEthPrice)) }
-        if !unpricedSymbols.isEmpty { notices.append(.init(.warning, HotWalletWording.noPrice(unpricedSymbols), short: HotWalletWording.shortNoPrice(unpricedSymbols))) }
-        // Being over the cap with nowhere to sweep already says to add one.
-        if settings.coldWallets.isEmpty, plan?.excessUsdMicros ?? 0 == 0 { notices.append(.init(.warning, HotWalletWording.addSavings(in: display), short: HotWalletWording.shortNoSavings, asksForSavings: true)) }
-        if ampProblem { notices.append(.init(.info, HotWalletWording.cantCheckAmp)) }
-        return notices
-    }
-
     /// How this wallet's amounts read. They're all USD in here, and this is the only place they stop being: see `MoneyDisplay`.
     public var display: MoneyDisplay { moneyDisplay() }
 
@@ -525,32 +440,6 @@ public final class HotWallet {
     /// The cap counts the plan's value, which leaves that ETH out. Nil until the first read.
     public var valueUsdMicros: UInt128? {
         plan.map { _ in holdings.reduce(0) { $0 + ($1.valueUsdMicros ?? 0) } }
-    }
-
-    /// Whether something needs the user, for places with room for only a triangle.
-    public var needsAttention: Bool {
-        alarm != nil || notices.contains { $0.kind == .warning }
-    }
-
-    public struct Notice: Equatable, Identifiable, Sendable {
-        public enum Kind: Sendable {
-            case info, warning
-        }
-
-        public let kind: Kind
-        public let text: String
-        /// A warning in a few words, for places with room for only that.
-        public let short: String?
-        /// Adding a savings wallet is what answers this one.
-        public let asksForSavings: Bool
-        public var id: String { text }
-
-        init(_ kind: Kind, _ text: String, short: String? = nil, asksForSavings: Bool = false) {
-            self.kind = kind
-            self.text = text
-            self.short = short
-            self.asksForSavings = asksForSavings
-        }
     }
 
     // MARK: - Settings
@@ -641,14 +530,14 @@ public final class HotWallet {
     private func confirmingSetting(_ reason: String) async -> Bool {
         isWorking = true
         defer { isWorking = false }
-        sweepProblem = nil
+        lastActionProblem = nil
         do {
             try await confirmPresence(reason: reason)
             return true
         } catch let error as LAError where [.userCancel, .appCancel, .systemCancel].contains(error.code) {
             return false
         } catch {
-            sweepProblem = HotWalletWording.touchIDDidNotConfirm
+            lastActionProblem = HotWalletWording.touchIDDidNotConfirm
             return false
         }
     }
@@ -675,7 +564,6 @@ public final class HotWallet {
         }
     }
 
-    /// Everything on the allowlist, to the chosen savings wallet, after asking the person at the device.
     /// What sweeping everything would move right now, for showing. It's worked out again from a fresh read before anything's signed.
     public var sweepPreview: SweepPreview? {
         guard let snapshot, let destination = settings.sweepDestination else { return nil }
@@ -685,28 +573,23 @@ public final class HotWallet {
         return SweepPreview(transfers: transfers, feeWei: feeWei, feeUsdMicros: snapshot.ethUsdMicros.map { Money.usdMicros(of: feeWei, priceMicros: $0, decimals: 18) }, whyNothing: HotWalletWording.whyNothingSweeps(plan))
     }
 
-    /// True once all of it's on its way. Otherwise `sweepProblem` says what stopped it, and what went anyway.
+    /// Everything on the allowlist, to the chosen savings wallet, after asking the person at the device.
+    /// True once all of it's on its way. Otherwise `lastActionProblem` says what stopped it, and what went anyway.
     @discardableResult
     public func sweepEverything(in prompt: PresencePrompt? = nil) async -> Bool {
         guard let address, let destination = settings.sweepDestination else { return false }
         // Touch ID is for approving something, and as of the last read there's nothing to approve, or it couldn't go yet. A read that does find something still asks, and then reads again.
         if let whyNot = whySweepHasToWait(for: address, lastRead: snapshot) ?? sweepPreview?.whyNothing {
-            sweepProblem = whyNot
+            lastActionProblem = whyNot
             return false
         }
         var isOnItsWay = false
         let name = settings.coldWallets.first { $0.address == destination }?.name ?? "your savings"
         lastSubmitted = []
-        await work(confirming: "sweep everything to \(name)", in: prompt) { [self] in
-            submitting = []
-            defer {
-                lastSubmitted = submitting ?? []
-                submitting = nil
-            }
+        await work(confirming: "sweep everything to \(name)", in: prompt) { [self] in try await keepingSubmitted {
+            // Not `canSend`: a key that may be stolen, or that's being replaced, can still move to safety. See "Reading before acting".
             guard self.address == address else { throw ChainError.rejected(HotWalletWording.changedWhileWaiting) }
-            let snapshot = try await patientSnapshot(of: address)
-            self.snapshot = snapshot
-            guard snapshot.chainID == Base.chainID else { throw ChainError.rejected(HotWalletWording.wrongChain) }
+            let snapshot = try await readInTurn(address)
             if let wait = whySweepHasToWait(for: address, lastRead: snapshot) { throw ChainError.rejected(wait) }
             let everything = SweepPlanner.everything(holdings: holdings, fees: snapshot.fees, destination: destination)
             if let whyNothing = HotWalletWording.whyNothingSweeps(everything) { throw ChainError.rejected(whyNothing) }
@@ -732,9 +615,9 @@ public final class HotWallet {
             throw ChainError.rejected(HotWalletWording.sweptOnlySome(
                 onItsWay: everything.transfers.prefix(sent).map(\.token.symbol),
                 left: left.map(\.token.symbol),
-                because: stoppedBy.map(HotWalletWording.whatStoppedASweep) ?? sweepProblem ?? ""
+                because: stoppedBy.map(HotWalletWording.whatStoppedASweep) ?? lastActionProblem ?? ""
             ))
-        }
+        } }
         return isOnItsWay
     }
 
@@ -748,7 +631,7 @@ public final class HotWallet {
     /// What the confirmation asks for, in its own terms. Only all of it being on its way is done, because done closes the sheet.
     public func sweepConfirmed(in prompt: PresencePrompt) async -> ApprovalResult {
         if await sweepEverything(in: prompt) { return .done }
-        return sweepProblem.map(ApprovalResult.failed) ?? .cancelled
+        return lastActionProblem.map(ApprovalResult.failed) ?? .cancelled
     }
 
     /// A new key, with everything moved off the old one, which is deleted once it's empty. After an alarm, what's left goes
@@ -817,7 +700,7 @@ public final class HotWallet {
         plan = nil
         portfolio = nil
         rotationHold = nil
-        sweepProblem = nil
+        lastActionProblem = nil
         cameBackWithSomethingOnIt = false
         pausedUntil = nil
         nonceAheadTicks = 0
@@ -843,7 +726,7 @@ public final class HotWallet {
         isWorking = true
         defer { isWorking = false }
         do {
-            sweepProblem = nil
+            lastActionProblem = nil
             if let reason { try await confirmPresence(reason: reason, in: prompt) }
             var failure: (any Error)?
             await inTurn {
@@ -857,51 +740,21 @@ public final class HotWallet {
         } catch let error as LAError where [.userCancel, .appCancel, .systemCancel].contains(error.code) {
             // They changed their mind, which isn't a problem to report.
         } catch is LAError {
-            sweepProblem = HotWalletWording.touchIDDidNotConfirm
+            lastActionProblem = HotWalletWording.touchIDDidNotConfirm
         } catch let error as ChainError {
             switch error {
-            case .rejected(let message): sweepProblem = message
-            case .rateLimited: sweepProblem = HotWalletWording.networkBusy
-            case .unreachable, .unreadable: sweepProblem = HotWalletWording.cantReachChain
+            case .rejected(let message): lastActionProblem = message
+            case .rateLimited: lastActionProblem = HotWalletWording.networkBusy
+            case .unreachable, .unreadable: lastActionProblem = HotWalletWording.cantReachChain
             }
         } catch let error as KeychainSealedKeyStore.Failure where error == .notProvisioned {
             availability = .notProvisioned
         } catch {
-            sweepProblem = HotWalletWording.problem(error)
+            lastActionProblem = HotWalletWording.problem(error)
         }
     }
 
-    // MARK: - Sites
-
-    /// Why a site can't use this wallet right now, if it can't. Reads don't need any of this.
-    public var siteProblem: SiteError? {
-        guard availability == .ready else { return .stopped("This build of \(SiteWording.appName) can't hold a key.") }
-        guard address != nil else { return .stopped("Set up \(HotWalletWording.title) in \(SiteWording.appName) first.") }
-        if alarm != nil { return .stopped("\(SiteWording.appName) has stopped this wallet, because its key may be stolen.") }
-        if rotation != nil { return .stopped("\(SiteWording.appName) is replacing this wallet's key. Try again once that's done.") }
-        if isKeyMissing { return .stopped(HotWalletWording.keyMissing) }
-        return nil
-    }
-
-    public var connectedSites: [String] { state.connectedSites ?? [] }
-    /// What the last check of `signedPermits` found. One it hasn't looked at has no answer here.
-    public private(set) var permitChecks: [String: SignedPermit.Check] = [:]
-    public private(set) var isCheckingPermits = false
-
-    func isConnected(_ origin: String) -> Bool {
-        connectedSites.contains(origin)
-    }
-
-    func connectSite(_ origin: String) {
-        guard !isConnected(origin) else { return }
-        state.connectedSites = connectedSites + [origin]
-        persistOrSayWhy()
-    }
-
-    func disconnectSite(_ origin: String) {
-        state.connectedSites?.removeAll { $0 == origin }
-        persistOrSayWhy()
-    }
+    // MARK: - Asking the person at the device
 
     func confirmPresence(reason: String, in prompt: PresencePrompt? = nil) async throws {
         if let prompt {
@@ -925,73 +778,7 @@ public final class HotWallet {
 
     static let pauseBetweenPrompts: TimeInterval = 2
 
-    func readForSite(_ method: String, _ parameters: JSONValue) async throws -> RPCAnswer {
-        // A node on another chain would tell a site things that aren't true of Base.
-        if let snapshot, snapshot.chainID != Base.chainID { return .failure(.wrongChain) }
-        return try await chain.read(method, parameters)
-    }
-
-    /// What a transaction would cost. What's signed later keeps to this gas and fee per gas. Its L1 data fee goes by its real size,
-    /// which a site's data can make far bigger than a sweep.
-    func quoteForSite(_ transaction: SiteTransaction) async throws -> SiteQuote {
-        guard let address else { throw ChainError.unreadable }
-        let snapshot = try await patientSnapshot(of: address)
-        guard snapshot.chainID == Base.chainID else { throw ChainError.rejected(HotWalletWording.wrongChain) }
-        guard snapshot.fees.isPlausible else { throw ChainError.rejected(HotWalletWording.feesLookWrong) }
-        let estimate: UInt64
-        do {
-            estimate = try await chain.estimateGas(from: address, to: transaction.to, value: transaction.value, data: transaction.data)
-        } catch ChainError.rejected(let message) {
-            // The node worked out what it would do, and it fails. Nothing good comes of signing that.
-            throw ChainError.rejected(HotWalletWording.wouldFail + message)
-        }
-        let gasLimit = FeeQuote.gasLimit(estimate: estimate, isPlainSend: transaction.data.isEmpty)
-        let unsigned = UnsignedTransaction(
-            chainID: Base.chainID,
-            nonce: snapshot.nonce,
-            maxPriorityFeePerGas: snapshot.fees.maxPriorityFeePerGas,
-            maxFeePerGas: snapshot.fees.maxFeePerGas,
-            gasLimit: gasLimit,
-            to: transaction.to,
-            value: transaction.value,
-            data: transaction.data
-        )
-        let l1Fee = try await chain.l1Fee(ofPayload: unsigned.signingPayload)
-        let fees = FeeQuote(maxFeePerGas: snapshot.fees.maxFeePerGas, maxPriorityFeePerGas: snapshot.fees.maxPriorityFeePerGas, l1FeeWei: l1Fee)
-        guard fees.isPlausible else { throw ChainError.rejected(HotWalletWording.feesLookWrong) }
-        var quote = SiteQuote(
-            gasLimit: gasLimit,
-            maxFeePerGas: snapshot.fees.maxFeePerGas,
-            feeWei: fees.costWei(gas: UInt128(gasLimit)),
-            ethUsdMicros: snapshot.ethUsdMicros,
-            ethBalance: snapshot.balances[Base.eth] ?? 0,
-            tokenUsdMicros: Base.tokens.first { $0.contract == transaction.to }.flatMap { price(of: $0, snapshot: snapshot) }
-        )
-        if TransactionReview(transaction, quote: quote).isUnreadableCall {
-            quote.preview = await preview(of: transaction, from: address, gasLimit: gasLimit, snapshot: snapshot)
-        }
-        return quote
-    }
-
-    /// What the node says a call would do. It sees what's about to be sent, as it does for the estimate above. A node that can't do this,
-    /// says no, or doesn't answer clearly leaves the approval saying what it always did.
-    private func preview(of transaction: SiteTransaction, from address: EthereumAddress, gasLimit: UInt64, snapshot: ChainSnapshot) async -> CallPreview? {
-        let parameters = CallSimulation.parameters(transaction, from: address, nonce: snapshot.nonce, gasLimit: gasLimit, fees: snapshot.fees)
-        guard case .success(let result)? = try? await chain.read(CallSimulation.method, parameters), let simulation = CallSimulation(result, wallet: address, value: transaction.value) else { return nil }
-        // A snapshot only has prices for what's held, and what a swap brings in usually isn't.
-        var prices: [Token: UInt128] = [:]
-        for token in simulation.tokens {
-            if let known = price(of: token, snapshot: snapshot) {
-                prices[token] = known
-            } else if let feed = Oracle.others[token.asset], let blockTime = simulation.blockTime {
-                let call: JSONValue = .object(["to": .string(feed.address.lowercased), "data": .string("0x" + Hex.encode(Calldata.latestRoundData))])
-                if case .success(.string(let round))? = try? await chain.read("eth_call", .array([call, .string("latest")])) {
-                    prices[token] = Oracle.price(round, feed: feed, blockTime: blockTime, ethUsdMicros: snapshot.ethUsdMicros)
-                }
-            }
-        }
-        return simulation.preview { prices[$0] }
-    }
+    // MARK: - Signing for sites
 
     /// Only after the user approved exactly this in the app. It's in line with sweeps, since two at once would use the same nonce.
     /// `isWanted` says the site hasn't gone away, which can happen at any point while this waits.
@@ -1011,9 +798,7 @@ public final class HotWallet {
     private func signAndSendForSite(_ transaction: SiteTransaction, from address: EthereumAddress, quote: SiteQuote, review: TransactionReview, origin: String, isWanted: @MainActor () -> Bool) async throws -> String {
         guard isWanted() else { throw CancellationError() }
         guard address == self.address, siteProblem == nil else { throw ChainError.rejected(HotWalletWording.changedWhileWaiting) }
-        let snapshot = try await patientSnapshot(of: address)
-        self.snapshot = snapshot
-        guard snapshot.chainID == Base.chainID else { throw ChainError.rejected(HotWalletWording.wrongChain) }
+        let snapshot = try await readInTurn(address)
         guard snapshot.blockNumber >= state.settledThroughBlock ?? 0 else { throw ChainError.rejected(HotWalletWording.lastOneStillShowingUp) }
         guard snapshot.fees.isPlausible else { throw ChainError.rejected(HotWalletWording.feesLookWrong) }
         // What was approved is a limit, so a rise doesn't change what's signed. It has room to land anyway, since a quote allows twice the
@@ -1067,46 +852,6 @@ public final class HotWallet {
         return signature
     }
 
-    /// What this key signed for sites that may still be used, newest first. An expired one can't be, whatever else is known about it.
-    public var signedPermits: [SignedPermit] {
-        guard let address else { return [] }
-        let time = now()
-        return (state.signedPermits?[address] ?? []).filter { !$0.hasExpired(at: time) }.reversed()
-    }
-
-    /// Asks the chain about each one, and forgets it only once that's proof it can't be used, or once it's expired. Anything that
-    /// doesn't answer stays listed, because a permit that can't be checked may still work.
-    public func checkSignedPermits() async {
-        guard let address, !isCheckingPermits else { return }
-        isCheckingPermits = true
-        defer { isCheckingPermits = false }
-        let time = now()
-        let permits = state.signedPermits?[address] ?? []
-        let open = permits.filter { !$0.hasExpired(at: time) }
-        // Settings can change the node while this waits, and only the node that said it's on Base gets to answer.
-        let chain = chain
-        // A node on another chain could answer anything about these, so only Base's answers count.
-        var isBase = false
-        if open.contains(where: { $0.terms != nil }) { isBase = (try? await chain.read("eth_chainId", .array([])))?.isBaseChainID == true }
-        var spent = Set<String>()
-        var checks: [String: SignedPermit.Check] = [:]
-        for permit in open {
-            guard let terms = permit.terms else { continue }
-            checks[permit.id] = .couldntCheck
-            guard isBase, let read = terms.read(owner: address),
-                  case .success(let answer)? = try? await chain.read("eth_call", .array([.object(["to": .string(read.to.lowercased), "data": .string("0x" + Hex.encode(read.data))]), .string("latest")])),
-                  let bytes = answer.string.flatMap(Hex.decode), let isSpent = terms.isSpent(given: bytes) else { continue }
-            if isSpent { spent.insert(permit.id) } else { checks[permit.id] = .notUsed }
-        }
-        permitChecks = checks
-        let expired = Set(permits.filter { $0.hasExpired(at: time) }.map(\.id))
-        guard !spent.isEmpty || !expired.isEmpty else { return }
-        // More may have been signed while this was reading, so this only takes out what it knows about.
-        state.signedPermits?[address]?.removeAll { spent.contains($0.id) || expired.contains($0.id) }
-        // If this doesn't reach the disk, the next check finds the same again.
-        persistOrSayWhy()
-    }
-
     // MARK: - Sending
 
     /// The most of a token that can be sent right now.
@@ -1126,12 +871,7 @@ public final class HotWallet {
         guard let address, canSend else { return false }
         var isOnItsWay = false
         lastSubmitted = []
-        await work(confirming: "send \(Money.text(ofUnits: request.amount, decimals: request.token.decimals)) \(request.token.symbol) to \(request.to.checksummed)", in: prompt) { [self] in
-            submitting = []
-            defer {
-                lastSubmitted = submitting ?? []
-                submitting = nil
-            }
+        await work(confirming: "send \(Money.text(ofUnits: request.amount, decimals: request.token.decimals)) \(request.token.symbol) to \(request.to.checksummed)", in: prompt) { [self] in try await keepingSubmitted {
             let snapshot = try await readToSign(address)
             if let problem = self.problem(sendingTo: request.to) ?? SendPlanner.problem(with: request, snapshot: snapshot) { throw ChainError.rejected(problem.message) }
             let price = self.price(of: request.token, snapshot: snapshot)
@@ -1149,7 +889,7 @@ public final class HotWallet {
                 )
             }
             isOnItsWay = true
-        }
+        } }
         return isOnItsWay
     }
 
@@ -1160,8 +900,7 @@ public final class HotWallet {
         guard let address, !revocations.isEmpty, revocations.count <= RevocationPlanner.maximum, revocations.allSatisfy(\.isAllowed) else { return nil }
         let transactions = RevocationPlanner.transactions(for: revocations)
         do {
-            let snapshot = try await patientSnapshot(of: address)
-            guard snapshot.chainID == Base.chainID, snapshot.fees.isPlausible else { return nil }
+            let snapshot = try await readToQuote(address)
             var feeWei: UInt128 = 0
             for transaction in transactions {
                 let gas = FeeQuote.gasLimit(estimate: try await chain.estimateGas(from: address, to: transaction.to, value: 0, data: transaction.data), isPlainSend: false)
@@ -1176,7 +915,7 @@ public final class HotWallet {
         }
     }
 
-    /// Asks the person at the device once, then signs one transaction for each token or collection, and one for Permit2. Each only
+    /// Asks the person at the device once, then signs one transaction for each token, and one for Permit2. Each only
     /// sets an allowance to nothing. True once they're all on their way. One that fails stops the rest, and says why.
     @discardableResult
     public func revoke(_ revocations: [Revocation], in prompt: PresencePrompt? = nil) async -> Bool {
@@ -1185,12 +924,7 @@ public final class HotWallet {
         var isOnItsWay = false
         lastSubmitted = []
         let what = revocations.count == 1 ? "an approval for \(revocations[0].label)" : "\(revocations.count) approvals"
-        await work(confirming: "revoke \(what)", in: prompt) { [self] in
-            submitting = []
-            defer {
-                lastSubmitted = submitting ?? []
-                submitting = nil
-            }
+        await work(confirming: "revoke \(what)", in: prompt) { [self] in try await keepingSubmitted {
             let snapshot = try await readToSign(address)
             for transaction in transactions {
                 let first = transaction.revocations[0]
@@ -1203,22 +937,44 @@ public final class HotWallet {
                 }
             }
             isOnItsWay = true
-        }
+        } }
         return isOnItsWay
     }
 
     /// What the confirmation asks for, in its own terms.
     public func revokeConfirmed(_ revocations: [Revocation], in prompt: PresencePrompt) async -> ApprovalResult {
         if await revoke(revocations, in: prompt) { return .done }
-        return sweepProblem.map(ApprovalResult.failed) ?? .cancelled
+        return lastActionProblem.map(ApprovalResult.failed) ?? .cancelled
+    }
+
+    // MARK: - Reading before acting
+
+    // Each of these reads the chain before something that costs money, and they ask for different things on purpose. Don't merge them further without keeping these:
+    // - Send, note and revoke (`readToSign`): checked against the balances this read shows, so it settles what's pending first and refuses to go until nothing is. `canSend` has to hold before and after, because alarms arrive during the wait.
+    // - Sweep (`sweepEverything`): `canSend` doesn't apply, because a key that may be stolen or that's being replaced still moves to safety. It moves everything, so it waits for what's pending too, which would otherwise go twice, but leaves settling to the tick. Fees are `execute`'s to check, since that's where an automatic sweep pauses over them.
+    // - Site's transaction (`signAndSendForSite`): `siteProblem` in place of `canSend`, which says the same with a site's wording. What's signed is what the user approved, not worked out from balances, so it only needs a nonce that's right: it doesn't settle or wait for what's pending, which `AlarmCheck.nextNonce` counts, so a site can send one right after another. A read that's behind what's settled could still reuse a nonce, so it refuses that.
+    // - Quotes (`quoteForSite`, `quoteRevocations`): nothing's signed and they run outside the line, so they don't settle anything or keep this read, which a turn in progress could be working from. A revocation's quote only says nil instead of why, because the sheet goes on without a fee.
+
+    /// For whatever has waited its turn in the line. What's read is what's shown from here on, and what the rest of the turn goes by.
+    private func readInTurn(_ address: EthereumAddress) async throws -> ChainSnapshot {
+        let snapshot = try await patientSnapshot(of: address)
+        self.snapshot = snapshot
+        guard snapshot.chainID == Base.chainID else { throw ChainError.rejected(HotWalletWording.wrongChain) }
+        return snapshot
+    }
+
+    /// For showing what something would cost, outside the line.
+    func readToQuote(_ address: EthereumAddress) async throws -> ChainSnapshot {
+        let snapshot = try await patientSnapshot(of: address)
+        guard snapshot.chainID == Base.chainID else { throw ChainError.rejected(HotWalletWording.wrongChain) }
+        guard snapshot.fees.isPlausible else { throw ChainError.rejected(HotWalletWording.feesLookWrong) }
+        return snapshot
     }
 
     /// A transaction asked for by hand, with everything before it settled, because it's checked against what this read says.
     private func readToSign(_ address: EthereumAddress) async throws -> ChainSnapshot {
         try checkStillAllowed(address)
-        let snapshot = try await patientSnapshot(of: address)
-        self.snapshot = snapshot
-        guard snapshot.chainID == Base.chainID else { throw ChainError.rejected(HotWalletWording.wrongChain) }
+        let snapshot = try await readInTurn(address)
         guard snapshot.fees.isPlausible else { throw ChainError.rejected(HotWalletWording.feesLookWrong) }
         try await settlePending(address: address, snapshot: snapshot)
         try checkStillAllowed(address)
@@ -1229,7 +985,7 @@ public final class HotWallet {
 
     /// For what someone is waiting on, usually having just approved it with Touch ID. Nothing's been signed, so a read that fails can be
     /// asked again, and failing the whole thing over one bad moment on the network would make them start over.
-    private func patientSnapshot(of address: EthereumAddress) async throws -> ChainSnapshot {
+    func patientSnapshot(of address: EthereumAddress) async throws -> ChainSnapshot {
         for _ in 0..<Self.patientReadRetries {
             do {
                 return try await chain.snapshot(of: address)
@@ -1242,6 +998,16 @@ public final class HotWallet {
 
     private func checkStillAllowed(_ address: EthereumAddress) throws {
         guard address == self.address, canSend else { throw ChainError.rejected(HotWalletWording.changedWhileWaiting) }
+    }
+
+    /// `lastSubmitted` is what `body` put on its way, however it ends.
+    private func keepingSubmitted(_ body: () async throws -> Void) async throws {
+        submitting = []
+        defer {
+            lastSubmitted = submitting ?? []
+            submitting = nil
+        }
+        try await body()
     }
 
     private func signAndSend(to: EthereumAddress, value: UInt128, data: [UInt8], from address: EthereumAddress, snapshot: ChainSnapshot, record: (String, UInt64) -> SignedRecord) async throws {
@@ -1309,7 +1075,7 @@ public final class HotWallet {
                     reason: reason, createdAt: now(), status: .pending
                 ))
                 nonce += 1
-                sweepProblem = nil
+                lastActionProblem = nil
             } catch let ChainError.rejected(message) {
                 sweptOnItsOwnFailed("A sweep of \(transfer.token.symbol) didn't go out. \(HotWalletWording.refusal(message))", reason: reason)
                 pausedUntil = now().addingTimeInterval(Self.pauseAfterFailure)
@@ -1320,8 +1086,8 @@ public final class HotWallet {
 
     /// Says so once, and not again each time it tries and fails the same way. One by hand is said in front of the person.
     private func sweptOnItsOwnFailed(_ problem: String, reason: SignedRecord.Reason) {
-        if reason != .manual, problem != sweepProblem { onNews?(.sweepDidntGoOut(problem)) }
-        sweepProblem = problem
+        if reason != .manual, problem != lastActionProblem { onNews?(.sweepDidntGoOut(problem)) }
+        lastActionProblem = problem
     }
 
     /// On disk before it leaves, so a crash in between can't make this look like someone else's transaction.
@@ -1392,13 +1158,13 @@ public final class HotWallet {
         if !receipt.succeeded {
             switch record.reason {
             case .aboveCap, .manual, .rotation:
-                sweepProblem = "A sweep of \(record.symbol) failed onchain. Nothing moved, but its gas was spent."
+                lastActionProblem = "A sweep of \(record.symbol) failed onchain. Nothing moved, but its gas was spent."
                 pausedUntil = now().addingTimeInterval(Self.pauseAfterFailure)
             case .sent, .note, .revoke:
-                sweepProblem = HotWalletWording.failedOnchain(record)
+                lastActionProblem = HotWalletWording.failedOnchain(record)
             case .site:
                 // The site's to answer for, so it doesn't hold up sweeps.
-                sweepProblem = "A transaction for \(record.site.map(siteName) ?? "a site") failed onchain. Nothing moved, but its gas was spent."
+                lastActionProblem = "A transaction for \(record.site.map(siteName) ?? "a site") failed onchain. Nothing moved, but its gas was spent."
             }
         }
         try persist()
@@ -1455,7 +1221,7 @@ public final class HotWallet {
 
     /// For a change that's already true here and can't be undone by failing to write it, like an alarm. A restart would lose it, so
     /// the wallet says so, and each tick tries again until it's on disk.
-    private func persistOrSayWhy() {
+    func persistOrSayWhy() {
         try? persist()
     }
 
@@ -1488,7 +1254,7 @@ extension HotWallet: CostNoteWriter {
         settings.coldWallets.contains { $0.address.lowercased == wallet.lowercased() }
     }
 
-    public var noteProblem: String? { sweepProblem }
+    public var noteProblem: String? { lastActionProblem }
 
     public func canWriteNote(from wallet: String) -> Bool {
         canSend && wallet.lowercased() == address?.lowercased

@@ -2,7 +2,7 @@ import Foundation
 import KeyVault
 import PricetagKit
 
-/// A token this wallet is willing to touch. It's `src/core/tokens.ts`, and a test compares the two.
+/// A token this wallet is willing to touch. It's `packages/sdk/src/tokens.ts`, and a test compares the two.
 public struct Token: Hashable, Sendable, Identifiable {
     /// nil for native ETH, which has no contract.
     public let contract: EthereumAddress?
@@ -24,7 +24,8 @@ public enum Base {
     /// Uniswap's, at the same address on every chain. Revoking only ever calls its `lockdown`.
     public static let permit2 = EthereumAddress("0x000000000022D473030F116dDEE9F6B43aC78BA3")!
 
-    /// Nothing else is ever called. Unknown tokens can be malicious, and a transaction to one could do anything.
+    /// The only tokens this app sweeps, sends or revokes on its own screens. Unknown tokens can be malicious, and a transaction to one could do anything.
+    /// A site can ask for a transaction to any contract, which only goes once the user's approved it.
     public static let tokens: [Token] = [
         eth,
         token("0x4200000000000000000000000000000000000006", "WETH", 18, asset: "ETH"),

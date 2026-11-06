@@ -99,7 +99,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(await rig.signer.signed.isEmpty)
         await rig.wallet.sweepEverything()
         #expect(await rig.signer.signed.isEmpty)
-        #expect(rig.wallet.sweepProblem == HotWalletWording.wrongChain)
+        #expect(rig.wallet.lastActionProblem == HotWalletWording.wrongChain)
     }
 
     @Test func aFailedReadDoesntLookLikeAnEmptyWallet() async throws {
@@ -118,7 +118,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         let rig = await Rig(over, now: { clock.now })
         await rig.chain.setSendFailure(.rejected("insufficient funds"))
         await rig.wallet.tick()
-        #expect(rig.wallet.sweepProblem == "A sweep of USDC didn't go out. \(HotWalletWording.refusal("insufficient funds"))")
+        #expect(rig.wallet.lastActionProblem == "A sweep of USDC didn't go out. \(HotWalletWording.refusal("insufficient funds"))")
         #expect(rig.wallet.records.first?.status == .dropped)
 
         await rig.chain.setSendFailure(nil)
@@ -136,7 +136,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         await rig.wallet.tick()
         await rig.wallet.sweepEverything()
         #expect(await rig.signer.signed.isEmpty)
-        #expect(rig.wallet.sweepProblem == HotWalletWording.feesLookWrong)
+        #expect(rig.wallet.lastActionProblem == HotWalletWording.feesLookWrong)
     }
 
     @Test func anEstimateThatFailsSignsNothing() async throws {
@@ -144,7 +144,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         await rig.chain.setEstimateFailure(.rejected("execution reverted"))
         await rig.wallet.tick()
         #expect(await rig.signer.signed.isEmpty)
-        #expect(rig.wallet.sweepProblem?.hasSuffix(HotWalletWording.refusal("execution reverted")) == true)
+        #expect(rig.wallet.lastActionProblem?.hasSuffix(HotWalletWording.refusal("execution reverted")) == true)
     }
 
     @Test func aBroadcastThatMightHaveWorkedStaysPending() async throws {
@@ -265,7 +265,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(await rig.chain.sent.count == 1)
         await rig.wallet.sweepEverything()
         #expect(await rig.chain.sent.count == 1, "by hand too")
-        #expect(rig.wallet.sweepProblem != nil)
+        #expect(rig.wallet.lastActionProblem != nil)
 
         // Once a read is from after it, and there's still too much, it sweeps again.
         await rig.chain.set(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(60)], nonce: 1))
@@ -283,7 +283,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         await rig.wallet.tick()
         #expect(rig.wallet.records.first?.status == .failed)
         #expect(await rig.chain.sent.count == 1)
-        #expect(rig.wallet.sweepProblem != nil)
+        #expect(rig.wallet.lastActionProblem != nil)
     }
 
     @Test func aMissingKeyIsFlaggedAndSignsNothing() async throws {
@@ -418,7 +418,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         await rig.chain.setReceipt(hash, succeeded: false)
         await rig.wallet.lookBetweenTicks()
         #expect(rig.wallet.records.first?.status == .failed)
-        #expect(rig.wallet.sweepProblem?.hasPrefix("A sweep of USDC") == true)
+        #expect(rig.wallet.lastActionProblem?.hasPrefix("A sweep of USDC") == true)
 
         await rig.chain.set(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(60)], nonce: 1))
         await rig.wallet.tick()
@@ -431,7 +431,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         await rig.chain.setReadFailure(.unreachable)
         await rig.wallet.lookBetweenTicks()
         #expect(rig.wallet.chainProblem == nil)
-        #expect(rig.wallet.sweepProblem == nil)
+        #expect(rig.wallet.lastActionProblem == nil)
 
         await rig.wallet.tick()
         #expect(rig.wallet.chainProblem == .unreachable)
@@ -1164,7 +1164,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         #expect(rig.wallet.address == hotAddress)
         #expect(rig.wallet.rotation != nil)
         #expect(await rig.signer.addresses() == [hotAddress, nextAddress])
-        #expect(rig.wallet.sweepProblem == HotWalletWording.deleteWaitsForRotation)
+        #expect(rig.wallet.lastActionProblem == HotWalletWording.deleteWaitsForRotation)
     }
 
     @Test func aRotationThatFinishesDuringTheDeletePromptLeavesTheNewKey() async throws {
@@ -1176,7 +1176,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         }
         await rig.wallet.deleteWallet()
         #expect(rig.wallet.address == nextAddress, "not just after the next tick, which would bring a forgotten key back")
-        #expect(rig.wallet.sweepProblem == HotWalletWording.changedWhileWaiting)
+        #expect(rig.wallet.lastActionProblem == HotWalletWording.changedWhileWaiting)
         #expect(await rig.signer.addresses() == [nextAddress])
     }
 
@@ -1315,7 +1315,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         await rig.signer.setDeleteFailure(KeyVault.Failure.noSuchKey)
         await rig.wallet.finishRotationLeavingFundsBehind()
         #expect(rig.wallet.address == nextAddress)
-        #expect(rig.wallet.sweepProblem == nil, "it's handled, so there's nothing to tell anyone")
+        #expect(rig.wallet.lastActionProblem == nil, "it's handled, so there's nothing to tell anyone")
         #expect(await rig.signer.addresses() == [hotAddress, nextAddress])
         #expect(rig.wallet.linkedWallets.contains(hotAddress.lowercased))
 
@@ -1332,7 +1332,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         rig.stateStore.failSaves(with: DiskFull())
         await rig.wallet.replaceKey()
         #expect(rig.wallet.rotation == nil)
-        #expect(rig.wallet.sweepProblem != nil)
+        #expect(rig.wallet.lastActionProblem != nil)
         #expect(await rig.signer.addresses() == [hotAddress])
 
         rig.stateStore.failSaves(with: nil)
@@ -1352,7 +1352,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         store.failSaves(with: DiskFull())
         await wallet.createWallet()
         #expect(wallet.address == nil)
-        #expect(wallet.sweepProblem != nil)
+        #expect(wallet.lastActionProblem != nil)
         #expect(await signer.addresses().isEmpty)
     }
 
@@ -1376,7 +1376,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         wallet.onKeyRetired = { _, _ in retirements += 1 }
         store.failSaves(with: DiskFull())
         await wallet.finishRotationLeavingFundsBehind()
-        #expect(wallet.sweepProblem != nil)
+        #expect(wallet.lastActionProblem != nil)
         #expect(wallet.address == hotAddress)
         #expect(wallet.rotation != nil)
         #expect(wallet.state.retired.isEmpty, "what's here has to match what's on disk")
@@ -1420,7 +1420,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         let rig = await Rig(over)
         rig.stateStore.failSaves(with: failure)
         await rig.wallet.tick()
-        let problem = try #require(rig.wallet.sweepProblem)
+        let problem = try #require(rig.wallet.lastActionProblem)
         #expect(!problem.contains("/"))
         #expect(!problem.contains("secret"))
         #expect(await rig.chain.sent.isEmpty, "nothing goes out that isn't on disk first")
@@ -1475,7 +1475,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         let rig = await Rig(snapshot(eth: 0))
         rig.stateStore.failSaves(with: DiskFull())
         await rig.wallet.deleteWallet()
-        #expect(rig.wallet.sweepProblem != nil)
+        #expect(rig.wallet.lastActionProblem != nil)
         #expect(rig.wallet.address == hotAddress)
         #expect(rig.stateStore.saved.active == hotAddress)
         #expect(await rig.signer.addresses() == [hotAddress], "a restart would find this key active")
@@ -1567,7 +1567,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         prompt.whileOpen = { await rig.wallet.deleteWallet() }
         await rig.wallet.sweepEverything()
         #expect(rig.wallet.snapshot == nil)
-        #expect(rig.wallet.sweepProblem == HotWalletWording.changedWhileWaiting)
+        #expect(rig.wallet.lastActionProblem == HotWalletWording.changedWhileWaiting)
         #expect(await rig.chain.sent.isEmpty)
     }
 

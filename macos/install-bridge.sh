@@ -7,6 +7,9 @@ extension_id=bidkgdhmaoccbkcccmijbppcfeicbllh
 app=$1
 host="$app/Contents/Helpers/pricetag-bridge"
 [ -x "$host" ] || { echo "No host at $host" >&2; exit 1; }
+# Goes in a JSON string below.
+case "$host" in *[[:cntrl:]]*) echo "Can't install from a path with control characters: $host" >&2; exit 1 ;; esac
+json_host=$(printf '%s' "$host" | sed 's/[\\"]/\\&/g')
 
 support="$HOME/Library/Application Support"
 for browser in \
@@ -18,7 +21,7 @@ for browser in \
 {
   "name": "com.benface.patina",
   "description": "Connects the extension to the Mac app",
-  "path": "$host",
+  "path": "$json_host",
   "type": "stdio",
   "allowed_origins": ["chrome-extension://$extension_id/"]
 }

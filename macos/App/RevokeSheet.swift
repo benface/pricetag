@@ -105,7 +105,6 @@ private struct RevokeConfirmation: View {
         switch revocation.kind {
         case .token: revocation.label
         case .permit2: "\(revocation.label) via Permit2"
-        case .collection: "NFTs in \(revocation.label)"
         }
     }
 

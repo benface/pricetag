@@ -281,7 +281,7 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
             try? await Task.sleep(for: .milliseconds(1))
         }
         #expect(gate.phase == .stopped(nil))
-        #expect(wallet.sweepProblem == nil, "changing their mind isn't a problem to report")
+        #expect(wallet.lastActionProblem == nil, "changing their mind isn't a problem to report")
         #expect(await rig.signer.signed.isEmpty)
     }
 
@@ -354,8 +354,8 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         let rig = await Rig(snapshot(tokens: [usdc: usdcUnits(10)]))
         await rig.chain.setSendFailure(.rejected("insufficient funds"))
         let phase = await approveSweep(on: rig.wallet)
-        #expect(phase == .stopped(rig.wallet.sweepProblem))
-        #expect(rig.wallet.sweepProblem == "A sweep of USDC didn't go out. There isn't enough ETH for this and its network fee. Add some ETH, then try again.")
+        #expect(phase == .stopped(rig.wallet.lastActionProblem))
+        #expect(rig.wallet.lastActionProblem == "A sweep of USDC didn't go out. There isn't enough ETH for this and its network fee. Add some ETH, then try again.")
         #expect(await rig.chain.sent.isEmpty)
     }
 
@@ -452,7 +452,7 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         // What went has to land first, so trying again can't reuse its nonce. Then only what's left goes.
         await rig.chain.setSendFailure(nil)
         #expect(await rig.wallet.sweepEverything(in: PresencePrompt()) == false)
-        #expect(rig.wallet.sweepProblem == HotWalletWording.lastOneOnItsWay)
+        #expect(rig.wallet.lastActionProblem == HotWalletWording.lastOneOnItsWay)
         #expect(await rig.chain.sent.count == 1)
 
         await rig.chain.confirmAll()
@@ -481,7 +481,7 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         await rig.chain.setSendFailure(.unreachable)
         #expect(await approveSweep(on: rig.wallet) == .done)
         #expect(rig.wallet.records.map(\.status) == [.pending])
-        #expect(rig.wallet.sweepProblem == nil)
+        #expect(rig.wallet.lastActionProblem == nil)
     }
 
     @Test func aSweepThatMightHaveGoneButHadMoreLeftSaysSo() async throws {
@@ -549,7 +549,7 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         for (address, problem) in [(EthereumAddress.zero, SendProblem.isZero), (hotAddress, .isThisWallet), (try #require(usdc.contract), .isAToken)] {
             #expect(rig.wallet.problem(sendingTo: address) == problem)
             #expect(await rig.wallet.send(SendRequest(token: usdc, amount: usdcUnits(5), to: address)) == false)
-            #expect(rig.wallet.sweepProblem == problem.message)
+            #expect(rig.wallet.lastActionProblem == problem.message)
         }
         #expect(await rig.signer.signed.isEmpty)
     }
@@ -567,7 +567,7 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         await rig.wallet.tick()
         await rig.chain.set(snapshot(eth: oneEth / 200, tokens: [usdc: usdcUnits(1)]))
         #expect(await rig.wallet.send(SendRequest(token: usdc, amount: usdcUnits(5), to: friend)) == false)
-        #expect(rig.wallet.sweepProblem == HotWalletWording.notEnoughToSend)
+        #expect(rig.wallet.lastActionProblem == HotWalletWording.notEnoughToSend)
         #expect(await rig.signer.signed.isEmpty)
     }
 
@@ -584,7 +584,7 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
     @Test func aTokenNeedsEthToPayTheFee() async throws {
         let rig = await Rig(snapshot(eth: 0, tokens: [usdc: usdcUnits(5)]))
         #expect(await rig.wallet.send(SendRequest(token: usdc, amount: usdcUnits(5), to: friend)) == false)
-        #expect(rig.wallet.sweepProblem == HotWalletWording.noGasToSend)
+        #expect(rig.wallet.lastActionProblem == HotWalletWording.noGasToSend)
     }
 
     /// What's in the way isn't always a sweep, so the wait doesn't call it one.
@@ -592,13 +592,13 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         let rig = await Rig(funded)
         #expect(await rig.wallet.send(SendRequest(token: usdc, amount: usdcUnits(5), to: friend)))
         #expect(await rig.wallet.sweepEverything(in: PresencePrompt()) == false)
-        #expect(rig.wallet.sweepProblem == HotWalletWording.lastOneOnItsWay)
+        #expect(rig.wallet.lastActionProblem == HotWalletWording.lastOneOnItsWay)
 
         await rig.chain.confirmAll()
         await rig.wallet.tick()
         #expect(rig.stateStore.saved.settledThroughBlock == 1001)
         #expect(await rig.wallet.sweepEverything(in: PresencePrompt()) == false)
-        #expect(rig.wallet.sweepProblem == HotWalletWording.lastOneStillShowingUp)
+        #expect(rig.wallet.lastActionProblem == HotWalletWording.lastOneStillShowingUp)
         #expect(await rig.chain.sent.count == 1)
     }
 
@@ -607,7 +607,7 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         let request = SendRequest(token: usdc, amount: usdcUnits(5), to: friend)
         #expect(await rig.wallet.send(request))
         #expect(await rig.wallet.send(request) == false)
-        #expect(rig.wallet.sweepProblem == HotWalletWording.lastOneOnItsWay)
+        #expect(rig.wallet.lastActionProblem == HotWalletWording.lastOneOnItsWay)
         await rig.chain.confirmAll()
         await rig.chain.set(snapshot(eth: oneEth / 200, tokens: [usdc: usdcUnits(15)], nonce: 1))
         #expect(await rig.wallet.send(request), "what landed since the last look doesn't need another tick")
@@ -655,7 +655,7 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         await rig.chain.setSendFailure(.rejected("nope"))
         #expect(await rig.wallet.send(SendRequest(token: usdc, amount: usdcUnits(5), to: friend)) == false)
         #expect(rig.wallet.records.first?.status == .dropped)
-        #expect(rig.wallet.sweepProblem == "Nothing was sent. The network refused it, saying \u{201C}nope\u{201D}. Try again in a moment.")
+        #expect(rig.wallet.lastActionProblem == "Nothing was sent. The network refused it, saying \u{201C}nope\u{201D}. Try again in a moment.")
     }
 
     @Test func amountsAreReadExactly() {
@@ -867,7 +867,7 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         let hash = try #require(rig.wallet.records.first?.hash)
         await rig.chain.setReceipt(hash, succeeded: false)
         await rig.wallet.tick()
-        #expect(rig.wallet.sweepProblem == HotWalletWording.failedOnchain(try #require(rig.wallet.records.first)))
+        #expect(rig.wallet.lastActionProblem == HotWalletWording.failedOnchain(try #require(rig.wallet.records.first)))
     }
 
     @Test func stoppedDuringARotation() async throws {
@@ -903,7 +903,7 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         await rig.chain.confirmAll()
         for _ in 0..<500 where rig.wallet.records.first?.status != .confirmed { try await Task.sleep(for: .milliseconds(10)) }
         #expect(rig.wallet.records.first?.status == .confirmed)
-        #expect(rig.wallet.sweepProblem == nil)
+        #expect(rig.wallet.lastActionProblem == nil)
     }
 
     @Test(arguments: [SignedRecord.Reason.sent, .note])
@@ -918,7 +918,7 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         await rig.chain.set(snapshot(eth: oneEth / 200, tokens: [usdc: usdcUnits(15)], nonce: 1))
         await rig.wallet.lookBetweenTicks()
         #expect(rig.wallet.snapshot?.nonce == 1)
-        #expect(rig.wallet.sweepProblem == nil)
+        #expect(rig.wallet.lastActionProblem == nil)
         #expect(rig.stateStore.saved.sweptGains[hotAddress] == nil)
     }
 
@@ -930,7 +930,7 @@ private final class TouchLands: UserPresence, @unchecked Sendable {
         await rig.wallet.lookBetweenTicks()
         let record = try #require(rig.wallet.records.first)
         #expect(record.status == .failed)
-        #expect(rig.wallet.sweepProblem == HotWalletWording.failedOnchain(record))
+        #expect(rig.wallet.lastActionProblem == HotWalletWording.failedOnchain(record))
 
         await rig.chain.set(snapshot(eth: SweepPlanner.minimumGasReserveWei, tokens: [usdc: usdcUnits(60)], nonce: 1))
         await rig.wallet.tick()

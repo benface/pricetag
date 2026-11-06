@@ -272,7 +272,6 @@ struct CallSimulation {
 
     /// nil if it doesn't fit, which for an allowlisted token means something's wrong, and for an allowance means unlimited.
     private static func amount(_ word: [UInt8]) -> UInt128? {
-        guard word.count == 32, word.prefix(16).allSatisfy({ $0 == 0 }) else { return nil }
-        return word.suffix(16).reduce(UInt128(0)) { $0 << 8 | UInt128($1) }
+        word.count == 32 ? word.uint128 : nil
     }
 }

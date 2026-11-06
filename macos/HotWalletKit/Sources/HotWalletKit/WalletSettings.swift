@@ -24,7 +24,7 @@ public struct WalletSettings: Codable, Equatable, Sendable {
     /// Lower without a cold wallet, since the hot wallet is then all they have.
     public static let capCeilingWithoutCold: UInt128 = 25 * Money.dollar
 
-    /// As a string in storage, since JSON has no 128-bit number. It's always under the ceiling, so it fits in anything.
+    /// In whole dollars in storage, since JSON has no 128-bit number. It's always under the ceiling, so it fits in anything.
     private var capDollars: Int
     public private(set) var coldWallets: [ColdWallet]
     public private(set) var sweepDestination: EthereumAddress?

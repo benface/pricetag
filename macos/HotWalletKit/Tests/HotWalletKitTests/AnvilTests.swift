@@ -129,7 +129,7 @@ struct AnvilTests {
 
         await running.tick()
         #expect(running.chainProblem == nil)
-        #expect(running.sweepProblem == nil)
+        #expect(running.lastActionProblem == nil)
         let before = try #require(running.snapshot)
         #expect(before.chainID == Base.chainID)
         #expect(before.ethUsdMicros != nil, "the fork's Chainlink feed reads")
@@ -201,7 +201,7 @@ struct AnvilTests {
         _ = try await anvil("anvil_dealERC20", [hot.lowercased, usdc.contract!.lowercased, hex(usdcUnits(10))])
 
         #expect(await wallet.send(SendRequest(token: usdc, amount: usdcUnits(4), to: friend)))
-        #expect(wallet.sweepProblem == nil)
+        #expect(wallet.lastActionProblem == nil)
         await wallet.tick()
         #expect(wallet.records.first?.status == .confirmed)
         #expect((try await client.snapshot(of: friend)).balances[usdc] == usdcUnits(4))
@@ -209,14 +209,14 @@ struct AnvilTests {
         // Anvil mines just after a send returns, so give the read a block past the receipt it found.
         await wallet.tick()
         #expect(await wallet.send(SendRequest(token: Base.eth, amount: oneEth / 10000, to: friend)))
-        #expect(wallet.sweepProblem == nil)
+        #expect(wallet.lastActionProblem == nil)
         await wallet.tick()
         #expect((try await client.snapshot(of: friend)).balances[Base.eth] == oneEth / 10000)
 
         await wallet.tick()
         let calldata = try #require(CostNote.calldata(txHash: "0x" + String(repeating: "ab", count: 32), asset: "USDC", usdMicros: "250000000"))
         #expect(await wallet.writeNote(calldata, asset: "USDC", from: hot.lowercased))
-        #expect(wallet.sweepProblem == nil)
+        #expect(wallet.lastActionProblem == nil)
         let note = try #require(wallet.records.first)
         let onchain = try #require(try await anvil("eth_getTransactionByHash", [note.hash]) as? [String: Any])
         #expect((onchain["from"] as? String)?.lowercased() == hot.lowercased)
@@ -276,7 +276,7 @@ struct AnvilTests {
         #expect(quote.transactions == 2)
         #expect(quote.feeWei > 0)
         #expect(await wallet.revoke(revocations))
-        #expect(wallet.sweepProblem == nil)
+        #expect(wallet.lastActionProblem == nil)
         await wallet.tick()
         await wallet.tick()
         #expect(wallet.records.allSatisfy { $0.status == .confirmed && $0.reason == .revoke })
@@ -335,7 +335,7 @@ struct AnvilTests {
         }
         for _ in 0..<(others.count + 2) { await wallet.tick() }
         #expect(wallet.chainProblem == nil)
-        #expect(wallet.sweepProblem == nil)
+        #expect(wallet.lastActionProblem == nil)
         #expect(wallet.unpricedSymbols.isEmpty)
         #expect((wallet.plan?.valueUsdMicros ?? .max) <= 51 * Money.dollar, "about the cap is left")
         let saved = try await client.snapshot(of: cold)
@@ -423,7 +423,7 @@ struct AnvilTests {
         _ = try await anvil("anvil_setBalance", [hot.lowercased, hex(oneEth)])
         _ = try await anvil("anvil_dealERC20", [hot.lowercased, usdc.contract!.lowercased, hex(usdcUnits(5))])
         await wallet.sweepEverything()
-        #expect(wallet.sweepProblem == nil)
+        #expect(wallet.lastActionProblem == nil)
         #expect(wallet.records.map(\.symbol).sorted() == ["ETH", "USDC"])
         await wallet.tick()
         #expect(wallet.records.allSatisfy { $0.status == .confirmed })

@@ -852,7 +852,7 @@ private func permitJSON(chain: String = "8453", domainExtra: String = "") -> JSO
         await rig.chain.setReceipt(hash, succeeded: false)
         await rig.wallet.tick()
         #expect(rig.wallet.records.first?.status == .failed)
-        #expect(rig.wallet.sweepProblem == "A transaction for app.example.com failed onchain. Nothing moved, but its gas was spent.")
+        #expect(rig.wallet.lastActionProblem == "A transaction for app.example.com failed onchain. Nothing moved, but its gas was spent.")
         #expect(rig.wallet.records.first?.site == site, "what's kept stays whole")
 
         await rig.chain.set(snapshot(eth: oneEth, nonce: 1))
