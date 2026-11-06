@@ -327,6 +327,25 @@ final class TestClock: @unchecked Sendable {
         await source.finish()
     }
 
+    @Test func aSavedWalletsNumbersDontStopItBeingCheckedForAContract() async throws {
+        let directory = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let source = HeldSource()
+        let store = makeStore(source, wallet: walletA, directory: directory)
+        store.start()
+        await answer(store, source, walletA, with: try numbers(walletA))
+        store.stop()
+        await source.finish()
+        try await waitForFile(in: directory)
+
+        let next = makeStore(ContractSource(answer: true), wallet: walletA, directory: directory)
+        let firstRun = FirstRun(defaults: UserDefaults(suiteName: "switch-tests-\(UUID().uuidString)")!, isExistingInstall: false)
+        #expect(next.portfolio != nil, "there's no reading screen to do the asking")
+        firstRun.checkContract(of: next.address) { next.currentSource }
+        await until(firstRun.warnsOfContract(walletA))
+        #expect(firstRun.warnsOfContract(walletA))
+    }
+
     @Test func aWalletsNumbersAreThereAtTheNextLaunchMarkedAsOld() async throws {
         let directory = try tempDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

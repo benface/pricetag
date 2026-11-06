@@ -1,6 +1,6 @@
 # Hot wallet security checklist
 
-The Mac app's hot wallet ("this device's spending money") is an unreviewed hackathon build. It's meant for small funds only, and it assumes it will get hacked: the cap is what makes the risk acceptable. This lists what it does, what's been checked and how, and what it doesn't protect against.
+The Mac app's hot wallet ("this device's spending money") is an unreviewed build. It's meant for small funds only, and it assumes it will get hacked: the cap is what makes the risk acceptable. This lists what it does, what's been checked and how, and what it doesn't protect against.
 
 To check it yourself: `pnpm check:mac` for the logic, `pnpm check:keychain` for the real Secure Enclave and Keychain, `pnpm check:anvil` for real signing against a local fork of Base, and `pnpm check:extension` for the browser extension on a real site, through to that fork.
 
@@ -58,6 +58,7 @@ A browser extension lets websites use this wallet. A site can do real damage wit
 - [x] Approvals only appear in the app's own window, showing the site and what's being signed. The wire protocol has no message for answering one, and a test sends the attempts anyone would try.
 - [x] Rejecting is one click, and Esc and closing the window do the same. Nothing approves with a key: Return only asks Touch ID again after a cancelled prompt. Connect and acknowledging a strong warning can't be pressed for the first second, so a window opening under the pointer can't catch a click. Everything else takes a touch, and Touch ID asks about 400 ms after the window's in front.
 - [x] Sending and signing also ask for Touch ID, right away, with the site and what's being signed on screen. A refused prompt leaves the request waiting, and signs nothing.
+- [x] The app only accepts connections for a device page, when it reads a hosted server: on `127.0.0.1` only, on a random port, only `GET` of files listed from its signed bundle, only with that exact `Host`, and never from another site (`Sec-Fetch-Site`). It stops when the page closes, and it can't reach a key: it has no code that does. `pnpm check:device-pages` tests all of this.
 - [x] The origin comes from the browser (`sender.origin`), not the page, and is checked again in the app. Only top-level pages on HTTPS or this Mac can ask: no iframes, and no plain HTTP that anyone on the network could change.
 - [x] Only the hot wallet is ever exposed. Nothing in the bridge can read a cold wallet, and a request naming any other address is refused.
 - [x] Only Base. Other chains are refused for switching, sending and typed data, and what's signed always carries chain ID 8453. A signature with no chain in its data gets a strong warning.
@@ -78,7 +79,8 @@ A browser extension lets websites use this wallet. A site can do real damage wit
 - [x] A site that goes away takes its request with it, at any point before signing: while the node's working out the fee, while it's waiting for approval, or after approval while it's waiting its turn. Once it's been sent, it's been sent.
 - [x] Each transaction is on disk before it's broadcast, so the stolen key alarm knows it. While an alarm is up or a key is being replaced, sites can't sign or connect.
 - [x] A connection belongs to one key, and goes away when the key does. They're listed in the wallet's window, and can be disconnected there.
-- [x] A site can only have 3 things waiting, and 3 rejections in a minute stops it asking for a while, so it can't wear someone down. Its reads are limited too, so it can't use up the wallet's share of the node.
+- [x] A site can only have 3 things waiting, counting transactions still being priced, and 3 rejections in a minute stops it asking for a while, so it can't wear someone down or keep taking focus. A page that asks and then goes away, say by reloading, counts as a rejection. Each stop in a row is twice as long as the last, up to about an hour. Its reads and the transactions it can have priced are limited too, and all of this is checked before anything goes to the node, so it can't use up the wallet's share of the node or what other sites get. All of this is per domain, so subdomains share it. Only a short list of public suffixes like `co.uk` splits a name further, so anything not on it counts as one domain, including sites on one shared host like `vercel.app`, since telling those apart takes the whole public suffix list.
+- [x] An error from outside this app's own code is never shown or told to a site in its own words, since it can name a local file. If something that has to survive a restart can't be written, like an alarm or a disconnected site, the wallet says so and tries again each tick.
 - [x] Only this extension's ID can start the host (`allowed_origins`). The host is a separate program that only relays bytes, with no Keychain access and no key code in it. The ID comes from a public key in `extension/manifest.json`. Its private half was thrown away, since a local unpacked extension doesn't need one.
 - [ ] **Malware running as this user can fake a site.** It can start the host itself and claim any origin, so the window would show the wrong one. It would still need someone to approve it, and it could reach the key anyway. See the enclave's limits above.
 - [ ] **Someone can load another extension with this ID,** because the manifest's public key is what sets it. That takes Developer mode on this Mac, and it gets what this one gets: it can ask, not approve.
@@ -92,6 +94,7 @@ A browser extension lets websites use this wallet. A site can do real damage wit
 The RPC is configurable and untrusted.
 
 - [x] It can't change where money goes, since destinations are local and go into what's signed.
+- [x] It can't crash the app with absurd numbers. A balance, fee, block number, nonce or gas amount too big to be real reads as an unreadable answer, and fees above what Base could charge, including for L1 data, stop signing.
 - [x] Calls to the public node are held to 15 a second with bursts of 8, under its limit of 25, and what it refuses for going over is asked again. It says that inside an HTTP 200 for part of a batch, or with a 429. It's never taken as an answer.
 - [x] It can't get an absurd fee signed: quotes above 100 gwei are refused.
 - [x] A failed read fails the whole tick, so it can't look like an empty wallet.
