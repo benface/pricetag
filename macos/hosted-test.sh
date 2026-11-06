@@ -57,7 +57,9 @@ cleanup() {
   pkill -f "$work/" 2>/dev/null
   [ -x "$work/debug/$name.app/Contents/MacOS/$name" ] && "$work/debug/$name.app/Contents/MacOS/$name" --isolated hosted-test --reset-isolated-wallet >/dev/null 2>&1
   # Only what this test's launch added, and is still this test's. A manifest that was already there can't have changed, since the copy isn't allowed to write it.
-  printf '%s\n' "$new_manifests" | while IFS= read -r file; do if [ -n "$file" ] && grep -qF "$work/" "$file" 2>/dev/null; then rm -f "$file"; fi; done
+  printf '%s\n' "$new_manifests" | while IFS= read -r file; do
+    if [ -n "$file" ] && /usr/bin/python3 -I -c 'import json,sys;assert json.load(open(sys.argv[1]))["path"].startswith(sys.argv[2]+"/")' "$file" "$work" 2>/dev/null; then rm -f "$file"; fi
+  done
   printf '%s\n' "$new_folders" | while IFS= read -r folder; do [ -z "$folder" ] || rmdir "$folder" 2>/dev/null; done
   for app in "$work/release/$name.app" "$work/debug/$name.app"; do "$lsregister" -u "$app" 2>/dev/null; done
   hdiutil detach -quiet "$mount" 2>/dev/null
