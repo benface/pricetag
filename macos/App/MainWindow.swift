@@ -31,6 +31,7 @@ struct MainWindow: View {
     @State private var columns = NavigationSplitViewVisibility.all
     @State private var width: CGFloat = 1120
     @State private var exporting = false
+    /// Not Now on the invite prompt, until the next launch. Settings can still ask for one.
     @State private var exportDocument: CSVDocument?
     @State private var exportError: String?
     /// Asked for from the details sheet, which closes first.
@@ -59,6 +60,9 @@ struct MainWindow: View {
                 .toolbar(removing: width < Self.titleWidth ? .title : nil)
                 .toolbar { toolbar }
                 .inspector(isPresented: inspectorBinding) { inspector }
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    if Build.isWatchOnly { WatchOnlyNotice() }
+                }
         }
         .frame(minWidth: Self.minimumSize.width, minHeight: Self.minimumSize.height)
         // What each wallet is called, wherever All Yours says which wallet something is in.
@@ -88,7 +92,16 @@ struct MainWindow: View {
             ReceiveSheet(wallet: hotWallet) { navigation.showSpendingMoney() }
         }
         .sheet(isPresented: $navigation.isResolving) {
-            ResolveFlow(store: store, firstAsset: navigation.resolvingAsset, noteWriter: hotWallet) { AnyView(PublishFromDeviceButton(link: $0, browsers: .real)) }
+            // Publishing what you paid signs a transaction, here or on a device, so a watch-only build only keeps it on this Mac.
+            if Build.isWatchOnly {
+                ResolveFlow(store: store, firstAsset: navigation.resolvingAsset)
+            } else {
+                ResolveFlow(store: store, firstAsset: navigation.resolvingAsset, noteWriter: hotWallet) { AnyView(PublishFromDeviceButton(link: $0, browsers: .real)) }
+            }
+        }
+        .sheet(isPresented: Binding(get: { Build.isWatchOnly && store.asksForInvite }, set: { if !$0 { store.declineInvite() } })) {
+            // The store closes this when an invite's given, and opens it again if the server refuses that one.
+            InvitePrompt(store: store, decline: store.declineInvite)
         }
         .sheet(isPresented: $navigation.isSettingUpSpendingMoney) {
             SpendingMoneySetup(wallet: hotWallet, store: store) { navigation.isSettingUpSpendingMoney = false }
@@ -140,7 +153,7 @@ struct MainWindow: View {
 
     private var sidebar: some View {
         List(selection: Binding(get: { navigation.section }, set: { if let section = $0 { navigation.section = section } })) {
-            ForEach(AppSection.allCases) { section in
+            ForEach(AppSection.shown) { section in
                 Label(section.title, systemImage: section.symbol).tag(section)
             }
         }

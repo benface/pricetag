@@ -1,6 +1,15 @@
 import Foundation
 import Security
 
+#if PATINA_WATCH_ONLY
+/// Only what the rest of the app reads to learn that this build can't hold a key. It has no way to reach the Keychain.
+public enum KeychainSealedKeyStore {
+    public enum Failure: Error, Equatable {
+        case notProvisioned
+        case keychain(OSStatus)
+    }
+}
+#else
 public protocol SealedKeyStore: Sendable {
     func save(_ sealed: SealedKey, for address: EthereumAddress) throws
     func load(_ address: EthereumAddress) throws -> SealedKey?
@@ -86,3 +95,4 @@ public struct KeychainSealedKeyStore: SealedKeyStore {
         return items.compactMap { ($0[kSecAttrAccount as String] as? String).flatMap(EthereumAddress.init) }
     }
 }
+#endif

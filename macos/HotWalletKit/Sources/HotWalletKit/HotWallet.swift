@@ -115,7 +115,7 @@ public final class HotWallet {
     static let readsToCatchUp = 5
 
     public init(
-        signer: any Signer = KeyVault(),
+        signer: any Signer = defaultSigner(),
         settingsStore: any WalletSettingsStore = UserDefaultsWalletSettingsStore(),
         stateStore: any DeviceStateStore = FileDeviceStateStore(),
         presence: any UserPresence = DeviceOwnerPresence(),
@@ -152,6 +152,8 @@ public final class HotWallet {
             state = DeviceWalletState()
             availability = .unavailable(HotWalletWording.cantReadRecords)
         }
+        // From the start, so nothing that can make a key is ever offered, even for a moment.
+        if Build.isWatchOnly || signer is WatchOnlySigner { availability = .notProvisioned }
     }
 
     // MARK: - Running
