@@ -1410,16 +1410,16 @@ describe("what the UI gets", () => {
     assert.equal(of("DEGEN").resolvable, false, "no market means no question")
   })
 
-  it("exports marks what's exact, estimated, unresolved and without a market", () => {
+  it("exports marks what's exact, estimated, unknown and without a market", () => {
     const { positions } = foldBook(DEMO_WALLET, [], "average", emptyBook())
     const lines = exportCsv(positions, "USD").trim().split("\n")
     assert.deepEqual(lines[0]?.split(","), ["time", "block", "transaction", "asset", "amount", "kind", "currency", "price", "price_source", "cost", "cost_source", "proceeds", "status"])
     const status = (asset: string, predicate = (_: string[]) => true) => lines.slice(1).map((l) => l.split(",")).filter((c) => c[3] === asset && predicate(c)).map((c) => c.at(-1))
-    assert.ok(status("USDC").includes("unresolved"))
+    assert.ok(status("USDC").includes("unknown"))
     assert.deepEqual(status("USDT"), ["estimated"])
     assert.ok(status("AERO").includes("exact"))
     assert.deepEqual(status("DEGEN"), ["no market"])
-    assert.ok(lines.slice(1).every((l) => /,(exact|estimated|unresolved|no market)$/.test(l)))
+    assert.ok(lines.slice(1).every((l) => /,(exact|estimated|unknown|no market)$/.test(l)))
   })
 
   it("asks about what's unresolved upstream too", () => {
@@ -1431,11 +1431,11 @@ describe("what the UI gets", () => {
   it("exports a transfer out as what it carried, not as exact", () => {
     const statuses = (rows: LegRow[], answers = emptyBook()) => exportCsv(foldBook(wallet(A, rows), [], "average", answers).positions, "USD").trim().split("\n").slice(1).map((l) => l.split(",").at(-1))
     const out = (from: string) => [...send(10, "0x1", from, A, 100n * E6), ...send(20, "0x2", A, B, 100n * E6)]
-    assert.deepEqual(statuses(out(STRANGER)), ["unresolved", "unresolved"], "unknown cost")
+    assert.deepEqual(statuses(out(STRANGER)), ["unknown", "unknown"], "unknown cost")
     assert.deepEqual(statuses(out(ACROSS)), ["estimated", "estimated"], "estimated cost")
     assert.deepEqual(statuses([...buy(5, "0x0", A, 100n), ...send(20, "0x2", A, B, 50n * E6)]).slice(-1), ["exact"], "paid")
     const partly = [...buy(5, "0x0", A, 100n), ...send(10, "0x1", STRANGER, A, 100n * E6), ...send(20, "0x2", A, B, 150n * E6)]
-    assert.deepEqual(statuses(partly).slice(-1), ["unresolved"], "partly unknown")
+    assert.deepEqual(statuses(partly).slice(-1), ["unknown"], "partly unknown")
   })
 
   it("explains where a cost came from, in plain words", () => {

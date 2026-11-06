@@ -4,9 +4,9 @@ import { createServer, request, type Server } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { after, before, describe, it } from "node:test"
-import { createApi } from "../server/app.ts"
+import { createApi, createSource } from "../server/app.ts"
 import { createHandler } from "../server/http.ts"
-import { createWallets, datasetSource, describeError, isNotStarted, settledThrough, type ReadL1Fees, type Source, type StreamRange, type StreamRanges } from "@pricetag/sdk/internal"
+import { createWallets, datasetSource, describeError, isNotStarted, settledThrough, type Query, type ReadL1Fees, type Source, type StreamRange, type StreamRanges } from "@pricetag/sdk/internal"
 import { resolvingSource, settledL1Fees, sharedReads } from "../server/source.ts"
 import { ETH_ADDRESS, encodeNote, marketPrice } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../src/core/api.ts"
@@ -68,6 +68,21 @@ describe("the server", () => {
 
   it("has nothing to compare with only one rule", async () => {
     assert.equal((await get(server, "/api/portfolio/demo/compare")).status, 404)
+  })
+
+  it("bounds the first head lookup by the dataset's start block", async () => {
+    const asked: string[] = []
+    const query = Object.assign(async <T>(sql: string) => (asked.push(sql), [] as T[]), { aliased: () => query })
+    const hash = { PRICETAG_DATASET_HASH: "a".repeat(64), PRICETAG_FORK_DATASET: "a/c@0.0.1", PRICETAG_FORK_HASH: "b".repeat(64) }
+    const dataset = { AMP_QUERY_URL: "http://127.0.0.1:1", BASE_RPC_URL: "http://127.0.0.1:1", PRICETAG_DATASET: "a/b@0.0.1", PRICETAG_START_BLOCK: "5" }
+    for (const env of [dataset, { ...dataset, ...hash }]) {
+      const created = createSource(env, query)!
+      asked.length = 0
+      await created.source.head(null)
+      await created.follow.readMark(null)
+      assert.equal(asked.length, 2)
+      for (const sql of asked) assert.match(sql, /\.blocks WHERE block_num >= 5 ORDER BY/)
+    }
   })
 
   it("won't start with a fork it can't pin", () => {
@@ -747,6 +762,38 @@ describe("a dataset whose tables haven't started", () => {
     assert.equal(await datasetSource(query, config).processedThrough(1, 100), 70)
     tops.unlisted_legs = 60
     assert.equal(await datasetSource(query, config).processedThrough(1, 100), 60)
+  })
+
+  describe("when Amp says how far its tables have got", () => {
+    const answering = (end: () => Promise<number | null>) => {
+      const rows: string[] = []
+      const query: Query = Object.assign(async <T,>(sql: string) => (rows.push(sql), [] as T[]), { snapshotEnd: end })
+      return { source: datasetSource(query, config), rows }
+    }
+
+    it("counts a block as processed with no row in it, in one query", async () => {
+      const { source, rows } = answering(async () => 90)
+      assert.equal(await source.processedThrough(1, 100), 90)
+      assert.deepEqual(rows, [])
+    })
+
+    it("stops at the head a read asked for, and at nothing if the tables aren't that far", async () => {
+      const { source } = answering(async () => 90)
+      assert.equal(await source.processedThrough(1, 80), 80)
+      assert.equal(await source.processedThrough(91, 100), null)
+      assert.equal(await source.processedThrough(90, 100), 90)
+    })
+
+    it("reads as not processed when a table hasn't started, and a real failure still fails", async () => {
+      assert.equal(await answering(() => Promise.reject(notStarted)).source.processedThrough(1, 100), null)
+      await assert.rejects(answering(() => Promise.reject(new Error("connection refused"))).source.processedThrough(1, 100), /connection refused/)
+    })
+
+    it("falls back on each table's newest row when Amp doesn't say", async () => {
+      const { source, rows } = answering(async () => null)
+      assert.equal(await source.processedThrough(1, 100), null)
+      assert.equal(rows.length, 4)
+    })
   })
 
   it("keeps an NFT row's kind and ID, including ID 0, so both data paths net it the same way", async () => {

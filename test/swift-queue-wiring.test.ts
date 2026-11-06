@@ -17,5 +17,5 @@ test("check:mac runs the queue's own tests, which are out of pnpm test because t
   assert.match(scripts["check:swift-queue"], /macos\/swift-queue\.test\.ts/)
   assert.doesNotMatch(scripts["check:swift-queue"], /--test/)
   const check = read("macos/check-mac.sh")
-  assert.ok(check.indexOf("check:swift-queue") < check.indexOf('exec "$here/swift-queue.sh"'))
+  assert.ok(check.indexOf("check:swift-queue") < check.lastIndexOf('exec "$here/swift-queue.sh"'))
 })
