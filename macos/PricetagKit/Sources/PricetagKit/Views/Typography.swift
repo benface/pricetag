@@ -72,5 +72,6 @@ public struct AddressLine: View {
         Text(grouped)
             .monospaced()
             .accessibilityLabel(address)
+            .contextMenu { AddressActions(address: address) }
     }
 }

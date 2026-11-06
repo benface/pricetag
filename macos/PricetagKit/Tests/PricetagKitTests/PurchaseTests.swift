@@ -97,6 +97,13 @@ struct PurchaseTrackerTests {
         #expect(PurchaseWording.checkoutNote(MoneyDisplay(main: .USD)) == "You'll need a Coinbase account. Its fees are added, and that total becomes the cost here.")
         #expect(PurchaseWording.checkoutNote(MoneyDisplay(main: .CAD, rateMicros: "1400000")).contains("starts at this amount in CAD"))
         #expect(PurchaseWording.checkoutNote(MoneyDisplay(main: .CAD)).hasPrefix("There's no current USD to CAD rate, so this is in US dollars"))
+        // Its page only starts from an amount in USD, CAD, GBP and EUR, so in anything else it doesn't promise to.
+        for main in [CurrencyCode.CHF, .AUD, .MXN, .ZAR] {
+            let note = PurchaseWording.checkoutNote(MoneyDisplay(main: main, rateMicros: "1400000"))
+            #expect(note.contains("can't start from an amount in \(main.rawValue)"), "\(main)")
+            #expect(!note.contains("starts at this amount"), "\(main)")
+        }
+        #expect(PurchaseWording.checkoutNote(MoneyDisplay(main: .EUR, rateMicros: "900000")).contains("starts at this amount in EUR"))
     }
 
     @Test func followsAnOrderFromThePageToItsCost() async throws {
@@ -365,5 +372,174 @@ struct PurchaseBookTests {
     @Test func aNewerReadOfAnOrderTakesOver() throws {
         let book = Book().recording(try #require(delivered(blockNum: nil).purchase)).recording(try #require(delivered().purchase))
         #expect(book.purchases.map(\.blockNum) == [50])
+    }
+}
+
+@Suite struct PurchaseNoticeTests {
+    private let purchase = TrackedPurchase(ref: "ref", wallet: wallet, asset: "ETH", dollars: 25, startedAt: .now, order: delivered())
+
+    private func notice(_ told: PurchaseMilestone, _ phase: PurchasePhase) -> MoneyNotice? {
+        PurchaseWording.notice(for: purchase, phase: phase, after: told, beside: .USD)
+    }
+
+    @Test func nothingForWhatsStillOnThePage() {
+        #expect(notice(.started, .onItsWay) == nil)
+        #expect(notice(.started, .noOrderYet) == nil)
+    }
+
+    @Test func deliveredThenRecordedIsOneNotificationThatsReplaced() {
+        let delivered = notice(.started, .arriving)
+        let recorded = notice(.delivered, .recorded(paid))
+        #expect(delivered?.title == "Purchase Delivered")
+        #expect(delivered?.body == "0.008 ETH arrived from Coinbase. Its cost is recorded once it shows up here.")
+        #expect(recorded?.title == "Purchase Cost Recorded")
+        #expect(recorded?.body == "0.008 ETH arrived. It cost $25.81, fees included.")
+        #expect(delivered?.id == recorded?.id, "the second replaces the first")
+        #expect(recorded?.row == MoneyNotice.purchaseRow("ref"))
+    }
+
+    @Test func skippingStraightToTheCostIsStillADelivery() {
+        #expect(notice(.started, .recorded(paid))?.title == "Purchase Delivered")
+    }
+
+    @Test func nothingThatsAlreadyBeenTold() {
+        #expect(notice(.delivered, .arriving) == nil)
+        #expect(notice(.finished, .arriving) == nil)
+        #expect(notice(.finished, .recorded(paid)) == nil)
+    }
+
+    @Test func anUnknownCostSaysSo() {
+        #expect(notice(.delivered, .costUnknown)?.title == "Purchase Cost Unknown")
+        #expect(notice(.costUnknown, .costUnknown) == nil)
+        #expect(notice(.costUnknown, .recorded(paid))?.title == "Purchase Cost Recorded", "and saying it's known later still is news")
+        #expect(notice(.started, .noRateFor("SEK"))?.body == "0.008 ETH arrived, but its cost is unknown: there's no exchange rate for SEK.")
+    }
+
+    @Test func aFailureSaysNothingWasBought() {
+        #expect(notice(.started, .failed(.payment))?.body == "Coinbase couldn't take the payment for 0.008 ETH. Nothing was bought.")
+        #expect(notice(.started, .failed(.delivery))?.title == "Purchase Didn't Arrive")
+    }
+}
+
+/// What the app keeps between launches, driven by a real tracker whose cost match comes and goes with the wallet that's chosen.
+@MainActor
+struct PurchaseNewsTests {
+    private final class Shown { var match: PurchaseMatch.State? }
+
+    private final class Clock: @unchecked Sendable { var now = Date.now }
+
+    private func rig(clock: Clock = Clock()) -> (PurchaseTracker, Orders, Shown) {
+        let defaults = UserDefaults(suiteName: "purchases-\(UUID())")!
+        let source = Orders()
+        let shown = Shown()
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in source })
+        return (PurchaseTracker(store: store, defaults: defaults, now: { clock.now }, matchOf: { _ in shown.match }), source, shown)
+    }
+
+    /// A delivery whose block takes hours to show is called unknown, and a late block and match can still record its cost.
+    @Test func anUnknownCostThatBecomesKnownIsToldOnce() async throws {
+        let clock = Clock()
+        let (tracker, source, shown) = rig(clock: clock)
+        var news = PurchaseNews()
+        _ = try await tracker.begin(wallet: wallet, asset: "ETH", dollars: 25, cryptoAmount: "0.008")
+        _ = news.update(phases(tracker), beside: .USD)
+        clock.now += 3 * 60 * 60
+        await source.say([delivered(id: "ref", blockNum: nil)])
+        await tracker.check()
+        #expect(tracker.phase(of: tracker.purchases[0]) == .costUnknown)
+        let unknown = news.update(phases(tracker), beside: .USD)
+        #expect(unknown.map(\.title) == ["Purchase Delivered"])
+        #expect(unknown.first?.body.contains("its cost is unknown") == true)
+
+        // A relaunch, and then its block and its match arrive.
+        var relaunched = try JSONDecoder().decode(PurchaseNews.self, from: JSONEncoder().encode(news))
+        await source.say([delivered(id: "ref")])
+        await tracker.check()
+        shown.match = .recorded
+        let known = relaunched.update(phases(tracker), beside: .USD)
+        #expect(known.map(\.title) == ["Purchase Cost Recorded"])
+        #expect(known.first?.id == unknown.first?.id, "it replaces what was said")
+
+        // Then another wallet is chosen and the hot wallet again, which says nothing more.
+        shown.match = nil
+        #expect(relaunched.update(phases(tracker), beside: .USD).isEmpty)
+        shown.match = .recorded
+        #expect(relaunched.update(phases(tracker), beside: .USD).isEmpty)
+    }
+
+    private func phases(_ tracker: PurchaseTracker) -> [(TrackedPurchase, PurchasePhase)] {
+        tracker.purchases.map { ($0, tracker.phase(of: $0)) }
+    }
+
+    @Test func switchingWalletsOrRelaunchingNeverTellsItAgain() async throws {
+        let (tracker, source, shown) = rig()
+        var news = PurchaseNews()
+        _ = try await tracker.begin(wallet: wallet, asset: "ETH", dollars: 25, cryptoAmount: "0.008")
+        #expect(news.update(phases(tracker), beside: .USD).isEmpty, "it's only just started")
+
+        await source.say([delivered(id: "ref")])
+        await tracker.check()
+        #expect(news.update(phases(tracker), beside: .USD).map(\.title) == ["Purchase Delivered"])
+        shown.match = .recorded
+        #expect(news.update(phases(tracker), beside: .USD).map(\.title) == ["Purchase Cost Recorded"])
+
+        // Another wallet is chosen, so its cost isn't matched for now, and then the hot wallet is chosen again.
+        shown.match = nil
+        #expect(tracker.phase(of: tracker.purchases[0]) == .arriving)
+        #expect(news.update(phases(tracker), beside: .USD).isEmpty)
+        shown.match = .recorded
+        #expect(news.update(phases(tracker), beside: .USD).isEmpty)
+
+        // A relaunch, before the wallet's numbers are back.
+        var relaunched = try JSONDecoder().decode(PurchaseNews.self, from: JSONEncoder().encode(news))
+        shown.match = nil
+        #expect(relaunched.update(phases(tracker), beside: .USD).isEmpty)
+        shown.match = .recorded
+        #expect(relaunched.update(phases(tracker), beside: .USD).isEmpty)
+    }
+
+    @Test func aCostThatArrivesAfterARelaunchIsStillNews() async throws {
+        let (tracker, source, shown) = rig()
+        var news = PurchaseNews()
+        _ = try await tracker.begin(wallet: wallet, asset: "ETH", dollars: 25, cryptoAmount: "0.008")
+        _ = news.update(phases(tracker), beside: .USD)
+        await source.say([delivered(id: "ref")])
+        await tracker.check()
+        #expect(news.update(phases(tracker), beside: .USD).map(\.title) == ["Purchase Delivered"])
+        var relaunched = try JSONDecoder().decode(PurchaseNews.self, from: JSONEncoder().encode(news))
+        shown.match = .recorded
+        #expect(relaunched.update(phases(tracker), beside: .USD).map(\.title) == ["Purchase Cost Recorded"])
+    }
+
+    @Test func aPurchaseFromBeforeThisKeptTrackIsntNews() {
+        var news = PurchaseNews()
+        let old = TrackedPurchase(ref: "old", wallet: wallet, asset: "ETH", dollars: 25, startedAt: .now, order: delivered(id: "old"))
+        #expect(news.update([(old, .arriving)], beside: .USD).isEmpty)
+        #expect(news.update([(old, .recorded(paid))], beside: .USD).isEmpty)
+        let going = TrackedPurchase(ref: "going", wallet: wallet, asset: "ETH", dollars: 25, startedAt: .now, order: OnrampOrder(id: "going", status: .pending))
+        #expect(news.update([(going, .onItsWay)], beside: .USD).isEmpty)
+        #expect(news.update([(going.delivering(), .arriving)], beside: .USD).map(\.title) == ["Purchase Delivered"], "what happens after it's seen still is")
+    }
+}
+
+private extension TrackedPurchase {
+    func delivering() -> TrackedPurchase {
+        var next = self
+        next.order = delivered(id: ref)
+        return next
+    }
+}
+
+@MainActor
+struct PurchasesAcrossKeysTests {
+    /// After a key's replaced, what was bought for the old one is still listed, so a notification about it has a row to open.
+    @Test func aReplacedKeysPurchasesAreListedWithTheNewOnes() async throws {
+        let (tracker, _, _, _) = setup()
+        let replacement = "0x00000000000000000000000000000000000DE303"
+        _ = try await tracker.begin(wallet: wallet, asset: "ETH", dollars: 25, cryptoAmount: "0.008")
+        _ = try await tracker.begin(wallet: replacement, asset: "USDC", dollars: 20, cryptoAmount: "20")
+        #expect(tracker.purchases(of: wallet).count == 1)
+        let both = tracker.purchases(of: [replacement, wallet])
+        #expect(both.map(\.asset) == ["USDC", "ETH"], "newest first, across both")
     }
 }

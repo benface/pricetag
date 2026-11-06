@@ -8,7 +8,7 @@ import type { PricedLeg } from "./legs.ts"
 import { referenceMarks, type LatestPrices, type MarkPrice } from "./portfolio.ts"
 import type { WalletData } from "./wallet.ts"
 
-export type CurrencyCode = "USD" | "CAD" | "EUR" | "GBP" | "CHF"
+export type CurrencyCode = "USD" | "CAD" | "EUR" | "GBP" | "CHF" | "AUD" | "NZD" | "SGD" | "MXN" | "BRL" | "TRY" | "ZAR"
 
 export type Currency = {
   code: CurrencyCode
@@ -16,24 +16,41 @@ export type Currency = {
   locale: string
   /** Printed by hand before amounts too small for Intl's two decimals. */
   symbol: string
+  /** Printed instead of `symbol` beside amounts in another currency, where a bare "$" doesn't say which. */
+  label: string
+  /** Where Intl's own symbol for this currency is its code, it can still print the one people use. */
+  narrow?: true
   /** Chainlink's feed on Base, answering USD for one unit with 8 decimals. USD doesn't need one. */
-  feed: { address: string; pair: string } | null
+  feed: { address: string; pair: string; aggregators: readonly string[] } | null
 }
 
-/** Adding a currency takes one line here and one in `Currency.swift`. Base also has feeds for AUD and SGD. */
+/**
+ * Adding a currency takes one line here and one in `Currency.swift`, plus a new version of the rates dataset (`node dataset/build.ts --rates`), since it only has these aggregators.
+ * Each address is from Chainlink's own list for Base, and checked onchain: `description()`, `decimals()` and `aggregator()`.
+ */
 export const CURRENCIES: Record<CurrencyCode, Currency> = {
-  USD: { code: "USD", name: "US dollar", locale: "en-US", symbol: "$", feed: null },
-  CAD: { code: "CAD", name: "Canadian dollar", locale: "en-CA", symbol: "$", feed: { address: "0xA840145F87572E82519d578b1F36340368a25D5d", pair: "CAD / USD" } },
-  EUR: { code: "EUR", name: "Euro", locale: "en-IE", symbol: "€", feed: { address: "0xc91D87E81faB8f93699ECf7Ee9B44D11e1D53F0F", pair: "EUR / USD" } },
-  GBP: { code: "GBP", name: "British pound", locale: "en-GB", symbol: "£", feed: { address: "0xCceA6576904C118037695eB71195a5425E69Fa15", pair: "GBP / USD" } },
+  USD: { code: "USD", name: "US dollar", locale: "en-US", symbol: "$", label: "US$", feed: null },
+  CAD: { code: "CAD", name: "Canadian dollar", locale: "en-CA", symbol: "$", label: "CA$", feed: { address: "0xA840145F87572E82519d578b1F36340368a25D5d", pair: "CAD / USD", aggregators: ["0x9D779986f861810CadA370F04F524226d150fb7F"] } },
+  EUR: { code: "EUR", name: "Euro", locale: "en-IE", symbol: "€", label: "€", feed: { address: "0xc91D87E81faB8f93699ECf7Ee9B44D11e1D53F0F", pair: "EUR / USD", aggregators: ["0x46ba9365C7CE12224504cF8581f061a6942f8516"] } },
+  GBP: { code: "GBP", name: "British pound", locale: "en-GB", symbol: "£", label: "£", feed: { address: "0xCceA6576904C118037695eB71195a5425E69Fa15", pair: "GBP / USD", aggregators: ["0x2e46086480909c2049F372DE72Ba5a2fAB281eE9"] } },
   // en-US because Intl writes -0.50 as "CHF-0.50" in en-CH. The space is the no-break one Intl puts there.
-  CHF: { code: "CHF", name: "Swiss franc", locale: "en-US", symbol: "CHF\u00a0", feed: { address: "0x3A1d6444fb6a402470098E23DaD0B7E86E14252F", pair: "CHF / USD" } },
+  CHF: { code: "CHF", name: "Swiss franc", locale: "en-US", symbol: "CHF\u00a0", label: "CHF\u00a0", feed: { address: "0x3A1d6444fb6a402470098E23DaD0B7E86E14252F", pair: "CHF / USD", aggregators: ["0x61d85c6cCE419845c2DfC20130B4f120C10B2105"] } },
+  AUD: { code: "AUD", name: "Australian dollar", locale: "en-AU", symbol: "$", label: "A$", feed: { address: "0x46e51B8cA41d709928EdA9Ae43e42193E6CDf229", pair: "AUD / USD", aggregators: ["0xBe5bC9c1d407a0D97C34A73FbA19118b478F427d"] } },
+  NZD: { code: "NZD", name: "New Zealand dollar", locale: "en-NZ", symbol: "$", label: "NZ$", feed: { address: "0x06bdFe07E71C476157FC025d3cCD4BBe08e83EF9", pair: "NZD / USD", aggregators: ["0xf74260ed595B7e31829f6f32cAD273563949A4BB"] } },
+  SGD: { code: "SGD", name: "Singapore dollar", locale: "en-SG", symbol: "$", label: "S$", feed: { address: "0x81575495532fB311Efc5C993B612564274F0949b", pair: "SGD / USD", aggregators: ["0x3860668e752604a6734e3d812E14DF14d2B3Ae48"] } },
+  // Base also has an MXN feed with 18 decimals, for another product. This is the one with 8.
+  MXN: { code: "MXN", name: "Mexican peso", locale: "es-MX", symbol: "$", label: "MX$", feed: { address: "0x9e8Ee77c76d4fa41306056D1C3196AF5da1600bd", pair: "MXN / USD", aggregators: ["0x84A0f5A767BD862bE27F6C8F07aCf6506b393370"] } },
+  // en-US because pt-BR writes its decimals with a comma, and nothing else here does.
+  BRL: { code: "BRL", name: "Brazilian real", locale: "en-US", symbol: "R$", label: "R$", feed: { address: "0x0b0E64c05083FdF9ED7C5D3d8262c4216eFc9394", pair: "BRL / USD", aggregators: ["0x70f3a88dfD546dE52D2cEA8733E4DecC5d58F5f0"] } },
+  // Their own locales write decimals with a comma too, and en-US knows these two only by their codes without `narrow`.
+  TRY: { code: "TRY", name: "Turkish lira", locale: "en-US", symbol: "₺", label: "₺", narrow: true, feed: { address: "0x29413773e7CD4Dfd6Ad89a50887877b88a6C592C", pair: "TRY / USD", aggregators: ["0x74Ec57bB8B8eb99e668c052c7F3c0c6e88d38Dec"] } },
+  ZAR: { code: "ZAR", name: "South African rand", locale: "en-US", symbol: "R", label: "R", narrow: true, feed: { address: "0x2ecc8A8B370fC6a217166b2782a35339bEBEe98B", pair: "ZAR / USD", aggregators: ["0x1D292e75f586f4B2638b9C81300d58aD6299c0Da"] } },
 }
 
 export const CURRENCY_CODES = Object.keys(CURRENCIES) as CurrencyCode[]
 
-/** What a portfolio can be shown in. The rest are only what something was paid in, until the screens are ready for them: add one here and in `Currency.swift`. */
-export const MAIN_CURRENCY_CODES: readonly CurrencyCode[] = ["USD", "CAD"]
+/** What a portfolio can be shown in: every currency, for now. To keep one as only what something was paid in, leave it out here and in `Currency.swift`. */
+export const MAIN_CURRENCY_CODES: readonly CurrencyCode[] = CURRENCY_CODES
 
 export function isMainCurrency(value: string | null | undefined): value is CurrencyCode {
   return MAIN_CURRENCY_CODES.includes(value as CurrencyCode)
@@ -60,8 +77,8 @@ export type Rates = {
   latest: { blockNum: number; round: RateRound } | null
 }
 
-/** Forex markets close for about 2 days a week. CAD and EUR update hourly, and GBP and CHF daily, weekends included. Older than this, a feed has stopped. */
-const MAX_ROUND_AGE_SECONDS = 3 * 24 * 60 * 60
+/** Forex markets close for about 2 days a week. Feeds update hourly or daily, weekends included. Older than this, a feed has stopped. */
+export const MAX_ROUND_AGE_SECONDS = 3 * 24 * 60 * 60
 
 const E8 = 10n ** 8n
 const E6 = 10n ** 6n

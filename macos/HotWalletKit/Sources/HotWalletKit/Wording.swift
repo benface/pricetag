@@ -44,6 +44,26 @@ public enum HotWalletWording {
         "Send only on Base. Anything above your \(cap) cap " + (hasDestination ? "gets swept to your savings." : "stays here until you add a savings wallet.")
     }
 
+    /// Buy's warning without savings. The provider's page can raise the amount, so it says what happens to the rest, whatever's typed.
+    public static func buyWithoutSavings(cap: String, provider: String) -> String {
+        "You don't have a savings wallet, so anything above your \(cap) cap stays here, with no backup, until you add one. \(provider)'s page can change the amount."
+    }
+
+    /// Where a purchase ends up. `fits` and `aboveCap` are already formatted, and nil when there's none.
+    public static func buyLands(fits: String?, aboveCap: String?, savings: String?) -> String {
+        guard let aboveCap else { return "It all stays in Spending Money." }
+        guard let savings else {
+            guard let fits else { return "Spending Money is already at its cap, so all of it stays here, above it." }
+            return "\(fits) fits under your cap. The other \(aboveCap) stays here too, above it."
+        }
+        guard let fits else { return "Spending Money is full, so it all goes to \(savings)." }
+        return "\(fits) stays in Spending Money, the rest goes to \(savings)."
+    }
+
+    public static func buyNoGas(_ symbol: String, savings: String?) -> String {
+        "This wallet doesn't have enough ETH to move \(symbol)\(savings.map { " to \($0)" } ?? ""), so it could get stuck here. Buy ETH this time."
+    }
+
     public static let sweepsOnlyWhileOpen = "Sweeps only run while the app is open. If it's closed, whatever arrives stays here until it opens again."
 
     /// The cap's held in USD, so its number here moves with the rate, and what it does doesn't.

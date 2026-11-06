@@ -143,7 +143,7 @@ public struct PricetagClient: PortfolioSource {
 
     public func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> String {
         let data = try await post("/api/portfolio/\(address)/export", body: FoldBody(method: method, currency: currency, rule: rule, linked: linked, book: book), timeout: .seconds(30))
-        guard let text = String(data: data, encoding: .utf8) else { throw FetchError.rejected("The server sent something this version can't read.") }
+        guard let text = String(data: data, encoding: .utf8) else { throw FetchError.rejected("The price service sent something this version can't read.") }
         return text
     }
 
@@ -179,14 +179,14 @@ public struct PricetagClient: PortfolioSource {
         do {
             return try JSONDecoder().decode(Body.self, from: data)
         } catch {
-            throw FetchError.rejected("The server sent something this version can't read.")
+            throw FetchError.rejected("The price service sent something this version can't read.")
         }
     }
 
     private func url(_ path: String, query: [URLQueryItem]) throws -> URL {
         var components = URLComponents(url: serverURL.appending(path: path), resolvingAgainstBaseURL: false)
         if !query.isEmpty { components?.queryItems = query }
-        guard let url = components?.url else { throw FetchError.rejected("That server address isn't a valid URL.") }
+        guard let url = components?.url else { throw FetchError.rejected("The price service's address isn't a valid URL.") }
         return url
     }
 
@@ -220,7 +220,7 @@ public struct PricetagClient: PortfolioSource {
         }
         guard let status = (response as? HTTPURLResponse)?.statusCode else { throw FetchError.unreachable }
         if status == 200 || status == 204 { return data }
-        let message = (try? JSONDecoder().decode(ErrorBody.self, from: data))?.error ?? "The server answered with an error (\(status))."
+        let message = (try? JSONDecoder().decode(ErrorBody.self, from: data))?.error ?? "The price service answered with an error (\(status))."
         switch status {
         case 502: throw FetchError.ampUnavailable(message)
         case 503: throw FetchError.noAmpConfigured(message)
