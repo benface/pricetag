@@ -86,6 +86,11 @@ public struct TaxPreviewRow: Codable, Sendable, Equatable {
     /// nil is unknown, which is never 0.
     public let gainMicros: String?
     public let status: String
+
+    /// An estimate reads as one here too. nil when the gain is unknown.
+    public func gainText(_ currency: CurrencyCode) -> String? {
+        gainMicros.map { Format.estimate(Format.signedMoney($0, currency), status == "estimated") }
+    }
 }
 
 /// What the server sends: see `TaxReportResponse` in `src/core/api.ts`.
@@ -127,6 +132,11 @@ public struct TaxReport: Codable, Sendable, Equatable {
     public let preview: [TaxPreviewRow]
     public let filename: String
     public let csv: String
+
+    /// The total, marked when any row in it rests on an estimate. nil when it's unknown.
+    public var gainText: String? {
+        gainMicros.map { Format.estimate(Format.signedMoney($0, currency), estimatedCount > 0) }
+    }
 
     /// Sales, fees and sends, each counted once.
     public var eventCount: Int { soldCount + feeCount + sentCount }

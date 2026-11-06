@@ -6,12 +6,12 @@
 // once, in the wallet that paid it. Only what counts money in and out of the user's wallets, like the comparison with
 // holding ETH, has to leave moves out by name.
 
-import { CHECK_LABELS } from "./wording.ts"
+import { CHECK_LABELS, ESTIMATE_LINE, est } from "./wording.ts"
 import { NO_FACTS, combinedFacts, type TransactionFacts } from "./activity.ts"
 import { compareWithHoldingEth, formatAmount, formatMoney, formatPrice, formatReturn, formatSignedMoney, hasStarted, pnlOverTime, pnlStatus as statusOf, returnBps, sumTotals, unconfirmedAssets, type CurrencyCode, type Exclusion, type HoldComparison, type LatestPrices, type LegEffect, type MarkPrice, type Method, type PnlPoint, type Position, type PricedLeg, type Reconciliation, type Totals } from "@pricetag/sdk/core"
 import type { BookPoint, BookPreview, ExplanationLeg, ExplanationResponse, PortfolioPosition, PortfolioResponse, WalletResponse } from "./api.ts"
 import type { Book } from "./book.ts"
-import { explainHold, explainPoint, explainTarget, explainTotal, type ExplainTarget, type Explanation, type Metric } from "./explain.ts"
+import { explainHold, explainPoint, explainTarget, explainTotal, metricIsEstimate, totalIsEstimate, type ExplainTarget, type Explanation, type Metric } from "./explain.ts"
 import { exportCsv } from "./export.ts"
 import { foldBook, meterOf, type BookFold, type Question } from "./resolve.ts"
 import { isMove, movesBetween } from "./tax.ts"
@@ -296,24 +296,24 @@ export type CombinedExplanation = Explanation & { parts: ExplanationPart[]; wall
 export type CombinedExplanationResponse = Omit<ExplanationResponse, "legs"> & { parts: ExplanationPart[]; legs: (ExplanationLeg & { wallet: string })[] }
 
 /** A holding's number across the wallets, the same way a wallet's own explanation shows it. */
-function assetValue({ asset, decimals, price, values, returnBps: bps, reconciliation }: CombinedPosition, metric: Metric, currency: CurrencyCode): string | null {
+function assetValue({ asset, decimals, price, values, returnBps: bps, reconciliation, estimates }: CombinedPosition, metric: Metric, currency: CurrencyCode): string | null {
   const unconfirmed = reconciliation !== null && reconciliation.status !== "reconciled"
   if (unconfirmed && (metric === "average" || metric === "return" || metric === "realized" || metric === "unrealized")) return null
   switch (metric) {
     case "amount":
       return `${formatAmount(values.qty, decimals)} ${asset}`
     case "average":
-      return values.averageCostMicros && formatPrice(values.averageCostMicros, currency)
+      return values.averageCostMicros && est(formatPrice(values.averageCostMicros, currency), estimates.cost)
     case "price":
-      return price && formatPrice(price.micros, currency)
+      return price && est(formatPrice(price.micros, currency), estimates.value)
     case "value":
-      return values.valueMicros && formatMoney(values.valueMicros, currency)
+      return values.valueMicros && est(formatMoney(values.valueMicros, currency), estimates.value)
     case "return":
-      return bps && formatReturn(bps)
+      return bps && est(formatReturn(bps), estimates.unrealized)
     case "realized":
-      return values.realizedMicros && formatSignedMoney(values.realizedMicros, currency)
+      return values.realizedMicros && est(formatSignedMoney(values.realizedMicros, currency), estimates.realized)
     case "unrealized":
-      return values.unrealizedMicros && formatSignedMoney(values.unrealizedMicros, currency)
+      return values.unrealizedMicros && est(formatSignedMoney(values.unrealizedMicros, currency), estimates.unrealized)
     case "onchain":
       return reconciliation?.status === "reconciled" ? `✓ ${CHECK_LABELS.reconciled}` : reconciliation?.status === "incomplete" ? `⚠ ${CHECK_LABELS.incomplete}` : CHECK_LABELS.unchecked
   }
@@ -347,22 +347,23 @@ export function explainAcross(read: readonly WalletResponse[], method: Method, t
 
   if (target.kind === "total") {
     const whole = explainTotal(walletPositions, totals as Totals, target.metric, usdLess)
-    return { currency, title: whole.title, value: whole.value, sourceValue: null, lines: target.metric === "pnl" ? whole.lines.slice(0, 1) : [], parts: partsOut, effects, walletOf: whose }
+    return { currency, title: whole.title, value: whole.value, sourceValue: null, lines: [...(target.metric === "pnl" ? whole.lines.slice(0, 1) : []), ...(whole.value !== null && totalIsEstimate(totals as Totals, target.metric) ? [ESTIMATE_LINE] : [])], parts: partsOut, effects, walletOf: whose }
   }
   if (target.kind === "asset") {
     const position = positions.find((p) => p.asset === target.asset)
     if (!position || parts.length === 0) return null
     const { title } = (parts[0] as (typeof parts)[number]).explanation
-    const lines = parts.length > 1 ? [`Across ${parts.length} of your wallets.`] : []
+    const value = assetValue(position, target.metric, currency)
+    const lines = [...(parts.length > 1 ? [`Across ${parts.length} of your wallets.`] : []), ...(value !== null && metricIsEstimate(position, target.metric) ? [ESTIMATE_LINE] : [])]
     // The same price in every wallet that holds it, so any of them can show where it comes from.
     const priced = parts.find(({ explanation }) => explanation.priceProof)
     const priceProof = priced?.explanation.priceProof ? { priceProof: { ...priced.explanation.priceProof, wallet: priced.wallet } } : {}
-    return { currency, title, value: assetValue(position, target.metric, currency), sourceValue: null, lines, ...priceProof, parts: partsOut, effects, walletOf: whose }
+    return { currency, title, value, sourceValue: null, lines, ...priceProof, parts: partsOut, effects, walletOf: whose }
   }
   const point = points.find((p) => p.txHash === target.txHash)
   if (!point) return null
   const whole = explainPoint(walletPositions, point, usdLess)
-  const lines = [`Total PnL across your wallets after this transaction.${point.excludedCount > 0 ? ` Leaves out ${point.excludedCount} unknown ${point.excludedCount === 1 ? "amount" : "amounts"}.` : ""}`]
+  const lines = [`Total PnL across your wallets after this transaction.${point.excludedCount > 0 ? ` Leaves out ${point.excludedCount} unknown ${point.excludedCount === 1 ? "amount" : "amounts"}.` : ""}`, ...(point.pnlMicros !== null && point.pnlEstimated ? [ESTIMATE_LINE] : [])]
   return { currency, title: whole.title, value: whole.value, sourceValue: null, lines, parts: partsOut, effects, walletOf: whose }
 }
 

@@ -48,6 +48,7 @@ import {
   unknownCostIn,
   valueGapsSentence,
   walletCount,
+  est,
 } from "../core/wording.ts"
 import { PnlChart } from "./PnlChart.tsx"
 import { ResolvePanel } from "./ResolvePanel.tsx"
@@ -105,7 +106,6 @@ const holdingOf = (position: CombinedPosition): Holding => ({ ...position, state
 /** The wallets a holding's parts qualify for. */
 const partsWhere = ({ wallets }: Holding, has: (part: PositionPart) => boolean) => (wallets ?? []).filter(has).map(({ wallet }) => wallet)
 
-const est = (text: string, isEstimate: boolean) => (isEstimate ? `≈${text}` : text)
 
 /** A header that sorts by its column. Clicking it again turns the order around. */
 function SortHeader({ column, sort, onSort, numeric = true, title, children }: { column: HoldingsColumn; sort: HoldingsSort; onSort: (column: HoldingsColumn) => void; numeric?: boolean; title?: string; children: ReactNode }) {

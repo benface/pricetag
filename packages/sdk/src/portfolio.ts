@@ -366,6 +366,8 @@ export type PnlPoint = {
   txHash: string | null
   /** Realized, plus unrealized at that moment's prices, less gas. Only what's known, and null when nothing is. */
   pnlMicros: string | null
+  /** What `pnlMicros` is made of includes an estimated cost or proceeds, or a token only a market can price. Only there when it's true. */
+  pnlEstimated?: boolean
   excludedCount: number
   /** What was held right after it, at that moment's prices. Only what's known, and null when nothing is. */
   valueMicros: string | null
@@ -414,6 +416,7 @@ export function pnlOverTime(
     const coverage: Coverage = { known: 0, missing: 0 }
     let pnl = 0n
     let excludedCount = 0
+    let pnlEstimated = false
     for (const [asset, state] of states) {
       if (noMarket.has(asset)) continue
       const v = valuePosition(state, priceOf(asset))
@@ -431,11 +434,15 @@ export function pnlOverTime(
         coverage.missing++
       } else {
         pnl += BigInt(v.realizedMicros)
+        if (BigInt(v.estimatedRealizedMicros) > 0n) pnlEstimated = true
         if (BigInt(state.resolvedDisposedQty) > 0n) coverage.known++
       }
       if (v.unrealizedMicros !== null) {
         pnl += BigInt(v.unrealizedMicros)
-        if (BigInt(v.qty) > 0n) coverage.known++
+        if (BigInt(v.qty) > 0n) {
+          coverage.known++
+          if (BigInt(v.estimatedCostMicros) > 0n || prices[asset]?.source === "market" || !(TOKENS.some((t) => t.symbol === asset && t.oracle) || TOKEN_FEEDS[asset])) pnlEstimated = true
+        }
       } else if (BigInt(v.qty) > 0n) {
         excludedCount++
         coverage.missing++
@@ -447,7 +454,7 @@ export function pnlOverTime(
       excludedCount++
       coverage.missing++
     }
-    return { pnlMicros: answer(pnl, coverage), excludedCount }
+    return { pnlMicros: answer(pnl, coverage), excludedCount, ...(pnlEstimated ? { pnlEstimated } : {}) }
   }
   // What's held, and nothing about cost. A quantity history can't vouch for is left out, like one with no price.
   const worthNow = (priceOf: (asset: string) => string | null) => {
