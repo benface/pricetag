@@ -765,6 +765,8 @@ describe("the book in two browser tabs", { skip: existsSync(CHROME) ? false : "C
           return request
         }
       ` }, a)
+      // The page that's open doesn't have that yet, and it would read what's about to be stored and keep its copy.
+      await reload(a)
       await evaluate(a, `sessionStorage.setItem("fail copies", "1"); localStorage.setItem(${JSON.stringify(key)}, ${JSON.stringify(unreadable)})`)
       await reload(a)
       await until(() => evaluate(a, "unreadableSaved.copyFailed"), "the person to be told")
