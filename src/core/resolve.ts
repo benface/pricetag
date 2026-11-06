@@ -4,9 +4,10 @@
 // or from a provider's order that matches a movement exactly. The rest come from here, and the fold then runs on the result.
 // An unanswered sender stays unknown: it could be the user's own wallet, so assuming otherwise would be a guess.
 
-import { applyLegTaking, emptyPosition, foldWallet, formatAmount, formatPaid, historyGaps, lessPaidAt, normalizeAddress, orderMatters, plainAmount, sharePaidAt, shortHash, usableAnswer, usdView, viewWallet, withoutCurrency, worth, type CostPiece, type CurrencyCode, type HistoryGap, type HoldComparison, type MarkPrice, type Method, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { applyLegTaking, emptyPosition, foldWallet, unconfirmedAssets, formatAmount, formatPaid, historyGaps, lessPaidAt, normalizeAddress, orderMatters, plainAmount, sharePaidAt, shortHash, usableAnswer, usdView, viewWallet, withoutCurrency, worth, type CostPiece, type CurrencyCode, type HistoryGap, type HoldComparison, type MarkPrice, type Method, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { NO_FACTS, legsByTransaction, transactionFacts } from "./activity.ts"
 import type { BookPoint, BookPreview, WalletResponse } from "./api.ts"
-import { costKey, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type Money, type Purchase, type Receipt, type SenderAnswer } from "./book.ts"
+import { costKey, isDemoWallet, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type Money, type Purchase, type Receipt, type SenderAnswer } from "./book.ts"
 import { matchWithdrawals, type ExchangeArrival } from "./exchange-import.ts"
 import { MINT_ADDRESS, knownSender, type KnownSender } from "./senders.ts"
 import { describeTransaction, purchaseSource } from "./wording.ts"
@@ -53,16 +54,22 @@ type Side = { wallet: WalletResponse; view: WalletView }
 
 const E8 = 10n ** 8n
 
+/** USD for one unit of a currency when this arrived, from the wallet's own rates or the ones read for what's stored in another. */
+function answerAt({ wallet }: Side, currency: CurrencyCode, leg: PricedLeg): bigint | null {
+  const own = currency === wallet.currency ? wallet.rates?.byBlock[leg.blockNum] : undefined
+  return usableAnswer(own ?? wallet.paidRates?.[currency]?.[leg.blockNum], leg.timestamp)
+}
+
 /**
- * An entered amount in the currency being folded, at the rate when it arrived. Null when there's no such rate, which leaves
- * the cost unknown: a CAD amount read as USD would be quietly wrong.
+ * A stored amount in the currency being folded, through USD at the rates when it arrived. Null when either rate is missing,
+ * which leaves the cost unknown: a CAD amount read as USD would be quietly wrong. The stored amount itself never changes.
  */
-function moneyIn({ wallet, view }: Side, money: Money, leg: PricedLeg): string | null {
-  if (money.currency === view.currency) return money.micros
-  const answer = usableAnswer(wallet.rates?.byBlock[leg.blockNum], leg.timestamp)
-  if (answer === null) return null
-  if (money.currency === "USD") return ((BigInt(money.micros) * E8) / answer).toString()
-  return view.currency === "USD" && money.currency === wallet.currency ? ((BigInt(money.micros) * answer) / E8).toString() : null
+function moneyIn(side: Side, money: Money, leg: PricedLeg): string | null {
+  const shown = side.view.currency
+  if (money.currency === shown) return money.micros
+  const from = money.currency === "USD" ? E8 : answerAt(side, money.currency, leg)
+  const to = shown === "USD" ? E8 : answerAt(side, shown, leg)
+  return from === null || to === null ? null : ((BigInt(money.micros) * from) / to).toString()
 }
 
 /** Part of a piece, with its share of the cost. Taking it all takes all of the cost, so rounding never loses any. */
@@ -167,7 +174,21 @@ function exchangeShare(costs: readonly ExchangeCost[], wallet: string, legId: st
  * Whether a note about this leg's transaction and asset would be about more than this leg. A note gives one cost for what
  * arrived in a transaction, and what its balance says arrived may not be part of that, so it can't be shared out or given to either.
  */
-const noteIsAmbiguous = (leg: PricedLeg, legs: readonly PricedLeg[]) => legs.filter((other) => other.txHash === leg.txHash && other.asset === leg.asset && BigInt(other.delta) > 0n).length > 1
+const noteIsAmbiguous = (leg: PricedLeg, legs: readonly PricedLeg[]) => (arrivalsIn(legs).get(`${leg.txHash}:${leg.asset}`) ?? 0) > 1
+
+/** How many legs brought in each asset in each transaction. Once per list, because a busy wallet can ask this for thousands of its legs. */
+const arrivalCounts = new WeakMap<readonly PricedLeg[], Map<string, number>>()
+function arrivalsIn(legs: readonly PricedLeg[]): Map<string, number> {
+  const known = arrivalCounts.get(legs)
+  if (known) return known
+  const counts = new Map<string, number>()
+  for (const { txHash, asset, delta } of legs) {
+    const key = `${txHash}:${asset}`
+    if (BigInt(delta) > 0n) counts.set(key, (counts.get(key) ?? 0) + 1)
+  }
+  arrivalCounts.set(legs, counts)
+  return counts
+}
 
 const isOpenCredit = (leg: PricedLeg) => BigInt(leg.delta) > 0n && leg.costLabel === "unknown" && !leg.unsettledCredit
 
@@ -210,14 +231,8 @@ function purchasedLegs(sides: readonly Side[], book: Book): Map<string, Purchase
   return purchased
 }
 
-/** What was paid, at its own feed's rate when it arrived, in the currency being folded. */
-function paidAtItsRate(side: Side, { micros, currency }: Money, leg: PricedLeg): string | null {
-  const answer = usableAnswer(side.wallet.paidRates?.[currency]?.[leg.blockNum], leg.timestamp)
-  return answer === null ? null : moneyIn(side, { micros: ((BigInt(micros) * answer) / E8).toString(), currency: "USD" }, leg)
-}
-
 /** What a purchase cost in the currency being folded. Null when that can't be said, which leaves it unknown. */
-const purchaseCost = (side: Side, { cost, costUsdMicros }: Purchase, leg: PricedLeg) => moneyIn(side, cost, leg) ?? paidAtItsRate(side, cost, leg) ?? (costUsdMicros === null ? null : moneyIn(side, { micros: costUsdMicros, currency: "USD" }, leg))
+const purchaseCost = (side: Side, { cost, costUsdMicros }: Purchase, leg: PricedLeg) => moneyIn(side, cost, leg) ?? (costUsdMicros === null ? null : moneyIn(side, { micros: costUsdMicros, currency: "USD" }, leg))
 
 export function resolveLegs(sides: readonly Side[], method: Method, book: Book): Resolved {
   const linked = new Set(linkedWallets(book))
@@ -286,10 +301,11 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
 
     const pending: OpenItem[] = []
     const unvouched: { sender: string; settled: boolean }[] = []
+    const outsideDemo: string[] = []
     const pieces = (sources ?? []).flatMap(({ address: sender, units: part }): CostPiece[] => {
       const unknown: CostPiece = { qty: part.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0" }
       const answer = book.senders[sender]
-      if (sender === address || (linked.has(sender) && isOwnWallet(book, wallet))) {
+      if (sender === address || walletsBehind(book, wallet).includes(sender)) {
         if (!read.has(sender)) {
           unvouched.push({ sender, settled: false })
           return [unknown]
@@ -317,12 +333,18 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
         const cost = worth(part, BigInt(leg.priceMicros), leg.decimals).toString()
         return [{ qty: part.toString(), costMicros: cost, label: "received at market", estimatedCostMicros: cost, ...(given ? { givenCostMicros: cost } : {}) }]
       }
-      pending.push({ wallet: address, leg, sender, units: part })
+      // Answered already, and answering again wouldn't change anything, because the demo never reads this wallet.
+      if (answer?.kind === "mine" && isDemoWallet(address)) outsideDemo.push(sender)
+      else pending.push({ wallet: address, leg, sender, units: part })
       return [unknown]
     })
 
     // What's inherited wins, unless part of it can't be, or can't be yet, since an entered cost is for all of what arrived.
-    if ((unvouched.length > 0 || !pieces.some((p) => p.label === "inherited" && p.costMicros !== null)) && report !== null) return reported(leg, report)
+    if ((unvouched.length > 0 || !pieces.some((p) => p.label === "inherited" && p.costMicros !== null)) && report !== null) {
+      // When what was already held got paid for isn't known, so there's no rate for that day, only the one when the history starts.
+      const approximate = leg.opening && reportedMoney && reportedMoney.currency !== side.view.currency
+      return approximate ? { ...reported(leg, report), estimated: true, enteredAs: reportedMoney } : reported(leg, report)
+    }
     if (sources === null) {
       // What it cost is known, in USD, and only the rate is missing. Nobody can answer that, and it may yet be read.
       if (leg.conversion?.rateMicros !== null || leg.conversion.costUsdMicros === null) open.push({ wallet: address, leg, sender: null, units })
@@ -332,6 +354,7 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     // Only once it's settled, or a card could appear for an unread balance and vanish when it's read.
     const settled = unvouched.filter((w) => w.settled)
     if (settled.length > 0) open.push({ wallet: address, leg, sender: null, units, evidence: settled.map((w) => `${shortHash(w.sender)}, your wallet, sent ${sources.length === 1 ? "" : "some of "}this, and its ${leg.asset} history can't be confirmed`) })
+    if (outsideDemo.length > 0) open.push({ wallet: address, leg, sender: null, units, evidence: outsideDemo.map((sender) => `You've said ${shortHash(sender)} is your wallet, but the demo only reads its own wallets, so what it paid can't carry over`) })
     return withPieces(leg, pieces)
   }
 
@@ -396,21 +419,34 @@ const day = (timestamp: string) => new Date(timestamp).toLocaleDateString("en-US
 /** Why this is being asked about at all, when no transaction shows it arriving. A balance can't say who sent it, so an address is only the likeliest. */
 const unseenEvidence = (sender: string | null) => `This wallet's ETH rose in this block with no transaction showing it${sender ? ". This is the contract most likely behind it." : ""}`
 
-function evidenceFor(sender: string, sides: readonly Side[], known: KnownSender | null, book: Book): string[] {
+/** The latest thing these wallets sent each address, and which part of the leg says so. */
+function latestSends(sides: readonly Side[]): Map<string, { leg: PricedLeg; amount: string }> {
+  const latest = new Map<string, { leg: PricedLeg; amount: string }>()
+  for (const { view } of sides) {
+    for (const leg of view.legs) {
+      if (leg.kind !== "transfer" || BigInt(leg.delta) >= 0n) continue
+      for (const { counterparty, amount } of leg.parts) {
+        if (!counterparty) continue
+        const to = normalizeAddress(counterparty)
+        const known = latest.get(to)
+        if (!known || leg.blockNum > known.leg.blockNum) latest.set(to, { leg, amount })
+      }
+    }
+  }
+  return latest
+}
+
+function evidenceFor(sender: string, sends: ReturnType<typeof latestSends>, known: KnownSender | null, book: Book): string[] {
   const evidence = [...(known ? [`From a ${known.name} address`] : []), ...(book.senders[sender]?.kind === "mine" ? ["You've said this is your wallet. Choose My wallet if the one you're looking at is yours too, or Someone else if it isn't."] : [])]
-  const sends = sides
-    .flatMap(({ view }) => view.legs)
-    .filter((leg) => BigInt(leg.delta) < 0n && leg.kind === "transfer" && leg.parts.some((p) => p.counterparty && normalizeAddress(p.counterparty) === sender))
-    .sort((a, b) => b.blockNum - a.blockNum)
-  const last = sends[0]
+  const last = sends.get(sender)
   if (!last) return evidence
-  const part = last.parts.find((p) => p.counterparty && normalizeAddress(p.counterparty) === sender)
-  return [...evidence, `You sent this address ${formatAmount(part?.amount ?? "0", last.decimals)} ${last.asset} on ${day(last.timestamp)}`]
+  return [...evidence, `You sent this address ${formatAmount(last.amount, last.leg.decimals)} ${last.leg.asset} on ${day(last.leg.timestamp)}`]
 }
 
 /** One card per address, however many transfers it covers. A token with no price anywhere isn't worth asking about. */
 export function questionsOf(open: readonly OpenItem[], sides: readonly Side[], book: Book): Question[] {
   const sideOf = new Map(sides.map((side) => [normalizeAddress(side.wallet.address), side]))
+  const sends = latestSends(sides)
   const questions = new Map<string, Omit<Question, "noteAbout"> & { arrived: Map<string, Arrival>; value: bigint; priced: boolean; first: { leg: PricedLeg; units: bigint } }>()
   for (const { wallet, leg, sender, units, evidence } of open) {
     const owner = sideOf.get(wallet) as Side
@@ -431,7 +467,7 @@ export function questionsOf(open: readonly OpenItem[], sides: readonly Side[], b
       transfers: 0,
       firstAt: leg.timestamp,
       lastAt: leg.timestamp,
-      evidence: [...(sender ? evidenceFor(sender, sides, known, book) : (evidence ?? [])), ...(leg.parts.some((p) => p.kind === "unseen_eth") ? [unseenEvidence(sender)] : [])],
+      evidence: [...(sender ? evidenceFor(sender, sends, known, book) : (evidence ?? [])), ...(leg.parts.some((p) => p.kind === "unseen_eth") ? [unseenEvidence(sender)] : [])],
       valueMicros: null,
       first: { leg, units },
       arrived: new Map<string, Arrival>(),
@@ -504,8 +540,8 @@ export function foldBook(focus: WalletResponse, others: readonly WalletResponse[
   const markPrice: MarkPrice = (blockNum, asset) => sides.map((side) => side.view.markPrice(blockNum, asset)).find((price) => price !== null) ?? null
   const { positions, unreadAssets: unread, totals, pnlStatus, points, holdComparison } = foldWallet(focus, method, { ...view, legs, markPrice })
   const questions = questionsOf(open, sides, book)
-  const legsByTx = new Map<string, PricedLeg[]>()
-  for (const leg of legs) if (!leg.opening) legsByTx.set(leg.txHash, [...(legsByTx.get(leg.txHash) ?? []), leg])
+  const legsByTx = legsByTransaction(legs)
+  const facts = transactionFacts(legsByTx, positions, method, address, unconfirmedAssets(positions, unread))
   return {
     view,
     legs,
@@ -513,7 +549,7 @@ export function foldBook(focus: WalletResponse, others: readonly WalletResponse[
     unread,
     totals,
     pnlStatus,
-    points: points.map((point) => ({ ...point, summary: point.txHash ? describeTransaction(legsByTx.get(point.txHash) ?? [], view.currency) : null })),
+    points: points.map((point) => ({ ...point, summary: point.txHash ? describeTransaction(legsByTx.get(point.txHash) ?? [], view.currency) : null, ...((point.txHash && facts.get(point.txHash)) || NO_FACTS) })),
     holdComparison,
     questions,
     meter: meterOf(questions, book, focus, missingWallets(book, focus, others).length),

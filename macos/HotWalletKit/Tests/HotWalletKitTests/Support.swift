@@ -150,6 +150,7 @@ actor FakeSigner: Signer {
     private(set) var signed: [UnsignedTransaction] = []
     private(set) var signedMessages: [SignableMessage] = []
     private var signFailure: (any Error)?
+    private var deleteFailure: (any Error)?
     private var keys: [EthereumAddress]
     private var unused: [EthereumAddress]
 
@@ -182,18 +183,30 @@ actor FakeSigner: Signer {
     }
 
     func hasKey(_ address: EthereumAddress) -> Bool { keys.contains(address) }
-    func deleteKey(_ address: EthereumAddress) { keys.removeAll { $0 == address } }
+    func setDeleteFailure(_ failure: (any Error)?) { deleteFailure = failure }
+    func deleteKey(_ address: EthereumAddress) throws {
+        if let deleteFailure { throw deleteFailure }
+        keys.removeAll { $0 == address }
+    }
     func addresses() -> [EthereumAddress] { keys }
 }
 
 final class MemoryStateStore: DeviceStateStore, @unchecked Sendable {
     private let lock = NSLock()
     private var state = DeviceWalletState()
+    private var saveFailure: (any Error)?
 
     var saved: DeviceWalletState { lock.withLock { state } }
 
+    func failSaves(with failure: (any Error)?) { lock.withLock { saveFailure = failure } }
+
     func load() throws -> DeviceWalletState { saved }
-    func save(_ state: DeviceWalletState) throws { lock.withLock { self.state = state } }
+    func save(_ state: DeviceWalletState) throws {
+        try lock.withLock {
+            if let saveFailure { throw saveFailure }
+            self.state = state
+        }
+    }
 }
 
 final class MemorySettingsStore: WalletSettingsStore, @unchecked Sendable {

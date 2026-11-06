@@ -38,9 +38,9 @@ public struct PublishCostSheet: View {
                     .disabled(isPublishing())
             }
             if let micros {
-                Text("This wallet would publish that it paid \(Format.usd(Format.money(micros, .USD), beside: currency)) in transaction \(Format.shortHash(draft.txHash)).")
+                Text("This wallet would publish that it paid \(Format.usd(Format.exactUSD(micros), beside: currency)) in transaction \(Format.shortHash(draft.txHash)).")
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .secondaryText()
                     .fixedSize(horizontal: false, vertical: true)
             }
             Text("It's a transaction from this wallet to itself, so it costs a small network fee and moves nothing else. Touch ID or your password confirms it.")

@@ -445,7 +445,23 @@
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000001",
       "pnlMicros": null,
       "excludedCount": 3,
-      "summary": "Received 5,000 USDC"
+      "valueMicros": "7074155750",
+      "valueBeforeMicros": "336960750",
+      "valueExcludedCount": 1,
+      "valueContinues": false,
+      "summary": "Received 5,000 USDC",
+      "assets": [
+        "USDC"
+      ],
+      "counterparty": "0x00000000000000000000000000000000000de301",
+      "amount": {
+        "direction": "in",
+        "micros": "6737195000"
+      },
+      "gain": null,
+      "unknownCost": [
+        "USDC"
+      ]
     },
     {
       "blockNum": 53500150,
@@ -453,7 +469,23 @@
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000002",
       "pnlMicros": null,
       "excludedCount": 4,
-      "summary": "Received 0.02 ETH"
+      "valueMicros": "7148261903",
+      "valueBeforeMicros": "7083700500",
+      "valueExcludedCount": 1,
+      "valueContinues": true,
+      "summary": "Received 0.02 ETH",
+      "assets": [
+        "ETH"
+      ],
+      "counterparty": "0x000000000000000000000000000000000000be11",
+      "amount": {
+        "direction": "in",
+        "micros": "64561403"
+      },
+      "gain": null,
+      "unknownCost": [
+        "ETH"
+      ]
     },
     {
       "blockNum": 53500300,
@@ -461,7 +493,27 @@
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000003",
       "pnlMicros": "-130081",
       "excludedCount": 6,
-      "summary": "Bought 1 ETH for 2,400 USDC"
+      "valueMicros": "7178059539",
+      "valueBeforeMicros": "7177537900",
+      "valueExcludedCount": 1,
+      "valueContinues": true,
+      "summary": "Bought 1 ETH for 2,400 USDC",
+      "assets": [
+        "USDC",
+        "ETH"
+      ],
+      "counterparty": null,
+      "amount": {
+        "direction": "trade",
+        "micros": "3251382113"
+      },
+      "gain": {
+        "micros": null,
+        "estimated": false
+      },
+      "unknownCost": [
+        "USDC"
+      ]
     },
     {
       "blockNum": 53500900,
@@ -469,7 +521,27 @@
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000004",
       "pnlMicros": "9427",
       "excludedCount": 6,
-      "summary": "Bought 800 AERO for 1,000 USDC"
+      "valueMicros": "7267342706",
+      "valueBeforeMicros": "7267202858",
+      "valueExcludedCount": 1,
+      "valueContinues": true,
+      "summary": "Bought 800 AERO for 1,000 USDC",
+      "assets": [
+        "USDC",
+        "AERO"
+      ],
+      "counterparty": null,
+      "amount": {
+        "direction": "trade",
+        "micros": "1362125340"
+      },
+      "gain": {
+        "micros": null,
+        "estimated": false
+      },
+      "unknownCost": [
+        "USDC"
+      ]
     },
     {
       "blockNum": 53501200,
@@ -477,7 +549,21 @@
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000005",
       "pnlMicros": "69305427",
       "excludedCount": 6,
-      "summary": "Received 200 USDT"
+      "valueMicros": "7645474466",
+      "valueBeforeMicros": "7372277866",
+      "valueExcludedCount": 1,
+      "valueContinues": true,
+      "summary": "Received 200 USDT",
+      "assets": [
+        "USDT"
+      ],
+      "counterparty": "0x09aea4b2242abc8bb4bb78d537a67a245a7bec64",
+      "amount": {
+        "direction": "in",
+        "micros": "273196600"
+      },
+      "gain": null,
+      "unknownCost": []
     },
     {
       "blockNum": 53501500,
@@ -485,7 +571,19 @@
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000006",
       "pnlMicros": "126222744",
       "excludedCount": 6,
-      "summary": "Network fee of $0.13"
+      "valueMicros": "7731447882",
+      "valueBeforeMicros": "7731582766",
+      "valueExcludedCount": 1,
+      "valueContinues": true,
+      "summary": "Network fee of $0.13",
+      "assets": [],
+      "counterparty": null,
+      "amount": {
+        "direction": "fee",
+        "micros": "134883"
+      },
+      "gain": null,
+      "unknownCost": []
     },
     {
       "blockNum": 53502400,
@@ -493,7 +591,25 @@
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000007",
       "pnlMicros": "287067973",
       "excludedCount": 6,
-      "summary": "Sold 300 AERO for 450 USDC"
+      "valueMicros": "7979934192",
+      "valueBeforeMicros": "7980195854",
+      "valueExcludedCount": 1,
+      "valueContinues": true,
+      "summary": "Sold 300 AERO for 450 USDC",
+      "assets": [
+        "AERO",
+        "USDC"
+      ],
+      "counterparty": null,
+      "amount": {
+        "direction": "trade",
+        "micros": "618008241"
+      },
+      "gain": {
+        "micros": "107211239",
+        "estimated": false
+      },
+      "unknownCost": []
     },
     {
       "blockNum": 53503000,
@@ -501,7 +617,23 @@
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000008",
       "pnlMicros": "271778073",
       "excludedCount": 6,
-      "summary": "Received 0.02 cbBTC"
+      "valueMicros": "8051345900",
+      "valueBeforeMicros": "8051345900",
+      "valueExcludedCount": 1,
+      "valueContinues": true,
+      "summary": "Received 0.02 cbBTC",
+      "assets": [
+        "cbBTC"
+      ],
+      "counterparty": "0x71660c4005ba85c37ccec55d0c4493e66fe775d3",
+      "amount": {
+        "direction": "in",
+        "micros": "1875862068"
+      },
+      "gain": null,
+      "unknownCost": [
+        "cbBTC"
+      ]
     },
     {
       "blockNum": 53503600,
@@ -509,7 +641,27 @@
       "txHash": "0xde30000000000000000000000000000000000000000000000000000000000009",
       "pnlMicros": "261371169",
       "excludedCount": 6,
-      "summary": "Bought 50,000 DEGEN for 0.000001 USDC"
+      "valueMicros": "8103371714",
+      "valueBeforeMicros": "8103514620",
+      "valueExcludedCount": 1,
+      "valueContinues": true,
+      "summary": "Bought 50,000 DEGEN for 0.000001 USDC",
+      "assets": [
+        "USDC",
+        "DEGEN"
+      ],
+      "counterparty": null,
+      "amount": {
+        "direction": "trade",
+        "micros": null
+      },
+      "gain": {
+        "micros": null,
+        "estimated": false
+      },
+      "unknownCost": [
+        "DEGEN"
+      ]
     },
     {
       "blockNum": 53504200,
@@ -517,7 +669,28 @@
       "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000a",
       "pnlMicros": "252669381",
       "excludedCount": 7,
-      "summary": "Bought 50 VIRTUAL for 100 USDC"
+      "valueMicros": "8139990331",
+      "valueBeforeMicros": "8133162019",
+      "valueExcludedCount": 1,
+      "valueContinues": true,
+      "summary": "Bought 50 VIRTUAL for 100 USDC",
+      "assets": [
+        "USDC",
+        "VIRTUAL"
+      ],
+      "counterparty": null,
+      "amount": {
+        "direction": "trade",
+        "micros": null
+      },
+      "gain": {
+        "micros": null,
+        "estimated": false
+      },
+      "unknownCost": [
+        "USDC",
+        "VIRTUAL"
+      ]
     },
     {
       "blockNum": 53504800,
@@ -525,7 +698,27 @@
       "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000b",
       "pnlMicros": "242136635",
       "excludedCount": 7,
-      "summary": "Sold 0.5 ETH for 1,300 USDC"
+      "valueMicros": "8162432326",
+      "valueBeforeMicros": "8162939431",
+      "valueExcludedCount": 1,
+      "valueContinues": true,
+      "summary": "Sold 0.5 ETH for 1,300 USDC",
+      "assets": [
+        "ETH",
+        "USDC"
+      ],
+      "counterparty": null,
+      "amount": {
+        "direction": "trade",
+        "micros": "1810222841"
+      },
+      "gain": {
+        "micros": null,
+        "estimated": false
+      },
+      "unknownCost": [
+        "ETH"
+      ]
     },
     {
       "blockNum": 53505000,
@@ -533,7 +726,23 @@
       "txHash": "0xde3000000000000000000000000000000000000000000000000000000000000c",
       "pnlMicros": "238527767",
       "excludedCount": 7,
-      "summary": "Sent 0.002 ETH"
+      "valueMicros": "8185299758",
+      "valueBeforeMicros": "8192764563",
+      "valueExcludedCount": 1,
+      "valueContinues": true,
+      "summary": "Sent 0.002 ETH",
+      "assets": [
+        "ETH"
+      ],
+      "counterparty": "0x00000000000000000000000000000000000de301",
+      "amount": {
+        "direction": "out",
+        "micros": "7318435"
+      },
+      "gain": null,
+      "unknownCost": [
+        "ETH"
+      ]
     },
     {
       "blockNum": 53505400,
@@ -541,7 +750,16 @@
       "txHash": null,
       "pnlMicros": "240285367",
       "excludedCount": 7,
-      "summary": null
+      "valueMicros": "8211228143",
+      "valueBeforeMicros": "8211228143",
+      "valueExcludedCount": 1,
+      "valueContinues": true,
+      "summary": null,
+      "assets": [],
+      "counterparty": null,
+      "amount": null,
+      "gain": null,
+      "unknownCost": []
     }
   ],
   "holdComparison": {

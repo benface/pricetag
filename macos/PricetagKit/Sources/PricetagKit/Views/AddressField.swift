@@ -88,6 +88,8 @@ public struct AddressField<Focus: Hashable>: View {
             .font(text.hasPrefix("0x") ? .body.monospaced() : .body)
             .autocorrectionDisabled()
             .onSubmit(submit)
+            // The label is hidden, so VoiceOver would only have what's typed.
+            .accessibilityLabel(label)
             .overlay(alignment: .trailing) {
                 if !text.isEmpty {
                     Button("Clear", systemImage: "xmark.circle.fill") { text = "" }

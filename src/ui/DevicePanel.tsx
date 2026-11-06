@@ -1,12 +1,12 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { ETH_ADDRESS, TOKENS, encodeNote, formatAmount, formatMoney, formatUsdIn, isAddress, labelUsd, normalizeAddress, shortHash, type CurrencyCode, type Token } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, TOKENS, encodeNote, formatAmount, formatExactUsd, formatMoney, formatUsdIn, isAddress, labelUsd, normalizeAddress, shortHash, type CurrencyCode, type Token } from "@pricetag/sdk/core"
 import type { Hex, PublicClient } from "viem"
 import { linkedWallets, type Book } from "../core/book.ts"
 import { readColdRequest, transferRequest, type ColdAccount, type ColdRequest, type ColdSigner, type DevicePrompt } from "../core/cold.ts"
 import { accountsToLink, isFresh, readCheckedAccounts, rememberCheckedAccount, selectedAccount, type AccountActivity, type CheckedAccount, type SeenAccount } from "../core/device-accounts.ts"
 import { addToMacLink, usdMicrosOf, type DeviceLink } from "../core/device-link.ts"
 import { amountForUsd, checkSend, parseAmount, readActivity, readEthPriceMicros, type SendCheck } from "../core/device-read.ts"
-import { CHECK_ADDRESS_WARNING, KEYSTONE_CONNECT, KEYSTONE_LOOK, LEDGER_HANDED_OFF, LEDGER_HAND_OFF, LEDGER_NEEDS_CHROMIUM, LEDGER_READY, LEDGER_VERIFY, LOOK_HANDED_OFF, NEVER_ASKED, PROMPTS, PUBLISH_DETAIL, PUBLISH_DEVICE_NOTE, PUBLISH_WARNING, WRONG_PUBLISHER, groupAddress } from "../core/device-wording.ts"
+import { ALL_YOURS_DEVICE, CHECK_ADDRESS_WARNING, KEYSTONE_CONNECT, KEYSTONE_LOOK, LEDGER_HANDED_OFF, LEDGER_HAND_OFF, LEDGER_NEEDS_CHROMIUM, LEDGER_READY, LEDGER_VERIFY, LOOK_HANDED_OFF, NEVER_ASKED, PROMPTS, PUBLISH_DETAIL, PUBLISH_DEVICE_NOTE, PUBLISH_WARNING, WRONG_PUBLISHER, groupAddress } from "../core/device-wording.ts"
 import type { BrowserWallet } from "./devices/browser.ts"
 import { realConnectors, type Connectors } from "./devices/connectors.ts"
 import type { ScannedCode } from "./devices/keystone.ts"
@@ -38,6 +38,8 @@ type Props = {
   book: Book
   /** What amounts read in. A note's still published in USD. */
   currency?: CurrencyCode
+  /** All the user's wallets are showing, so nothing here says which one this acts on until an account's chosen. */
+  allYours?: boolean
   /** Accounts from a device are the user's, with no question. */
   onLink: (addresses: readonly string[]) => void
   /** Opens a wallet in the main view. */
@@ -49,7 +51,7 @@ type Props = {
 }
 
 /** The one place the web app reaches a hardware wallet. Keys stay on the device: this only ever sees addresses and signatures. */
-export function DevicePanel({ link, book, currency = "USD", onLink, onView, onClose, connectors = realConnectors, start }: Props) {
+export function DevicePanel({ link, book, currency = "USD", allYours = false, onLink, onView, onClose, connectors = realConnectors, start }: Props) {
   const dialog = useRef<HTMLDialogElement>(null)
   const closeButton = useRef<HTMLButtonElement>(null)
   const [step, setStep] = useState<Step>(start?.step ?? (link?.kind === "add-savings" && link.device === "ledger" && connectors.canUseUsb() ? "ledger" : "route"))
@@ -214,6 +216,7 @@ export function DevicePanel({ link, book, currency = "USD", onLink, onView, onCl
         {step === "route" ? (
           <>
             <p className="muted small">Your device holds the keys and signs everything. {NEVER_ASKED}</p>
+            {allYours && !link ? <p className="small">{ALL_YOURS_DEVICE}</p> : null}
             <button type="button" className="route" disabled={busy || !connectors.canUseUsb()} onClick={() => setStep("ledger")}>
               <strong>Ledger</strong>
               <span className="muted small">{connectors.canUseUsb() ? "With its USB cable" : LEDGER_NEEDS_CHROMIUM}</span>
@@ -537,7 +540,7 @@ function PublishForm({ link, currency, busy, onBack, onSend }: { link: Extract<D
   const go = () => {
     if (!micros) return
     // To the wallet the link names, so from any other this isn't a send to itself, and the rule refuses it.
-    onSend({ to: link.wallet, value: 0n, data: encodeNote(link.txHash, link.asset, micros) as Hex }, `This wallet published that it paid ${labelUsd(formatMoney(micros, "USD"), currency)} for ${amount} in transaction ${shortHash(link.txHash)}.`, new Set())
+    onSend({ to: link.wallet, value: 0n, data: encodeNote(link.txHash, link.asset, micros) as Hex }, `This wallet published that it paid ${labelUsd(formatExactUsd(micros), currency)} for ${amount} in transaction ${shortHash(link.txHash)}.`, new Set())
   }
   return (
     <>
@@ -546,7 +549,7 @@ function PublishForm({ link, currency, busy, onBack, onSend }: { link: Extract<D
         <span className="small muted">Paid for {amount}, in USD</span>
         <input inputMode="decimal" placeholder="$0.00" value={usd} onChange={(e) => setUsd(e.target.value)} />
       </label>
-      {micros ? <p className="muted small">This wallet would publish that it paid {labelUsd(formatMoney(micros, "USD"), currency)} in transaction {shortHash(link.txHash)}.</p> : null}
+      {micros ? <p className="muted small">This wallet would publish that it paid {labelUsd(formatExactUsd(micros), currency)} in transaction {shortHash(link.txHash)}.</p> : null}
       <p className="muted small">{PUBLISH_DETAIL}</p>
       <p className="muted small">{PUBLISH_DEVICE_NOTE}</p>
       <div className="device-actions">

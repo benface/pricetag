@@ -41,7 +41,15 @@ struct WordingVectors: Decodable {
         let notStarted, unpricedFees, demo, pnlUnavailable, nothingToChart, reading, notAnAddress, rulesTitle, rulesHelp: String
         let holdTitle, holdWallet, holdEth, holdPast: String
         let answerQuestions, showMissing, senderQuestion, senderWhy, costQuestion, costWhy, exchangeCostWhy, allAnswered, nothingLeft: String
+        let moneyUnaffected: String
     }
+    struct Problem: Decodable {
+        let kind: String
+        let said: String?
+        let message: String
+        let detail: String
+    }
+    let problems: [Problem]
     let manifestHash: String
     let methods: [String: String]
     let modes: [String: String]
@@ -122,6 +130,24 @@ struct WordingVectors: Decodable {
         #expect(Wording.nothingToChart == sentences.nothingToChart)
         #expect(Wording.reading == sentences.reading)
         #expect(Wording.notAnAddress == sentences.notAnAddress)
+    }
+
+    /// A failed read says the same on the web, for a server that isn't on this machine, which a website never asks anyone to start.
+    @Test func aFailedReadSaysTheSameOnTheWeb() throws {
+        #expect(Wording.moneyUnaffected == vectors.sentences.moneyUnaffected)
+        #expect(vectors.problems.count == 4)
+        for vector in vectors.problems {
+            let said = vector.said ?? ""
+            let state: FeedState = switch vector.kind {
+            case "unreachable": .serverUnreachable
+            case "unavailable": .ampUnavailable(said)
+            case "noSource": .noAmpConfigured(said)
+            default: .rejected(said)
+            }
+            let problem = try #require(state.problem(serverURL: URL(string: "https://prices.example.com")!, portfolio: nil))
+            #expect(problem.message == vector.message)
+            #expect(problem.detail == vector.detail)
+        }
     }
 
     /// Answering has one name, and the questions say why they're asked, the same on the web.

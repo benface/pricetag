@@ -79,7 +79,7 @@ private struct RevokeConfirmation: View {
         self.revocations = revocations
         self.quote = quote
         self.close = close
-        _gate = State(initialValue: gate ?? ApprovalPrompt(notBefore: { wallet.nextPromptAt }) { prompt, _ in
+        _gate = State(initialValue: gate ?? ApprovalPrompt(needsReview: ApprovalPrompt.needsReview, notBefore: { wallet.nextPromptAt }) { prompt, _ in
             await wallet.revokeConfirmed(revocations, in: prompt)
         })
     }

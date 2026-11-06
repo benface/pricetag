@@ -6,6 +6,13 @@ import { formatMoney, formatPrice, formatSignedMoney, labelUsd, type CurrencyCod
 /** `dataset` and `hash` say exactly what was read, because a query pinned to a hash can't read anything else. */
 export type PricingRule = { id: string; name: string; summary: string; dataset: string; hash: string }
 
+/** The rules in a `/api/rules` response. Throws for anything else, like a refusal's `{ error }`, because that says nothing about which rules the server has. */
+export async function readRules(response: Response): Promise<PricingRule[]> {
+  const body = (await response.json()) as { rules?: PricingRule[] }
+  if (!response.ok || !Array.isArray(body.rules)) throw new Error("Couldn't read the rules.")
+  return body.rules
+}
+
 export const MARKET_RULE_ID = "market-price"
 export const CAUTIOUS_RULE_ID = "cautious-eth"
 
