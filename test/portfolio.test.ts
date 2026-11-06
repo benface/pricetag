@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
-import { ASSETS, CURRENCIES, CURRENCY_CODES, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, applyLeg, blockBefore, buildPricedLegs, chartMoneyTicks, derivePricedRows, emptyPosition, formatChartSpan, msBetweenBlocks, encodeNote, foldPositions, pnlOverTime, referenceMarks, formatAmount, formatDuration, formatMoney, formatPaid, formatPrice, formatReturn, formatSignedAmount, formatSignedMoney, labelUsd, plainAmount, sumTotals, type LegRow, type Method, type PricedLeg } from "@pricetag/sdk/core"
+import { ASSETS, CURRENCIES, CURRENCY_CODES, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, applyLeg, blockBefore, buildPricedLegs, chartMoneyTicks, derivePricedRows, emptyPosition, formatChartSpan, msBetweenBlocks, encodeNote, foldPositions, pnlOverTime, referenceMarks, formatAmount, formatDuration, formatExactUsd, formatMoney, formatPaid, formatPrice, formatReturn, formatSignedAmount, formatSignedMoney, labelUsd, plainAmount, sumTotals, type LegRow, type Method, type PricedLeg } from "@pricetag/sdk/core"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { TICK_GAP, chartLeftMargin, placeChartTimes } from "../src/core/chart-times.ts"
 import { describeEffect, describeNetting, summarizeEffect } from "../src/core/explain.ts"
@@ -511,6 +511,7 @@ describe("the formatters the Swift package repeats", () => {
         price: usd.filter((micros) => !micros.startsWith("-") && micros !== "0").map((micros) => ({ micros, price: formatPrice(micros, currency) })),
         chartTicks: [[0], [-0.0023], [0.75], [120], [-250000, 1250000]].map((values) => ({ values, ticks: chartMoneyTicks(values, currency) })),
       })),
+      exactUsd: ["0", "1", "1234", "500000", "1000000", "250000000", "1234500000", "1234567000", "1234567891", "1000000000000"].map((micros) => ({ micros, usd: formatExactUsd(micros) })),
       labeledUsd: ["$2,376.00", "+$24.00", "-$24.00", "$0.004", "-$0.004"].map((text) => ({ text, usd: labelUsd(text, "USD"), cad: labelUsd(text, "CAD") })),
       amount: units.map(([value, decimals]) => ({ units: value, decimals, amount: formatAmount(value, decimals), signed: formatSignedAmount(value, decimals) })),
       chartTicks: [[], [0], [-0.0023], [-0.0015, -0.0023], [0.000001], [-0.2], [0.75], [8.5], [-3, 12], [120], [1250], [8000], [-250000, 1250000], [12000000]].map((values) => ({ values, usd: chartMoneyTicks(values, "USD"), cad: chartMoneyTicks(values, "CAD") })),

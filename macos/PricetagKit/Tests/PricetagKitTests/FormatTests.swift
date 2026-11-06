@@ -44,6 +44,7 @@ struct FormatVectors: Decodable {
         let price: [OtherPrice]
         let chartTicks: [OtherTicks]
     }
+    struct ExactUSD: Decodable { let micros, usd: String }
     struct Typed: Decodable {
         let currency: CurrencyCode
         let text: String
@@ -53,6 +54,7 @@ struct FormatVectors: Decodable {
     let cad: [USD]
     let price: [Price]
     let others: [Other]
+    let exactUsd: [ExactUSD]
     let labeledUsd: [LabeledUSD]
     let amount: [Amount]
     let chartTicks: [ChartTicks]
@@ -146,6 +148,14 @@ struct FormatVectors: Decodable {
         for vector in vectors.price {
             #expect(Format.price(vector.micros, .USD) == vector.price, "\(vector.micros)")
             #expect(Format.price(vector.micros, .CAD) == vector.cad, "\(vector.micros)")
+        }
+    }
+
+    @Test func aNotesExactAmountMatchesTheWebApp() {
+        #expect(vectors.exactUsd.contains { $0.micros == "1234567000" && $0.usd == "$1,234.567" })
+        #expect(vectors.exactUsd.contains { $0.micros == "1234" && $0.usd == "$0.001234" })
+        for vector in vectors.exactUsd {
+            #expect(Format.exactUSD(vector.micros) == vector.usd, "\(vector.micros)")
         }
     }
 

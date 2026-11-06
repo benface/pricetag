@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { ETH_ADDRESS, TOKENS, encodeNote, formatAmount, formatMoney, formatUsdIn, isAddress, labelUsd, normalizeAddress, shortHash, type CurrencyCode, type Token } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, TOKENS, encodeNote, formatAmount, formatExactUsd, formatMoney, formatUsdIn, isAddress, labelUsd, normalizeAddress, shortHash, type CurrencyCode, type Token } from "@pricetag/sdk/core"
 import type { Hex, PublicClient } from "viem"
 import { linkedWallets, type Book } from "../core/book.ts"
 import { readColdRequest, transferRequest, type ColdAccount, type ColdRequest, type ColdSigner, type DevicePrompt } from "../core/cold.ts"
@@ -540,7 +540,7 @@ function PublishForm({ link, currency, busy, onBack, onSend }: { link: Extract<D
   const go = () => {
     if (!micros) return
     // To the wallet the link names, so from any other this isn't a send to itself, and the rule refuses it.
-    onSend({ to: link.wallet, value: 0n, data: encodeNote(link.txHash, link.asset, micros) as Hex }, `This wallet published that it paid ${labelUsd(formatMoney(micros, "USD"), currency)} for ${amount} in transaction ${shortHash(link.txHash)}.`, new Set())
+    onSend({ to: link.wallet, value: 0n, data: encodeNote(link.txHash, link.asset, micros) as Hex }, `This wallet published that it paid ${labelUsd(formatExactUsd(micros), currency)} for ${amount} in transaction ${shortHash(link.txHash)}.`, new Set())
   }
   return (
     <>
@@ -549,7 +549,7 @@ function PublishForm({ link, currency, busy, onBack, onSend }: { link: Extract<D
         <span className="small muted">Paid for {amount}, in USD</span>
         <input inputMode="decimal" placeholder="$0.00" value={usd} onChange={(e) => setUsd(e.target.value)} />
       </label>
-      {micros ? <p className="muted small">This wallet would publish that it paid {labelUsd(formatMoney(micros, "USD"), currency)} in transaction {shortHash(link.txHash)}.</p> : null}
+      {micros ? <p className="muted small">This wallet would publish that it paid {labelUsd(formatExactUsd(micros), currency)} in transaction {shortHash(link.txHash)}.</p> : null}
       <p className="muted small">{PUBLISH_DETAIL}</p>
       <p className="muted small">{PUBLISH_DEVICE_NOTE}</p>
       <div className="device-actions">
