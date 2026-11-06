@@ -3,7 +3,7 @@
 //
 // Every query is bounded by block, because staging is shared.
 
-import { CURRENCIES, ERC20_ADDRESSES, ETH_ADDRESS, ETH_USD_FEED, MAX_ROUND_AGE_SECONDS, MIN_TRADE_USD_MICROS, TOKENS, TOKEN_FEEDS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, marketTrades, parseNote, type CostNote, type CurrencyCode, type FeedRound, type MarketTrade, type PricedRow, type RateRound } from "@pricetag/sdk/core"
+import { CURRENCIES, ERC20_ADDRESSES, ETH_ADDRESS, ETH_USD_FEED, MAX_ROUND_AGE_SECONDS, MIN_TOKEN_TRADE_USD, MIN_TRADE_USD_MICROS, TOKENS, TOKEN_FEEDS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, marketTrades, parseNote, type TokenActivity, type CostNote, type CurrencyCode, type FeedRound, type MarketTrade, type PricedRow, type RateRound } from "@pricetag/sdk/core"
 import { asIso, asNumber, blockFilters, datasetReader, datasetSource, decimalString, describeError, hexOf, isNotStarted, prefixed, readBalancesAt, readEthBalancesAt, readHead, readPayoutTxsAt, settledThrough, type Query, type ReadL1Fees, type Row, type Source, type WindowRows } from "@pricetag/sdk/internal"
 import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, decodeRound, decodeRoundAnswer, legRowsFromRaw, type RawLog, type RawTx } from "./raw.ts"
 
@@ -383,11 +383,25 @@ export function settledL1Fees(read: ReadL1Fees, tip: () => number | null): ReadL
   })
 }
 
+/** A token's trades, one row per sender and side every 5 minutes, so a busy token's still a small read. Each is dated by its last trade, so no price looks ahead of its time. */
+function readTokenActivityFrom(query: Query, dataset: string) {
+  return async (tokens: readonly string[], from: number, to: number): Promise<TokenActivity[]> => {
+    const rows = await query<Row>(
+      `SELECT token, sender, side, date_bin(INTERVAL '5 minutes', timestamp) AS bucket, MAX(timestamp) AS at, SUM(CAST(usd_micros AS DOUBLE)) AS usd_micros, SUM(CAST(token_amount AS DOUBLE)) AS raw, COUNT(*) AS trades
+       FROM "${dataset}".token_trades
+       WHERE block_num BETWEEN ${from} AND ${to} AND token IN (${tokens.map((token) => `X'${hexOf(token)}'`).join(", ")}) AND CAST(usd_micros AS DOUBLE) >= ${MIN_TOKEN_TRADE_USD * 1_000_000}
+       GROUP BY token, sender, side, bucket`,
+      120_000,
+    )
+    return rows.map((r) => ({ token: prefixed(String(r.token)), timeMs: Number(r.at), sender: String(r.sender), side: r.side as "buy" | "sell", usd: Number(r.usd_micros) / 1e6, raw: Number(r.raw), trades: Number(r.trades) }))
+  }
+}
+
 /**
  * The SDK's `datasetSource`, plus what only working out a cost needs: who was on the other side, notes, and market prices.
  * Pricing rules of one wallet history pass the same `shared`, so only what a rule changes is read for each.
  */
-export function resolvingSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string; startBlock: number; network: string }, shared = sharedReads(query, config)): Source {
+export function resolvingSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string; startBlock: number; network: string; tokensDataset?: string | undefined }, shared = sharedReads(query, config)): Source {
   const { readPriced } = datasetReader(query, config)
   const ds = `"${config.dataset}"`
   // What a fork of the pricing rule changes, so its market prices come from its own trades.
@@ -397,6 +411,7 @@ export function resolvingSource(query: Query, config: { baseDataset: string; dat
     readNotes: shared.readNotes,
     readEthBalances: shared.readEthBalances,
     readFeedRounds: readFeedRoundsAt(query, config),
+    ...(config.tokensDataset ? { readTokenActivity: readTokenActivityFrom(query, config.tokensDataset) } : {}),
 
     async readWindow(address, from, to) {
       return { ...(await shared.readLegs(address, from, to)), priced: await readPriced(address, from, to) }

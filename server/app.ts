@@ -103,7 +103,7 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
       const shared = sharedReads(query.aliased({ pricetag: pin }), { baseDataset, dataset: "pricetag", network })
       const ruleSource = (id: string, name: string, hash: string | undefined, priceDataset: string): RuleSource => ({
         rule: { id, ...RULE_TEXT[id]!, dataset: name, hash: hash as string },
-        source: resolvingSource(query.aliased({ pricetag: pin, pricing: priceDataset }), { baseDataset, dataset: "pricetag", priceDataset: "pricing", startBlock, network }, shared),
+        source: resolvingSource(query.aliased({ pricetag: pin, pricing: priceDataset }), { baseDataset, dataset: "pricetag", priceDataset: "pricing", startBlock, network, tokensDataset: env.PRICETAG_TOKENS_DATASET }, shared),
       })
       const rules = [
         ruleSource(MARKET_RULE_ID, env.PRICETAG_DATASET, env.PRICETAG_DATASET_HASH, pin),
@@ -114,7 +114,7 @@ export function createSource(env: Env, query: AmpQuery | null = env.AMP_QUERY_UR
     }
     const shared = sharedReads(query, { baseDataset, dataset: env.PRICETAG_DATASET, network })
     const approvals = createApprovals(query, { baseDataset, dataset: { reference: env.PRICETAG_DATASET, name: env.PRICETAG_DATASET }, network, historyFrom: () => startBlock })
-    return { source: resolvingSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock, network }, shared), readRates, proofs, follow: followOf(followSql(env.PRICETAG_DATASET), startBlock), shared, approvals }
+    return { source: resolvingSource(query, { baseDataset, dataset: env.PRICETAG_DATASET, startBlock, network, tokensDataset: env.PRICETAG_TOKENS_DATASET }, shared), readRates, proofs, follow: followOf(followSql(env.PRICETAG_DATASET), startBlock), shared, approvals }
   }
   const historyBlocks = env.PRICETAG_HISTORY_BLOCKS ? Number(env.PRICETAG_HISTORY_BLOCKS) : null
   if (historyBlocks !== null && (!Number.isSafeInteger(historyBlocks) || historyBlocks <= 0)) throw new Error("PRICETAG_HISTORY_BLOCKS must be a positive number")
