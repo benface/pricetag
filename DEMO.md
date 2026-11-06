@@ -1,6 +1,6 @@
 # Demo plan, Friday November 6
 
-**Demo: Friday 2026-11-06 at 11:00 EST. Rehearsal: today, 9:00 to 10:00 EST, with [this checklist](#rehearsal-checklist-today-900-to-1000-est).**
+**Demo: Friday 2026-11-06 at 11:00 EST. Rehearsal: today, 9:30 to 10:30 EST, with [this checklist](#rehearsal-checklist-today-930-to-1030-est).**
 
 All times are Montréal. Numbers marked *measured* come from the real server against staging, and say when if they're older than this morning. Button names come from the code on `main` at `a25c96a`, and from its screens rendered with fixtures. Nobody has clicked through this in the real window yet, so the rehearsal is the test.
 
@@ -66,9 +66,9 @@ About 5 minutes. **Before you start:**
 | When | You do | Why |
 |---|---|---|
 | **Before funding** | Add your savings wallet if you can, then check the cap | Cap is $50 by default with savings, and at most $25 without. Without savings, cut every amount below to about half |
-| **Before 9:00**, if it isn't done | Withdraw **$40 of ETH from Coinbase** on Base. Write down the total you paid for both withdrawals, this one and Wednesday's | This is what makes WORK-424 visible, see below. It's too late for the chart's one-day change, which needs a known point 24 h back, but the rest works |
+| **Before 9:30**, if it isn't done | Withdraw **$40 of ETH from Coinbase** on Base. Write down the total you paid for both withdrawals, this one and Wednesday's | This is what makes WORK-424 visible, see below. It's too late for the chart's one-day change, which needs a known point 24 h back, but the rest works |
 | **Once it shows in the app** | With the extension on `app.uniswap.org`, swap **$12 of ETH to cbBTC**, then **$12 of ETH to AERO**. Don't answer the Coinbase question | Costs that are really paid, and prices that move. Waiting avoids landing in the payout's block, which would leave costs unknown. Each row should show a dollar cost. If one says unknown, see below |
-| **Before 9:00** | Under Settings at the bottom of Spending Money's page, in Cap and Sweeps, turn off **Sweep realized gains to savings**. Then swap **half the AERO to USDC** | Gives Realized a number, and won't sweep on stage. Sell into USDC rather than ETH, because ETH paid out through a contract is the hardest case |
+| **Before 9:30** | Under Settings at the bottom of Spending Money's page, in Cap and Sweeps, turn off **Sweep realized gains to savings**. Then swap **half the AERO to USDC** | Gives Realized a number, and won't sweep on stage. Sell into USDC rather than ETH, because ETH paid out through a contract is the hardest case |
 | **After the rehearsal** | In Settings > **Answers** (or File > **Your Answers…**), remove the Coinbase answer with the ⊖ beside it. Every other answer stays | Puts steps 5 and 6 back on stage. Do this after each run through the steps, too |
 
 **If a swap's cost says unknown, don't buy again.** A later purchase doesn't repair the earlier one, and answering Coinbase doesn't either. Click the row and read its reason, then:
@@ -157,35 +157,35 @@ tail ~/Library/Logs/pricetag-job-watch.log
 
 If it isn't running, start it with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.benface.pricetag-job-watch.plist`. If that fails, run `node scripts/job-watch.ts` from the repo in its own terminal.
 
-## Rehearsal checklist, today, 9:00 to 10:00 EST
+## Rehearsal checklist, today, 9:30 to 10:30 EST
 
-**Before 9:00**
+**Before 9:30**
 - [ ] Read the 8:00 health check on WORK-448.
 - [ ] Do what's left of [Wallet setup](#wallet-setup): the withdrawal and swaps if they aren't done, sweeping off, and half the AERO sold. Start early, since these take time to show.
 
-**9:00: start it (5 min)**
+**9:30: start it (5 min)**
 - [ ] In your own folder, on `main`: `git pull`, then `pnpm mac`. Run it last from there, because each run points the extension at that build, so a run from `pricetag-test` leaves it on the wrong one. If a server's already on 8787, `pnpm mac` keeps it, and one started before 0.3.0 can't read anything. So stop it first.
 - [ ] [Check the job watch](#the-job-watch) is running, then read the wallet once under each rule.
 - [ ] Answer the Coinbase card. There should be no other question and no warning. If there is, read it, and see [Wallet setup](#wallet-setup). Then remove the answer in Settings > **Answers**.
 
-**9:05: the steps, twice with a timer (15 min)**
+**9:35: the steps, twice with a timer (15 min)**
 - [ ] Run the 10 steps twice, on the projector's resolution if you can. Each run should take under 5 minutes. Remove the Coinbase answer between runs.
 - [ ] Note what really appears at each step, and say on WORK-448 what differs.
 - [ ] Check the Send step's real time, then keep it or cut it.
 
-**9:20: one small real purchase (15 min)**
+**9:50: one small real purchase (15 min)**
 1. Start a screen recording before pressing **Buy**. It can double as the demo's backup clip of a purchase.
 2. Buy the smallest amount that works. Screenshot Coinbase's final page, showing the total charged, the fees and the crypto received. Hide the card number, and anything personal.
 3. Screenshot Patina's row in Spending Money when it says "Cost $X, fees included", and note how long that took.
 4. Reply on WORK-477 with those. Then run the command in WORK-480's description in Terminal, and paste only its `cost` and `costUsdMicros` values on WORK-480.
 
-**9:35: the fallbacks that matter most (10 min)**
+**10:05: the fallbacks that matter most (10 min)**
 - [ ] Switch to the hotspot, and check the numbers still update. Then switch back.
 - [ ] Open `http://localhost:8787/?address=demo` in a browser.
 - [ ] Press Ctrl-C in `pnpm mac`'s terminal, check the app says "The Price Service Isn't Running", then run `pnpm mac` again and time the cold read. This is the only time to restart it.
 - [ ] Have the [restart command](#if-the-dataset-is-stuck) ready in a terminal, but don't run it unless a job's stuck.
 
-**9:45: record the backup (15 min)**
+**10:15: record the backup (15 min)**
 - [ ] [Record it](#backup-recording) and copy it to your phone.
 - [ ] Remove the Coinbase answer in Settings > **Answers**, and leave the server running until the demo.
 
