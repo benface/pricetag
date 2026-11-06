@@ -53,7 +53,7 @@ function linkingAll(book: Book, addresses: readonly string[]): Book {
 
 function foldAll(read: readonly WalletResponse[], method: Method, book: Book): Folded[] {
   // Every fold stays in memory until they've all been added up, so each fitting isn't enough.
-  assertFoldsFit(read.map((wallet) => wallet.legs), method)
+  assertFoldsFit(read.map(({ address, legs }) => ({ address: address.toLowerCase(), legs })), method)
   return read.map((wallet) => {
     const others = read.filter((other) => other !== wallet)
     return { address: wallet.address.toLowerCase(), wallet, others, fold: foldBook(wallet, others, method, book) }

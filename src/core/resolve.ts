@@ -4,7 +4,7 @@
 // or from a provider's order that matches a movement exactly. The rest come from here, and the fold then runs on the result.
 // An unanswered sender stays unknown: it could be the user's own wallet, so assuming otherwise would be a guess.
 
-import { applyLegTaking, emptyPosition, foldWallet, unconfirmedAssets, formatAmount, formatPaid, historyGaps, lessPaidAt, normalizeAddress, orderMatters, plainAmount, sharePaidAt, shortHash, usableAnswer, usdView, viewWallet, withoutCurrency, worth, type CostPiece, type CurrencyCode, type HistoryGap, type HoldComparison, type MarkPrice, type Method, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { applyLegTaking, assertFoldFits, emptyPosition, foldWallet, unconfirmedAssets, formatAmount, formatPaid, historyGaps, lessPaidAt, normalizeAddress, orderMatters, plainAmount, sharePaidAt, shortHash, usableAnswer, usdView, viewWallet, withoutCurrency, worth, type CostPiece, type CurrencyCode, type HistoryGap, type HoldComparison, type MarkPrice, type Method, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import { NO_FACTS, legsByTransaction, transactionFacts } from "./activity.ts"
 import type { BookPoint, BookPreview, WalletResponse } from "./api.ts"
 import { costKey, isDemoWallet, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type Money, type Purchase, type Receipt, type SenderAnswer } from "./book.ts"
@@ -344,8 +344,12 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     return withPieces(leg, pieces)
   }
 
+  let at: PricedLeg | null = null
   for (const { side, leg, index } of steps) {
     const address = normalizeAddress(side.wallet.address)
+    // What's carried is only for this transaction. Kept any longer, it's as much memory as every lot times every move.
+    if (at && (at.blockNum !== leg.blockNum || at.txIndex !== leg.txIndex)) carried.clear()
+    at = leg
     const next = resolve(side, leg)
     ;(output.get(address) as PricedLeg[])[index] = next
     const key = `${address}:${next.asset}`
@@ -505,7 +509,11 @@ export function foldBook(focus: WalletResponse, others: readonly WalletResponse[
   const address = normalizeAddress(focus.address)
   const linked = new Set(walletsBehind(book, focus))
   const sideOf = (wallet: WalletResponse): Side => ({ wallet, view: usd ? usdView(wallet) : viewWallet(wallet) })
-  const sides = [focus, ...others.filter((w) => normalizeAddress(w.address) !== address && linked.has(normalizeAddress(w.address)) && sameRead(w, focus))].map(sideOf)
+  const behind = others.filter((w) => normalizeAddress(w.address) !== address && linked.has(normalizeAddress(w.address)) && sameRead(w, focus))
+  // Working out what it inherits walks every lot, so a fold that can't fit stops here, before any of that.
+  const historyOf = ({ address, legs }: WalletResponse) => ({ address: normalizeAddress(address), legs })
+  assertFoldFits(historyOf(focus), behind.map(historyOf), method)
+  const sides = [focus, ...behind].map(sideOf)
   const view = (sides[0] as Side).view
   const { legs: resolved, open, purchases } = resolveLegs(sides, method, book)
   const legs = resolved.get(address) as PricedLeg[]

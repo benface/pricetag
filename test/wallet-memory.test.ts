@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { after, before, describe, it } from "node:test"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
-import { ASSETS, ETH_ADDRESS, WalletsTooBigError, assertFoldsFit, limitFolds, type LegRow } from "@pricetag/sdk/core"
+import { ASSETS, ETH_ADDRESS, USDC_ADDRESS, WalletsTooBigError, applyLeg, assertFoldsFit, emptyPosition, limitFolds, type LegRow } from "@pricetag/sdk/core"
 import { OldestFirstTooBigError, WalletTooBigError, buildPortfolio } from "@pricetag/sdk"
 import { WalletsBusyError, createRowBudget, createWallets, foldBytesThatFit, pricetagClient, rowsThatFit, type Query, type Source } from "@pricetag/sdk/internal"
 import { createApi } from "../server/app.ts"
@@ -286,9 +286,120 @@ describe("oldest first on a long history", () => {
   it("adds wallets up, and leaves each less room the more of them there are", () => {
     const history = Array.from({ length: 10 }, (_, i) => leg(i))
     limitFolds(220_000)
-    assertFoldsFit([history, history], "average")
-    assert.throws(() => assertFoldsFit([history, history], "fifo"), OldestFirstTooBigError)
-    assert.throws(() => assertFoldsFit([history, history, history], "average"), WalletsTooBigError)
+    const of = (count: number) => Array.from({ length: count }, () => ({ legs: history }))
+    assertFoldsFit(of(2), "average")
+    assert.throws(() => assertFoldsFit(of(2), "fifo"), OldestFirstTooBigError)
+    assert.throws(() => assertFoldsFit(of(3), "average"), WalletsTooBigError)
+  })
+
+  // One 10-unit lot of its own, then five older lots of 1 from another wallet, then 1 leaves. Oldest by when they were acquired, that's one of the five, which leaves 5 open. By when they arrived, it would leave 6.
+  const piece = (block: number) => ({ qty: "1", costMicros: "1", label: "inherited", estimatedCostMicros: "0", acquiredBlock: block, acquiredAt: HEAD.timestamp }) as never
+  const inherited = () => [leg(10, "10"), { ...(leg(20, "5") as object), pieces: [1, 2, 3, 4, 5].map(piece) } as never, leg(21, "-1")]
+
+  it("counts every lot a leg inherited, in the order they were acquired", () => {
+    const legs = 3 * 10_000
+    const lots = (1 + 6 + 5) * 20
+    const copies = 5 * 500
+    limitFolds(legs + lots + copies)
+    assert.equal(buildPortfolio(inherited(), "fifo", {}).method, "fifo")
+    limitFolds(legs + lots + copies - 1)
+    assert.throws(() => buildPortfolio(inherited(), "fifo", {}), OldestFirstTooBigError)
+  })
+
+  it("keeps a line for each block paid at only while working out what's inherited", () => {
+    const paidAt = [{ costMicros: "1", qty: "1", blockNum: 1 }]
+    const pieces = [{ qty: "1", costMicros: "1", label: "inherited", estimatedCostMicros: "0", paidAt }] as never
+    const credit = { ...(leg(1) as object), pieces } as never
+    assert.equal(applyLeg(emptyPosition("average", 18), credit).lots[0]?.paidAt, undefined)
+    assert.deepEqual(applyLeg(emptyPosition("average", 18, true), credit).lots[0]?.paidAt, paidAt)
+  })
+})
+
+describe("wallets that pass lots between them", () => {
+  const A = ME
+  const B = OTHER
+  const SOMEONE = "0x00000000000000000000000000000000000000cc"
+  const LOTS = 30
+  const SPENDS = 40
+  const usdc = (block: number, account: string, side: "credit" | "debit", amount: number, counterparty: string): LegRow => ({ block_num: block, timestamp: HEAD.timestamp, tx_hash: `0x${block.toString(16)}`, tx_index: 1, log_index: 0, token: USDC_ADDRESS, account, side, amount: String(amount), kind: "erc20", counterparty })
+  const rows: Record<string, LegRow[]> = {
+    [A]: [...Array.from({ length: LOTS }, (_, i) => usdc(i + 1, A, "credit", 100, SOMEONE)), usdc(LOTS + 1, A, "debit", LOTS * 100, B)],
+    [B]: [usdc(LOTS + 1, B, "credit", LOTS * 100, A), ...Array.from({ length: SPENDS }, (_, i) => usdc(LOTS + 2 + i, B, "debit", 1, SOMEONE))],
+  }
+  const book = { senders: { [SOMEONE]: { kind: "someone-else" } }, costs: {} }
+  const body = { linked: [A, B], book }
+  const source = fakeSource(rows)
+  const usdcHeld = (address: string, block: number) => (rows[address] ?? []).filter((r) => r.block_num <= block).reduce((sum, r) => sum + BigInt(r.amount) * (r.side === "credit" ? 1n : -1n), 0n)
+  source.readBalances = async (address, blockNum) => ({ blockNum, amounts: Object.fromEntries(ASSETS.map((asset) => [asset, asset === "USDC" ? usdcHeld(address, blockNum).toString() : "0"])) })
+  let server: Server
+  let base: string
+  before(async () => {
+    const api = createApi({}, { source, readRates: async () => ({ byBlock: {}, latest: null }), proofs: { datasets: async () => [], priceBehind: async () => null, readBlock: async () => null } }, null)
+    server = createServer(createHandler(api, null))
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  })
+  after(() => {
+    limitFolds(Number.POSITIVE_INFINITY)
+    server.close()
+  })
+  const post = (path: string, payload: unknown) => fetch(`${base}/api/${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) })
+  const together: [string, unknown][] = [
+    ["portfolio/all", body],
+    ["portfolio/all/export", body],
+    ["portfolio/all/explain?metric=pnl", body],
+    ["portfolio/all/preview", { ...body, candidates: [book] }],
+  ]
+  const one: [string, unknown][] = [
+    [`portfolio/${B}`, body],
+    [`portfolio/${B}/export`, body],
+    [`portfolio/${B}/preview`, { ...body, candidates: [book] }],
+    [`tax-report/${A}`, { country: "CA", scope: "per-wallet", also: [B], book }],
+    [`tax-report/${A}`, { country: "CA", scope: "pooled", also: [B], book }],
+  ]
+  const withMethod = (payload: unknown, method: string) => ({ ...(payload as object), method })
+
+  it("counts what the recipient inherited, every way of asking, and leaves the server usable", async () => {
+    limitFolds(Number.POSITIVE_INFINITY)
+    await post("portfolio/all/wallets", body)
+    // Room for what each wallet's own legs say it holds, but not for what B holds once it inherits them all.
+    const refused = async (limit: number, ways: [string, unknown][]) => {
+      limitFolds(limit)
+      for (const [path, payload] of ways) {
+        const response = await post(path, withMethod(payload, "fifo"))
+        assert.equal(response.status, 413, path)
+        assert.match(response.headers.get("content-type") ?? "", /json/)
+        assert.match(((await response.json()) as { error: string }).error, /oldest first.*Average cost still works/)
+      }
+    }
+    await refused(840_000, together)
+    await refused(420_000, one)
+    limitFolds(840_000)
+    assert.equal((await post("portfolio/all", withMethod(body, "average"))).status, 200)
+    assert.equal((await post(`portfolio/${A}`, { method: "fifo" })).status, 200)
+  })
+
+  it("refuses by average too, when moves hold more lines than fit", async () => {
+    limitFolds(Number.POSITIVE_INFINITY)
+    await post("portfolio/all/wallets", body)
+    limitFolds((rows[A]!.length + rows[B]!.length) * 11_000 + (LOTS - 1) * 150)
+    for (const [path, payload] of together) {
+      const response = await post(path, withMethod(payload, "average"))
+      assert.equal(response.status, 413, path)
+      assert.match(((await response.json()) as { error: string }).error, /too much history to add up/)
+    }
+    limitFolds((rows[A]!.length + rows[B]!.length) * 11_000 + LOTS * 150)
+    assert.equal((await post("portfolio/all", withMethod(body, "average"))).status, 200)
+  })
+
+  it("reads them in full when they fit, with the costs carried across", async () => {
+    limitFolds(Number.POSITIVE_INFINITY)
+    const whole = await post(`portfolio/${B}`, withMethod(body, "fifo"))
+    assert.equal(whole.status, 200)
+    const { positions } = (await whole.json()) as { positions: { asset: string; values: { unknownCostQty: string; costMicros: string | null } }[] }
+    const held = positions.find(({ asset }) => asset === "USDC")
+    assert.equal(held?.values.unknownCostQty, "0")
+    assert.notEqual(held?.values.costMicros, null)
   })
 })
 

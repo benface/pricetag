@@ -21,7 +21,7 @@
 // elsewhere, and CRA's crypto guide doesn't count moving between your own wallets as a disposition, so that keeps what they
 // first paid, which we can't see. Those stay estimates in every country, and the report says why.
 
-import { foldPositions, formatDuration, isAddress, markUnknownOrder, msBetweenBlocks, normalizeAddress, orderMatters, shortHash, timestampOfBlock, unreadAssets, viewWallet, worth, type CurrencyCode, type LegEffect, type Method, type PositionState, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
+import { assertFoldFits, foldPositions, formatDuration, isAddress, markUnknownOrder, msBetweenBlocks, normalizeAddress, orderMatters, shortHash, timestampOfBlock, unreadAssets, viewWallet, worth, type CurrencyCode, type LegEffect, type Method, type PositionState, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type TaxReportResponse, type WalletResponse } from "./api.ts"
 import { emptyBook, linkedWallets, type Book } from "./book.ts"
 import { rateSource } from "./explain.ts"
@@ -250,6 +250,9 @@ function sourcesOf(wallets: readonly WalletResponse[], method: Method, { book = 
     return { wallet, view, ...checksOf(wallet, view, method) }
   })
   const linking = wallets.length > 1 ? { ...book, linked: [...(book.linked ?? []), ...wallets.map((wallet) => wallet.address.toLowerCase())] } : book
+  // Working out what each inherits walks every lot, so a fold that can't fit stops here, before any of that.
+  const histories = sides.map(({ wallet }) => ({ address: normalizeAddress(wallet.address), legs: wallet.legs }))
+  for (const history of histories.slice(0, wallets.length)) assertFoldFits(history, histories.filter((other) => other !== history), method)
   const { legs } = resolveLegs(sides, method, linking)
   return sides.slice(0, wallets.length).map((side) => ({ ...side, view: { ...side.view, legs: legs.get(normalizeAddress(side.wallet.address)) as PricedLeg[] } }))
 }
