@@ -157,6 +157,16 @@
       "pnlMicros": "-3000000",
       "excludedCount": 0,
       "summary": "Received 2 ETH",
+      "assets": [
+        "ETH"
+      ],
+      "counterparty": "0xdddddddddddddddddddddddddddddddddddddddd",
+      "amount": {
+        "direction": "in",
+        "micros": "6000000000"
+      },
+      "gain": null,
+      "unknownCost": [],
       "wallets": [
         "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
       ]
@@ -168,6 +178,16 @@
       "pnlMicros": "-6000000",
       "excludedCount": 0,
       "summary": "Moved 1 ETH between your wallets",
+      "assets": [
+        "ETH"
+      ],
+      "counterparty": null,
+      "amount": {
+        "direction": "trade",
+        "micros": "3000000000"
+      },
+      "gain": null,
+      "unknownCost": [],
       "wallets": [
         "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -180,6 +200,16 @@
       "pnlMicros": "-9000000",
       "excludedCount": 0,
       "summary": "Sent 0.5 ETH",
+      "assets": [
+        "ETH"
+      ],
+      "counterparty": "0xdddddddddddddddddddddddddddddddddddddddd",
+      "amount": {
+        "direction": "out",
+        "micros": "1500000000"
+      },
+      "gain": null,
+      "unknownCost": [],
       "wallets": [
         "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
       ]
@@ -191,6 +221,18 @@
       "pnlMicros": "-9000000",
       "excludedCount": 1,
       "summary": "Received 1 ETH",
+      "assets": [
+        "ETH"
+      ],
+      "counterparty": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "amount": {
+        "direction": "in",
+        "micros": "3000000000"
+      },
+      "gain": null,
+      "unknownCost": [
+        "ETH"
+      ],
       "wallets": [
         "0xcccccccccccccccccccccccccccccccccccccccc"
       ]
@@ -202,6 +244,11 @@
       "pnlMicros": "-547920000",
       "excludedCount": 1,
       "summary": null,
+      "assets": [],
+      "counterparty": null,
+      "amount": null,
+      "gain": null,
+      "unknownCost": [],
       "wallets": []
     }
   ],

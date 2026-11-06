@@ -398,6 +398,7 @@ public enum Wording {
     public static let pnlUnavailable = "PnL unavailable"
     public static let valueUnavailable = "Value unavailable"
     public static let unknown = "Unknown"
+    public static let noPrice = "No price"
     public static let chartGap = "Where it's shaded, the PnL depends on a cost or price that isn't known, so there's no line. It isn't zero."
     public static let nothingToChart = "Everything here depends on an unknown cost or price, so there's no PnL to chart. It isn't zero."
     public static let tooNewToChart = "Not enough history for a chart yet."

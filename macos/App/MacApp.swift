@@ -138,6 +138,10 @@ struct MacApp: App {
                 Button("Refresh") { store.refresh() }
                     .keyboardShortcut("r", modifiers: .command)
             }
+            CommandGroup(after: .textEditing) {
+                Button("Find Transactions…") { navigation.findTransactions() }
+                    .keyboardShortcut("f", modifiers: .command)
+            }
             CommandMenu("Wallet") {
                 WalletCommands(store: store, hotWallet: hotWallet, navigation: navigation)
             }

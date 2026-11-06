@@ -385,15 +385,7 @@ struct MainWindow: View {
     }
 
     private func transactions(_ portfolio: Portfolio) -> some View {
-        VStack(spacing: 0) {
-            let notices = notices(portfolio)
-            notices.padding(12)
-            if portfolio.transactions.isEmpty {
-                ContentUnavailableView("No Transactions Yet", systemImage: "list.bullet", description: Text("They'll show up here as they happen."))
-            } else {
-                TransactionsTable(transactions: portfolio.transactions, currency: portfolio.currency, isLive: isLive, showsWallets: portfolio.isAllYours, target: $navigation.target)
-            }
-        }
+        TransactionsPage(portfolio: portfolio, store: store, hotWallet: hotWallet, isLive: isLive, navigation: navigation, notices: notices(portfolio))
     }
 
     @ViewBuilder
@@ -901,109 +893,8 @@ private struct HoldingsTable: View {
 
 extension View {
     /// Lines a cell up with its column's title, which the header draws a couple of points in from each side.
-    fileprivate func tableCell() -> some View {
+    func tableCell() -> some View {
         padding(.horizontal, 2)
-    }
-}
-
-/// Each transaction the chart plots. Up and down move through them and show each one's legs.
-private struct TransactionsTable: View {
-    let transactions: [PnlPoint]
-    let currency: CurrencyCode
-    let isLive: Bool
-    /// Which wallet each one is in, for All Yours.
-    let showsWallets: Bool
-    @Binding var target: ExplainTarget?
-    @Environment(\.walletNames) private var walletNames
-    @State private var columns = TableColumnCustomization<PnlPoint>()
-    @State private var selection: PnlPoint.ID?
-    @FocusState private var isFocused: Bool
-
-    private var targetHash: String? {
-        if case .transaction(let hash) = target { hash } else { nil }
-    }
-
-    private static let walletColumnID = "wallet"
-
-    private func hash(_ id: PnlPoint.ID) -> String? {
-        transactions.first { $0.id == id }?.txHash
-    }
-
-    var body: some View {
-        Table(transactions, selection: $selection, columnCustomization: $columns) {
-            TableColumn("Time") { point in
-                Text(point.date.map(Format.time) ?? point.timestamp)
-                    .tableCell()
-            }
-            // Only what they need, so the words get the rest, and a small window still has room for the last column.
-            .width(min: 120, ideal: 120, max: 130)
-            TableColumn("What happened") { point in
-                if let summary = point.summary {
-                    Text(summary)
-                        .lineLimit(1)
-                        .help(summary)
-                        .tableCell()
-                } else {
-                    Text("—").foregroundStyle(.tertiary).tableCell()
-                }
-            }
-            .width(min: 100)
-            TableColumn("Wallet") { point in
-                let names = (point.wallets ?? []).map(walletNames.walletName)
-                Text(names.formatted(.list(type: .and)))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .help(names.formatted(.list(type: .and)))
-                    .tableCell()
-            }
-            .width(min: 90, ideal: 140, max: 220)
-            .customizationID(Self.walletColumnID)
-            .disabledCustomizationBehavior(.all)
-            TableColumn("Total PnL") { point in
-                LiveNumber(point.pnlMicros.map { Format.signedMoney($0, currency) } ?? "Unavailable", tone: point.pnlMicros == nil ? .secondary : isLive ? Tone(signed: point.pnlMicros) : .neutral)
-                    .opacity(isLive ? 1 : 0.55)
-                    .help(Wording.pnlHelp)
-                    .updatingMark()
-                    .tableCell()
-            }
-            .width(min: 90, ideal: 90, max: 110)
-            .alignment(.numeric)
-            TableColumn("Left out") { point in
-                if point.excludedCount > 0 {
-                    LiveNumber("\(point.excludedCount) unknown", tone: .secondary).tableCell()
-                } else {
-                    Text("—").foregroundStyle(.tertiary).tableCell()
-                }
-            }
-            .width(min: 70, ideal: 70, max: 90)
-            .alignment(.numeric)
-        }
-        .tableStyle(.inset)
-        .alternatingRowBackgrounds(.disabled)
-        .contextMenu(forSelectionType: PnlPoint.ID.self) { ids in
-            if let hash = ids.first.flatMap(hash) {
-                TransactionActions(hash: hash) { target = .transaction(hash) }
-            }
-        }
-        .onCopyCommand {
-            guard let hash = selection.flatMap(hash) else { return [] }
-            return [NSItemProvider(object: hash as NSString)]
-        }
-        .focused($isFocused)
-        .onAppear { isFocused = true }
-        .onChange(of: selection) { _, id in
-            guard let hash = transactions.first(where: { $0.id == id })?.txHash, hash != targetHash else { return }
-            target = .transaction(hash)
-        }
-        .onChange(of: target, initial: true) {
-            selection = transactions.first { $0.txHash == targetHash }?.id
-        }
-        // Not `if` around the column, for the same reason as the holdings' columns.
-        .onChange(of: showsWallets, initial: true) {
-            columns[visibility: Self.walletColumnID] = showsWallets ? .visible : .hidden
-        }
-        .accessibilityLabel("Transactions")
     }
 }
 
