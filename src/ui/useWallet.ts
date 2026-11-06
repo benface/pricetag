@@ -109,6 +109,10 @@ export function followRead<T>(read: (signal: AbortSignal) => Promise<T>, { live,
 
   let events: EventSource
   let retry: ReturnType<typeof setTimeout> | undefined
+  // Asking again counts against the same limit, and an error response can't say so, so this goes by what the last read heard.
+  const reconnect = () => {
+    retry = setTimeout(() => (Date.now() < heldUntil ? reconnect() : connect()), Math.max(RECONNECT_MS, heldUntil - Date.now()))
+  }
   const connect = () => {
     events = new EventSource("/api/events")
     events.addEventListener("open", () => {
@@ -125,7 +129,7 @@ export function followRead<T>(read: (signal: AbortSignal) => Promise<T>, { live,
       drops++
       update((s) => ({ ...s, updateFailure: { kind: "unreachable" } }))
       // The browser retries a dropped connection by itself, but gives up for good on an error response.
-      if (events.readyState === EventSource.CLOSED) retry = setTimeout(connect, RECONNECT_MS)
+      if (events.readyState === EventSource.CLOSED) reconnect()
     })
   }
   connect()

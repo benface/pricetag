@@ -91,6 +91,35 @@ describe("a server that says to slow down", () => {
     }
   })
 
+  it("doesn't reconnect the updates until it's time, whichever was refused first", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout", "Date"] })
+    ;(globalThis as { EventSource?: unknown }).EventSource = FakeEvents
+    for (const readFirst of [true, false]) {
+      FakeEvents.opened = []
+      const run = follow()
+      try {
+        if (readFirst) await run.fail(slowedDown(60))
+        run.events().refuse()
+        if (!readFirst) await run.fail(slowedDown(60))
+        for (let seconds = 0; seconds < 59; seconds++) t.mock.timers.tick(1000)
+        assert.equal(FakeEvents.opened.length, 1, "Its minute isn't up")
+        assert.equal(run.reads.length, 1)
+        t.mock.timers.tick(1000)
+        assert.equal(FakeEvents.opened.length, 2, "Now it is")
+        assert.equal(run.reads.length, 2)
+        run.events().fire("open")
+        await run.finish("back")
+        await run.finish("caught up")
+        assert.equal(run.error(), null)
+        run.events().refuse()
+        t.mock.timers.tick(3000)
+        assert.equal(FakeEvents.opened.length, 3, "With no wait to honor, it's the usual few seconds")
+      } finally {
+        run.stop()
+      }
+    }
+  })
+
   it("reads the wait from the answer, and a minute if it doesn't say", async () => {
     const answer = (headers: Record<string, string>) => new Response(JSON.stringify({ error: "Too many." }), { status: 429, headers })
     await assert.rejects(readResponse(answer({ "retry-after": "17" })), (error: ReadError) => error.failure.kind === "slowedDown" && error.failure.retryAfter === 17)
