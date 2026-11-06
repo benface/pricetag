@@ -55,6 +55,13 @@ export function plainAmount(text: string): string | null {
   return clean.replaceAll(",", "")
 }
 
+/** A note's amount, for what can't be taken back: in USD, with every decimal it has, and cents always. */
+export function formatExactUsd(micros: string): string {
+  const padded = micros.padStart(7, "0")
+  const fraction = padded.slice(-6).replace(/0{1,4}$/, "")
+  return `$${BigInt(padded.slice(0, -6)).toLocaleString("en-US")}.${fraction}`
+}
+
 /** What was paid, beside amounts in another currency, so no kind of dollar is left bare. */
 export function formatPaid(micros: string, currency: CurrencyCode): string {
   const { symbol, label } = CURRENCIES[currency]

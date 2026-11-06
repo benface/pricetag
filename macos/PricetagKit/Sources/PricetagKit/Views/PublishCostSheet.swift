@@ -38,7 +38,7 @@ public struct PublishCostSheet: View {
                     .disabled(isPublishing())
             }
             if let micros {
-                Text("This wallet would publish that it paid \(Format.usd(Format.money(micros, .USD), beside: currency)) in transaction \(Format.shortHash(draft.txHash)).")
+                Text("This wallet would publish that it paid \(Format.usd(Format.exactUSD(micros), beside: currency)) in transaction \(Format.shortHash(draft.txHash)).")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
