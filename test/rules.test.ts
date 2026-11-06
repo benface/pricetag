@@ -81,7 +81,7 @@ describe("comparing a token priced by its feed", () => {
       readBalances: async (_, block) => ({ blockNum: block, amounts: Object.fromEntries(ASSETS.map((asset) => [asset, asset === "DAI" && block >= 5 ? ONE : "0"])) }),
       marketReady: async () => true,
       readMarketTrades: async () => [],
-      readFeedRounds: async (assets, block) => Object.fromEntries(assets.map((asset) => [asset, { answer: "100000000", updatedAt: Date.parse(NOW) / 1000 - 60, blockNum: block, timestamp: NOW }])),
+      readFeedRounds: async (assets, blocks) => new Map(blocks.map((block) => [block, Object.fromEntries(assets.map((asset) => [asset, { answer: "100000000", updatedAt: Date.parse(NOW) / 1000 - 60, blockNum: block, timestamp: NOW }]))])),
       ...changes,
     }
   }
@@ -115,9 +115,9 @@ describe("comparing a token priced by its feed", () => {
   it("says the value leaves it out, rather than $0, when the feed read fails during the comparison", async () => {
     let reads = 0
     const failsAfterTheRefresh: Partial<Source> = {
-      readFeedRounds: async (assets, block) => {
+      readFeedRounds: async (assets, blocks) => {
         if (++reads > 1) throw new Error("boom")
-        return Object.fromEntries(assets.map((asset) => [asset, { answer: "100000000", updatedAt: Date.parse(NOW) / 1000 - 60, blockNum: block, timestamp: NOW }]))
+        return new Map(blocks.map((block) => [block, Object.fromEntries(assets.map((asset) => [asset, { answer: "100000000", updatedAt: Date.parse(NOW) / 1000 - 60, blockNum: block, timestamp: NOW }]))]))
       },
     }
     const { status, normal, comparison } = await valueRow(daiSource(31, failsAfterTheRefresh), daiSource(29))

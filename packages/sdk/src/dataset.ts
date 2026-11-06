@@ -341,26 +341,29 @@ export function decodeRound(data: string | null | undefined): RateRound | null {
 }
 
 /**
- * One query however many feeds: a wallet that holds several asks for them all at once. The filter sits in an inner subquery
+ * One query however many feeds and blocks: a wallet that holds several asks for them all at once, and a chart's points share one. The filter sits in an inner subquery
  * with a LIMIT, and the outer query reads no field of the result. WORK-320 found the other shapes can run eth_call on every block on the chain.
  */
 export function readFeedRoundsAt(query: Query, config: { baseDataset: string; network: string }): NonNullable<Source["readFeedRounds"]> {
-  return async (assets, block) => {
+  return async (assets, blocks) => {
+    const result = new Map<number, Record<string, FeedRound>>()
     const feeds = assets.flatMap((asset) => {
       const feed = TOKEN_FEEDS[asset]
       return feed ? [{ asset, address: feed.address }] : []
     })
-    if (feeds.length === 0) return {}
+    if (feeds.length === 0) return result
     const calls = feeds.map(({ address }, i) => `rpc.${config.network}.eth_call(NULL, evm_encode_hex('${address}'), evm_encode_params('latestRoundData()'), block_num) AS f${i}`)
-    const { filter, count } = blockFilters([block])[0] as { filter: string; count: number }
-    const [row] = await query<Row>(`SELECT block_num, timestamp, ${calls.join(", ")} FROM (SELECT block_num, timestamp FROM "${config.baseDataset}".blocks WHERE ${filter} LIMIT ${count})`)
-    if (!row) return {}
-    const rounds: Record<string, FeedRound> = {}
-    feeds.forEach(({ asset }, i) => {
-      const round = decodeRound((row[`f${i}`] as { data?: string } | null)?.data)
-      if (round) rounds[asset] = { ...round, blockNum: asNumber(row.block_num), timestamp: asIso(row.timestamp) }
-    })
-    return rounds
+    for (const { filter, count } of blockFilters(blocks)) {
+      for (const row of await query<Row>(`SELECT block_num, timestamp, ${calls.join(", ")} FROM (SELECT block_num, timestamp FROM "${config.baseDataset}".blocks WHERE ${filter} LIMIT ${count})`)) {
+        const rounds: Record<string, FeedRound> = {}
+        feeds.forEach(({ asset }, i) => {
+          const round = decodeRound((row[`f${i}`] as { data?: string } | null)?.data)
+          if (round) rounds[asset] = { ...round, blockNum: asNumber(row.block_num), timestamp: asIso(row.timestamp) }
+        })
+        result.set(asNumber(row.block_num), rounds)
+      }
+    }
+    return result
   }
 }
 

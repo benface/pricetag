@@ -346,7 +346,8 @@ export function pricetagClient(query: Query, config: ClientConfig) {
       if (!head) return {}
       const prices = latestPrices(await reader.readLatestReference(head.blockNum))
       try {
-        return { ...prices, ...feedPrices(await readFeedRoundsAt(query, { baseDataset, network })(Object.keys(TOKEN_FEEDS), head.blockNum), prices) }
+        const rounds = await readFeedRoundsAt(query, { baseDataset, network })(Object.keys(TOKEN_FEEDS), [head.blockNum])
+        return { ...prices, ...feedPrices(rounds.get(head.blockNum) ?? {}, prices) }
       } catch (error) {
         logger.warn(`Feed read failed: ${describeError(error)}`)
         return prices
