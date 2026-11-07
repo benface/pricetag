@@ -89,18 +89,26 @@ describe("oldest first on purchases that all stay open", () => {
   const everything = (state: PositionState) => ({
     values: valuePosition(state, PRICE),
     afterSell: applyLeg(state, sellOne),
-    split: lotsSplitBy(state, 1000000n),
+    split: lotsSplitBy(state, 1000000n, state.method),
     answerable: takesAnswerableCost(state, 1000000n),
     canAnswer: costCanBeAnswered(sellOne, state),
   })
 
-  /** A state saved before these legs answers everything as a copy of it made before would, once the legs are applied to it. */
-  function staysAsMade(first: readonly FoldLeg[], then: readonly FoldLeg[]) {
-    const earlier = first.reduce(applyLeg, emptyPosition("fifo", 6))
-    const copy = structuredClone(earlier)
-    const later = then.reduce(applyLeg, earlier)
-    assert.deepEqual(everything(earlier), everything(copy))
-    assert.deepEqual(everything(later), everything(then.reduce(applyLeg, copy)))
+  /**
+   * A state saved before these legs answers everything as a copy of it made before would, once the legs are applied to it, by
+   * every method that keeps lots, since all of them share their lots' array from step to step. Returns the saved states.
+   */
+  function staysAsMade(first: readonly FoldLeg[], then: readonly FoldLeg[]): Record<"fifo" | "lifo" | "hifo", PositionState> {
+    const saved = {} as Record<"fifo" | "lifo" | "hifo", PositionState>
+    for (const method of ["fifo", "lifo", "hifo"] as const) {
+      const earlier = first.reduce(applyLeg, emptyPosition(method, 6))
+      const copy = structuredClone(earlier)
+      const later = then.reduce(applyLeg, earlier)
+      assert.deepEqual(everything(earlier), everything(copy), method)
+      assert.deepEqual(everything(later), everything(then.reduce(applyLeg, copy)), method)
+      saved[method] = earlier
+    }
+    return saved
   }
 
   it("keeps a saved state's lots when an older lot arrives after it", () => {
@@ -184,5 +192,24 @@ describe("oldest first on purchases that all stay open", () => {
   it("answers the same about a saved state's unknown cost once a later lot is added to it", () => {
     // Only known as a whole with no date, so it would split what's ahead of it if it were there.
     staysAsMade([unit("unknown", 20, {})], [unit("whole", 30, { kind: "swap", delta: "2000000", pieces: [piece("2000000", "500", { label: "paid", wholeCostOnly: true })] })])
+  })
+
+  it("answers newest and highest cost first for a saved state's lots, not lots bought after it", () => {
+    const known = unit("known", 20, { kind: "swap", costMicros: "1000", costLabel: "paid" })
+    const unknown = (blockNum: number) => unit(`unknown-${blockNum}`, blockNum, {})
+    // Only known cost was held, so nothing an answer could fix is taken, whatever comes after.
+    let saved = staysAsMade([known], [unknown(30)])
+    assert.equal(takesAnswerableCost(saved.lifo, 1000000n), false)
+    assert.equal(takesAnswerableCost(saved.hifo, 1000000n), false)
+    assert.equal(costCanBeAnswered(sellOne, saved.lifo), false)
+    assert.equal(costCanBeAnswered(sellOne, saved.hifo), false)
+    // Only unknown cost was held, so an answer could fix it, even once newer known cost would be taken first.
+    saved = staysAsMade([unknown(10)], [known])
+    assert.equal(takesAnswerableCost(saved.lifo, 1000000n), true)
+    assert.equal(takesAnswerableCost(saved.hifo, 1000000n), true)
+    // Selling all of the one lot held splits nothing, even once a cheaper lot known only as a whole arrives.
+    saved = staysAsMade([known], [unit("whole", 30, { kind: "swap", pieces: [piece("1000000", "100", { label: "paid", wholeCostOnly: true })] })])
+    assert.deepEqual(lotsSplitBy(saved.hifo, 1000000n, "hifo"), [])
+    assert.deepEqual(lotsSplitBy(saved.lifo, 1000000n, "lifo"), [])
   })
 })
