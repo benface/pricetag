@@ -6,7 +6,7 @@ import { costKey, emptyBook, type Book } from "../src/core/book.ts"
 import { parseCoinbaseCsv } from "../src/core/exchange-import.ts"
 import { DEMO_WALLET } from "../src/core/fixtures.ts"
 import { termOf } from "../src/core/tax-forms.ts"
-import { taxReportOf } from "../src/core/tax.ts"
+import { TAX_COUNTRIES, isTaxMethod, taxReportOf } from "../src/core/tax.ts"
 import { E18 } from "./support/units.ts"
 
 const A = `0x${"a".repeat(40)}`
@@ -325,5 +325,40 @@ describe("superficial losses", () => {
   it("only checks Canada's report", () => {
     const legs = [buy(1, "2025-01-01", 2n, 6000), sell(2, "2025-03-01", 1n, 2000), buy(3, "2025-03-20", 1n, 2100)]
     assert.doesNotMatch(taxReportOf([walletOf(legs, "2026-01-01T00:00:00.000Z")], { country: "US", method: "fifo", scope: "per-wallet" }).csv, /superficial loss\./)
+  })
+})
+
+describe("newest first and highest cost first", () => {
+  const READ = "2027-01-01T00:00:00.000Z"
+  // One ETH at $1,000 more than a year before the sale, then one at $3,000 and one at $2,000 shortly before, and one sold.
+  const wallet = walletOf([buy(1, "2025-01-10", 1n, 1000), buy(2, "2026-05-01", 1n, 3000), buy(3, "2026-06-01", 1n, 2000), sell(4, "2026-07-01", 1n, 2500)], READ)
+  const lineOf = (method: "fifo" | "lifo" | "hifo") => {
+    const report = taxReportOf([wallet], { country: "US", method, scope: "per-wallet" })
+    return { report, lines: linesOf(report.form?.csv ?? "").filter((line) => line[2] !== "Total").map((line) => line.slice(0, 10)) }
+  }
+
+  it("take the units they say, with each one's date and how long it was held", () => {
+    assert.deepEqual(lineOf("fifo").lines, [["Part II (long-term)", "L", "1 ETH", "01/10/2025", "07/01/2026", "2500.000000", "1000.000000", "", "", "1500.000000"]])
+    assert.deepEqual(lineOf("lifo").lines, [["Part I (short-term)", "I", "1 ETH", "06/01/2026", "07/01/2026", "2500.000000", "2000.000000", "", "", "500.000000"]])
+    assert.deepEqual(lineOf("hifo").lines, [["Part I (short-term)", "I", "1 ETH", "05/01/2026", "07/01/2026", "2500.000000", "3000.000000", "", "", "-500.000000"]])
+  })
+
+  it("say in plain words which they are, and that US rules only allow them when your records said so before each sale", () => {
+    for (const [method, name, slug] of [["lifo", "newest first", "newest-first"], ["hifo", "highest cost first", "highest-cost-first"]] as const) {
+      const { report } = lineOf(method)
+      assert.equal(report.filename, `tax-report-${A.slice(0, 8)}-US-${slug}-USD.csv`)
+      assert.ok(report.csv.includes(`Prepared for the US: ${name}, each wallet on its own, in USD.`))
+      assert.ok(report.warnings.includes(TAX_COUNTRIES.US.methodWarnings[method] as string))
+      assert.doesNotMatch(report.csv, /FIFO|LIFO|HIFO/)
+    }
+  })
+
+  it("are only offered where the rules can allow them", () => {
+    assert.deepEqual(TAX_COUNTRIES.US.methods, ["fifo", "lifo", "hifo", "average"])
+    assert.deepEqual(TAX_COUNTRIES.CA.methods, ["average", "fifo"])
+    assert.equal(isTaxMethod("US", "hifo"), true)
+    assert.equal(isTaxMethod("CA", "hifo"), false)
+    assert.equal(isTaxMethod("CA", "lifo"), false)
+    assert.equal(isTaxMethod("US", "something"), false)
   })
 })

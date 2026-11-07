@@ -46,7 +46,7 @@ struct RenderTests {
             PortfolioSummary(portfolio: portfolio, isLive: true, size: 30) { _ in }
             // A control AppKit draws, which ImageRenderer would leave out.
             Picker("Cost method", selection: .constant(CostMethod.average)) {
-                ForEach(CostMethod.allCases) { Text($0.label).tag($0) }
+                ForEach(CostMethod.portfolio) { Text($0.label).tag($0) }
             }
             .pickerStyle(.segmented)
             ForEach(portfolio.positions) { HoldingRow(position: $0, currency: portfolio.currency, isLive: true) }

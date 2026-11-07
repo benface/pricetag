@@ -23,6 +23,14 @@ public enum TaxCountry: String, Codable, Sendable, CaseIterable, Identifiable {
         }
     }
 
+    /// What the report offers here, default first: only what this country's rules can allow. See `TAX_COUNTRIES` in `src/core/tax.ts`.
+    public var methods: [CostMethod] {
+        switch self {
+        case .CA: [.average, .fifo]
+        case .US: [.fifo, .lifo, .hifo, .average]
+        }
+    }
+
     public var defaultScope: TaxScope {
         switch self {
         case .CA: .pooled
@@ -214,7 +222,8 @@ public final class TaxReportModel {
         chosenScope = defaults.string(forKey: Keys.scope).flatMap(TaxScope.init(rawValue:))
     }
 
-    public var method: CostMethod { chosenMethod ?? country.defaultMethod }
+    /// One the country doesn't allow goes back to what it calls for.
+    public var method: CostMethod { chosenMethod.flatMap { country.methods.contains($0) ? $0 : nil } ?? country.defaultMethod }
     public var scope: TaxScope { chosenScope ?? country.defaultScope }
 
     public var otherWallets: [String] {
@@ -238,6 +247,7 @@ public final class TaxReportModel {
     }
 
     public func setMethod(_ next: CostMethod) {
+        guard country.methods.contains(next) else { return }
         chosenMethod = next == country.defaultMethod ? nil : next
         defaults.set(chosenMethod?.rawValue, forKey: Keys.method)
         // What's remembered has to say which country this override is for.

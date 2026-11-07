@@ -79,6 +79,29 @@ import Testing
         #expect(model.scope == .pooled)
     }
 
+    @Test func offersNewestAndHighestCostFirstOnlyWhereTheRulesCanAllowThem() {
+        #expect(TaxCountry.US.methods == [.fifo, .lifo, .hifo, .average])
+        #expect(TaxCountry.CA.methods == [.average, .fifo])
+        #expect(CostMethod.portfolio == [.average, .fifo])
+        let defaults = freshDefaults()
+        let us = model(defaults: defaults)
+        us.setCountry(.US)
+        us.setMethod(.hifo)
+        #expect(us.method == .hifo)
+        #expect(model(defaults: defaults).method == .hifo)
+        let ca = model()
+        ca.setCountry(.CA)
+        ca.setMethod(.lifo)
+        #expect(ca.method == .average)
+    }
+
+    @Test func aRememberedMethodTheCountryDoesntAllowGoesBackToItsDefault() {
+        let defaults = freshDefaults()
+        defaults.set("CA", forKey: "taxCountry")
+        defaults.set("hifo", forKey: "taxMethod")
+        #expect(model(defaults: defaults).method == .average)
+    }
+
     @Test func remembersAnOverride() {
         let defaults = freshDefaults()
         let first = model(defaults: defaults)

@@ -1,7 +1,9 @@
 {
   "methods": {
     "average": "Average",
-    "fifo": "Oldest first"
+    "fifo": "Oldest first",
+    "lifo": "Newest first",
+    "hifo": "Highest cost first"
   },
   "modes": {
     "demo": "Demo data",

@@ -4,7 +4,7 @@
 // or from a provider's order that matches a movement exactly. The rest come from here, and the fold then runs on the result.
 // An unanswered sender stays unknown: it could be the user's own wallet, so assuming otherwise would be a guess.
 
-import { applyLegTaking, assertFoldFits, emptyPosition, firstMarks, foldWallet, unconfirmedAssets, formatAmount, formatPaid, historyGaps, lessPaidAt, lotsSplitBy, normalizeAddress, orderMatters, plainAmount, ranking, sharePaidAt, shortHash, usableAnswer, usdView, viewWallet, withoutCurrency, worth, type CostPiece, type CurrencyCode, type HistoryGap, type HoldComparison, type Method, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { applyLegTaking, assertFoldFits, emptyPosition, firstMarks, foldWallet, unconfirmedAssets, formatAmount, formatPaid, historyGaps, keepsLots, lessPaidAt, lotsSplitBy, normalizeAddress, orderMatters, plainAmount, ranking, sharePaidAt, shortHash, usableAnswer, usdView, viewWallet, withoutCurrency, worth, type CostPiece, type CurrencyCode, type HistoryGap, type HoldComparison, type Method, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import { NO_FACTS, legsByTransaction, transactionFacts } from "./activity.ts"
 import type { BookPoint, BookPreview, WalletResponse } from "./api.ts"
 import { costKey, isDemoWallet, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type ExchangeLot, type ExchangeWithdrawal, type Money, type Purchase, type Receipt, type SenderAnswer } from "./book.ts"
@@ -118,8 +118,8 @@ function recipientsOf(leg: PricedLeg): Source[] | null {
 
 /**
  * What a debit took, split between everyone it went to, whether or not their wallets are read. That way a recipient's cost
- * can't depend on which wallet is open, and nothing's counted twice or lost. Oldest first gives the first transfer the oldest
- * lots. Average gives each one the same mix, because that's what it means: every unit cost the same. Oldest first can't say
+ * can't depend on which wallet is open, and nothing's counted twice or lost. Every method but average gives the first transfer
+ * the first lots it took. Average gives each one the same mix, because that's what it means: every unit cost the same. Oldest first can't say
  * who got what when nothing says which came first, and then only what goes to one wallet together keeps its cost, which is why
  * transfers in a row to one wallet count as one.
  */
@@ -129,11 +129,11 @@ export function allocateTaken(taken: readonly CostPiece[], transfers: readonly S
     return last?.address === address ? [...all.slice(0, -1), { address, units: last.units + units }] : [...all, { address, units }]
   }, [])
   const divided = new Set<CostPiece>()
-  if (method === "fifo") {
+  if (keepsLots(method)) {
     let through = 0n
     for (const { units } of recipients) {
       through += units
-      for (const piece of lotsSplitBy({ lots: taken }, through)) divided.add(piece)
+      for (const piece of lotsSplitBy({ lots: taken }, through, method)) divided.add(piece)
     }
   }
   let left = taken.map((piece) => (divided.has(piece) ? withoutItsCost(piece, BigInt(piece.qty)) : piece))
@@ -253,7 +253,10 @@ function purchasedLegs(sides: readonly Side[], book: Book): Map<string, Purchase
 /** What a purchase cost in the currency being folded. Null when that can't be said, which leaves it unknown. */
 const purchaseCost = (side: Side, { cost, costUsdMicros }: Purchase, leg: PricedLeg) => moneyIn(side, cost, leg) ?? (costUsdMicros === null ? null : moneyIn(side, { micros: costUsdMicros, currency: "USD" }, leg))
 
-/** What a withdrawal cost by this method. An average never stands in for oldest first, so with no figure for that, it stays unknown. */
+/**
+ * What a withdrawal cost by this method. An average never stands in for oldest first, so with no figure for that, it stays unknown.
+ * What left an exchange is worked out oldest first there, whatever the wallet's method is, so newest and highest cost first use that.
+ */
 const withdrawalCost = ({ cost, fifoCostMicros }: ExchangeWithdrawal, method: Method): Money | undefined => (method === "average" ? cost : fifoCostMicros === null ? undefined : { micros: fifoCostMicros, currency: cost.currency })
 
 /**
@@ -333,7 +336,7 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     if (BigInt(leg.delta) > 0n && orderMatters(leg, method)) {
       const { estimated: _, ...rest } = leg
       const address = normalizeAddress(side.wallet.address)
-      const withdrawal = method === "fifo" && !book.costs[costKey(address, leg.id)] ? withdrawals.get(costKey(address, leg.id)) : undefined
+      const withdrawal = keepsLots(method) && !book.costs[costKey(address, leg.id)] ? withdrawals.get(costKey(address, leg.id)) : undefined
       // Still from those purchases, so it goes where they do, whatever that makes of what's ahead of it.
       const lots = withdrawal ? piecesOfWithdrawal(side, withdrawal, leg) : null
       return { ...rest, costLabel: "unknown", costMicros: null, ...(lots ? { pieces: lots.map((piece) => withoutItsCost(piece, BigInt(piece.qty))) } : {}) }
@@ -397,7 +400,7 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     // What's inherited wins, unless part of it can't be, or can't be yet, since an entered cost is for all of what arrived.
     if ((unvouched.length > 0 || !pieces.some((p) => p.label === "inherited" && p.costMicros !== null)) && report !== null) {
       // When what was already held got paid for isn't known, so there's no rate for that day, only the one when the history starts.
-      const fromWithdrawal = withdrawal && method === "fifo" && !book.costs[costKey(address, leg.id)] && !note
+      const fromWithdrawal = withdrawal && keepsLots(method) && !book.costs[costKey(address, leg.id)] && !note
       const lots = fromWithdrawal ? piecesOfWithdrawal(side, withdrawal, leg) : null
       if (lots) return withPieces(leg, lots)
       const approximate = leg.opening && reportedMoney && reportedMoney.currency !== side.view.currency
