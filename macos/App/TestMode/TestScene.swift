@@ -527,8 +527,6 @@ enum TestScene: String, CaseIterable {
     case motionWalletUndo = "motion-wallet-undo"
 
     var isAboutMotion: Bool { rawValue.hasPrefix("motion") }
-    /// Every wallet that's yours as one, from the demo's two wallets.
-    var isAllYours: Bool { rawValue.contains("all-yours") }
     /// Someone who's never been here, and only in these scenes, so every other one looks as it would for anyone else.
     private var isAboutWelcome: Bool { rawValue.hasPrefix("main-welcome") || self == .resolveFirstQuestion }
 

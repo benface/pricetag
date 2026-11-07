@@ -52,7 +52,11 @@ macOS doesn't give other apps Dynamic Type: SwiftUI's text styles stay the same 
 
 ### Adding a scene
 
-A scene is a case in `TestScene` and one line in its `spec`, which says everything that's different about it. The compiler fails on a scene with no line. `FixtureSource.swift` is what stands in for the server, and `TestSceneViews.swift` has views that only scenes use. The `hot-wallet-*` scenes draw Spending Money's real page, overview included, without the window around it, so that everything down to the settings fits in the picture.
+A scene is a case in `TestScene` and one line in its `spec`, both in `App/TestMode/TestScene.swift`. That line says everything that's different about the scene, and the compiler fails on a scene without one. Then it's in `shot.sh list` and `all`. Add it to `needsRealWindow` only if a render gets it wrong.
+
+`FixtureSource.swift` is what stands in for the server, and `TestSceneViews.swift` has views that only scenes use. A hot wallet state goes in `HotWalletFixture.swift`, and another currency needs its `demo-portfolio-xyz.json` and `demo-explanation-xyz.json`: put them in `PricetagKit/Tests/PricetagKitTests/Resources`, with a symlink in `App/TestMode` like the others, so the tests read the same files the app does.
+
+The `hot-wallet-*` scenes draw Spending Money's real page, overview included, without the window around it, so that everything down to the settings fits in the picture.
 
 ## 2. Capture a real window
 
@@ -176,7 +180,3 @@ A test that waits for something needs a deadline. If it spins forever and `swift
 Build products stay in each worktree on purpose, so one branch's can't pass as another's, and nothing signed or cryptographic is shared. Seeding a new worktree from another's would save about a third of a package's first build, not skip it, because the paths in them are absolute. So a new worktree's first `check:mac` compiles everything, and the largest part of that is the Release build, at over a minute.
 
 `RenderTests` and `ContrastTests` really draw, on the main actor, and other tests on the main actor wait behind them. So a test's reported time can say more about what ran beside it than about the test: run it alone with `--filter` before calling it slow.
-
-## Adding a scene
-
-Add a case to `TestScene` in `App/TestMode/TestMode.swift`, give it a feed and a view, and it's in `shot.sh list` and `all`. Set `needsRealWindow` only if a render gets it wrong. A hot wallet state goes in `HotWalletFixture`, and another currency needs its `demo-portfolio-xyz.json` and `demo-explanation-xyz.json`: put them in `PricetagKit/Tests/PricetagKitTests/Resources`, with a symlink in `App/TestMode` like the others, so the tests read the same files the app does.
