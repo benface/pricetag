@@ -51,11 +51,16 @@ import Testing
         #expect(report.defaults.scope == report.country.defaultScope)
         #expect(TaxCountry.US.defaultMethod == .fifo)
         #expect(TaxCountry.US.defaultScope == .perWallet)
+        #expect(TaxCountry.GB.defaultMethod == .average)
+        #expect(TaxCountry.GB.defaultScope == .pooled)
+        #expect(TaxCountry.GB.matchesAcquisitions && !TaxCountry.CA.matchesAcquisitions)
     }
 
     @Test func guessesTheCountryFromTheCurrencyUntilOneIsChosen() {
         #expect(model(currency: .CAD).country == .CA)
         #expect(model(currency: .USD).country == .US)
+        #expect(model(currency: .GBP).country == .GB)
+        #expect(model(currency: .EUR).country == .US)
         let defaults = freshDefaults()
         model(currency: .USD, defaults: defaults).setCountry(.CA)
         #expect(model(currency: .USD, defaults: defaults).country == .CA)

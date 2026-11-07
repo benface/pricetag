@@ -5,27 +5,28 @@ import Foundation
 import Observation
 
 public enum TaxCountry: String, Codable, Sendable, CaseIterable, Identifiable {
-    case CA, US
+    case CA, GB, US
 
     public var id: Self { self }
 
     public var name: String {
         switch self {
         case .CA: "Canada"
+        case .GB: "United Kingdom"
         case .US: "United States"
         }
     }
 
     public var defaultMethod: CostMethod {
         switch self {
-        case .CA: .average
+        case .CA, .GB: .average
         case .US: .fifo
         }
     }
 
     public var defaultScope: TaxScope {
         switch self {
-        case .CA: .pooled
+        case .CA, .GB: .pooled
         case .US: .perWallet
         }
     }
@@ -34,13 +35,21 @@ public enum TaxCountry: String, Codable, Sendable, CaseIterable, Identifiable {
     public var rules: String {
         switch self {
         case .CA: "Canada's rules"
+        case .GB: "UK rules"
         case .US: "US rules"
         }
     }
 
+    /// With Average, each sale is first matched to what was bought the same day and in the 30 days after: see `src/core/tax-matching.ts`.
+    public var matchesAcquisitions: Bool { self == .GB }
+
     /// Until one is chosen, the main currency is the best guess.
     static func guess(from currency: CurrencyCode) -> TaxCountry {
-        currency == .CAD ? .CA : .US
+        switch currency {
+        case .CAD: .CA
+        case .GBP: .GB
+        default: .US
+        }
     }
 }
 
@@ -115,8 +124,12 @@ public struct TaxReport: Codable, Sendable, Equatable {
     public let defaults: Defaults
     /// nil when it lists every year.
     public let year: Int?
-    /// Newest first.
+    /// Newest first, each named for the calendar year it starts in.
     public let years: [Int]
+    /// What each of `years` is called where it's filed, like 2025, or 2025 to 2026 in the UK.
+    public let yearLabels: [String]
+    /// What `year` is called. nil when it lists every year.
+    public let yearLabel: String?
     /// Why the year's history isn't all here, when it isn't.
     public let partialYear: String?
     public let rowCount: Int
@@ -199,6 +212,8 @@ public final class TaxReportModel {
     public private(set) var year: TaxYear = .latest
     /// Every year with some history, newest first, from the last report.
     public private(set) var years: [Int] = []
+    /// What each of `years` is called, from the same report.
+    private var yearLabels: [Int: String] = [:]
     public private(set) var state: State = .loading
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -256,6 +271,11 @@ public final class TaxReportModel {
         return year
     }
 
+    /// What a year is called where it's filed, which only a report says.
+    public func label(of year: Int) -> String {
+        yearLabels[year] ?? String(year)
+    }
+
     public func setYear(_ next: TaxYear) {
         // Picking the year already showing changes nothing, so it doesn't ask again.
         guard next != shownYear else { return }
@@ -295,6 +315,7 @@ public final class TaxReportModel {
             let report = try await fetch(request)
             guard !Task.isCancelled else { return }
             years = report.years
+            yearLabels = Dictionary(zip(report.years, report.yearLabels), uniquingKeysWith: { first, _ in first })
             state = .ready(report)
         } catch {
             guard !Task.isCancelled, !(error is CancellationError) else { return }

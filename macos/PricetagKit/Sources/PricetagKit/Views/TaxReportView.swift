@@ -94,7 +94,7 @@ public struct TaxReportView: View {
             Picker("Year", selection: Binding(get: { model.shownYear }, set: { model.setYear($0) })) {
                 // Until the first report says which years there are.
                 if model.years.isEmpty { Text("Newest").tag(TaxYear.latest) }
-                ForEach(model.years, id: \.self) { Text(verbatim: String($0)).tag(TaxYear.year($0)) }
+                ForEach(model.years, id: \.self) { Text(verbatim: model.label(of: $0)).tag(TaxYear.year($0)) }
                 Text("All years").tag(TaxYear.all)
             }
             Picker("Country", selection: Binding(get: { model.country }, set: { model.setCountry($0) })) {
@@ -156,12 +156,14 @@ public struct TaxReportView: View {
         }
     }
 
-    /// Overview's numbers and this report's can differ only through this, so it says so and why.
+    /// Overview's numbers and this report's can differ through the method, or the UK's matching, so it says so and why.
     private var methodNote: String? {
-        guard model.method != store.method else { return nil }
+        let matching = model.method == .average && model.country.matchesAcquisitions
+        let matchingNote = "\(model.country.rules) match each sale to what was bought the same day or in the 30 days after before averaging the rest, so its gains can differ from Overview's."
+        guard model.method != store.method else { return matching ? matchingNote : nil }
         let overview = "Overview uses \(store.method.label)"
         if model.method == model.country.defaultMethod {
-            return "\(overview), but \(model.country.rules) call for \(model.method.label), so this report uses that. Its gains can differ from Overview's."
+            return "\(overview), but \(model.country.rules) call for \(model.method.label), so this report uses that. \(matching ? matchingNote : "Its gains can differ from Overview's.")"
         }
         return "\(overview), and you chose \(model.method.label) here, so its gains can differ from Overview's."
     }
@@ -212,7 +214,7 @@ public struct TaxReportView: View {
             .accessibilityLabel(Spoken.number("Total gain", report.gainText))
             if report.unresolvedCount > 0 { unknownRow(report) }
         } header: {
-            Text(report.year.map { "In \(String($0))" } ?? "In all years")
+            Text(report.yearLabel.map { "In \($0)" } ?? "In all years")
         }
         previewSection(report)
         Section {
@@ -287,7 +289,7 @@ public struct TaxReportView: View {
     private func previewSection(_ report: TaxReport) -> some View {
         Section {
             if report.preview.isEmpty {
-                Text(report.year.map { "Nothing to report in \(String($0))." } ?? "Nothing to report.")
+                Text(report.yearLabel.map { "Nothing to report in \($0)." } ?? "Nothing to report.")
                     .secondaryText()
             }
             ForEach(Array(report.preview.enumerated()), id: \.offset) { _, row in
