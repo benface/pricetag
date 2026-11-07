@@ -1,5 +1,5 @@
 #!/bin/sh
-# `pnpm check:mac`: the queue's own tests, then the Swift tests, the app's build, and the shared packages' builds for iOS, as one turn in the Swift queue.
+# `pnpm check:mac`: the queue's own tests, then the Swift tests, the app's debug and Release builds, and the shared packages' builds for iOS, as one turn in the Swift queue.
 # It runs nothing if this exact code already passed on this Mac with these tools, unless it's given --force.
 # `pnpm check:mac:quick` (--quick) is only the tests, always run, for while you're working. It never counts as a pass. See TESTING.md.
 # A pass is only remembered once the queue has verified that the whole turn is over, and any run that fails forgets one for its code.
@@ -137,9 +137,22 @@ ios() { # package
   (cd "$here/$1" && xcodebuild -quiet -scheme "$1" -destination 'generic/platform=iOS' -derivedDataPath "../build/ios/$1" build)
 }
 
+# The same build as shot.sh, since App/TestMode/ only compiles in Debug and nothing else here builds it. A folder of its own, so it stays
+# incremental without rewriting an app that a shot.sh in this worktree is copying.
+debug() { # folder, then any more of xcodebuild's arguments
+  products="$here/build/$1"
+  shift
+  xcodebuild -quiet \
+    -project "$here/App.xcodeproj" -scheme App -configuration Debug "$@" \
+    -derivedDataPath "$products" -destination 'platform=macOS' \
+    -onlyUsePackageVersionsFromResolvedFile ENABLE_APP_SANDBOX=NO build
+}
+
 step "PricetagKit's tests" tests PricetagKit
 step "HotWalletKit's tests" tests HotWalletKit
 [ -z "$quick" ] || exit 0
+step "The app's debug build" debug check-debug
+step "The watch-only debug build" debug check-debug-watch-only -xcconfig "$here/Config/WatchOnly.xcconfig"
 step "The app's Release build" "$here/run.sh" --build-only
 step "The watch-only build" "$here/watch-only.sh" --build-only
 step "The hosted build" "$here/hosted.sh" --build-only

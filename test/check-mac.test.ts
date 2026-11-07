@@ -12,6 +12,9 @@ let repo: string
 let calls: string
 let env: Record<string, string | undefined>
 
+// How many calls to those a full run makes: 2 tests, 2 debug builds, 3 Release builds and 2 iOS builds.
+const FULL_RUN = 9
+
 // The queue's own tests have their own record, because they're not one of the steps in a turn.
 const fakePnpm = `#!/bin/sh
 echo "pnpm $*" >>"$FAKE_PNPM_CALLS"
@@ -115,6 +118,8 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
     assert.equal(ran.filter((call) => call.startsWith("swift test")).length, 2)
     assert.ok(ran.some((call) => /PricetagKit --scratch-path/.test(call)))
     assert.ok(ran.some((call) => /HotWalletKit --scratch-path/.test(call)))
+    assert.ok(ran.some((call) => call.includes("-scheme App -configuration Debug -derivedDataPath") && call.includes("build/check-debug -destination") && call.includes("ENABLE_APP_SANDBOX=NO")))
+    assert.ok(ran.some((call) => call.includes("-scheme App -configuration Debug -xcconfig") && call.includes("Config/WatchOnly.xcconfig") && call.includes("build/check-debug-watch-only -destination") && call.includes("ENABLE_APP_SANDBOX=NO")))
     assert.ok(ran.some((call) => call.includes("-scheme App") && call.includes("-configuration Release") && call.includes("APP_SIGN_IDENTITY=Apple Development")))
     assert.ok(ran.some((call) => call.includes("watch-only/build.xcconfig") && call.includes("CODE_SIGNING_ALLOWED=NO")))
     assert.match(readFileSync(join(repo, "macos/build/watch-only/build.xcconfig"), "utf8"), /^#include ".*WatchOnly\.xcconfig"\nPATINA_SERVER_HOST = \S+\n$/)
@@ -143,7 +148,7 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
     assert.equal(status, 1)
     assert.deepEqual(ran, [])
     assert.match(output, /so nothing was built/)
-    assert.equal(check().ran.length, 7)
+    assert.equal(check().ran.length, FULL_RUN)
   })
 
   test("the same code runs nothing the second time, and says so", () => {
@@ -156,7 +161,7 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
 
   test("--force runs it again", () => {
     check()
-    assert.equal(check(["--force"]).ran.length, 7)
+    assert.equal(check(["--force"]).ran.length, FULL_RUN)
   })
 
   for (const [what, change] of [
@@ -168,7 +173,7 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
     test(`${what} runs everything again`, () => {
       check()
       change()
-      assert.equal(check().ran.length, 7)
+      assert.equal(check().ran.length, FULL_RUN)
     })
   }
 
@@ -182,7 +187,7 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
 
   test("other tools run everything again", () => {
     check()
-    assert.equal(check([], { FAKE_TOOLS: "2" }).ran.length, 7)
+    assert.equal(check([], { FAKE_TOOLS: "2" }).ran.length, FULL_RUN)
   })
 
   test("a pass carries over to another worktree of the same code", () => {
@@ -196,16 +201,21 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
   })
 
   for (const [step, pattern] of [
-    ["a package's tests", "test --package-path"],
-    ["the app's build", "-scheme App"],
-    ["an iOS build", "-scheme HotWalletKit"],
+    ["PricetagKit's tests", "test --package-path"],
+    ["The app's debug build", "build/check-debug -destination"],
+    ["The watch-only debug build", "build/check-debug-watch-only -destination"],
+    ["The app's Release build", "-scheme App -configuration Release"],
+    ["The watch-only build", "watch-only/build.xcconfig"],
+    ["The hosted build", "hosted/build.xcconfig"],
+    ["HotWalletKit's iOS build", "-scheme HotWalletKit"],
   ] as const) {
-    test(`${step} failing fails the check with its code, and isn't remembered`, () => {
+    test(`${step} failing fails the check with its code, stops there, and isn't remembered`, () => {
       const failed = check([], { FAKE_FAIL: pattern })
-      assert.notEqual(failed.status, 0)
-      assert.match(failed.output, /failed/)
+      assert.equal(failed.status, 3)
+      assert.ok(failed.output.includes(`${step} failed`), failed.output)
+      assert.ok(failed.ran.at(-1)?.includes(pattern), failed.ran.join("\n"))
       assert.ok(!existsSync(join(root, "passes")) || passes().length === 0)
-      assert.equal(check().ran.length, 7)
+      assert.equal(check().ran.length, FULL_RUN)
     })
   }
 
@@ -228,7 +238,7 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
     assert.equal(check(["--quick"]).status, 0)
     assert.deepEqual(check().ran, [])
     assert.equal(check(["--quick"], { FAKE_FAIL: "HotWalletKit" }).status, 3)
-    assert.equal(check().ran.length, 7)
+    assert.equal(check().ran.length, FULL_RUN)
   })
 
   test("a run the queue can't verify as clean isn't remembered, even with every step passing", () => {
@@ -246,7 +256,7 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
     }
     const next = check()
     assert.equal(next.status, 0)
-    assert.equal(next.ran.length, 7)
+    assert.equal(next.ran.length, FULL_RUN)
   })
 
   for (const [what, args] of [["a run", []], ["a forced run", ["--force"]]] as const) {
@@ -258,7 +268,7 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
       writeFileSync(calls, "")
       const { status } = spawnSync("sh", ["-c", `"$0" "$@" & echo $! >'${pid}'; wait $!`, join(repo, "macos/check-mac.sh"), ...args], { env: { ...env, FAKE_ON_CALL: stop }, encoding: "utf8" })
       assert.notEqual(status, 0)
-      assert.equal(check().ran.length, 7)
+      assert.equal(check().ran.length, FULL_RUN)
     })
   }
 
@@ -277,7 +287,7 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
     const stop = `kill -TERM "$(cat '${pid}')"`
     spawnSync("sh", ["-c", `"$0" "$@" & echo $! >'${pid}'; wait $!`, join(repo, "macos/check-mac.sh"), "--force"], { env: { ...env, FAKE_ON_CALL: stop }, encoding: "utf8" })
     assert.equal(await older.release(), 0)
-    assert.equal(check().ran.length, 7)
+    assert.equal(check().ran.length, FULL_RUN)
   })
 
   for (const [signal, code] of [["SIGTERM", 143], ["SIGINT", 130], ["SIGHUP", 129], ["SIGKILL", null]] as const) {
@@ -285,7 +295,7 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
       const run = await publishing()
       run.child.kill(signal)
       assert.equal(await run.release(), code)
-      assert.equal(check().ran.length, 7)
+      assert.equal(check().ran.length, FULL_RUN)
     })
   }
 
@@ -301,7 +311,7 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
       check([], { [setting]: "http://127.0.0.1:1" })
       assert.ok(!existsSync(join(root, "passes")) || passes().length === 0)
       check()
-      assert.equal(check([], { [setting]: "http://127.0.0.1:1" }).ran.length, 7)
+      assert.equal(check([], { [setting]: "http://127.0.0.1:1" }).ran.length, FULL_RUN)
     })
   }
 
@@ -315,7 +325,7 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
     assert.equal(quick.status, 0)
     assert.deepEqual(quick.ran.map((call) => call.split(" ")[1]), ["test", "test"])
     assert.ok(!existsSync(join(root, "passes")) || passes().length === 0)
-    assert.equal(check().ran.length, 7)
+    assert.equal(check().ran.length, FULL_RUN)
     assert.equal(check(["--quick"]).ran.length, 2)
   })
 
