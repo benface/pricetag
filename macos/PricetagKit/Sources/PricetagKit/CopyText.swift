@@ -2,20 +2,28 @@ extension Position {
     /// A holding as ⌘C copies it: what it is, how much, its price, what it's worth, what it made and its return, as the row shows them.
     /// Tabs between them, so it pastes into a spreadsheet as cells and into a message as one line.
     public func copyText(currency: CurrencyCode) -> String {
-        let priceText = price.map { Format.estimate(Format.price($0.micros, currency), estimates.value) } ?? Wording.noPrice
-        return [asset, Format.amount(values.qty, decimals: decimals), priceText, valueText(currency), pnlText(currency), isHeld ? returnText : "—"].joined(separator: "\t")
+        [asset, Format.amount(values.qty, decimals: decimals), priceText(currency) ?? Wording.noPrice, valueText(currency), pnlOrWhyNot(currency), isHeld ? returnText : "—"].joined(separator: "\t")
     }
 
-    /// What it's worth. Nothing for what's no longer held, and never $0 for what has no price.
+    /// Its price right now, or nil with none.
+    public func priceText(_ currency: CurrencyCode) -> String? {
+        price.map { Format.estimate(Format.price($0.micros, currency), estimates.value) }
+    }
+
+    /// What it's worth, which is nothing to show once it isn't held, and never $0 for lack of a price.
     public func valueText(_ currency: CurrencyCode) -> String {
-        if !isHeld { return "—" }
+        guard isHeld else { return "—" }
         return values.valueMicros.map { Format.estimate(Format.money($0, currency), estimates.value) } ?? Wording.noPrice
     }
 
-    /// What it's made. A cost nobody can work out yet says so, because that's what there is to fix.
-    public func pnlText(_ currency: CurrencyCode) -> String {
-        if let pnlMicros { return Format.estimate(Format.signedMoney(pnlMicros, currency), estimates.realized || estimates.unrealized) }
-        return isHeld && values.averageCostMicros == nil ? "Cost unknown" : Wording.pnlUnavailable
+    /// What it made, or nil when that's not known. What that means depends on where it's said.
+    public func pnlText(_ currency: CurrencyCode) -> String? {
+        pnlMicros.map { Format.estimate(Format.signedMoney($0, currency), estimates.realized || estimates.unrealized) }
+    }
+
+    /// What it made, or why that's not known. A cost nobody can work out yet says so, because that's what there is to fix.
+    public func pnlOrWhyNot(_ currency: CurrencyCode) -> String {
+        pnlText(currency) ?? (isHeld && values.averageCostMicros == nil ? "Cost unknown" : Wording.pnlUnavailable)
     }
 
     /// Unknown whenever its cost is, and never 0%. With a known cost of nothing, there's no share of it to show.

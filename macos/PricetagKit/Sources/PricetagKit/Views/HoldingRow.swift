@@ -12,7 +12,7 @@ public struct HoldingRow: View {
         self.isLive = isLive
     }
 
-    private var pnlText: String { position.pnlText(currency) }
+    private var pnlText: String { position.pnlOrWhyNot(currency) }
     private var valueText: String { position.valueText(currency) }
 
     public var body: some View {
@@ -45,7 +45,7 @@ public struct HoldingRow: View {
         if let amount { parts.append(Spoken.number("amount", amount)) }
         if let price { parts.append(Spoken.number("price", price)) }
         parts.append(position.isHeld ? Spoken.number("value", position.valueText(currency)) : "no longer held")
-        let pnl = position.pnlText(currency)
+        let pnl = position.pnlOrWhyNot(currency)
         parts.append(position.pnlMicros == nil ? pnl : Spoken.number("PnL", pnl))
         if let returnText { parts.append(Spoken.number("return", returnText)) }
         if !isLive { parts.append(Spoken.notUpdating) }

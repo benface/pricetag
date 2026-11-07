@@ -332,3 +332,20 @@ struct CostArrivalTests {
         #expect(marks.lit == ["eth", "usdc"])
     }
 }
+
+@Suite struct WebAddressTests {
+    @Test func itTakesWhatCanBeReached() {
+        #expect(WebAddress.read("https://mainnet.base.org")?.absoluteString == "https://mainnet.base.org")
+        #expect(WebAddress.read("  http://127.0.0.1:8787\n")?.absoluteString == "http://127.0.0.1:8787")
+    }
+
+    @Test func itRefusesWhatCant() {
+        for text in ["", "base rpc", "localhost 8787", "mainnet.base.org", "ftp://mainnet.base.org", "https://", "file:///etc/hosts"] {
+            #expect(WebAddress.read(text) == nil, "\(text)")
+        }
+    }
+
+    @Test func itsProblemShowsWhatOneLooksLike() {
+        #expect(WebAddress.problem(example: URL(string: "https://mainnet.base.org")!) == "That isn't a web address. It should look like https://mainnet.base.org.")
+    }
+}

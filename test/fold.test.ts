@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { describe, it } from "node:test"
-import { applyLeg, applyLegTaking, emptyPosition, lotsSplitBy, returnBps, takesAnswerableCost, valuePosition, type FoldLeg, type Method } from "@pricetag/sdk/core"
+import { applyLeg, applyLegTaking, costCanBeAnswered, emptyPosition, lotsSplitBy, returnBps, takesAnswerableCost, valuePosition, type FoldLeg, type Method } from "@pricetag/sdk/core"
 
 const USD = 1_000_000n
 const ETH = 10n ** 18n
@@ -57,6 +57,72 @@ describe("a lot whose cost is only known for all of it", () => {
     assert.deepEqual(held.lots.map((lot) => lot.legId), ["later", "in"], "bought before the undated one arrived")
     assert.deepEqual(applyLegTaking(held, sold(ETH, 3000n)).taken.map((piece) => piece.costMicros), [null])
     assert.equal(valuePosition(applyLeg(held, sold(ETH, 3000n)), null).costMicros, null)
+  })
+})
+
+describe("what an unknown order leaves behind", () => {
+  const arrived = (id: string, usd: bigint | null, extra: Partial<FoldLeg> = {}): FoldLeg => ({ id, delta: (2n * ETH).toString(), decimals: 18, kind: "transfer", priceMicros: null, costMicros: usd === null ? null : (usd * USD).toString(), proceedsMicros: null, costLabel: usd === null ? "unknown" : "paid", ...extra })
+  const left = (qty: bigint, extra: Partial<FoldLeg> = {}): FoldLeg => ({ id: "out", delta: (-qty).toString(), decimals: 18, kind: "transfer", priceMicros: null, costMicros: null, proceedsMicros: null, costLabel: "unknown", ...extra })
+  const methods: Method[] = ["fifo", "average"]
+
+  for (const method of methods) {
+    describe(`by ${method}`, () => {
+      const start = (usd: bigint | null) => applyLeg(emptyPosition(method, 18), arrived("in", usd))
+
+      it("says no answer can fix what's taken or what's left, whatever cost they had", () => {
+        for (const usd of [null, 2000n]) {
+          const { state, taken } = applyLegTaking(start(usd), left(ETH, { orderUnknown: "always" }))
+          assert.ok(taken.length > 0 && taken.every((piece) => piece.costMicros === null && piece.unanswerable))
+          assert.ok(state.lots.length > 0 && state.lots.every((lot) => lot.costMicros === null && lot.unanswerable))
+          assert.equal(takesAnswerableCost(state, ETH / 2n), false)
+        }
+      })
+
+      it("says the same of a credit where its order matters", () => {
+        assert.ok(applyLeg(emptyPosition(method, 18), arrived("in", 2000n, { orderUnknown: "always" })).lots.every((lot) => lot.unanswerable))
+      })
+
+      it("still says an answer can fix a cost that was only ever unknown", () => {
+        assert.equal(takesAnswerableCost(start(null), ETH), true)
+        assert.equal(start(null).lots[0]?.unanswerable, undefined)
+      })
+
+      it("is back to answerable once what's taken includes something a question is about", () => {
+        const after = applyLeg(start(null), left(ETH, { orderUnknown: "always" }))
+        const more = applyLeg(after, { ...arrived("more", null), blockNum: 9, timestamp: "2026-11-05T00:00:00.000Z" })
+        assert.equal(takesAnswerableCost(more, 3n * ETH), true)
+      })
+    })
+  }
+
+  it("takes oldest first, so a spend that stops short of an answerable lot can't be fixed by its answer", () => {
+    const after = applyLeg(applyLeg(emptyPosition("fifo", 18), arrived("in", null)), left(ETH, { orderUnknown: "always" }))
+    const more = applyLeg(after, arrived("more", null))
+    assert.equal(takesAnswerableCost(more, ETH / 2n), false)
+    assert.equal(takesAnswerableCost(more, ETH + 1n), true)
+  })
+
+  it("only calls an average's pool unanswerable while all of it is", () => {
+    const after = applyLeg(applyLeg(emptyPosition("average", 18), arrived("in", null)), left(ETH, { orderUnknown: "always" }))
+    const lost = applyLeg(after, arrived("lost", null, { orderUnknown: "always" }))
+    assert.deepEqual([lost.lots.length, lost.lots[0]?.unanswerable], [1, true])
+    const more = applyLeg(lost, arrived("more", null))
+    assert.deepEqual([more.lots.length, more.lots[0]?.unanswerable], [1, undefined])
+    assert.equal(takesAnswerableCost(more, ETH / 2n), true)
+  })
+
+  it("leaves an average's known cost out of it", () => {
+    const after = applyLeg(applyLeg(emptyPosition("average", 18), arrived("in", null)), left(ETH, { orderUnknown: "always" }))
+    const paid = applyLeg(after, arrived("paid", 2000n))
+    assert.equal(takesAnswerableCost(paid, ETH / 2n), false)
+    assert.equal(takesAnswerableCost(applyLeg(emptyPosition("average", 18), arrived("paid", 2000n)), ETH), false)
+  })
+
+  it("carries it in a receipt's pieces, to what the receiver spends later", () => {
+    const { taken } = applyLegTaking(applyLeg(emptyPosition("fifo", 18), arrived("in", null)), left(ETH, { orderUnknown: "always" }))
+    const received = applyLeg(emptyPosition("fifo", 18), { ...arrived("receipt", null), delta: ETH.toString(), pieces: taken })
+    assert.equal(costCanBeAnswered({ delta: ETH.toString(), pieces: taken }, emptyPosition("fifo", 18)), false)
+    assert.equal(takesAnswerableCost(received, ETH / 2n), false)
   })
 })
 

@@ -143,7 +143,7 @@ struct SecurityPage: View {
                     .secondaryText()
                     .monospacedDigit()
             }
-            SecurityGroup {
+            PageGroup {
                 ForEach(Array(checks.enumerated()), id: \.element.id) { index, check in
                     if index > 0 { Divider() }
                     CheckRow(check: check) { fix(check.fix) }
@@ -202,7 +202,7 @@ struct SecurityPage: View {
                 list(read, entry: entry)
                     .opacity(model?.refreshFailure == nil ? 1 : 0.6)
             case .failed(let message):
-                SecurityGroup {
+                PageGroup {
                     HStack {
                         WarningText(message)
                         Spacer()
@@ -210,7 +210,7 @@ struct SecurityPage: View {
                     }
                 }
             case .reading, nil:
-                SecurityGroup {
+                PageGroup {
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
                         Text("Reading this wallet's approvals…").secondaryText()
@@ -243,7 +243,7 @@ struct SecurityPage: View {
         if entry.kind == .savings {
             savingsNote(read)
         }
-        SecurityGroup {
+        PageGroup {
             if read.approvals.isEmpty {
                 Label(read.unreadable == 0 ? "No approvals found." : "None that could be read.", systemImage: "checkmark.seal")
                     .secondaryText()
@@ -342,7 +342,7 @@ struct SecurityPage: View {
                 .font(.callout)
                 .secondaryText()
                 .fixedSize(horizontal: false, vertical: true)
-            SecurityGroup {
+            PageGroup {
                 if permits.isEmpty {
                     Label("Nothing signed here is waiting to be used.", systemImage: "checkmark.seal")
                         .secondaryText()
@@ -379,7 +379,7 @@ struct SecurityPage: View {
     private var unlisted: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("What No One Can List").font(.headline)
-            SecurityGroup {
+            PageGroup {
                 Text("A permit signed in another app, or here before \(AppName.current) kept track of them, isn't onchain until it's used, so no app can find it, \(AppName.current) included. Once it's used, some permits set an approval, and others move the tokens right away.")
                     .fixedSize(horizontal: false, vertical: true)
                 VStack(alignment: .leading, spacing: 6) {
@@ -399,7 +399,7 @@ struct SecurityPage: View {
     private var tips: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Tips").font(.headline)
-            SecurityGroup {
+            PageGroup {
                 VStack(alignment: .leading, spacing: 10) {
                     ForEach(Self.tips, id: \.text) { tip in
                         Label(tip.text, systemImage: tip.symbol)
@@ -416,18 +416,6 @@ struct SecurityPage: View {
         ("bookmark", "Go to sites from your bookmarks, not from links in messages, ads or search results."),
         ("arrow.triangle.2.circlepath", "Keep macOS and your device's firmware up to date."),
     ]
-}
-
-/// A rounded group, as the rest of the app's pages have them.
-private struct SecurityGroup<Content: View>: View {
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) { content }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-    }
 }
 
 private struct CheckRow: View {

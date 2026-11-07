@@ -30,11 +30,17 @@ struct MainWindow: View {
     let purchases: PurchaseTracker
     /// What someone new is still to see. Nothing, for anything that doesn't say otherwise.
     var firstRun: FirstRun = .finished
+    #if DEBUG
+    /// For a test scene that renders a whole page, which is taller than a window can be, and has no window's sidebar or toolbar.
+    var showsOnlyPage = false
+    #endif
     @State private var columns = NavigationSplitViewVisibility.all
     @State private var width: CGFloat = 1120
     @State private var exporting = false
     @State private var exportDocument: CSVDocument?
     @State private var exportError: String?
+    @State private var isBuying = false
+    @State private var isReceiving = false
     /// Asked for from the details sheet, which closes first.
     @State private var resolvingAfterDetails: String?
 
@@ -54,6 +60,20 @@ struct MainWindow: View {
     private var hasNumbers: Bool { portfolio.map { $0.progress.started && !$0.isEmpty } ?? false }
 
     var body: some View {
+        #if DEBUG
+        if showsOnlyPage {
+            pageWithDeviceNotice
+                .environment(\.updatingNote, store.updatingNote)
+                .environment(\.staleNote, store.staleNote)
+        } else {
+            window
+        }
+        #else
+        window
+        #endif
+    }
+
+    private var window: some View {
         NavigationSplitView(columnVisibility: $columns) {
             sidebar
         } detail: {
@@ -72,7 +92,7 @@ struct MainWindow: View {
                             .transition(.opacity)
                     }
                 }
-                .animation(Motion.state, value: store.hasStatusDetails)
+                .motion(Motion.state, value: store.hasStatusDetails)
                 .navigationTitle(navigation.section.title)
                 // The wallet comes first when there's only room for one of them.
                 .toolbar(removing: width < Self.titleWidth || isOnWayToWallet ? .title : nil)
@@ -127,10 +147,10 @@ struct MainWindow: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await purchases.check() }
         }
-        .sheet(isPresented: $navigation.isBuying) {
+        .sheet(isPresented: $isBuying) {
             BuySheet(wallet: hotWallet, purchases: purchases) { navigation.showSpendingMoney() } addSavings: { navigation.addSavings() }
         }
-        .sheet(isPresented: $navigation.isReceiving) {
+        .sheet(isPresented: $isReceiving) {
             ReceiveSheet(wallet: hotWallet) { navigation.showSpendingMoney() }
         }
         .sheet(isPresented: $navigation.isResolving) {
@@ -148,10 +168,6 @@ struct MainWindow: View {
         }
         .sheet(isPresented: $navigation.isShowingWelcomeAgain) {
             WelcomeAgain()
-        }
-        // Whatever was going to follow making one is off, if it wasn't made.
-        .onChange(of: navigation.isSettingUpSpendingMoney) { _, isOpen in
-            if !isOpen, hotWallet.address == nil { navigation.wantsAddSavings = false }
         }
         .sheet(isPresented: $navigation.isSettingUpSpendingMoney) {
             SpendingMoneySetup(wallet: hotWallet, store: store) { navigation.isSettingUpSpendingMoney = false }
@@ -172,18 +188,28 @@ struct MainWindow: View {
             Text(exportError ?? "")
         }
         // The menu asks for it, which opens the window if it's closed. The file's written only once the server has answered.
-        .onChange(of: navigation.isExporting, initial: true) { _, asked in
-            guard asked else { return }
-            navigation.isExporting = false
-            Task {
-                do {
-                    exportDocument = CSVDocument(text: try await store.exportCSV())
-                    exporting = true
-                } catch FetchError.notCaughtUp(let message) {
-                    exportError = message
-                } catch {
-                    exportError = "The price service couldn't make this file."
+        .onChange(of: navigation.pending, initial: true) { _, intent in
+            switch intent {
+            case .buy:
+                navigation.pending = nil
+                isBuying = true
+            case .receive:
+                navigation.pending = nil
+                isReceiving = true
+            case .export:
+                navigation.pending = nil
+                Task {
+                    do {
+                        exportDocument = CSVDocument(text: try await store.exportCSV())
+                        exporting = true
+                    } catch FetchError.notCaughtUp(let message) {
+                        exportError = message
+                    } catch {
+                        exportError = "The price service couldn't make this file."
+                    }
                 }
+            default:
+                break
             }
         }
         // What's open belongs to the wallet it was opened on.
@@ -263,7 +289,7 @@ struct MainWindow: View {
             }
         } else if hotWallet.availability == .ready, !isOnWayToWallet {
             ToolbarItem(placement: .primaryAction) {
-                Button("Buy", systemImage: "plus") { navigation.isBuying = true }
+                Button("Buy", systemImage: "plus") { navigation.pending = .buy }
                     // A plus on its own could mean adding anything.
                     .labelStyle(.titleAndIcon)
                     // With every wallet showing, it says which one it's for.
@@ -439,7 +465,7 @@ struct MainWindow: View {
     private var spendingMoneyOverview: some View {
         GeometryReader { window in
             overviewPage(pageWidth: window.size.width) {
-                HotWalletDetails(wallet: hotWallet, store: store, siteBridge: siteBridge, navigation: navigation, purchases: purchases, showsHoldings: !hasHoldingsInOverview) {
+                SpendingMoneyPage(wallet: hotWallet, store: store, siteBridge: siteBridge, navigation: navigation, purchases: purchases, showsHoldings: !hasHoldingsInOverview) {
                     walletPage(isInsidePage: true) { overview($0, pageHeight: window.size.height) }
                         .frame(minHeight: hasHoldingsInOverview ? nil : 260)
                 }
@@ -587,9 +613,9 @@ private struct HoldingsSection: View {
                 .onChange(of: navigation.holdingsQuery.isEmpty, initial: true) { _, isEmpty in
                     if !isEmpty { reveal(with: proxy) }
                 }
-                .onChange(of: navigation.wantsSearch, initial: true) { _, wants in
-                    guard wants else { return }
-                    navigation.wantsSearch = false
+                .onChange(of: navigation.pending, initial: true) { _, intent in
+                    guard intent == .search else { return }
+                    navigation.pending = nil
                     isSearching = true
                     reveal(with: proxy)
                 }
@@ -643,11 +669,7 @@ private struct HoldingsSection: View {
             let arrived = new.arrivals(since: old)
             if !arrived.isEmpty { justKnown.formUnion(arrived) }
         }
-        .task(id: justKnown) {
-            guard !justKnown.isEmpty else { return }
-            try? await Task.sleep(for: Motion.highlight)
-            if !Task.isCancelled { justKnown = [] }
-        }
+        .flash(trigger: justKnown, rest: []) { justKnown = [] }
     }
 
     /// The fine print, for whoever wants it.
@@ -668,7 +690,7 @@ private struct HoldingsSection: View {
                 Button { navigation.target = .asset(position.asset, .amount) } label: {
                     CompactHolding(position: position, currency: portfolio.currency, isLive: isLive)
                         .padding(.horizontal, 4)
-                        .justKnown(justKnown.contains(position.asset))
+                        .flash(justKnown.contains(position.asset), .known)
                 }
                 .buttonStyle(RowButtonStyle())
                 .contextMenu {
@@ -714,7 +736,7 @@ private struct CompactHolding: View {
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 1) {
-                LiveNumber(position.isHeld ? position.values.valueMicros.map { Format.estimate(Format.money($0, currency), position.estimates.value) } ?? Wording.noPrice : "—", tone: position.values.valueMicros == nil ? .secondary : .neutral)
+                LiveNumber(position.valueText(currency), tone: position.values.valueMicros == nil ? .secondary : .neutral)
                     .updatingMark()
                 LiveNumber(howItsDone, tone: position.pnlMicros == nil ? .secondary : isLive ? Tone(signed: position.pnlMicros) : .neutral)
                     .font(.caption)
@@ -730,23 +752,23 @@ private struct CompactHolding: View {
             currency,
             isLive: isLive,
             amount: Format.amount(position.values.qty, decimals: position.decimals),
-            price: position.price.map { Format.estimate(Format.price($0.micros, currency), position.estimates.value) },
+            price: position.priceText(currency),
             returnText: position.isHeld ? position.returnBps.map { Format.estimate(Format.percent(bps: $0), position.estimates.unrealized) } : nil
         ))
     }
 
     private var amountAtPrice: String {
         let amount = Format.amount(position.values.qty, decimals: position.decimals)
-        guard let price = position.price else { return amount }
-        return "\(amount) · \(Format.estimate(Format.price(price.micros, currency), position.estimates.value))"
+        guard let price = position.priceText(currency) else { return amount }
+        return "\(amount) · \(price)"
     }
 
     /// Its PnL, then its return when that's known. An unknown return says nothing the PnL doesn't.
     private var howItsDone: String {
-        let pnl = position.pnlMicros.map { Format.estimate(Format.signedMoney($0, currency), position.estimates.realized || position.estimates.unrealized) } ?? Wording.pnlUnavailable
+        let pnl = position.pnlText(currency) ?? Wording.pnlUnavailable
         guard position.isHeld, let bps = position.returnBps else { return pnl }
-        // One "≈" says the line rests on an estimate.
-        return "\(pnl) · \(Format.estimate(Format.percent(bps: bps), position.estimates.unrealized && !pnl.hasPrefix("≈")))"
+        // One "≈" says the line rests on an estimate, and a PnL that's there and rests on one has it.
+        return "\(pnl) · \(Format.estimate(Format.percent(bps: bps), position.estimates.unrealized && position.pnlMicros == nil))"
     }
 }
 
@@ -849,7 +871,7 @@ private struct HoldingsTable: View {
             .alignment(.numeric)
             TableColumn("Price", sortUsing: HoldingsSort(.price)) { position in
                 let price = position.price
-                number(position, .price, price.map { Format.estimate(Format.price($0.micros, currency), position.estimates.value) } ?? Wording.noPrice, tone: price == nil ? .secondary : .neutral)
+                number(position, .price, position.priceText(currency) ?? Wording.noPrice, tone: price == nil ? .secondary : .neutral)
             }
             .width(min: Column.price, ideal: Column.price, max: Column.price + Column.comebackRoom)
             .alignment(.numeric)
@@ -1004,7 +1026,7 @@ private struct HoldingsTable: View {
                 // A long amount gets smaller rather than losing digits.
                 .minimumScaleFactor(0.7)
                 .stale(!isLive || !position.isHeld)
-                .justKnown(justKnown.contains(position.asset) && (metric == .average || metric == .unrealized || metric == .return))
+                .flash(justKnown.contains(position.asset) && (metric == .average || metric == .unrealized || metric == .return), .known)
         }
         .buttonStyle(NumberButtonStyle())
         .help((text == Wording.unknown ? unknownIn(position) : nil) ?? metric.help ?? "")
@@ -1067,11 +1089,11 @@ private struct NoActivity<Notices: View>: View {
                 description
             } actions: {
                 if isSpendingMoney {
-                    Button("Receive…") { navigation.isReceiving = true }
+                    Button("Receive…") { navigation.pending = .receive }
                         .buttonStyle(.borderedProminent)
                 }
                 if canBuy {
-                    Button("Buy…") { navigation.isBuying = true }
+                    Button("Buy…") { navigation.pending = .buy }
                 }
                 if firstRun.isWelcoming, !isSpendingMoney, !canBuy {
                     Button("Try Another Address") { store.setWallet(nil) }

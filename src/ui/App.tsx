@@ -25,7 +25,7 @@ import { foldBook } from "../core/resolve.ts"
 import { PurchaseList } from "./PurchaseList.tsx"
 import { usePurchases } from "./usePurchases.ts"
 import { downloadCsv } from "./download.ts"
-import { Holdings, OtherTokens, holdingOf, type Holding } from "./Holdings.tsx"
+import { Holdings, OtherTokens, holdingOf, walletHoldingOf, type Holding } from "./Holdings.tsx"
 import { LiveBadge } from "./LiveBadge.tsx"
 import { AttentionBox, HoldLine, PastCostsLine, Summary } from "./Summary.tsx"
 
@@ -164,7 +164,7 @@ export function App() {
   const rule = (together?.read[0] ?? wallet)?.rule ?? null
   // Whatever's on screen says what it's in, which for a moment after a change isn't what was just chosen.
   const currency = combined?.currency ?? view?.currency ?? chosenCurrency
-  const positions: Holding[] = useMemo(() => combined?.positions.map(holdingOf) ?? fold?.positions ?? [], [combined, fold])
+  const positions: Holding[] = useMemo(() => combined?.positions.map(holdingOf) ?? fold?.positions.map((position) => walletHoldingOf(position, fold.questions)) ?? [], [combined, fold])
   const shown = combined ?? fold
   const unread = combined?.unreadAssets ?? fold?.unread ?? []
   const totals = shown?.totals ?? sumTotals([])

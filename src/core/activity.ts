@@ -1,7 +1,7 @@
 // What a transaction did to a wallet, as a row in a list of them: what moved, who with, what it was worth and what it
 // realized. Like every other number, the server works it out, and a client only shows it.
 
-import { normalizeAddress, orderMatters, worth, type LegEffect, type Method, type Position, type PricedLeg } from "@pricetag/sdk/core"
+import { costCanBeAnswered, normalizeAddress, orderMatters, worth, type LegEffect, type Method, type Position, type PricedLeg } from "@pricetag/sdk/core"
 
 /**
  * in or out: something only arrived, or only left. trade: things went both ways. fee: only a network fee was paid.
@@ -22,9 +22,11 @@ export type TransactionFacts = {
   gain: TransactionGain | null
   /** What arrived, or left, with a cost nobody can work out yet. */
   unknownCost: string[]
+  /** Those an answer could work out, which isn't all of them: nobody can answer which came first in a block, say. */
+  answerableCost: string[]
 }
 
-export const NO_FACTS: TransactionFacts = { assets: [], counterparty: null, amount: null, gain: null, unknownCost: [] }
+export const NO_FACTS: TransactionFacts = { assets: [], counterparty: null, amount: null, gain: null, unknownCost: [], answerableCost: [] }
 
 const isIncoming = (leg: PricedLeg) => BigInt(leg.delta) > 0n
 
@@ -121,6 +123,12 @@ function leftUnknown(leg: PricedLeg, effects: ReadonlyMap<string, LegEffect>): b
   return grew("unknownCostDisposedQty") || grew("transferredOutUnknownQty")
 }
 
+/** Whether an answer could fix what a leg's cost is missing, going by what was held before it. */
+function answerable(leg: PricedLeg, effects: ReadonlyMap<string, LegEffect>): boolean {
+  const effect = effects.get(leg.id)
+  return effect !== undefined && !leg.unsettledCredit && costCanBeAnswered(leg, effect.before)
+}
+
 /** A wallet's legs, by the transaction they're in. What it held before the first block read isn't in one. */
 export function legsByTransaction(legs: readonly PricedLeg[]): Map<string, PricedLeg[]> {
   const byTx = new Map<string, PricedLeg[]>()
@@ -141,12 +149,14 @@ export function transactionFacts(byTx: ReadonlyMap<string, readonly PricedLeg[]>
   const facts = new Map<string, TransactionFacts>()
   for (const [txHash, txLegs] of byTx) {
     const moved = txLegs.filter((leg) => leg.kind !== "gas" && BigInt(leg.delta) !== 0n)
+    const unknown = txLegs.filter((leg) => arrivedUnknown(leg, method) || leftUnknown(leg, effects))
     facts.set(txHash, {
       assets: [...new Set(moved.map((leg) => leg.asset))],
       counterparty: counterpartyOf(txLegs, me),
       amount: amountOf(txLegs),
       gain: gainOf(txLegs, effects, unconfirmed),
-      unknownCost: [...new Set(txLegs.filter((leg) => arrivedUnknown(leg, method) || leftUnknown(leg, effects)).map((leg) => leg.asset))],
+      unknownCost: [...new Set(unknown.map((leg) => leg.asset))],
+      answerableCost: [...new Set(unknown.filter((leg) => answerable(leg, effects)).map((leg) => leg.asset))],
     })
   }
   return facts
@@ -171,5 +181,6 @@ export function combinedFacts(legs: readonly PricedLeg[], each: readonly Transac
     amount: amountOf(legs),
     gain: sumGains(each.map((facts) => facts.gain)),
     unknownCost: [...new Set(each.flatMap((facts) => facts.unknownCost))],
+    answerableCost: [...new Set(each.flatMap((facts) => facts.answerableCost))],
   }
 }

@@ -252,6 +252,8 @@ public struct PnlPoint: Codable, Sendable, Equatable, Identifiable {
     public var gain: TransactionGain? = nil
     /// What arrived with a cost nobody can work out yet.
     public var unknownCost: [String] = []
+    /// Those an answer could work out, which isn't all of them. nil from a server that doesn't say yet, which deploys apart from the app.
+    public var answerableCost: [String]? = nil
     /// Which of the user's wallets its transaction is in, when several are shown as one.
     public var wallets: [String]? = nil
     /// `valueMicros` was worked out for where a chart's range starts, between prices that were read, so it's never from a server.
@@ -264,7 +266,7 @@ public struct PnlPoint: Codable, Sendable, Equatable, Identifiable {
 extension PnlPoint {
     /// Everything but `valueEstimated`, which never comes from a server.
     private enum CodingKeys: String, CodingKey {
-        case blockNum, timestamp, txHash, pnlMicros, excludedCount, summary, valueMicros, valueBeforeMicros, valueExcludedCount, valueContinues, valueRead, assets, counterparty, amount, gain, unknownCost, wallets
+        case blockNum, timestamp, txHash, pnlMicros, excludedCount, summary, valueMicros, valueBeforeMicros, valueExcludedCount, valueContinues, valueRead, assets, counterparty, amount, gain, unknownCost, answerableCost, wallets
     }
 }
 

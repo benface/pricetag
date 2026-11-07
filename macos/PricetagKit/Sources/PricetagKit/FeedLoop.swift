@@ -46,6 +46,19 @@ public enum FeedState: Equatable, Sendable {
     }
 }
 
+extension FeedState {
+    /// Whether the menu bar's panel says what kind of wallet this is. Not when the line beside it or under it already says the same:
+    /// "Demo wallet", "No wallet yet", or "Reading this wallet…".
+    public func showsWalletBadge(portfolio: Portfolio?) -> Bool {
+        switch self {
+        case .noWallet: false
+        case .reading: portfolio != nil
+        case .live: portfolio?.mode != .demo
+        default: true
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class FeedLoop {

@@ -111,7 +111,7 @@ private struct ConnectFooter: View {
     }
 }
 
-/// What a request is, the same before and after it's approved.
+/// What a request is, the same before and after it's approved. What it says is in `ReviewRows`, with its tests.
 private struct SiteRequestSummary<Footer: View>: View {
     let approval: SiteApproval
     let money: (UInt128) -> String
@@ -120,108 +120,19 @@ private struct SiteRequestSummary<Footer: View>: View {
     var body: some View {
         switch approval.action {
         case .connect:
-            ConfirmationView(asker: .site(approval.site), hero: .words("Connect to \(HotWalletWording.title)"), rows: [
-                ConfirmationRow(label: "It can see", value: "This wallet's address and balances"),
-                ConfirmationRow(label: "It can't", value: "Move anything without you, or see your savings"),
-            ]) {
+            let connect = ReviewRows.connect()
+            ConfirmationView(asker: .site(approval.site), hero: connect.hero, rows: connect.rows) {
                 footer
             }
         case .transaction(let review):
-            ConfirmationView(asker: .site(approval.site), hero: hero(review), worth: review.isUnreadableCall ? nil : review.moved?.usdMicros.map(money), rows: rows(review), warnings: approval.warnings, details: details(review), data: review.data.isEmpty ? nil : "0x" + Hex.encode(review.data)) {
+            ConfirmationView(asker: .site(approval.site), hero: ReviewRows.hero(review), worth: ReviewRows.worth(review, money: money), rows: ReviewRows.rows(review, money: money), warnings: approval.warnings, details: ReviewRows.details(review), data: ReviewRows.data(review)) {
                 footer
             }
         case .message(let review):
-            // A permit this app can read says what it allows, and what's signed is one click away. Anything else is shown as it is.
-            // A token's own permit already shows its address as the token.
-            let contract = review.contract.flatMap { $0 == review.permit?.token ? nil : [Self.contractRow($0)] } ?? []
-            ConfirmationView(asker: .site(approval.site), hero: .words(review.title), rows: (review.permit.map(permitRows) ?? []) + contract, warnings: approval.warnings, message: review.permit == nil ? review.body : nil, data: review.permit == nil ? nil : review.body) {
+            ConfirmationView(asker: .site(approval.site), hero: .words(review.title), rows: ReviewRows.rows(review), warnings: approval.warnings, message: ReviewRows.message(review), data: ReviewRows.data(review)) {
                 footer
             }
         }
-    }
-
-    /// Every address with its name above it when it's on the list, and plainly unknown when it isn't.
-    private static func contractRow(_ address: EthereumAddress) -> ConfirmationRow {
-        ConfirmationRow(label: "Contract", value: address.checksummed, isAddress: true, name: KnownContracts.name(of: address) ?? SiteWording.unknownContract)
-    }
-
-    private static func spenderRow(_ address: EthereumAddress) -> ConfirmationRow {
-        ConfirmationRow(label: "Spender", value: address.checksummed, isAddress: true, name: KnownContracts.name(of: address) ?? SiteWording.unknownAddress)
-    }
-
-    private func permitRows(_ permit: PermitSummary) -> [ConfirmationRow] {
-        var rows = [
-            ConfirmationRow(label: permit.kind == .permit2Transfer ? "Can take" : "Can spend", value: permit.amount),
-            ConfirmationRow(label: "Token", value: permit.token.checksummed, isAddress: true, name: permit.tokenSymbol ?? "Unknown token"),
-            Self.spenderRow(permit.spender),
-        ]
-        if let allowedUntil = permit.allowedUntil { rows.append(ConfirmationRow(label: "Allowed until", value: allowedUntil)) }
-        rows.append(ConfirmationRow(label: "Must be used by", value: permit.mustBeUsedBy))
-        return rows
-    }
-
-    /// A big number says that's the whole of it, which it isn't when something comes back, or when nothing says what the call does.
-    /// The rows say what goes where.
-    private func hero(_ review: TransactionReview) -> ConfirmationHero {
-        guard !review.isUnreadableCall, let moved = review.moved else { return .words(review.title) }
-        return .amount(moved.text, symbol: moved.symbol)
-    }
-
-    /// "You'd" because it's an estimate, and the note under the rows says so too.
-    private func previewRows(_ preview: CallPreview) -> [ConfirmationRow] {
-        func row(_ label: String, _ asset: CallPreview.Asset) -> ConfirmationRow {
-            switch asset {
-            case .known(let amount):
-                ConfirmationRow(label: label, value: amount.usdMicros.map { "\(amount.text) \(amount.symbol) (\(money($0)))" } ?? "\(amount.text) \(amount.symbol)")
-            case .unknown(let contract):
-                ConfirmationRow(label: label, value: contract.checksummed, isAddress: true, name: "Unknown token")
-            }
-        }
-        let allowances = preview.allowances.flatMap { allowance in
-            var rows = [ConfirmationRow(label: "You'd allow", value: allowance.spender.checksummed, isAddress: true, name: "\(KnownContracts.name(of: allowance.spender) ?? "This address") to spend \(allowance.words)")]
-            if let contract = allowance.unknownContract {
-                rows.append(ConfirmationRow(label: "For", value: contract.checksummed, isAddress: true, name: allowance.isCollection ? "Unknown collection" : "Unknown token"))
-            }
-            return rows
-        }
-        // What can leave comes first, so a long list of what's arriving can't push it out of sight.
-        let rows = preview.gives.map { row("You'd give", $0) } + allowances + preview.gets.map { row("You'd get", $0) }
-        return rows.isEmpty ? [ConfirmationRow(label: "Your balances", value: "No change")] : rows
-    }
-
-    private func rows(_ review: TransactionReview) -> [ConfirmationRow] {
-        var rows = review.preview.map(previewRows) ?? []
-        // Anyone can be sent to, so a recipient only gets a name when it's on the list.
-        if let recipient = review.recipient {
-            rows.append(ConfirmationRow(label: "To", value: recipient.checksummed, isAddress: true, name: KnownContracts.name(of: recipient)))
-        } else if let spender = review.spender {
-            rows.append(Self.spenderRow(spender))
-        } else {
-            rows.append(Self.contractRow(review.to))
-        }
-        // A token this app doesn't know is only as good as its contract, so that's never tucked away.
-        if review.toName == nil, review.recipient != review.to, review.recipient != nil || review.spender != nil {
-            rows.append(Self.contractRow(review.to))
-        }
-        // With no estimate, the ETH is all that's certain, so it's a row under the title rather than the title itself.
-        if review.preview == nil, review.isUnreadableCall, review.value > 0 {
-            rows.insert(ConfirmationRow(label: "Sends", value: amount(Money.text(ofUnits: review.value, decimals: 18), usdMicros: review.valueUsdMicros)), at: 0)
-        }
-        if review.alsoSendsEth {
-            rows.append(ConfirmationRow(label: "Also sends", value: amount(Money.text(ofUnits: review.value, decimals: 18), usdMicros: review.valueUsdMicros)))
-        }
-        rows.append(ConfirmationRow(label: "Network fee", value: "About \(review.feeUsdMicros.map(money) ?? "\(Format.amount(String(review.feeWei), decimals: 18)) ETH")"))
-        return rows
-    }
-
-    /// What's tucked away: the contract of a token this app knows, since the rows say who's on the other end of it.
-    private func details(_ review: TransactionReview) -> [ConfirmationRow] {
-        guard let name = review.toName, review.recipient != review.to, review.recipient != nil || review.spender != nil else { return [] }
-        return [ConfirmationRow(label: name, value: review.to.checksummed, isAddress: true)]
-    }
-
-    private func amount(_ text: String, usdMicros: UInt128?) -> String {
-        usdMicros.map { "\(text) ETH (\(money($0)))" } ?? "\(text) ETH"
     }
 }
 

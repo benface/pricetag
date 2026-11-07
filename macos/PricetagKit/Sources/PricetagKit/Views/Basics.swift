@@ -89,7 +89,7 @@ public struct LiveNumber: View {
             // Faded already, a color or a grey on top would leave too little contrast. The words still say what's unknown.
             .foregroundStyle(prominence == .increased || isStale ? Tone.neutral.style : tone.style(contrast))
             .contentTransition(transition)
-            .animation(Motion.number, value: text)
+            .motion(Motion.number, value: text)
     }
 }
 
@@ -219,7 +219,7 @@ private struct StaleMark: View {
                     .transition(.opacity)
             }
         }
-        .animation(Motion.state, value: note != nil)
+        .motion(Motion.state, value: note != nil)
     }
 }
 
@@ -237,7 +237,7 @@ private struct UpdatingMark: View {
                     .transition(.opacity)
             }
         }
-        .animation(Motion.state, value: note != nil)
+        .motion(Motion.state, value: note != nil)
     }
 }
 
@@ -273,7 +273,7 @@ private struct StaleModifier: ViewModifier {
         content
             .environment(\.isStale, isStale)
             .opacity(isStale && contrast != .increased ? Tone.staleOpacity : 1)
-            .animation(Motion.state, value: isStale)
+            .motion(Motion.state, value: isStale)
     }
 }
 
@@ -347,6 +347,22 @@ public struct AlarmButtonStyle: ButtonStyle {
 extension View {
     public func softBox(cornerRadius: CGFloat = 10, opacity: Double = 0.5) -> some View {
         modifier(SoftBox(cornerRadius: cornerRadius, opacity: opacity))
+    }
+}
+
+/// A rounded group, as the app's pages have them.
+public struct PageGroup<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    public init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 10) { content }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .softBox(opacity: 0.35)
     }
 }
 
@@ -537,7 +553,7 @@ public struct FeedBadge: View {
 
     public var body: some View {
         HStack(spacing: 5) {
-            Circle().fill(color).frame(width: 7, height: 7).animation(Motion.state, value: color)
+            Circle().fill(color).frame(width: 7, height: 7).motion(Motion.state, value: color)
             if let readingSince, feed == .reading || feed.isStale {
                 ReadingClock(since: readingSince) { label(text(seconds: $0)) }
             } else {
@@ -552,7 +568,7 @@ public struct FeedBadge: View {
 
     /// A count that ticks rolls its digits. Anything else fades from one state to the next.
     private func label(_ text: String) -> some View {
-        Text(text).monospacedDigit().contentTransition(readingSince != nil ? .numericText() : .opacity).animation(Motion.state, value: text)
+        Text(text).monospacedDigit().contentTransition(readingSince != nil ? .numericText() : .opacity).motion(Motion.state, value: text)
     }
 }
 

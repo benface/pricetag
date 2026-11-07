@@ -3,6 +3,7 @@ import { formatAmount, formatMoney, formatPrice, formatReturn, formatSignedMoney
 import type { CombinedPosition, PositionPart } from "../core/combined.ts"
 import { firstSort, formatHoldingsSort, parseHoldingsSort, sortHoldings, type HoldingsColumn, type HoldingsSort } from "../core/holdings.ts"
 import { allBalancesMatch, balanceFlag } from "../core/attention.ts"
+import { isResolvable } from "../core/portfolio.ts"
 import type { ExplainTarget, Metric } from "../core/explain.ts"
 import { ABOUT_THIS_DATA, AVERAGE_PAID, ETH_NOTE, METHOD_HELP, METHOD_LABELS, METHOD_NAME, NO_PRICE, OTHER_TOKENS_NOTE, OTHER_TOKENS_TITLE, POSSIBLE_SPAM_RULE, POSSIBLE_SPAM_TITLE, REALIZED_HELP, RETURN_HELP, UNKNOWN, UNREALIZED_HELP, answerQuestionsLabel, inWallets, otherTokenAmount, otherTokenName, otherTokensLeftOutSentence, unknownCostIn, est } from "../core/wording.ts"
 import type { Question } from "../core/resolve.ts"
@@ -11,9 +12,12 @@ import { Num, toneOf } from "./Num.tsx"
 const HOLDINGS_SORT_KEY = "pricetag.holdingsSort"
 
 /** A row of the holdings table, of one wallet or, with `wallets`, several. */
-export type Holding = Pick<Position, "asset" | "decimals" | "price" | "values" | "reconciliation" | "noMarket" | "estimates"> & { state: Pick<Position["state"], "shortfallQty">; wallets?: PositionPart[] }
+export type Holding = Pick<Position, "asset" | "decimals" | "price" | "values" | "reconciliation" | "noMarket" | "estimates"> & { state: Pick<Position["state"], "shortfallQty">; resolvable: boolean; wallets?: PositionPart[] }
 
 export const holdingOf = (position: CombinedPosition): Holding => ({ ...position, state: { shortfallQty: position.shortfallQty } })
+
+/** The same, for one wallet's folded position. */
+export const walletHoldingOf = (position: Position, questions: readonly Question[]): Holding => ({ ...position, resolvable: isResolvable(position, questions) })
 
 /** The wallets a holding's parts qualify for. */
 const partsWhere = ({ wallets }: Holding, has: (part: PositionPart) => boolean) => (wallets ?? []).filter(has).map(({ wallet }) => wallet)
@@ -182,7 +186,7 @@ export function Holdings({ positions, unread, about, currency, questions, method
               const held = BigInt(values.qty) > 0n
               const unknown = BigInt(values.unknownCostQty) > 0n
               const flag = balanceFlag(position, { combined: position.wallets !== undefined })
-              const askable = held && unknown ? questionsAbout(asset).length : 0
+              const askable = held && position.resolvable ? questionsAbout(asset).length : 0
               const heldIn = partsWhere(position, ({ qty }) => BigInt(qty) > 0n)
               const unknownIn = partsWhere(position, ({ unknownCostQty }) => BigInt(unknownCostQty) > 0n)
               const mismatchedIn = partsWhere(position, ({ reconciliation }) => reconciliation === "incomplete")

@@ -14,7 +14,8 @@
       "counterparty": null,
       "amount": null,
       "gain": null,
-      "unknownCost": []
+      "unknownCost": [],
+      "answerableCost": []
     },
     {
       "blockNum": 20,
@@ -30,7 +31,8 @@
       "counterparty": null,
       "amount": null,
       "gain": null,
-      "unknownCost": []
+      "unknownCost": [],
+      "answerableCost": []
     },
     {
       "blockNum": 120,
@@ -46,7 +48,8 @@
       "counterparty": null,
       "amount": null,
       "gain": null,
-      "unknownCost": []
+      "unknownCost": [],
+      "answerableCost": []
     },
     {
       "blockNum": 150,
@@ -62,7 +65,8 @@
       "counterparty": null,
       "amount": null,
       "gain": null,
-      "unknownCost": []
+      "unknownCost": [],
+      "answerableCost": []
     }
   ],
   "differentOmissions": [
@@ -80,7 +84,8 @@
       "counterparty": null,
       "amount": null,
       "gain": null,
-      "unknownCost": []
+      "unknownCost": [],
+      "answerableCost": []
     },
     {
       "blockNum": 10,
@@ -96,7 +101,8 @@
       "counterparty": null,
       "amount": null,
       "gain": null,
-      "unknownCost": []
+      "unknownCost": [],
+      "answerableCost": []
     },
     {
       "blockNum": 20,
@@ -112,7 +118,8 @@
       "counterparty": null,
       "amount": null,
       "gain": null,
-      "unknownCost": []
+      "unknownCost": [],
+      "answerableCost": []
     },
     {
       "blockNum": 30,
@@ -128,7 +135,8 @@
       "counterparty": null,
       "amount": null,
       "gain": null,
-      "unknownCost": []
+      "unknownCost": [],
+      "answerableCost": []
     },
     {
       "blockNum": 40,
@@ -144,7 +152,8 @@
       "counterparty": null,
       "amount": null,
       "gain": null,
-      "unknownCost": []
+      "unknownCost": [],
+      "answerableCost": []
     }
   ]
 }

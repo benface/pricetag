@@ -130,7 +130,7 @@ private struct RevokeConfirmation: View {
         var rows = revocations.map { revocation in
             ConfirmationRow(label: Self.label(revocation), value: revocation.spender.checksummed, isAddress: true, name: revocation.spenderName)
         }
-        rows.append(ConfirmationRow(label: "Network fee", value: "About \(quote.feeUsdMicros.map(wallet.money) ?? "\(Format.amount(String(quote.feeWei), decimals: 18)) ETH")"))
+        rows.append(.networkFee(usdMicros: quote.feeUsdMicros, wei: quote.feeWei, money: wallet.money))
         return rows
     }
 }
