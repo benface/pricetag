@@ -805,6 +805,17 @@ actor BookSource: PortfolioSource {
         #expect(model.costWarning(["DAI": "nope"], for: question) == nil)
     }
 
+    @Test func saysNothingAboutACostWhileTheCurrencyIsSwitching() async throws {
+        let (store, _, _) = try makeStore()
+        await _ = store.poll()
+        let model = ResolveModel(store: store, firstAsset: "DAI")
+        let question = try #require(model.current)
+        #expect(model.costWarning(["DAI": "121360"], for: question) != nil)
+        store.setCurrency(.CAD)
+        #expect(store.portfolio?.currency == .USD, "What's on screen stays until the new numbers arrive")
+        #expect(model.costWarning(["DAI": "121360"], for: question) == nil, "What it was worth is in USD and this is in CAD")
+    }
+
     @Test func readsDollarsAsTyped() {
         #expect(Format.micros(fromDollars: "$1,234.50") == "1234500000")
         #expect(Format.micros(fromDollars: "0") == "0")

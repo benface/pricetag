@@ -623,8 +623,14 @@ public struct ProofLink: Codable, Sendable, Equatable, Identifiable {
     public let title: String
     public let url: String
 
+    /// Where the server's proofs link to. Whatever else a server says, this app won't open it.
+    static let hosts: Set<String> = ["basescan.org"]
+
     public var id: String { url }
-    public var destination: URL? { URL(string: url) }
+    public var destination: URL? {
+        guard let page = URL(string: url), page.scheme == "https", let host = page.host(), Self.hosts.contains(host) else { return nil }
+        return page
+    }
 }
 
 /// What's behind one row's price, in the server's words.
@@ -952,8 +958,12 @@ public struct Book: Codable, Sendable, Equatable, Hashable {
     /// An order can say more as it goes, like the block its delivery landed in, so a newer read of one takes over.
     public func recording(_ purchase: Purchase) -> Book {
         var next = self
-        next.purchases.removeAll { $0.order == purchase.order }
-        next.purchases.append(purchase)
+        // In its place, because a read that says nothing new mustn't look like a change.
+        if let index = next.purchases.firstIndex(where: { $0.order == purchase.order }) {
+            next.purchases[index] = purchase
+        } else {
+            next.purchases.append(purchase)
+        }
         return next
     }
 

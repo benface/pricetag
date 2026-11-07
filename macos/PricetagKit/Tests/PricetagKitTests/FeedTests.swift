@@ -131,6 +131,23 @@ actor TimedOutThenGatedSource: PortfolioSource {
     }
 }
 
+/// Fails to say what its rules are until it's told to recover.
+private actor SwitchingRules: PortfolioSource {
+    var failure: FetchError?
+    private(set) var asked = 0
+
+    init(failure: FetchError) { self.failure = failure }
+    func recover() { failure = nil }
+
+    func rules() async throws -> [PricingRule] {
+        asked += 1
+        if let failure { throw failure }
+        return ["a", "b"].map { PricingRule(id: $0, name: $0, summary: "", dataset: "benface/pricetag", hash: $0) }
+    }
+    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio { throw FetchError.unreachable }
+    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation { throw FetchError.unreachable }
+}
+
 /// `demoPortfolio()`, but from a real source, and with its newest block at a given time.
 func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod = .average, currency: CurrencyCode = .USD, progress: ReadProgress? = nil, linkedFailed: [String] = []) throws -> Portfolio {
     var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(demoPortfolio())) as! [String: Any]
@@ -163,6 +180,63 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         await _ = store.poll()
         #expect(store.feed == .live)
         #expect(store.feed.isLive)
+    }
+
+    @Test func aNewestBlockWithATimeThatCantBeReadIsntLive() async throws {
+        var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(realPortfolio(at: now))) as! [String: Any]
+        object["latest"] = ["blockNum": 53_505_400, "timestamp": "not a time"]
+        let portfolio = try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
+        let (store, _, _) = makeStore([.success(portfolio)])
+        await _ = store.poll()
+        #expect(store.feed == .catchingUp)
+        #expect(!store.feed.isLive)
+    }
+
+    @Test func readingAPurchaseAgainDoesntStartOver() async throws {
+        let (store, _, defaults) = makeStore([.success(try realPortfolio(at: now))])
+        let purchases = ["first", "second"].map { Purchase(provider: "coinbase", order: $0, wallet: "0xabc", asset: "ETH", units: "8000000000000000", txHash: "0x" + String(repeating: "ab", count: 32), blockNum: nil, cost: Money(micros: "25810000", currency: .USD), costUsdMicros: nil) }
+        for purchase in purchases { store.recordPurchase(purchase) }
+        store.stop()
+        await _ = store.poll()
+        #expect(store.feed == .live)
+        let saved = defaults.data(forKey: "book")
+        // As a poll does for each order that's delivered and has no block yet.
+        for purchase in purchases { store.recordPurchase(purchase) }
+        #expect(store.feed == .live, "Nothing's new, so nothing's read again")
+        #expect(store.book.purchases.map(\.order) == ["first", "second"])
+        #expect(defaults.data(forKey: "book") == saved)
+    }
+
+    @Test func aFailedReadOfTheRulesIsTriedAgain() async throws {
+        for failure in [FetchError.unreachable, .timedOut, .rejected("No.")] {
+            let source = SwitchingRules(failure: failure)
+            let store = PortfolioStore(defaults: UserDefaults(suiteName: "feed-tests-\(UUID().uuidString)")!, makeSource: { _ in source }, rulesRetryDelay: .milliseconds(10))
+            await store.refreshRules()
+            #expect(store.rules.isEmpty)
+            await source.recover()
+            let deadline = Date.now.addingTimeInterval(5)
+            while store.rules.isEmpty, Date.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
+            #expect(store.rules.map(\.id) == ["a", "b"])
+            #expect(store.serverCheck == .answers)
+            let asked = await source.asked
+            try await Task.sleep(for: .milliseconds(50))
+            #expect(await source.asked == asked, "An answer ends the retries")
+        }
+    }
+
+    @Test func rulesAreOnlyTriedAgainForTheServerAndInviteThatFailed() async throws {
+        let needsInvite = SwitchingRules(failure: .needsInvite("This server needs an invite."))
+        let waiting = PortfolioStore(defaults: UserDefaults(suiteName: "feed-tests-\(UUID().uuidString)")!, makeSource: { _ in needsInvite }, rulesRetryDelay: .milliseconds(5))
+        await waiting.refreshRules()
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await needsInvite.asked == 1, "Asking again without an invite would get the same answer")
+
+        let down = SwitchingRules(failure: .unreachable)
+        let stopped = PortfolioStore(defaults: UserDefaults(suiteName: "feed-tests-\(UUID().uuidString)")!, makeSource: { _ in down }, rulesRetryDelay: .milliseconds(20))
+        await stopped.refreshRules()
+        stopped.stop()
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(await down.asked == 1, "A stopped store isn't following anything")
     }
 
     @Test func keepsNumbersButStopsCallingThemLiveWhenTheServerGoes() async throws {
