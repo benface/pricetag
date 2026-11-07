@@ -349,6 +349,7 @@ enum TestScene: String, CaseIterable {
     case settingsAnswers = "settings-answers"
     case settingsAnswersEmpty = "settings-answers-empty"
     case settingsNotificationsOff = "settings-notifications-off"
+    case settingsLoginItemOff = "settings-login-item-off"
     case hotWalletSetup = "hot-wallet-setup"
     case hotWalletNotProvisioned = "hot-wallet-not-provisioned"
     case hotWalletUnreadable = "hot-wallet-unreadable"
@@ -749,6 +750,7 @@ enum TestScene: String, CaseIterable {
         case .settingsAnswers: SceneSpec(screen: .settings, listsWallets: true, answers: .everyKind)
         case .settingsAnswersEmpty: SceneSpec(screen: .settings)
         case .settingsNotificationsOff: SceneSpec(screen: .settings)
+        case .settingsLoginItemOff: SceneSpec(screen: .settings)
         case .hotWalletSetup: SceneSpec(screen: .spendingMoneySetup)
         case .hotWalletNotProvisioned: SceneSpec(screen: .spendingMoneySetup, hotWallet: .notProvisioned)
         case .hotWalletUnreadable: SceneSpec(screen: .spendingMoneySetup, hotWallet: .unreadableRecords)
@@ -1162,6 +1164,7 @@ enum TestScene: String, CaseIterable {
             let view = SettingsView(
                 store: store,
                 notifications: MoneyNotifications(center: nil, defaults: parts.defaults, authorization: self == .settingsNotificationsOff ? .denied : .authorized),
+                launchAtLogin: LaunchAtLogin(service: nil, state: self == .settingsLoginItemOff ? .needsApproval : .off),
                 tab: .constant(pane),
                 server: self == .settingsServerProblem ? "localhost 8787" : "",
                 serverError: self == .settingsServerProblem ? WebAddress.problem(example: PortfolioStore.defaultServerURL) : nil,

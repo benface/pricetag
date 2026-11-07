@@ -17,6 +17,7 @@
     "check": "tsc --noEmit && node --test 'test/**/*.test.ts' && vite build",
     "mac": "macos/run.sh",
     "mac:build": "macos/run.sh --build-only",
+    "mac:install": "macos/install.sh",
     "mac:shot": "macos/shot.sh",
     "mac:watch-only": "macos/watch-only.sh",
     "mac:hosted": "macos/hosted.sh",
