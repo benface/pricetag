@@ -143,9 +143,9 @@ const BYTES_PER_LEG = 10_000
 /** What each wallet beyond the first adds to every leg, because each fold looks through all of them: 21 wallets of 1,000 legs fit, and of 1,400 didn't. */
 const BYTES_PER_LEG_PER_OTHER_WALLET = 1_000
 /**
- * What a lot costs while it's open. Only the lots open at once count, since a step keeps none of them (WORK-559): 10,000 purchases
- * all still open peaked at 156 MB, about what their legs alone cost, and a lot kept under 200 bytes more than average's one pool
- * (WORK-673, with `test/support/fifo-server.ts`).
+ * What a lot costs while it's open. Only the lots open at once count, since a step keeps none of them (WORK-559). With its leg, a
+ * purchase still open is charged 10,500 bytes. On the server, 10,000 of them peaked at 173 MB and 20,000 at 249 MB, so each one
+ * past the first 10,000 took 7,600 (WORK-673, peaks from V8's collections with `test/support/fifo-server.ts`).
  */
 const BYTES_PER_LOT = 500
 /** What a lot that arrived from another wallet costs on top, because the leg it arrived on keeps its own copy of it. */
