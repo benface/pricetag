@@ -143,6 +143,17 @@ import Testing
         #expect(try item("Received 5,000 USDC").answerableAsset(in: [usdc]) == "USDC")
     }
 
+    @Test func onlyOffersAQuestionWhereAnAnswerCouldHelp() throws {
+        let portfolio = try demoPortfolio()
+        let json = #"{"blockNum": 1, "timestamp": "2026-11-05T00:00:00.000Z", "txHash": "0xa1", "pnlMicros": null, "excludedCount": 0, "summary": "Sent 0.1 ETH", "unknownCost": ["ETH"], "answerableCost": []}"#
+        let point = try JSONDecoder().decode(PnlPoint.self, from: Data(json.utf8))
+        let item = try #require(TransactionLog(points: [point], calendar: utc).items.first)
+        // It still says its cost is unknown, but no question about ETH can change that, like when nothing says what came first in its block.
+        #expect(portfolio.questions.contains { $0.arrivals.contains { $0.asset == "ETH" } })
+        #expect(item.unknownCost == ["ETH"])
+        #expect(item.answerableAsset(in: portfolio.questions) == nil)
+    }
+
     /// A busy wallet has about 65,000 transactions. Reading them, then searching as someone types, has to stay quick.
     @Test func staysQuickWithABusyWallet() throws {
         let start = Date(timeIntervalSince1970: 1_790_000_000)

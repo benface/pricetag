@@ -1,6 +1,6 @@
 // What a click on a number explains: a sentence for how it's worked out, and the legs behind it.
 
-import { CURRENCIES, TOKENS, TOKEN_FEEDS, formatAmount, formatMoney, formatPaid, formatPrice, formatRate, formatReturn, returnBps, orderMatters, formatSignedMoney, holdEffects, shortHash, takesAnswerableCost, tokenByAddress, worth, type CostLabel, type CurrencyCode, type HoldComparison, type LegEffect, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { CURRENCIES, TOKENS, TOKEN_FEEDS, formatAmount, formatMoney, formatPaid, formatPrice, formatRate, formatReturn, returnBps, costCanBeAnswered, orderMatters, formatSignedMoney, holdEffects, shortHash, tokenByAddress, worth, type CostLabel, type CurrencyCode, type HoldComparison, type LegEffect, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import { COST_WORDS, AVERAGE_PRICE_PAID, BALANCE_CHECK, CHECK_LABELS, ESTIMATE_LINE, HOLD_ETH, HOLD_PAST, METHOD_LABELS, NETWORK_FEES, currentPriceSource, est, holdCaveatSentence, holdDifferenceSentence, tokenLabel, unrecordedSentence, unseenEthCause } from "./wording.ts"
 
 export type Metric = "amount" | "average" | "price" | "value" | "return" | "realized" | "unrealized" | "onchain"
@@ -143,11 +143,10 @@ export function summarizeEffect({ leg, before, after }: LegEffect, currency: Cur
   // What it's worth at a market price is an estimate, and it's only ever that price that says so.
   const atMarket = leg.priceSource === "market"
   // Nobody can answer which came first, or what the chain hasn't confirmed yet, or which of an exchange's purchases this was.
-  const costCanBeAnswered = BigInt(leg.delta) > 0n ? (leg.pieces?.some((p) => p.costMicros === null && !p.unanswerable) ?? true) : takesAnswerableCost(before, qty)
-  const orderUnknown = orderMatters(leg, before.method) || !costCanBeAnswered
+  const canAnswer = costCanBeAnswered(leg, before)
   if (BigInt(leg.delta) > 0n) {
     const unknown = leg.costMicros !== null ? null : leg.pieces?.some((p) => p.costMicros !== null) ? "What part of this cost isn't known yet." : "What this cost isn't known yet."
-    const facts = { unknown, answerable: unknown !== null && !orderUnknown && !leg.unsettledCredit }
+    const facts = { unknown, answerable: unknown !== null && canAnswer && !leg.unsettledCredit }
     if (leg.opening) return { summary: `Already held ${what(value, atMarket)} when this history starts.`, ...facts }
     // Bought and then moved here keeps what was paid as its cost, but this movement is the move.
     if (leg.costLabel !== "inherited" && (leg.kind === "swap" || leg.purchaseSource)) {
@@ -164,7 +163,7 @@ export function summarizeEffect({ leg, before, after }: LegEffect, currency: Cur
     // Its unknown cost is the one it arrived with, which a question can be about. What's short never arrived.
     const missing = diff(after.transferredOutUnknownQty, before.transferredOutUnknownQty) - shortfall
     const unknown = shortfall > 0n ? `${amount(shortfall)} more left than we saw arrive, so what it cost isn't known.` : missing > 0n ? (missing < qty ? "What part of this cost isn't known yet." : "What this cost isn't known yet.") : null
-    return { summary: `Sent ${what(value, atMarket)}, with no gain or loss.`, unknown, answerable: missing > 0n && !orderUnknown }
+    return { summary: `Sent ${what(value, atMarket)}, with no gain or loss.`, unknown, answerable: missing > 0n && canAnswer }
   }
   // A shortfall is also an unknown cost, but it isn't one any question is about, since nothing is known to have arrived.
   const missingCost = diff(after.unknownCostDisposedQty, before.unknownCostDisposedQty) - shortfall
@@ -174,7 +173,7 @@ export function summarizeEffect({ leg, before, after }: LegEffect, currency: Cur
     ...(diff(after.unknownProceedsQty, before.unknownProceedsQty) > 0n ? [leg.kind === "gas" ? "it has no price at this block" : "what you received has no usable value"] : []),
   ]
   const unknown = unresolved > 0n ? `The gain on ${amount(unresolved)} isn't known, because ${causes.join(", and ")}.` : null
-  const answerable = missingCost > 0n && !orderUnknown
+  const answerable = missingCost > 0n && canAnswer
   if (leg.kind === "gas") {
     const fee = diff(after.gasMicros, before.gasMicros)
     return { summary: leg.priceMicros === null ? `Paid ${amount(qty)} in network fees.` : `Paid ${money(fee)} in network fees.`, unknown, answerable }

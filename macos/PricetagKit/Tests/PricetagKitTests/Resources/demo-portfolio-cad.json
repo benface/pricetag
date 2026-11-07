@@ -486,6 +486,9 @@
       "gain": null,
       "unknownCost": [
         "USDC"
+      ],
+      "answerableCost": [
+        "USDC"
       ]
     },
     {
@@ -509,6 +512,9 @@
       },
       "gain": null,
       "unknownCost": [
+        "ETH"
+      ],
+      "answerableCost": [
         "ETH"
       ]
     },
@@ -537,6 +543,9 @@
         "estimated": false
       },
       "unknownCost": [
+        "USDC"
+      ],
+      "answerableCost": [
         "USDC"
       ]
     },
@@ -567,6 +576,9 @@
       },
       "unknownCost": [
         "USDC"
+      ],
+      "answerableCost": [
+        "USDC"
       ]
     },
     {
@@ -590,7 +602,8 @@
         "micros": "273196600"
       },
       "gain": null,
-      "unknownCost": []
+      "unknownCost": [],
+      "answerableCost": []
     },
     {
       "blockNum": 53501500,
@@ -611,7 +624,8 @@
         "micros": "134883"
       },
       "gain": null,
-      "unknownCost": []
+      "unknownCost": [],
+      "answerableCost": []
     },
     {
       "blockNum": 53502400,
@@ -638,7 +652,8 @@
         "micros": "107211239",
         "estimated": false
       },
-      "unknownCost": []
+      "unknownCost": [],
+      "answerableCost": []
     },
     {
       "blockNum": 53503000,
@@ -662,6 +677,9 @@
       },
       "gain": null,
       "unknownCost": [
+        "cbBTC"
+      ],
+      "answerableCost": [
         "cbBTC"
       ]
     },
@@ -691,6 +709,9 @@
         "estimated": false
       },
       "unknownCost": [
+        "DEGEN"
+      ],
+      "answerableCost": [
         "DEGEN"
       ]
     },
@@ -722,6 +743,10 @@
       "unknownCost": [
         "USDC",
         "VIRTUAL"
+      ],
+      "answerableCost": [
+        "USDC",
+        "VIRTUAL"
       ]
     },
     {
@@ -751,6 +776,9 @@
       },
       "unknownCost": [
         "ETH"
+      ],
+      "answerableCost": [
+        "ETH"
       ]
     },
     {
@@ -776,6 +804,9 @@
       "gain": null,
       "unknownCost": [
         "ETH"
+      ],
+      "answerableCost": [
+        "ETH"
       ]
     },
     {
@@ -794,7 +825,8 @@
       "counterparty": null,
       "amount": null,
       "gain": null,
-      "unknownCost": []
+      "unknownCost": [],
+      "answerableCost": []
     }
   ],
   "holdComparison": {

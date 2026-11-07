@@ -196,6 +196,7 @@
       },
       "gain": null,
       "unknownCost": [],
+      "answerableCost": [],
       "wallets": [
         "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
       ]
@@ -221,6 +222,7 @@
       },
       "gain": null,
       "unknownCost": [],
+      "answerableCost": [],
       "wallets": [
         "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -247,6 +249,7 @@
       },
       "gain": null,
       "unknownCost": [],
+      "answerableCost": [],
       "wallets": [
         "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
       ]
@@ -274,6 +277,9 @@
       "unknownCost": [
         "ETH"
       ],
+      "answerableCost": [
+        "ETH"
+      ],
       "wallets": [
         "0xcccccccccccccccccccccccccccccccccccccccc"
       ]
@@ -294,6 +300,7 @@
       "amount": null,
       "gain": null,
       "unknownCost": [],
+      "answerableCost": [],
       "wallets": []
     }
   ],

@@ -36,6 +36,8 @@ public struct TransactionItem: Identifiable, Equatable, Sendable {
     public let amount: TransactionAmount?
     public let gain: TransactionGain?
     public let unknownCost: [String]
+    /// Those an answer could work out, which isn't all of them.
+    public let answerableCost: [String]
     /// Which of the user's wallets it's in, when several are shown as one.
     public let wallets: [String]
     public let status: Status
@@ -64,6 +66,7 @@ public struct TransactionItem: Identifiable, Equatable, Sendable {
         amount = point.amount
         gain = point.gain
         unknownCost = point.unknownCost
+        answerableCost = point.answerableCost
         wallets = point.wallets ?? []
         self.status = status
         isRead = true
@@ -82,6 +85,7 @@ public struct TransactionItem: Identifiable, Equatable, Sendable {
         amount = nil
         gain = nil
         unknownCost = []
+        answerableCost = []
         wallets = []
         status = signed.status == .pending ? .pending : .failed
         isRead = false
@@ -216,7 +220,7 @@ extension TransactionItem {
     /// The first of its unknown costs that an open question asks about, which is where answering starts. That holds after
     /// all of it was sold or sent, since answering still fixes what the sale made. nil when no answer could change it.
     public func answerableAsset(in questions: [Question]) -> String? {
-        unknownCost.first { asset in questions.contains { $0.arrivals.contains { $0.asset == asset } } }
+        answerableCost.first { asset in questions.contains { $0.arrivals.contains { $0.asset == asset } } }
     }
 
     /// Who's on the other side, from this wallet's point of view.

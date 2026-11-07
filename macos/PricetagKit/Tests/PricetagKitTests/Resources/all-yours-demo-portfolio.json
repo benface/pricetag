@@ -604,6 +604,7 @@
       },
       "gain": null,
       "unknownCost": [],
+      "answerableCost": [],
       "wallets": [
         "0x00000000000000000000000000000000000de301"
       ]
@@ -629,6 +630,9 @@
       },
       "gain": null,
       "unknownCost": [
+        "USDC"
+      ],
+      "answerableCost": [
         "USDC"
       ],
       "wallets": [
@@ -657,6 +661,9 @@
       },
       "gain": null,
       "unknownCost": [
+        "ETH"
+      ],
+      "answerableCost": [
         "ETH"
       ],
       "wallets": [
@@ -688,6 +695,9 @@
         "estimated": false
       },
       "unknownCost": [
+        "USDC"
+      ],
+      "answerableCost": [
         "USDC"
       ],
       "wallets": [
@@ -722,6 +732,9 @@
       "unknownCost": [
         "USDC"
       ],
+      "answerableCost": [
+        "USDC"
+      ],
       "wallets": [
         "0x00000000000000000000000000000000000de300"
       ]
@@ -748,6 +761,7 @@
       },
       "gain": null,
       "unknownCost": [],
+      "answerableCost": [],
       "wallets": [
         "0x00000000000000000000000000000000000de300"
       ]
@@ -772,6 +786,7 @@
       },
       "gain": null,
       "unknownCost": [],
+      "answerableCost": [],
       "wallets": [
         "0x00000000000000000000000000000000000de300"
       ]
@@ -802,6 +817,7 @@
         "estimated": false
       },
       "unknownCost": [],
+      "answerableCost": [],
       "wallets": [
         "0x00000000000000000000000000000000000de300"
       ]
@@ -828,6 +844,9 @@
       },
       "gain": null,
       "unknownCost": [
+        "cbBTC"
+      ],
+      "answerableCost": [
         "cbBTC"
       ],
       "wallets": [
@@ -860,6 +879,9 @@
         "estimated": false
       },
       "unknownCost": [
+        "DEGEN"
+      ],
+      "answerableCost": [
         "DEGEN"
       ],
       "wallets": [
@@ -895,6 +917,10 @@
         "USDC",
         "VIRTUAL"
       ],
+      "answerableCost": [
+        "USDC",
+        "VIRTUAL"
+      ],
       "wallets": [
         "0x00000000000000000000000000000000000de300"
       ]
@@ -927,6 +953,9 @@
       "unknownCost": [
         "ETH"
       ],
+      "answerableCost": [
+        "ETH"
+      ],
       "wallets": [
         "0x00000000000000000000000000000000000de300"
       ]
@@ -955,6 +984,9 @@
       "unknownCost": [
         "ETH"
       ],
+      "answerableCost": [
+        "ETH"
+      ],
       "wallets": [
         "0x00000000000000000000000000000000000de300",
         "0x00000000000000000000000000000000000de301"
@@ -977,6 +1009,7 @@
       "amount": null,
       "gain": null,
       "unknownCost": [],
+      "answerableCost": [],
       "wallets": []
     }
   ],

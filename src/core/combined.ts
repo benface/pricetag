@@ -250,8 +250,8 @@ function combine(read: readonly WalletResponse[], method: Method, book: Book, { 
   const currency = (folded[0] as Folded).fold.view.currency
   const factsIn = new Map<string, TransactionFacts[]>()
   for (const { fold } of started) {
-    for (const { txHash, assets, counterparty, amount, gain, unknownCost } of fold.points) {
-      if (txHash) factsIn.set(txHash, [...(factsIn.get(txHash) ?? []), { assets, counterparty, amount, gain, unknownCost }])
+    for (const { txHash, assets, counterparty, amount, gain, unknownCost, answerableCost } of fold.points) {
+      if (txHash) factsIn.set(txHash, [...(factsIn.get(txHash) ?? []), { assets, counterparty, amount, gain, unknownCost, answerableCost }])
     }
   }
   const everyWallet = new Set(started.map(({ address }) => address))
