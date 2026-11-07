@@ -1,6 +1,6 @@
 // Runs the fold over a wallet's priced legs, and adds up what can honestly be added up.
 
-import { applyLeg, applyLegTaking, costCanBeAnswered, emptyPosition, tallyOf, worth, valuePosition, type KnownTaken, type LegApplied, type Method, type PositionState, type PositionTally, type PositionValues } from "./fold.ts"
+import { applyLeg, applyLegTaking, costCanBeAnswered, emptyPosition, tallyOf, worth, valuePosition, type CostPiece, type KnownTaken, type LegApplied, type Method, type PositionState, type PositionTally, type PositionValues } from "./fold.ts"
 import { timestampOfBlock } from "./chain.ts"
 import type { RateRound } from "./currency.ts"
 import { answerToMicros, isSanePrice, type PricedLeg, type Reference } from "./legs.ts"
@@ -31,11 +31,13 @@ export type LegEffect = {
   answerable: boolean
   /** Debits only: what it took with a known cost. Nothing a lot lost by this leg's taking part of it counts. */
   known: KnownTaken | null
+  /** Debits only: the pieces it took, oldest first under FIFO, each with its cost and when it was acquired. */
+  taken: CostPiece[] | null
 }
 
 /** What a leg did to a position, from what applying it already worked out, so no step goes through every lot again. */
-export function effectOf(leg: PricedLeg, before: PositionState, { state: after, known, split }: LegApplied): LegEffect {
-  return { leg, before: tallyOf(before), after: tallyOf(after), answerable: costCanBeAnswered(leg, before, split ?? undefined), known }
+export function effectOf(leg: PricedLeg, before: PositionState, { state: after, known, split, taken }: LegApplied): LegEffect {
+  return { leg, before: tallyOf(before), after: tallyOf(after), answerable: costCanBeAnswered(leg, before, split ?? undefined), known, taken: known === null ? null : taken }
 }
 
 /** Which of a position's numbers rest on an estimate, so they can look different from exact ones. */
