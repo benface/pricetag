@@ -2276,3 +2276,66 @@ describe("prices between a wallet's transactions", () => {
     assert.equal(priced?.priceSamples, undefined)
   })
 })
+
+describe("a client that runs for a long time", () => {
+  const AERO = "0x940181a94a35a4569e4529a3cdfb74e38fd98631"
+  const HOUR = 3600_000
+  const aero = (block: number): LegRow => ({ ...row(block), token: AERO, kind: "erc20", amount: (10n ** 18n).toString() })
+
+  it("lets go of market prices no read has used in a day, and reads them again when one's needed", async () => {
+    let time = 0
+    let head = 1000
+    const marketReads: number[] = []
+    const { source } = fake(new Map([[950, [aero(950)]]]), () => reference(head))
+    const withMarket: Source = {
+      ...source,
+      marketReady: async () => true,
+      async readMarketTrades(_, __, to) {
+        marketReads.push(to)
+        return []
+      },
+    }
+    const wallets = createWallets(withMarket, async () => headAt(head)(), noFees, console, { now: () => time })
+    const first = await wallets.get(ME)
+    const read = marketReads.length
+    assert.ok(read > 0)
+    head += 1
+    time += HOUR
+    await wallets.get(ME)
+    assert.equal(marketReads.length, read, "what a read keeps using stays")
+    head += 1
+    time += 25 * HOUR
+    const later = await wallets.get(ME)
+    assert.deepEqual(marketReads.slice(read).sort(), marketReads.slice(0, read).sort(), "each one unused for a day is read again")
+    assert.deepEqual(later.legs, first.legs, "and the numbers don't change")
+  })
+
+  it("forgets a reorg once the tables and every wallet kept are past it", async () => {
+    let time = 0
+    let head = 1000
+    let processedReads = 0
+    const { source } = fake(new Map([[950, [row(950)]]]), () => reference(head))
+    const counting: Source = {
+      ...source,
+      async processedThrough(after, at) {
+        processedReads += 1
+        return source.processedThrough(after, at)
+      },
+    }
+    const fixedReadQueries = async (minutesLater: number) => {
+      const wallets = createWallets(counting, async () => headAt(head)(), noFees, console, { now: () => time })
+      head = 1000
+      await wallets.get(ME)
+      await wallets.rewind(900, 1000)
+      head = 1100
+      await wallets.get(ME)
+      time += minutesLater * 60_000
+      await wallets.get(ME)
+      const before = processedReads
+      await wallets.get("0x00000000000000000000000000000000000000bb", { to: 950 })
+      return processedReads - before
+    }
+    assert.equal(await fixedReadQueries(1), 2, "until it's forgotten, a read before the reorg's blocks asks how far the tables have got")
+    assert.equal(await fixedReadQueries(11), 1, "after, it doesn't need to")
+  })
+})

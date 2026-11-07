@@ -11,10 +11,10 @@ import type { OtherToken } from "./other-tokens.ts"
 import { limitFolds, latestPrices, type Head, type LatestPrices } from "./portfolio.ts"
 import { createRates, feedRounds, updateRounds } from "./rates.ts"
 import { createL1FeeReader, type ReadL1Fees } from "./receipts.ts"
-import { ASSETS, TOKENS, TOKEN_FEEDS, isAddress, normalizeAddress, tokenByAddress, type Token } from "./tokens.ts"
-import { describeMissing, foldWallet, hasStarted, type FoldedWallet, type WalletData } from "./wallet.ts"
+import { ASSETS, TOKENS, TOKEN_FEEDS, isAddress, normalizeAddress, tokenByAddress, tokenBySymbol, type Token } from "./tokens.ts"
+import { describeMissing, foldWallet, hasStarted, type FoldedWallet, type WalletData } from "./wallet-data.ts"
 import { createRowBudget, foldBytesThatFit, rowsThatFit } from "./memory.ts"
-import { createWallets, feedPrices } from "./wallets.ts"
+import { createWallets, feedPrices, type BlockRange } from "./wallets.ts"
 
 export type PricetagConfig = {
   /** Amp's query URL. */
@@ -52,8 +52,7 @@ export type PricetagConfig = {
   maxWalletRows?: number | undefined
 }
 
-/** Blocks to read, inclusive. Without `from`, it starts at the config's `startBlock`. Without `to`, it reads up to the chain's head. */
-export type BlockRange = { from?: number | undefined; to?: number | undefined }
+export type { BlockRange }
 
 export type PortfolioOptions = BlockRange & {
   /** How to work out the cost of what's sold. It defaults to `average`. */
@@ -93,7 +92,10 @@ export type WalletLegs = {
   l1FeeUnknownTxs: string[]
 }
 
-/** A wallet's holdings, cost and PnL in `currency`, the same way the app works them out. */
+/**
+ * A wallet's holdings, cost and PnL in `currency`, by the app's rules. The app also reads recent trades' prices, costs written
+ * in notes, and the other side of a transfer, so it can know a price or cost this leaves unknown. See the README's Limits.
+ */
 export type WalletPortfolio = Omit<FoldedWallet, "view"> & {
   address: string
   method: Method
@@ -170,7 +172,7 @@ function checkCurrency(currency: string) {
 }
 
 function findToken(token: string): Token {
-  const found = isAddress(token) ? tokenByAddress(token) : TOKENS.find((t) => t.symbol === token)
+  const found = isAddress(token) ? tokenByAddress(token) : tokenBySymbol(token)
   if (!found) throw new Error(`${token} isn't on the allowlist, so it has no price. See TOKENS.`)
   return found
 }
@@ -264,8 +266,8 @@ export function pricetagClient(query: Query, config: ClientConfig) {
 
   return {
     /**
-     * A wallet's holdings, cost and PnL, the same way the app works them out: what it held before the range, its L1 fees,
-     * and every position checked against the chain. Check `started`, and show `pnlStatus` and `missing` next to any total.
+     * A wallet's holdings, cost and PnL, by the app's rules: what it held before the range, its L1 fees, and every position
+     * checked against the chain. The app reads more than this, so it can know a price or cost this leaves unknown. Check `started`, and show `pnlStatus` and `missing` next to any total.
      * With a `to`, it's the wallet as of that block, valued at that block's prices. With a `currency`, its money is in that.
      */
     getPortfolio,
@@ -356,12 +358,12 @@ export function pricetagClient(query: Query, config: ClientConfig) {
     },
 
     /**
-     * A wallet's legs in the range, priced and labeled the same way the app's are. They're what moved, not what the wallet
+     * A wallet's legs in the range, priced and labeled by the app's rules. They're what moved, not what the wallet
      * holds, so there's no opening balance in them, and no position is checked against the chain. For that, use `getPortfolio`.
      *
-     * With an `rpcUrl`, these are the app's legs, because they come from the same read: gas includes L1 fees, and a swap
-     * paid out in unwrapped ETH is confirmed against the wallet's balance. Without one, gas has no L1 fee and that swap
-     * stays unknown, so this skips the balance reads, which couldn't confirm anything.
+     * With an `rpcUrl`, gas includes L1 fees, and a swap paid out in unwrapped ETH is confirmed against the wallet's balance,
+     * as in the app. Without one, gas has no L1 fee and that swap stays unknown, so this skips the balance reads, which
+     * couldn't confirm anything.
      */
     async getLegs(address: string, range: BlockRange = {}): Promise<WalletLegs> {
       if (!isAddress(address)) throw new Error(`${address} isn't a Base address`)

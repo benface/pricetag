@@ -158,8 +158,8 @@ export const tallyOf = ({ lots: _, ...tally }: PositionState): PositionTally => 
 
 /**
  * What a debit took that had a known cost, and where that cost came from, whatever each lot is labeled. Decimal strings, like the
- * rest of a state. `purchaseSource` is the last exchange named among the known lots held before, the way the tax report has always
- * named it, and only when part of what was taken came from an exchange.
+ * rest of a state. `purchaseSource` is the last exchange named among the known lots held before, the same one the tax report
+ * names, and only when part of what was taken came from an exchange.
  */
 export type KnownTaken = { qty: string; costMicros: string; estimatedMicros: string; givenMicros: string; reportedQty: string; purchasedQty: string; purchaseSource: string | null }
 
@@ -188,7 +188,7 @@ export function worth(qty: bigint, unitMicros: bigint, decimals: number): bigint
   return (qty * unitMicros) / 10n ** BigInt(decimals)
 }
 
-/** Only what's there, so a lot with neither looks the way it always has. */
+/** Only what's there, so a lot with neither carries neither field, and stays as small as a plain lot. */
 const costSource = (reported: boolean | undefined, given: bigint): Pick<CostPiece, "reported" | "givenCostMicros"> => ({
   ...(reported ? { reported: true } : {}),
   ...(given > 0n ? { givenCostMicros: given.toString() } : {}),
@@ -237,13 +237,13 @@ function mergedPaidAt(a: Lot, b: Lot): PaidAt[] | null {
   return [...byBlock].map(([blockNum, { cost, qty }]) => ({ costMicros: cost.toString(), qty: qty.toString(), blockNum }))
 }
 
-/** Only what's there, so a lot with none looks the way it always has. */
+/** Only what's there, so a lot with none carries no field. */
 const unconfirmed = (...wallets: readonly (readonly string[] | undefined)[]): Pick<CostPiece, "unconfirmedBy"> => {
   const all = [...new Set(wallets.flatMap((list) => list ?? []))]
   return all.length > 0 ? { unconfirmedBy: all } : {}
 }
 
-/** What says where this goes among the rest, which stays true whatever becomes of its cost. Only what's there, so a lot with none looks the way it always has. */
+/** What says where this goes among the rest, which stays true whatever becomes of its cost. Only what's there, so a lot with none carries no field. */
 export const ranking = ({ wholeCostOnly, boughtAt, boughtIn }: Pick<CostPiece, "wholeCostOnly" | "boughtAt" | "boughtIn">): Pick<CostPiece, "wholeCostOnly" | "boughtAt" | "boughtIn"> => ({
   ...(wholeCostOnly ? { wholeCostOnly } : {}),
   ...(boughtAt ? { boughtAt } : {}),
@@ -272,12 +272,12 @@ function lotOf({ tracksPaidAt }: PositionState, piece: CostPiece, legId: string)
 
 const estimatedOf = (lot: Lot) => BigInt(lot.estimatedCostMicros ?? "0")
 
-/** What a position's lots add up to. Only a known cost's estimate counts, the way `valuePosition` has always counted it. */
+/** What a position's lots add up to. Only a known cost's estimate counts, as in `valuePosition`. */
 type LotSums = { qty: bigint; unknownCostQty: bigint; cost: bigint; estimatedCost: bigint }
 
 /**
- * Each lots array's sums, carried from one step to the next, so oldest first doesn't add up every lot it holds at every step
- * (WORK-559). Nothing changes a lots array once it's made, so a sum can't go stale, and state stays plain JSON.
+ * Each lots array's sums, carried from one step to the next, so oldest first doesn't add up every lot it holds at every step.
+ * Nothing changes a lots array once it's made, so a sum can't go stale, and state stays plain JSON.
  */
 const lotSums = new WeakMap<readonly Lot[], LotSums>()
 

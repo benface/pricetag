@@ -2,9 +2,9 @@
 
 import { msBetweenBlocks } from "./chain.ts"
 import { worth } from "./fold.ts"
-import { answerToMicros, isSanePrice, type LegRow, type PricedRow } from "./legs.ts"
+import { answerToMicros, isSanePrice, signedAmount, type LegRow, type PricedRow } from "./legs.ts"
 import type { BalanceSnapshot } from "./reconcile.ts"
-import { ETH_ADDRESS, TOKENS, normalizeAddress, tokenByAddress } from "./tokens.ts"
+import { ETH_ADDRESS, TOKENS, normalizeAddress, tokenByAddress, tokenBySymbol } from "./tokens.ts"
 
 /** One account's trade of a token. A trade shows up once per account it went through, which is why these group by transaction. */
 export type MarketTrade = { blockNum: number; txHash: string; asset: string; usdMicros: string; notionalUsdMicros: string }
@@ -34,7 +34,7 @@ export function marketTrades(rows: readonly MarketRow[]): MarketTrade[] {
   return rows.flatMap((row) => {
     if (row.priced.source !== "swap" || !row.priced.usd_micros) return []
     if (normalizeAddress(row.bought_token) === ETH_ADDRESS) return []
-    const token = TOKENS.find((t) => t.symbol === row.priced.token)
+    const token = tokenBySymbol(row.priced.token)
     if (!token || token.oracle) return []
     if (!isSanePrice(token, row.priced.usd_micros, answerToMicros(row.eth_usd))) return []
     const sold = tokenByAddress(row.sold_token)?.asset === token.asset
@@ -73,14 +73,14 @@ export type FeedMarks = Record<string, string[]>
  * gets a chart point. In the order the fold reads them, since a token can arrive and leave in different transactions of
  * one block. Newest first, because reads can run out.
  */
-export function markNeeds(account: string, rows: readonly LegRow[], opening: Pick<BalanceSnapshot, "amounts"> | null): { asset: string; block: number }[] {
+export function heldAtChartPoints(account: string, rows: readonly LegRow[], opening: Pick<BalanceSnapshot, "amounts"> | null): { asset: string; block: number }[] {
   const txs = new Map<string, { block: number; index: number; changes: Map<string, bigint> }>()
   for (const row of rows) {
     if (row.account !== account) continue
     const tx = txs.get(row.tx_hash) ?? { block: row.block_num, index: row.tx_index, changes: new Map<string, bigint>() }
     txs.set(row.tx_hash, tx)
     const token = tokenByAddress(row.token)
-    if (token && !token.oracle) tx.changes.set(token.asset, (tx.changes.get(token.asset) ?? 0n) + (row.side === "credit" ? BigInt(row.amount) : -BigInt(row.amount)))
+    if (token && !token.oracle) tx.changes.set(token.asset, (tx.changes.get(token.asset) ?? 0n) + signedAmount(row))
   }
   const held = new Map(TOKENS.filter((t) => !t.oracle).map((t) => [t.asset, BigInt(opening?.amounts[t.asset] ?? "0")]))
   const needs = new Map<string, { asset: string; block: number }>()

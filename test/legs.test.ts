@@ -315,6 +315,7 @@ describe("pricing a wallet's rows", () => {
       assert.equal(aero(legs).costMicros, null)
       assert.equal(aero(legs).priceMicros, null)
       assert.match(aero(legs).priceNote!, /a token we can't price yet/)
+      assert.equal(aero(legs).alsoMovedUnlisted, true)
     })
 
     it("a row from a dataset deployed before unlisted_moves can't price it either", () => {

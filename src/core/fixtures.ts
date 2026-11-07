@@ -3,7 +3,7 @@
 // that also moved a token off the allowlist, an opening balance, a balance the legs don't explain, and senders to answer
 // for: another of this user's wallets, a stranger, an exchange address and a bridge. Answering them is the demo.
 
-import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, derivePricedRows, markNeeds, normalizeAddress, openingLegs, type CurrencyCode, type LegKind, type LegRow, type Rates, type Reference } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, derivePricedRows, heldAtChartPoints, normalizeAddress, openingLegs, type CurrencyCode, type LegKind, type LegRow, type Rates, type Reference } from "@pricetag/sdk/core"
 import type { WalletResponse } from "./api.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS } from "./book.ts"
 
@@ -201,7 +201,7 @@ export function demoRates(currency: CurrencyCode): Rates {
 }
 
 const marketMarks: WalletResponse["marketMarks"] = {}
-for (const { asset, block } of markNeeds(DEMO_ADDRESS, rows, opening)) {
+for (const { asset, block } of heldAtChartPoints(DEMO_ADDRESS, rows, opening)) {
   const price = marketAt(asset, block)
   if (price) (marketMarks[block] ??= {})[asset] = price
 }
