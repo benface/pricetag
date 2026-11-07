@@ -149,12 +149,21 @@ function matchAsset(legs: readonly PricedLeg[], readThroughDay: number, timeZone
   const acquisitions: Acquisition[] = []
   const pooledCredits = new Map<number, PricedLeg>()
   const disposals: Disposal[] = []
-  const times = legs.map((leg) => Date.parse(leg.timestamp))
+  // The latest time up to each leg, which never decreases, so the first leg after a time is a binary search.
+  const latest: number[] = []
+  for (const leg of legs) latest.push(Math.max(Date.parse(leg.timestamp), latest.at(-1) ?? -Infinity))
   // The first leg after `at`, but never after the credit that brought it, which is where something acquired here joins.
   const joinsBefore = (at: string, arrival: number) => {
     const ms = Date.parse(at)
-    const next = times.findIndex((time) => time > ms)
-    return next === -1 || next > arrival ? arrival : next
+    if (!(ms < (latest[arrival] as number))) return arrival
+    let low = 0
+    let high = arrival
+    while (low < high) {
+      const mid = (low + high) >> 1
+      if ((latest[mid] as number) > ms) high = mid
+      else low = mid + 1
+    }
+    return low
   }
   legs.forEach((leg, index) => {
     const delta = BigInt(leg.delta)
