@@ -27,7 +27,15 @@ export type Resolved = {
   legs: Map<string, PricedLeg[]>
   open: OpenItem[]
   purchases: PurchaseState[]
+  received: Received[]
 }
+
+/**
+ * What arrived from another address that may be income, like pay or rewards. given: the user said it came from someone else, which
+ * also covers a gift. unanswered: nobody has said who sent it. Never listed: what came from the user's own wallets or exchange
+ * accounts, what they entered or imported a cost for, what a purchase or note covers, and what came through a bridge or a mint.
+ */
+export type Received = { wallet: string; leg: PricedLeg; sender: string; units: bigint; why: "given" | "unanswered" }
 
 /**
  * What became of a purchase. recorded: it's the cost of what arrived. waiting: nothing's been seen arriving from its
@@ -288,6 +296,7 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
   const read = new Map(sides.map((side) => [normalizeAddress(side.wallet.address), side]))
   const purchased = purchasedLegs(sides, book)
   const open: OpenItem[] = []
+  const received: Received[] = []
   const gaps = new Map<string, Map<string, HistoryGap>>()
   /**
    * A cost can only carry over from a wallet whose history of that asset is confirmed as of when it left. Otherwise it could
@@ -354,6 +363,8 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     const report = reportedMoney ? moneyIn(side, reportedMoney, leg) : null
 
     const pending: OpenItem[] = []
+    // Only once nothing else explains what it cost, since anything that does says it isn't income.
+    const incoming: Received[] = []
     const unvouched: { sender: string; settled: boolean }[] = []
     const outsideDemo: string[] = []
     const pieces = (sources ?? []).flatMap(({ address: sender, units: part }): CostPiece[] => {
@@ -382,6 +393,7 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
       // Their wallet sent it to a wallet they've said isn't theirs, so that wallet got it from someone else.
       const given = answer?.kind === "someone-else" || (answer?.kind === "mine" && book.senders[address]?.kind === "someone-else")
       const someoneElse = given || knownSender(sender)?.kind === "bridge" || sender === MINT_ADDRESS
+      if (given && !reportedMoney) incoming.push({ wallet: address, leg, sender, units: part, why: "given" })
       if (someoneElse) {
         if (leg.priceMicros === null) return [unknown]
         const cost = worth(part, BigInt(leg.priceMicros), leg.decimals).toString()
@@ -391,6 +403,7 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
       // Answered already, and answering again wouldn't change anything, because the demo never reads this wallet.
       if (answer?.kind === "mine" && isDemoWallet(address)) outsideDemo.push(sender)
       else pending.push({ wallet: address, leg, sender, units: part })
+      if (answer === undefined && !reportedMoney) incoming.push({ wallet: address, leg, sender, units: part, why: "unanswered" })
       return [unknown]
     })
 
@@ -409,6 +422,7 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
       return leg
     }
     open.push(...pending)
+    received.push(...incoming)
     // Only once it's settled, or a card could appear for an unread balance and vanish when it's read.
     const settled = unvouched.filter((w) => w.settled)
     if (settled.length > 0) open.push({ wallet: address, leg, sender: null, units, evidence: settled.map((w) => `${shortHash(w.sender)}, your wallet, sent ${sources.length === 1 ? "" : "some of "}this, and its ${leg.asset} history can't be confirmed`) })
@@ -436,7 +450,7 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     const recorded = [...purchased].some(([key, match]) => match === purchase && legs.some((leg) => costKey(purchase.wallet, leg.id) === key && leg.purchaseSource))
     return { order: purchase.order, state: recorded ? "recorded" : legs.length === 0 ? "waiting" : "unmatched" }
   })
-  return { legs: output, open, purchases }
+  return { legs: output, open, purchases, received }
 }
 
 export type Arrival = { asset: string; decimals: number; units: string }

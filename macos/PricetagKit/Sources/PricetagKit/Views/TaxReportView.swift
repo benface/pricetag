@@ -201,6 +201,9 @@ public struct TaxReportView: View {
             if report.sentCount > 0 {
                 countRow("Sent to other addresses", report.sentCount)
             }
+            if let received = report.receivedCount, received > 0 {
+                countRow("Received, may be income", received)
+            }
             LabeledContent("Total gain") {
                 if let gain = report.gainMicros, let text = report.gainText {
                     LiveNumber(text, tone: Tone(signed: gain))

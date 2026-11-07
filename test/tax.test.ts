@@ -356,9 +356,9 @@ describe("taxReportOf", () => {
     const report = taxReportOf([DEMO_WALLET], { country: "US", method: "fifo", scope: "per-wallet" })
     const rows = parseCsv(report.csv)
     assert.ok(rows.every((row) => row.length === rows[0]?.length))
-    assert.deepEqual(rows[0], ["Date (UTC)", "Type", "Asset", "Amount", "Proceeds", "Cost", "Gain", "Currency", "Method", "Calculation", "Price source", "Status", "Notes", "Wallet", "Transaction"])
+    assert.deepEqual(rows[0], ["Date (UTC)", "Type", "Asset", "Amount", "Proceeds", "Cost", "Gain", "Value when received", "Currency", "Method", "Calculation", "Price source", "Status", "Notes", "Wallet", "Transaction"])
     assert.match(cellsOf(report)[0]?.Notes ?? "", /^Not tax advice/)
-    assert.equal(eventsOf(report).length, report.rowCount)
+    assert.equal(eventsOf(report).filter((row) => row.Type !== "Received").length, report.rowCount)
   })
 
   it("writes unknown where there's a gap, and never 0", () => {
@@ -840,6 +840,76 @@ describe("the user's answers in a report", () => {
       const [row] = eventsOf(taxReportOf([wallet], CA, { book: answering({ [SELLER]: { kind: "someone-else" } }) }))
       assert.deepEqual([row?.Cost, row?.Status], ["4000.000000", "ESTIMATED"])
       assert.match(row?.Notes ?? "", /worth when it arrived/, "and says the rest is what it was worth")
+    })
+  })
+
+  describe("what was received that may be income", () => {
+    const receivedOf = (report: TaxReportResponse) => cellsOf(report).filter((row) => row.Type === "Received")
+    const MERKL = "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae"
+
+    it("lists what nobody has answered for at what it was worth, after the sales, as possibly income", () => {
+      const report = taxReportOf([held([arrived(10, SELLER), sell(30, 1n, 2500)])], US)
+      const events = eventsOf(report)
+      assert.deepEqual(events.map((row) => row.Type), ["Sold", "Received"])
+      const [row] = receivedOf(report)
+      assert.deepEqual([row?.Amount, row?.["Value when received"], row?.Proceeds, row?.Cost, row?.Gain, row?.Status, row?.["Price source"]], ["1", "2000.000000", "", "", "", "POSSIBLY INCOME", "Market price feed (Chainlink)"])
+      assert.match(row?.Notes ?? "", new RegExp(`^From ${SELLER}\\. Nobody has said who sent it\\.`))
+      assert.equal(report.receivedCount, 1)
+      assert.equal(report.rowCount, 1, "it isn't a sale, fee or send")
+      assert.ok(report.warnings.some((warning) => /^1 thing you received .* may be income/.test(warning)))
+    })
+
+    it("lists what the user said came from someone else, and says a gift generally isn't income", () => {
+      for (const settings of [US, CA]) {
+        const [row] = receivedOf(taxReportOf([held([arrived(10, SELLER)])], settings, { book: answering({ [SELLER]: { kind: "someone-else" } }) }))
+        assert.equal(row?.["Value when received"], "2000.000000")
+        assert.match(row?.Notes ?? "", /You said it came from someone else\..*A gift generally isn't\./)
+      }
+    })
+
+    it("names a sender that pays rewards, and an exchange the user may have an account at", () => {
+      const fromMerkl = receivedOf(taxReportOf([held([arrived(10, MERKL)])], US))[0]
+      assert.match(fromMerkl?.Notes ?? "", /\(Merkl\)\. Merkl pays rewards/)
+      const fromCoinbase = receivedOf(taxReportOf([held([arrived(10, "0x71660c4005ba85c37ccec55d0c4493e66fe775d3")])], US))[0]
+      assert.match(fromCoinbase?.Notes ?? "", /If it came from your own Coinbase account, it isn't income/)
+    })
+
+    it("says unknown when there's no price, never 0", () => {
+      const [row] = receivedOf(taxReportOf([held([leg(10, E18, { kind: "transfer", priceMicros: null, priceSource: null, parts: [part(A, "credit", E18, SELLER)] })])], US))
+      assert.deepEqual([row?.["Value when received"], row?.["Price source"]], ["unknown", "None"])
+      assert.match(row?.Notes ?? "", /what it was worth isn't known/)
+    })
+
+    it("leaves out what the user's own wallets, exchange accounts, bridges and mints sent, and what has a cost entered or noted", () => {
+      const cases: [string, WalletResponse[], Book?][] = [
+        ["a wallet said to be theirs", [held([arrived(10, SELLER)])], answering({ [SELLER]: { kind: "mine" } })],
+        ["an exchange account", [held([arrived(10, SELLER)])], answering({ [SELLER]: { kind: "my-exchange" } })],
+        ["a bridge", [held([arrived(10, "0x4200000000000000000000000000000000000010")])]],
+        ["a mint", [held([arrived(10, `0x${"0".repeat(40)}`)])]],
+        ["another wallet in the report", [walletOf(A, [arrived(5, SELLER), sent(10, B)]), walletOf(B, [arrived(10, A, B)])], answering({ [SELLER]: { kind: "mine" } })],
+        ["a cost entered", [held([arrived(10, SELLER)])], answering({}, { [costKey(A, arrived(10, SELLER).id)]: { micros: usd(1000), currency: "USD" } })],
+        ["a note", [{ ...held([arrived(10, SELLER)]), notes: [{ noteTx: hash(99), blockNum: 11, txHash: hash(10), asset: "ETH", usdMicros: usd(700) }] }]],
+      ]
+      for (const [name, wallets, book] of cases) {
+        const report = taxReportOf(wallets, US, book ? { book } : {})
+        assert.deepEqual([receivedOf(report).length, report.receivedCount], [0, 0], name)
+      }
+    })
+
+    it("only lists the year asked for", () => {
+      const late = leg(10, E18, { kind: "transfer", timestamp: "2027-01-02T00:00:00.000Z", parts: [part(A, "credit", E18, SELLER)] })
+      const wallet = walletOf(A, [arrived(5, SELLER), late], { latest: { blockNum: 1000, timestamp: "2027-02-01T00:00:00.000Z" } })
+      assert.equal(taxReportOf([wallet], { ...US, year: 2026 }).receivedCount, 1)
+      assert.equal(taxReportOf([wallet], { ...US, year: 2027 }).receivedCount, 1)
+      assert.equal(taxReportOf([wallet], US).receivedCount, 2)
+    })
+
+    it("isn't on Form 8949 or Schedule 3, which only list sales, and they say where it is", () => {
+      for (const settings of [US, CA]) {
+        const form = taxReportOf([held([arrived(10, SELLER), sell(30, 1n, 2500)])], settings).form
+        assert.ok(form && !form.csv.includes(SELLER))
+        assert.match(form?.csv ?? "", /What you received isn't a sale either, so it's only in the full report/)
+      }
     })
   })
 

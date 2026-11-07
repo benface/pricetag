@@ -24,6 +24,7 @@ import Testing
         #expect(report.scope == .pooled)
         #expect(report.csv.hasPrefix("Date (UTC),Type,Asset,"))
         #expect(report.unresolvedCount > 0)
+        #expect(report.receivedCount == 3)
     }
 
     @Test func marksWhatRestsOnAnEstimate() throws {
