@@ -27,7 +27,16 @@ export type Resolved = {
   legs: Map<string, PricedLeg[]>
   open: OpenItem[]
   purchases: PurchaseState[]
+  received: Received[]
 }
+
+/**
+ * What arrived from another address that may be income, like pay or rewards. given: the user said it came from someone else, which
+ * also covers a gift. unanswered: nobody has said who sent it. Never listed: what came from the user's own wallets or exchange
+ * accounts, what a purchase or a matched exchange withdrawal covers, and what came through a bridge or a mint. An entered cost
+ * or a note doesn't take it off, since what something cost doesn't say whether it was pay.
+ */
+export type Received = { wallet: string; leg: PricedLeg; sender: string; units: bigint; why: "given" | "unanswered"; costEntered?: true }
 
 /**
  * What became of a purchase. recorded: it's the cost of what arrived. waiting: nothing's been seen arriving from its
@@ -295,6 +304,7 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
   const read = new Map(sides.map((side) => [normalizeAddress(side.wallet.address), side]))
   const purchased = purchasedLegs(sides, book)
   const open: OpenItem[] = []
+  const received: Received[] = []
   const gaps = new Map<string, Map<string, HistoryGap>>()
   /**
    * A cost can only carry over from a wallet whose history of that asset is confirmed as of when it left. Otherwise it could
@@ -333,6 +343,37 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     const traced = (pieces ?? []).map((piece): CostPiece => ({ ...piece, label: piece.costMicros === null ? "unknown" : "inherited" }))
     const left = traced.reduce((rest, piece) => rest - BigInt(piece.qty), units)
     return left > 0n ? [...traced, { qty: left.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0" }] : traced
+  }
+
+  /**
+   * What arrived from someone else in this credit, by sender. Who sent it is what decides whether it may be income, so this doesn't
+   * depend on what cost was entered or noted for it, or on whether its cost can be worked out. Each sender's credits count in
+   * full, even when as much or more left in the same transaction, so this reads a debit's credit parts too, and what netted
+   * to nothing (`WalletView.netted`).
+   */
+  const receivedIn = (side: Side, leg: PricedLeg): Received[] => {
+    if (leg.kind !== "transfer" || leg.opening || leg.unsettledCredit || leg.costLabel === "paid") return []
+    const address = normalizeAddress(side.wallet.address)
+    const key = costKey(address, leg.id)
+    // Bought, or the user's own money coming off an exchange.
+    if (purchased.has(key) || withdrawals.has(key)) return []
+    const own = new Set([address, ...walletsBehind(book, side.wallet)])
+    const costEntered = Boolean(book.costs[key]) || side.wallet.notes.some((n) => n.txHash === leg.txHash && n.asset === leg.asset)
+    const senders = new Map<string, bigint>()
+    for (const part of leg.parts) {
+      if (part.side === "debit" || !part.counterparty) continue
+      const sender = normalizeAddress(part.counterparty)
+      senders.set(sender, (senders.get(sender) ?? 0n) + BigInt(part.amount))
+    }
+    return [...senders].flatMap(([sender, units]): Received[] => {
+      if (units <= 0n || own.has(sender) || knownSender(sender)?.kind === "bridge" || sender === MINT_ADDRESS) return []
+      const answer = book.senders[sender]
+      const given = answer?.kind === "someone-else" || (answer?.kind === "mine" && book.senders[address]?.kind === "someone-else")
+      const item = { wallet: address, leg, sender, units, ...(costEntered ? { costEntered: true as const } : {}) }
+      if (given) return [{ ...item, why: "given" }]
+      // Mine or my exchange says it isn't income.
+      return answer === undefined ? [{ ...item, why: "unanswered" }] : []
+    })
   }
 
   const resolve = (side: Side, leg: PricedLeg): PricedLeg => {
@@ -429,6 +470,7 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     // What's carried is only for this transaction. Kept any longer, it's as much memory as every lot times every move.
     if (at && (at.blockNum !== leg.blockNum || at.txIndex !== leg.txIndex)) carried.clear()
     at = leg
+    received.push(...receivedIn(side, leg))
     const next = resolve(side, leg)
     ;(output.get(address) as PricedLeg[])[index] = next
     const key = `${address}:${next.asset}`
@@ -443,7 +485,8 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     const recorded = [...purchased].some(([key, match]) => match === purchase && legs.some((leg) => costKey(purchase.wallet, leg.id) === key && leg.purchaseSource))
     return { order: purchase.order, state: recorded ? "recorded" : legs.length === 0 ? "waiting" : "unmatched" }
   })
-  return { legs: output, open, purchases }
+  for (const side of sides) for (const leg of side.view.netted ?? []) received.push(...receivedIn(side, leg))
+  return { legs: output, open, purchases, received }
 }
 
 export type Arrival = { asset: string; decimals: number; units: string }

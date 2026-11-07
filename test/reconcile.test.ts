@@ -311,7 +311,7 @@ describe("the words", () => {
     const states = [onchain({ ETH: COMPUTED_ETH, USDC: 0n }), onchain({ ETH: COMPUTED_ETH + 1n, USDC: 1n }), onchain({ ETH: COMPUTED_ETH, USDC: 0n }, ["0xabc"]), { balances: null, l1FeeUnknownTxs: [] }]
     for (const state of states) {
       for (const position of foldPositions(legsOf(WALLET_ROWS), "average", PRICES, state)) {
-        // The price's own wording is WORK-349's, so this looks at the part reconciliation adds.
+        // The price has its own wording, tested elsewhere, so this looks at the part reconciliation adds.
         for (const metric of ["amount", "average", "value", "realized", "unrealized", "onchain"] as const) {
           const added = explainMetric(position, metric, USD_CONTEXT).lines.filter((line) => !line.startsWith("Current price") && !line.startsWith("There's no current price"))
           for (const line of added) assert.doesNotMatch(line, /\blegs?\b/i)

@@ -132,6 +132,8 @@ public struct TaxReport: Codable, Sendable, Equatable {
     public let soldCount: Int
     public let feeCount: Int
     public let sentCount: Int
+    /// What arrived from other addresses that may be income, listed after the sales. nil from a server that doesn't list it.
+    public let receivedCount: Int?
     /// Of those, how many have an unknown gain, in whole or in part.
     public let unknownCount: Int
     /// The wallets with something unknown, in the order of `wallets`.

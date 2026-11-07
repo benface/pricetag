@@ -72,7 +72,8 @@ export class FollowedTable {
       this.from = Math.min(this.from, start)
     }
     if (start > this.through + 1) throw new Error(`The stream skipped from block ${this.through} to ${start}`)
-    this.rows.push(...rows)
+    // A loop, since spreading a big batch into `push` overflows the stack.
+    for (const row of rows) this.rows.push(row)
     this.partial = complete ? null : { start, end, hash }
     if (!complete) return
     this.through = end

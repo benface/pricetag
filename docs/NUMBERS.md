@@ -225,8 +225,14 @@ These tokens still get no position or value, and nothing here changes what's swe
 
 ## Tax report
 
-Both apps export the same CSV, because the server writes it (`POST /api/tax-report/<address>` with the country and the answers, in `src/core/tax.ts`; a `GET` with `?country=CA|US` has no answers).
+Both apps export the same files, because the server writes them (`POST /api/tax-report/<address>` with the country and the answers, in `src/core/tax.ts`; a `GET` with `?country=CA|US` has no answers).
 This isn't tax advice, and the report says so first.
+
+There are two buttons, and both give a CSV to check, not a finished return:
+
+- **Download CSV** (**Export CSV…** on the Mac) is the full report, every row below.
+- **Download as Form 8949** for the US, or **Download as Schedule 3** for Canada (**Export as …** on the Mac), lays the same rows out like that form's lines, for whoever copies them over (`src/core/tax-forms.ts`).
+  Every amount comes from the full report's rows, so the two always agree. Things sent away aren't sales, so they're only in the full report.
 
 - **One row per thing that may be taxable:** a sale, a network fee (paying in ETH sells that ETH) or something sent, with its proceeds, cost, gain, method, price source and transaction link, in the main currency.
   A position with nothing unresolved adds up to the Realized the apps show. With something unresolved, the apps leave the position out and this keeps each row it knows, and says so.
@@ -252,7 +258,46 @@ A wallet nobody's said is theirs takes no costs from the others.
 The demo wallet can't be combined with anything.
 All together needs one consistent history, so the report stops at the last block every wallet has reached and says what that leaves out. If their histories start at different blocks, which only happens on the raw dataset, every cost is `unknown`.
 
-The report doesn't check Canada's superficial loss rule, split US short-term from long-term gains, or list what was received, and it says so.
+### Form 8949 (US)
+
+Lines follow the IRS instructions for Form 8949, in box I (short-term, Part I) or box L (long-term, Part II), which are for digital assets no Form 1099-DA or 1099-B reported. If a broker sent one, the user should use the box it names, and the file says so.
+
+- **Short-term or long-term** comes from when each sold unit was acquired: it's long-term from the day after its first anniversary (`termOf`).
+  A sale of units held for different lengths becomes a short-term and a long-term line, with the proceeds shared by units.
+  Several purchase dates on one line say `VARIOUS`, and dates are in UTC.
+- **When a date isn't known, it stays unknown.** A unit keeps its date through moves between linked wallets, and something received from someone else is dated the day it arrived.
+  An opening balance has none, and neither does anything that arrived with no history behind it, like a bridge deposit or an amount with only a cost someone entered, unless an exchange file has its purchase date.
+  Those lines go in their own group, "How long it was held isn't known", with no box and no total, since they can't be added to either part.
+- **Only Oldest first keeps purchase dates.** Average mixes every purchase together, so with it every line lands in that unknown group.
+- **Each part's total** only adds lines whose amounts are all known, and says how many it leaves out. With none known there's no total, never $0.
+
+### Schedule 3 (Canada)
+
+Lines follow Part 3 of Schedule 3, as CRA's guide T4037 describes: crypto-assets go on line 7, with the total proceeds for line 15200 and the total gain or loss for line 15301.
+Each line has the year it was acquired, `Various` when there were several, and `unknown` when nothing says. Network fees are their own lines, so outlays and expenses stay empty.
+The total leaves out unknown amounts the same way.
+
+### Superficial losses (Canada)
+
+A loss can't be deducted when the same asset is acquired within 30 days before or after the sale and is still held 30 days after (`flagSuperficialLosses`).
+The report checks this across the wallets in it, and **only warns**: it marks the row, adds a warning, and counts the flagged losses next to the Schedule 3 total, but doesn't change any amount or add the loss to the new cost.
+When the 30 days after haven't all been read yet, it says the loss may turn out to be superficial.
+It can't see a spouse's or a company's wallets, which the rule counts too, and doesn't count something that arrived with no history behind it, like a bridge deposit, as a new purchase, unless an exchange file says when it was bought.
+
+### Received (possibly income)
+
+What arrived from other addresses is listed after the sales as **Received**, with the status `POSSIBLY INCOME` and its worth when it arrived in a **Value when received** column, which is `unknown`, never 0, when there's no price or exchange rate. Pay is income at fair market value in both countries ([ITA s. 52(1)](https://laws-lois.justice.gc.ca/eng/acts/I-3.3/section-52.html), [IRS FAQ Q59](https://www.irs.gov/individuals/international-taxpayers/frequently-asked-questions-on-digital-asset-transactions)), but a gift generally isn't, so a row is never called certain income, and its note names the sender.
+Moves between the report's wallets, what's answered as "mine" or "my exchange", purchases, matched exchange withdrawals, bridges and mints aren't listed. An entered cost or a note doesn't take a row off, since what it cost doesn't say whether it was pay, but the note says that if it was bought, it isn't income.
+A sender's whole credit is listed, even when as much or more of that token left in the same transaction. When it nets to nothing, it comes from the wallet's `netted`, which nothing folds, and its block's exchange rate is read like a leg's.
+Received rows follow the year asked for, but aren't sales, so they're left out of `rowCount`, Form 8949 and Schedule 3, which say they're only in the full report.
+
+### What it still doesn't do
+
+- It doesn't adjust a superficial loss, or check the US wash sale rule, which the report says to ask an accountant about.
+- Choosing specific units to sell isn't available.
+- It only knows what reached these wallets. Something that arrived with no history behind it has no date unless an exchange file gives one, and its original cost stays unknown unless an exchange file or an answer gives it. A bridge deposit or a mint is the exception: without either, it's still valued at the market price when it arrived, as an estimate, not what was first paid for it.
+- An unknown amount stays `unknown` in every file and every total, never $0.
+
 On an older wallet, most rows start with an unknown gain, until the user answers for what it held before the first block read.
 In a currency neither country reports in, like EUR, it warns first that those rules may not apply.
 

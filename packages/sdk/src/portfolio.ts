@@ -6,7 +6,7 @@ import type { RateRound } from "./currency.ts"
 import { answerToMicros, isSanePrice, type PricedLeg, type Reference } from "./legs.ts"
 import type { FeedMarks, MarketMarks } from "./market.ts"
 import { decimalsOf, reconcile, type Onchain, type Reconciliation } from "./reconcile.ts"
-import { TOKENS, TOKEN_FEEDS } from "./tokens.ts"
+import { TOKEN_FEEDS, tokenBySymbol } from "./tokens.ts"
 
 export type Head = { blockNum: number; timestamp: string }
 
@@ -21,7 +21,7 @@ export type LatestPrices = Record<string, LatestPrice | undefined>
 
 /**
  * What one leg did to its position. Only counters, and what a debit took, rather than every lot before and after: holding
- * those for every leg made oldest first's memory grow with the lots held times the legs (WORK-559).
+ * those for every leg made oldest first's memory grow with the lots held times the legs.
  */
 export type LegEffect = {
   leg: PricedLeg
@@ -60,9 +60,9 @@ export type Position = {
 export type Exclusion = { asset: string; reason: "unknown cost" | "no current price" | "sold or spent at an unknown cost" | "sold or spent at an unknown price" | "incomplete history" | "doesn't match its actual balance" | "not checked against its actual balance" | "balance couldn't be read" }
 
 /** What a sum is made of. A sum with something missing and nothing known has no answer, which isn't the same as $0. */
-export type Coverage = { known: number; missing: number }
+export type SumParts = { known: number; missing: number }
 
-export const hasAnswer = ({ known, missing }: Coverage) => known > 0 || missing === 0
+const hasAnswer = ({ known, missing }: SumParts) => known > 0 || missing === 0
 
 export type Totals = {
   /** Each sums only what's known, and is null when nothing is. `excluded` says what isn't in it. */
@@ -74,7 +74,7 @@ export type Totals = {
   excluded: Exclusion[]
   /** Some gas had no price at its block, so it's not in `gasMicros`. */
   unpricedGas: boolean
-  coverage: Record<"value" | "realized" | "unrealized" | "pnl", Coverage>
+  coverage: Record<"value" | "realized" | "unrealized" | "pnl", SumParts>
   /** What's held with an unknown cost, at today's price. It's not in any PnL. */
   unresolvedMicros: string
   /** How much of what these sums are made of is an estimate. */
@@ -139,7 +139,7 @@ export function limitFolds(bytes: number) {
   foldBytes = bytes
 }
 
-// Measured through the server's API on a 640 MB heap (WORK-570).
+// Measured through the server's API on a 640 MB heap.
 /** What a leg costs at the peak of reading and folding it, the same as a row in the budget wallets are read under. */
 const BYTES_PER_LEG = 10_000
 /** What each wallet beyond the first adds to every leg, because each fold looks through all of them: 21 wallets of 1,000 legs fit, and of 1,400 didn't. */
@@ -337,7 +337,7 @@ export function foldPositions(legs: readonly PricedLeg[], method: Method, prices
       effects,
       price,
       reconciliation,
-      noMarket: onchain?.marketChecked === true && !hasPrice && !TOKENS.some((t) => t.symbol === asset && t.oracle),
+      noMarket: onchain?.marketChecked === true && !hasPrice && !tokenBySymbol(asset)?.oracle,
       estimates: { cost, value, realized: confirmed && BigInt(values.estimatedRealizedMicros) > 0n, unrealized: confirmed && (cost || value) },
       values:
         reconciliation === null || reconciliation.status === "reconciled"
@@ -411,7 +411,7 @@ export type FeedRound = RateRound & { blockNum: number; timestamp: string }
  */
 export function feedPrice(asset: string, round: FeedRound, ethUsdMicros: string | null): string | null {
   const feed = TOKEN_FEEDS[asset]
-  const token = TOKENS.find((t) => t.symbol === asset)
+  const token = tokenBySymbol(asset)
   if (!feed || !token) return null
   const age = Math.floor(new Date(round.timestamp).getTime() / 1000) - round.updatedAt
   if (!(age >= 0 && age <= feed.maxAgeSeconds)) return null
@@ -421,7 +421,7 @@ export function feedPrice(asset: string, round: FeedRound, ethUsdMicros: string 
   return isSanePrice(token, micros, ethUsdMicros) ? micros : null
 }
 
-const answer = (sum: bigint, coverage: Coverage) => (hasAnswer(coverage) ? sum.toString() : null)
+const answer = (sum: bigint, coverage: SumParts) => (hasAnswer(coverage) ? sum.toString() : null)
 
 export function sumTotals(positions: readonly Position[], unread: readonly string[] = []): Totals {
   let value = 0n
@@ -624,7 +624,7 @@ export function pnlOverTime(
   const states = new Map<string, PositionState>()
   const points: PnlPoint[] = []
   const measure = (priceOf: (asset: string) => string | null, priceEstimated: (asset: string) => boolean) => {
-    const coverage: Coverage = { known: 0, missing: 0 }
+    const coverage: SumParts = { known: 0, missing: 0 }
     let pnl = 0n
     let excludedCount = 0
     let pnlEstimated = false
@@ -669,7 +669,7 @@ export function pnlOverTime(
   }
   // What's held, and nothing about cost. A quantity history can't vouch for is left out, like one with no price.
   const worthNow = (priceOf: (asset: string) => string | null) => {
-    const coverage: Coverage = { known: 0, missing: 0 }
+    const coverage: SumParts = { known: 0, missing: 0 }
     let value = 0n
     const excluded: string[] = []
     for (const [asset, state] of states) {

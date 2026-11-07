@@ -118,6 +118,21 @@ The RPC is configurable and untrusted.
 - [x] Realized gains only sweep when the realized total is fully known, and only count as swept once the transaction lands.
 - [x] Only one thing signs at a time, so two can't take the same nonce.
 
+## Buying through a one-use address
+
+- [x] A purchase bigger than what Spending Money has room for, with a savings wallet, goes to a new key made just for it, the same way as Spending Money's: `SecRandomCopyBytes`, wrapped by the Secure Enclave, in a device-only Keychain item. Without a savings wallet it lands in Spending Money as before.
+- [x] The key is on disk, in the vault and in the device records, before its address goes to the provider. If the records can't be written, the key is deleted and nothing starts.
+- [x] Everything that arrives moves to savings by itself, ETH paying for its own move. A token that arrives without ETH gets the fee from Spending Money, at most three times per key, only from a settled read with nothing of Spending Money's own on the way, and never during an alarm or a rotation. Until it can, it says so.
+- [x] It's retired like a rotation's old key: three reads in a row saying it's empty, plus an answer from Amp, reaching the block where it first read as empty and within a minute of now, that it holds nothing off the allowlist. On top of that, its purchase's order has to say nothing more is coming: delivered, in a block a read has reached, or failed. Something else arriving and moving on, or part of the purchase, doesn't count, and an order still going keeps the key however long it takes. Only a key whose page never opened, or whose page someone said they didn't pay on before any order turned up, goes without that, and only 14 days after it was made, because they could have paid anyway. Hiding a finished row with an order, such as one whose cost or block is unknown, never lets the key go: it stays until a read reaches the order's block, so a key could stay forever if the block never turns up. The key's records have to say a purchase may be coming before its page opens, and a row is only hidden once the key's records have its latest order. If either can't be saved, no page opens, or the row stays and says why, so after a restart there's always something saying not to delete the key.
+- [x] A fee for a token only counts against the key's three once everything that can stop it before it's signed has passed, so a node that can't estimate it doesn't use them up.
+- [x] Without Spending Money, what a purchase needs still shows, in its setup sheet and the menu bar, with the purchases still on their way.
+- [x] It's checked on every tick while the app's open, so a purchase that lands while it's closed moves on the next launch. It never becomes Spending Money, including after Spending Money is deleted, and it keeps working without it, except for a token's fee.
+- [x] A nonce it used that this app didn't sign, or a transaction in its history that this app didn't sign, raises the same alarm as Spending Money's, which stops top-ups and further purchases through one. Only this Mac ever had that key, so that means this Mac's keys can't be trusted.
+- [x] Its address counts as linked, so a purchase's cost carries on to savings as `inherited`. Sends to it and adding it as a savings wallet are refused, and it isn't listed among wallets.
+- [ ] **It doesn't stop malware on the Mac at that moment,** which can read either key as it signs. WORK-332's onchain limits are the fix for that.
+- [ ] **Sweeps only run while the app is open,** so a purchase sits on its one-use address until the next launch if the app's closed.
+- [ ] **A provider that wants proof the buyer controls the address** (a signed message, as EU rules can require above €1,000) isn't handled. The key could sign one, but nothing here asks it to.
+
 ## Stolen key alarm
 
 - [x] Each transaction is written to disk before it's broadcast, so nothing this app sent can look stolen, even after a crash.

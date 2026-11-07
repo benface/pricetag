@@ -9,7 +9,8 @@ extension PortfolioStore {
         WalletList(
             spending: hotWallet?.address.map { NamedWallet(address: $0.lowercased, name: HotWalletWording.title) },
             savings: hotWallet?.settings.coldWallets.map { NamedWallet(address: $0.address.lowercased, name: $0.name) } ?? [],
-            linked: book.linkedWallets,
+            // A one-use address is only a stop on the way to savings, so it isn't a wallet to pick. Its costs still carry over.
+            linked: book.linkedWallets.filter { address in !(hotWallet?.purchaseKeys.contains { $0.lowercased == address } ?? false) },
             replacedKeys: hotWallet?.replacedKeys ?? [],
             newKey: hotWallet?.rotation?.to.lowercased,
             saved: savedWallets,

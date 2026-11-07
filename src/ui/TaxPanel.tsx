@@ -263,6 +263,12 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
                   <dd>{report.sentCount.toLocaleString("en-US")}</dd>
                 </div>
               ) : null}
+              {report.receivedCount > 0 ? (
+                <div>
+                  <dt className="small muted">Received, may be income</dt>
+                  <dd>{report.receivedCount.toLocaleString("en-US")}</dd>
+                </div>
+              ) : null}
               <div>
                 <dt className="small muted">Total gain · {report.currency}</dt>
                 <dd>{report.gainMicros === null ? <span className="warn-text">⚠ Unknown</span> : est(formatSignedMoney(report.gainMicros, report.currency), report.estimatedCount > 0)}</dd>

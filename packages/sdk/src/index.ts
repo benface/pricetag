@@ -16,6 +16,6 @@ export type { CostLabel, Method, PositionState, PositionValues } from "./fold.ts
 export type { HoldComparison, HoldStatus, HoldUnavailable } from "./hold.ts"
 export type { LegConversion, LegPart, PricedLeg, PriceSource, Reference, SettledCredit } from "./legs.ts"
 export type { OtherToken } from "./other-tokens.ts"
-export type { Coverage, Exclusion, LatestPrice, LatestPrices, LegEffect, MarkEstimated, MarkPrice, PnlPoint, PnlStatus, Portfolio, Position, Totals } from "./portfolio.ts"
+export type { SumParts, Exclusion, LatestPrice, LatestPrices, LegEffect, MarkEstimated, MarkPrice, PnlPoint, PnlStatus, Portfolio, Position, Totals } from "./portfolio.ts"
 export type { Reconciliation } from "./reconcile.ts"
 export type { Token } from "./tokens.ts"
