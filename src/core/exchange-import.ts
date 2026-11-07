@@ -2,6 +2,8 @@
 // out rather than guessed: it stays a question. Nothing in a file says whether it starts at the account's beginning, and what
 // was bought before it changes every cost in it, so only the person who downloaded it can vouch for that.
 
+import { sha256 } from "@noble/hashes/sha2"
+import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils"
 import { ASSETS, decimalsOf, isAddress, normalizeAddress, type CurrencyCode } from "@pricetag/sdk/core"
 import { MAX_EXCHANGE_LOTS, type Book, type ExchangeLot, type ExchangeWithdrawal } from "./book.ts"
 
@@ -52,7 +54,7 @@ const isReadable = (currency: string): currency is CurrencyCode => READABLE.has(
  * Bought at one moment, which is one lot however many rows it took, because a file doesn't say which of them came first. When
  * they were at different prices, what part of it cost depends on that, so only all of it has a cost. Null: part of it has gone.
  */
-type Lot = { at: number; units: bigint; cost: bigint | null; tied: boolean; boughtUnits: bigint; boughtCost: bigint }
+type Lot = { at: number; units: bigint; cost: bigint | null; tied: boolean }
 
 /** A sale or a withdrawal waiting for the rest of its moment, since a file doesn't say which of those came first either. */
 type Disposal = { at: number; units: bigint; withdrawal: ExchangeWithdrawal | null }
@@ -65,18 +67,16 @@ type Pool = { units: bigint; cost: bigint; lots: Lot[]; oldest: number; disposal
 
 function addLot(lots: Lot[], at: number, units: bigint, cost: bigint) {
   const last = lots.at(-1)
-  if (last?.at !== at || last.cost === null) lots.push({ at, units, cost, tied: false, boughtUnits: units, boughtCost: cost })
+  if (last?.at !== at || last.cost === null) lots.push({ at, units, cost, tied: false })
   else {
     last.tied ||= last.cost * units !== cost * last.units
     last.units += units
     last.cost += cost
-    last.boughtUnits += units
-    last.boughtCost += cost
   }
 }
 
-/** Part of a lot, as taken: how much, what it cost, when it was bought, whether a file says which came first within it, and all that was bought. */
-type Part = { at: number; units: bigint; cost: bigint; tied: boolean; boughtUnits: bigint; boughtCost: bigint }
+/** Part of a lot, as taken: how much, what it cost, when it was bought, and whether a file says which came first within it. */
+type Part = { at: number; units: bigint; cost: bigint; tied: boolean }
 
 /** What these units cost lot by lot, this far along the lots. Null when that can't be said, or the budget ran out before it could. */
 function partsAlong({ lots, oldest }: Pool, from: bigint, units: bigint, budget: Budget): Part[] | null {
@@ -93,7 +93,7 @@ function partsAlong({ lots, oldest }: Pool, from: bigint, units: bigint, budget:
     }
     const taken = left < lot.units - skip ? left : lot.units - skip
     if (lot.cost === null || (lot.tied && taken < lot.units)) known = false
-    else parts.push({ at: lot.at, units: taken, cost: (lot.cost * taken) / lot.units, tied: lot.tied, boughtUnits: lot.boughtUnits, boughtCost: lot.boughtCost })
+    else parts.push({ at: lot.at, units: taken, cost: (lot.cost * taken) / lot.units, tied: lot.tied })
     skip = 0n
     left -= taken
   }
@@ -170,7 +170,7 @@ function costInAnyOrder(pool: Pool, moment: ReadonlyMap<bigint, number>, size: b
     if (parts === null || !within(costOf(parts), cost, rounding)) return null
     settled &&= sameParts(first, parts, rounding)
   }
-  const lots = settled ? first.map((part) => ({ units: part.units.toString(), micros: part.cost.toString(), at: new Date(part.at).toISOString(), boughtUnits: part.boughtUnits.toString(), boughtMicros: part.boughtCost.toString(), ...(part.tied ? { wholeCostOnly: true as const } : {}) })) : [{ units: size.toString(), micros: cost.toString(), wholeCostOnly: true as const }]
+  const lots = settled ? first.map((part) => ({ units: part.units.toString(), micros: part.cost.toString(), at: new Date(part.at).toISOString(), ...(part.tied ? { wholeCostOnly: true as const } : {}) })) : [{ units: size.toString(), micros: cost.toString(), wholeCostOnly: true as const }]
   return { cost, lots }
 }
 
@@ -207,6 +207,7 @@ export function parseCoinbaseCsv(text: string): ExchangeImport | null {
   // Coinbase puts a few lines about the account before the header.
   const headerAt = lines.findIndex((line) => /(^|,)Timestamp(,|$)/.test(line) && /Transaction Type/.test(line))
   if (headerAt < 0) return null
+  const fileId = bytesToHex(sha256(utf8ToBytes(text)))
   const header = parseCsvLine(lines[headerAt] as string).map((h) => h.trim().toLowerCase())
   const column = (start: string) => header.findIndex((h) => h.startsWith(start))
   const at = { time: column("timestamp"), type: column("transaction type"), asset: column("asset"), qty: column("quantity"), currency: header.findIndex((h) => h.endsWith("currency")), total: column("total"), notes: column("notes") }
@@ -272,7 +273,7 @@ export function parseCoinbaseCsv(text: string): ExchangeImport | null {
       if (SENDS.has(type)) {
         if (enough) {
           const to = (cells[at.notes] ?? "").match(/0x[0-9a-fA-F]{40}/)?.[0]
-          withdrawal = { exchange: "Coinbase", asset, units: units.toString(), at: new Date(time).toISOString(), cost: { micros: cost.toString(), currency: pool.currency as CurrencyCode }, fifoCostMicros: null, toAddress: to && isAddress(to) ? normalizeAddress(to) : null }
+          withdrawal = { exchange: "Coinbase", asset, units: units.toString(), at: new Date(time).toISOString(), cost: { micros: cost.toString(), currency: pool.currency as CurrencyCode }, fifoCostMicros: null, fileId, toAddress: to && isAddress(to) ? normalizeAddress(to) : null }
           withdrawals.push(withdrawal)
         } else skipped++
       }

@@ -30,12 +30,6 @@ export type ExchangeLot = {
   wholeCostOnly?: true
   /** When it was bought, as `toISOString` writes it. Only a part only known as a whole can be without one, when it could be from several moments. */
   at?: string
-  /**
-   * All that was bought at `at`, of which this is part. A second withdrawal from one purchase says the same, in this file or
-   * another export of it, and that's how the two are known to be one purchase. Missing means nothing says what it's part of.
-   */
-  boughtUnits?: string
-  boughtMicros?: string
 }
 
 /** The most lots a withdrawal keeps. More than that only has a cost as a whole, so one file can't weigh down every fold after it. */
@@ -53,6 +47,12 @@ export type ExchangeWithdrawal = {
   fifoCostMicros: string | null
   /** What `fifoCostMicros` is made of, oldest first. Missing means it was saved before this was kept, so only all of it has that cost. */
   fifoLots?: ExchangeLot[]
+  /**
+   * Which file this came from. A file makes one lot of all it says was bought at one moment, so two lots with one date from one
+   * file are one purchase. Nothing else can say so: separate accounts can buy the same amount for the same price at the same second.
+   * Missing means it was saved before this was kept.
+   */
+  fileId?: string
   toAddress: string | null
 }
 
@@ -258,8 +258,7 @@ function parseExchangeLots(value: unknown[], units: string, fifoCostMicros: stri
     if (!lot || !isMicros(lot.units) || BigInt(lot.units) === 0n || !isMicros(lot.micros)) return null
     if (lot.wholeCostOnly !== undefined && lot.wholeCostOnly !== true) return null
     if (lot.at === undefined ? !lot.wholeCostOnly : typeof lot.at !== "string" || Number.isNaN(Date.parse(lot.at))) return null
-    if (lot.boughtUnits === undefined ? lot.boughtMicros !== undefined : lot.at === undefined || !isMicros(lot.boughtUnits) || BigInt(lot.boughtUnits) < BigInt(lot.units) || !isMicros(lot.boughtMicros)) return null
-    lots.push({ units: lot.units, micros: lot.micros, ...(lot.wholeCostOnly ? { wholeCostOnly: true as const } : {}), ...(typeof lot.at === "string" ? { at: new Date(lot.at).toISOString() } : {}), ...(typeof lot.boughtUnits === "string" ? { boughtUnits: lot.boughtUnits, boughtMicros: lot.boughtMicros as string } : {}) })
+    lots.push({ units: lot.units, micros: lot.micros, ...(lot.wholeCostOnly ? { wholeCostOnly: true as const } : {}), ...(typeof lot.at === "string" ? { at: new Date(lot.at).toISOString() } : {}) })
   }
   const adds = (pick: (lot: ExchangeLot) => string, total: string) => lots.reduce((sum, lot) => sum + BigInt(pick(lot)), 0n) === BigInt(total)
   return adds((lot) => lot.units, units) && adds((lot) => lot.micros, fifoCostMicros) ? lots : null
@@ -280,7 +279,8 @@ function parseWithdrawal(value: unknown): ExchangeWithdrawal | null {
   if (savedLots !== null && !Array.isArray(savedLots)) return null
   const fifoLots = savedLots && parseExchangeLots(savedLots, row.units, fifoCostMicros)
   if (savedLots && !fifoLots) return null
-  return { exchange: row.exchange, asset: row.asset, units: row.units, at: row.at, cost, fifoCostMicros, ...(fifoLots ? { fifoLots } : {}), toAddress: toAddress === null ? null : normalizeAddress(toAddress) }
+  if (row.fileId !== undefined && (typeof row.fileId !== "string" || row.fileId === "")) return null
+  return { exchange: row.exchange, asset: row.asset, units: row.units, at: row.at, cost, fifoCostMicros, ...(fifoLots ? { fifoLots } : {}), ...(row.fileId ? { fileId: row.fileId } : {}), toAddress: toAddress === null ? null : normalizeAddress(toAddress) }
 }
 
 function parsePurchase(value: unknown): Purchase | null {

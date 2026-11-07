@@ -262,7 +262,7 @@ const withdrawalCost = ({ cost, fifoCostMicros }: ExchangeWithdrawal, method: Me
  * depends on how much it kept. Saved before its lots were kept, it's one cost for all of it, because treating that as one
  * purchase would be a guess.
  */
-function piecesOfWithdrawal(side: Side, { exchange, units, cost, fifoCostMicros, fifoLots }: ExchangeWithdrawal, leg: PricedLeg): CostPiece[] | null {
+function piecesOfWithdrawal(side: Side, { units, cost, fifoCostMicros, fifoLots, fileId }: ExchangeWithdrawal, leg: PricedLeg): CostPiece[] | null {
   if (fifoCostMicros === null) return null
   const lots: readonly ExchangeLot[] = fifoLots ?? [{ units, micros: fifoCostMicros, wholeCostOnly: true }]
   const [sent, arrived] = [BigInt(units), BigInt(leg.delta)]
@@ -276,7 +276,7 @@ function piecesOfWithdrawal(side: Side, { exchange, units, cost, fifoCostMicros,
     // Converted as a running total, so the pieces add up to exactly what all of it comes to.
     const upTo = moneyIn(side, { micros: microsUpTo.toString(), currency: cost.currency }, leg)
     if (upTo === null) return null
-    pieces.push({ qty: qty.toString(), costMicros: (BigInt(upTo) - microsGiven).toString(), label: "self-reported", estimatedCostMicros: "0", ...(lot.wholeCostOnly ? { wholeCostOnly: true as const } : {}), ...(lot.at ? { boughtAt: lot.at, ...(lot.boughtUnits ? { boughtAs: JSON.stringify([exchange, cost.currency, lot.boughtUnits, lot.boughtMicros]) } : {}) } : {}) })
+    pieces.push({ qty: qty.toString(), costMicros: (BigInt(upTo) - microsGiven).toString(), label: "self-reported", estimatedCostMicros: "0", ...(lot.wholeCostOnly ? { wholeCostOnly: true as const } : {}), ...(lot.at ? { boughtAt: lot.at, ...(fileId ? { boughtIn: fileId } : {}) } : {}) })
     unitsGiven += qty
     microsGiven = BigInt(upTo)
   }

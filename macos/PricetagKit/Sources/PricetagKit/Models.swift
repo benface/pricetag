@@ -787,9 +787,6 @@ public struct ExchangeLot: Codable, Sendable, Equatable, Hashable {
     public var wholeCostOnly: Bool? = nil
     /// When it was bought. Only a part only known as a whole can be without one, when it could be from several moments.
     public var at: String? = nil
-    /// All that was bought at `at`, of which this is part. A second withdrawal from one purchase says the same, and that's how the two are known to be one purchase.
-    public var boughtUnits: String? = nil
-    public var boughtMicros: String? = nil
 }
 
 /// A withdrawal found in an exchange's history, with what it cost.
@@ -805,6 +802,8 @@ public struct ExchangeWithdrawal: Codable, Sendable, Equatable {
     public var fifoCostMicros: String? = nil
     /// What `fifoCostMicros` is made of, oldest first. Nil means it was saved before this was kept, so only all of it has that cost.
     public var fifoLots: [ExchangeLot]? = nil
+    /// Which file this came from, which is how two lots with one date are known to be one purchase. Nil means it was saved before this was kept.
+    public var fileId: String? = nil
 }
 
 public struct ExchangeImport: Codable, Sendable, Equatable {

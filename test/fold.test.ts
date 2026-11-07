@@ -63,7 +63,7 @@ describe("a lot whose cost is only known for all of it", () => {
 describe("purchases at the same moment", () => {
   const AT = "2026-10-01T00:00:00.000Z"
   const onchain = (usd: bigint, qty = ETH): FoldLeg => ({ id: "chain", delta: qty.toString(), decimals: 18, kind: "transfer", priceMicros: null, costMicros: (usd * USD).toString(), proceedsMicros: null, costLabel: "paid", blockNum: 1, timestamp: AT })
-  const bought = (id: string, usd: bigint, qty = ETH, purchase = id): FoldLeg => ({ id, delta: qty.toString(), decimals: 18, kind: "transfer", priceMicros: null, costMicros: (usd * USD).toString(), proceedsMicros: null, costLabel: "self-reported", blockNum: 5, timestamp: "2026-10-03T00:00:00.000Z", pieces: [{ qty: qty.toString(), costMicros: (usd * USD).toString(), label: "self-reported", estimatedCostMicros: "0", boughtAt: AT, boughtAs: purchase }] })
+  const bought = (id: string, usd: bigint, qty = ETH, purchase = id): FoldLeg => ({ id, delta: qty.toString(), decimals: 18, kind: "transfer", priceMicros: null, costMicros: (usd * USD).toString(), proceedsMicros: null, costLabel: "self-reported", blockNum: 5, timestamp: "2026-10-03T00:00:00.000Z", pieces: [{ qty: qty.toString(), costMicros: (usd * USD).toString(), label: "self-reported", estimatedCostMicros: "0", boughtAt: AT, boughtIn: purchase }] })
   const sold = (qty: bigint, usd: bigint): FoldLeg => ({ id: "out", delta: (-qty).toString(), decimals: 18, kind: "swap", priceMicros: null, costMicros: null, proceedsMicros: (usd * USD).toString(), costLabel: "unknown" })
   const hold = (method: Method, ...legs: FoldLeg[]) => legs.reduce(applyLeg, emptyPosition(method, 18))
 
@@ -101,10 +101,23 @@ describe("purchases at the same moment", () => {
     const held = hold("fifo", bought("a", 2000n, ETH, "one"), bought("b", 1000n, ETH, "two"))
     assert.equal(lotsSplitBy(held, ETH / 2n).length, 2)
     assert.deepEqual(lotsSplitBy(held, 2n * ETH), [])
-    const { boughtAs: _, ...undescribed } = bought("c", 1000n).pieces![0]!
+    const { boughtIn: _, ...undescribed } = bought("c", 1000n).pieces![0]!
     for (const legs of [[bought("a", 2000n, ETH, "one"), { ...bought("c", 1000n), pieces: [undescribed] }], [{ ...bought("c", 3000n), pieces: [{ ...undescribed, costMicros: (3000n * USD).toString() }] }, { ...bought("d", 1000n), pieces: [undescribed] }]]) {
       assert.equal(lotsSplitBy(hold("fifo", ...legs), ETH / 2n).length, 2)
     }
+  })
+
+  it("is a tie with a lot only known as a whole, even at the same average, unless nothing else shares its date", () => {
+    const whole = (id: string, usd: bigint, qty: bigint, purchase = id): FoldLeg => {
+      const leg = bought(id, usd, qty, purchase)
+      return { ...leg, pieces: [{ ...leg.pieces![0]!, wholeCostOnly: true }] }
+    }
+    for (const legs of [[whole("a", 4000n, 2n * ETH), bought("b", 2000n)], [whole("a", 4000n, 2n * ETH), onchain(2000n)], [bought("b", 2000n), whole("a", 4000n, 2n * ETH)]]) {
+      const held = hold("fifo", ...legs)
+      assert.equal(lotsSplitBy(held, 2n * ETH).length, 2)
+      assert.deepEqual(lotsSplitBy(held, 3n * ETH), [])
+    }
+    assert.deepEqual(lotsSplitBy(hold("fifo", whole("a", 4000n, 2n * ETH)), 2n * ETH), [])
   })
 
   it("counts one with no cost, since what's taken could be that one", () => {
