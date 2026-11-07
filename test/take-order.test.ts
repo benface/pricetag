@@ -130,6 +130,31 @@ describe("which units a sale takes", () => {
     })
   })
 
+  describe("by newest first, once what's taken could be from a lot nothing places", () => {
+    // $200 on the 1st, $400 on the 2nd, then 1 ETH from an exchange on the 3rd, $100, that could have been bought before either.
+    const withdrawn: FoldLeg = { ...bought("withdrawn", 3, 100n), kind: "transfer", costLabel: "self-reported", pieces: [{ qty: ETH.toString(), costMicros: (100n * USD).toString(), label: "self-reported", estimatedCostMicros: "0", wholeCostOnly: true }] }
+    const held = hold("lifo", bought("a", 1, 200n), bought("b", 2, 400n), withdrawn)
+    const sales = [sold(ETH, 500n, 4), { ...sold(ETH, 500n, 5), id: "out2" }, { ...sold(ETH, 500n, 6), id: "out3" }]
+
+    it("has no known cost or date for any of three sales in a row, since what's left could be any of them", () => {
+      let state = held
+      for (const sale of sales) {
+        const applied = applyLegTaking(state, sale)
+        assert.ok(applied.taken.every((piece) => piece.costMicros === null), sale.id)
+        state = applied.state
+      }
+      const [first] = [applyLegTaking(held, sales[0] as FoldLeg)]
+      assert.deepEqual(first.state.lots.map((lot) => [lot.legId, lot.costMicros, lot.unplaced ?? false, lot.undated ?? false]), [["a", (200n * USD).toString(), false, false], ["b", null, true, true]], "the oldest is surely left after one sale")
+      const second = applyLegTaking(first.state, sales[1] as FoldLeg)
+      assert.deepEqual(second.state.lots.map((lot) => [lot.legId, lot.costMicros, lot.unplaced ?? false, lot.undated ?? false]), [["a", null, true, true]])
+      assert.ok(second.taken.every((piece) => piece.undated))
+    })
+
+    it("knows the cost of selling everything", () => {
+      assert.equal(applyLeg(held, sold(3n * ETH, 500n, 4)).realizedMicros, ((1500n - 700n) * USD).toString())
+    })
+  })
+
   it("matters in what order things arrived in one block for oldest and newest first, but not by cost", () => {
     assert.deepEqual((["average", "fifo", "lifo", "hifo"] as const).map((method) => orderMatters({ orderUnknown: "fifo" }, method)), [false, true, true, false])
     assert.deepEqual((["average", "fifo", "lifo", "hifo"] as const).map((method) => orderMatters({ orderUnknown: "always" }, method)), [true, true, true, true])

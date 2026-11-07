@@ -73,7 +73,7 @@ function moneyIn(side: Side, money: Money, leg: PricedLeg): string | null {
 }
 
 /** Part of a piece whose cost is only known for all of it, so this part has none, and neither does the rest. */
-const withoutItsCost = (piece: CostPiece, units: bigint, answerable = false): CostPiece => ({ qty: units.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0", ...(answerable ? {} : { unanswerable: true as const }), ...(piece.unconfirmedBy ? { unconfirmedBy: piece.unconfirmedBy } : {}), ...(piece.acquiredBlock === undefined ? {} : { acquiredBlock: piece.acquiredBlock, acquiredAt: piece.acquiredAt as string }), ...(piece.undated ? { undated: true as const } : {}), ...ranking(piece) })
+const withoutItsCost = (piece: CostPiece, units: bigint, answerable = false, unplaced = false): CostPiece => ({ qty: units.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0", ...(answerable ? {} : { unanswerable: true as const }), ...(piece.unconfirmedBy ? { unconfirmedBy: piece.unconfirmedBy } : {}), ...(piece.acquiredBlock === undefined ? {} : { acquiredBlock: piece.acquiredBlock, acquiredAt: piece.acquiredAt as string }), ...(piece.undated || unplaced ? { undated: true as const } : {}), ...ranking(piece), ...(unplaced ? { unplaced: true as const } : {}) })
 
 /** Part of a piece, with its share of the cost. Taking it all takes all of the cost, so rounding never loses any. */
 function slice(piece: CostPiece, qty: bigint): CostPiece {
@@ -129,16 +129,18 @@ export function allocateTaken(taken: readonly CostPiece[], transfers: readonly S
     return last?.address === address ? [...all.slice(0, -1), { address, units: last.units + units }] : [...all, { address, units }]
   }, [])
   const divided = new Set<CostPiece>()
+  // By newest first, what could be what floated ahead of it floats too.
+  const unplaced = new Set<CostPiece>()
   if (keepsLots(method)) {
     let through = 0n
     for (const { units } of recipients) {
       through += units
-      for (const piece of lotsSplitBy({ lots: taken }, through, method)) divided.add(piece)
+      for (const piece of lotsSplitBy({ lots: taken }, through, method, unplaced)) divided.add(piece)
     }
   }
   // By highest cost first, who got what can wait on an answer to what something cost, which says where it ranks.
   const answerable = divided.size > 0 && splitIsAnswerable(taken, method)
-  let left = taken.map((piece) => (divided.has(piece) ? withoutItsCost(piece, BigInt(piece.qty), answerable) : piece))
+  let left = taken.map((piece) => (divided.has(piece) ? withoutItsCost(piece, BigInt(piece.qty), answerable, unplaced.has(piece)) : piece))
   const allocated = new Map<string, CostPiece[]>()
   for (const { address, units } of recipients) {
     const pieces: CostPiece[] = []
