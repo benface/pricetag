@@ -143,7 +143,7 @@ const ESTIMATED_COST = "Part of its cost is an estimate, from a market price or 
 const ESTIMATED_PROCEEDS = "What it sold for is an estimate, from a market price."
 const ESTIMATED_BOTH = "What it sold for and part of its cost are estimates, from market prices or exchange rates."
 const REPORTED_COST = "Part of its cost is what you entered or imported, which the chain can't confirm."
-const purchasedCost = (source: string) => `Some or all of its cost: ${source}, fees included.`
+const purchasedCost = (sources: readonly string[]) => `Some or all of its cost: ${sources.length === 1 ? sources[0] : "several exchange purchases"}, fees included.`
 const MISMATCH = "This asset's history doesn't match its onchain balance, so its cost can't be trusted."
 const UNCHECKED = "This asset hasn't been checked against its onchain balance yet, so its cost isn't shown."
 const DIFFERENT_STARTS = "These wallets' histories start at different blocks, so their costs can't be worked out together."
@@ -197,7 +197,7 @@ function rowsOf(effect: LegEffect, wallet: string, unconfirmed: string | null, c
     // By units rather than dollars, because $0 is a cost someone can enter.
     const reported = BigInt(known.reportedQty) > 0n
     const estimate = costIsEstimated && proceedsAreEstimated ? ESTIMATED_BOTH : costIsEstimated ? ESTIMATED_COST : proceedsAreEstimated ? ESTIMATED_PROCEEDS : null
-    const purchased = BigInt(known.purchasedQty) > 0n && known.purchaseSource ? purchasedCost(known.purchaseSource) : null
+    const purchased = BigInt(known.purchasedQty) > 0n && known.purchaseSources.length > 0 ? purchasedCost(known.purchaseSources) : null
     const reason = [estimate, given > 0n ? (country?.marketRowNote ?? null) : null, reported ? REPORTED_COST : null, purchased].filter((note) => note !== null).join(" ")
     rows.push(row({ amount: resolvedQty.toString(), proceedsMicros: resolvedProceeds.toString(), costMicros: knownCost.toString(), gainMicros: gain.toString(), status: estimate ? "estimated" : reported ? "self-reported" : "resolved", reason: reason || null, givenCost: given > 0n }))
   }
