@@ -101,7 +101,7 @@ public struct TaxReportView: View {
                 ForEach(TaxCountry.allCases) { Text($0.name).tag($0) }
             }
             Picker(Wording.methodName, selection: Binding(get: { model.method }, set: { model.setMethod($0) })) {
-                ForEach(CostMethod.allCases) { Text($0.label + defaultTag($0 == model.country.defaultMethod)).tag($0) }
+                ForEach(model.country.methods) { Text($0.label + defaultTag($0 == model.country.defaultMethod)).tag($0) }
             }
             Picker("Wallets", selection: Binding(get: { model.scope }, set: { model.setScope($0) })) {
                 ForEach(TaxScope.allCases) { Text($0.label + defaultTag($0 == model.country.defaultScope)).tag($0) }

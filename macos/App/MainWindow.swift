@@ -563,7 +563,7 @@ struct CostMethodMenu: View {
     var body: some View {
         Menu {
             Picker(Wording.methodName, selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
-                ForEach(CostMethod.allCases) { Text($0.label).tag($0) }
+                ForEach(CostMethod.portfolio) { Text($0.label).tag($0) }
             }
             .pickerStyle(.inline)
         } label: {

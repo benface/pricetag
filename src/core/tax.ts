@@ -12,6 +12,15 @@
 // - US, oldest first in each wallet: Treas. Reg. 1.1012-1(j), for dispositions from January 1, 2025. Average basis in
 //   1.1012-1(e) only covers certain stock. Rev. Proc. 2024-28 and IRS digital asset FAQs cover the move to wallets.
 //
+// Which other methods each country allows, from the same sources:
+// - Canada, none: s. 47(1) averages identical properties whatever order they're sold in, so only Oldest first is offered on top,
+//   with a warning, for someone comparing.
+// - US, newest first and highest cost first: 1.1012-1(j)(2) lets you identify which units you sell from your own wallet ((j)(3)
+//   is for units a broker holds), if your books and records name them no later than the date and time of the sale, by any
+//   identifier such as purchase date or price. A rule like these, recorded before selling, names them that way. That they count as a standing rule is our reading,
+//   and an accountant should confirm it. Choosing units after the fact, which a report would be doing, doesn't count. IRS digital
+//   asset FAQs Q82 says the same goes for units you transfer, so the rule has to cover sending and spending too, not only selling.
+//
 // What something received from someone else costs, which decides whether its market price is a cost or an estimate:
 // - Canada, the market price is the cost: Income Tax Act s. 69(1)(c) deems a gift acquired at fair market value, and
 //   s. 52(1) adds what was included in income to the cost of what was received.
@@ -25,7 +34,7 @@
 // FAQs Q59 both value what you're paid at its fair market value when you receive it, and neither treats a gift as the
 // receiver's income. We can't tell pay from a gift, or from the user's own money, so these are only ever "possibly income".
 
-import { assertFoldFits, foldPositions, formatDuration, isAddress, markUnknownOrder, msBetweenBlocks, normalizeAddress, orderMatters, shortHash, timestampOfBlock, unreadAssets, viewWallet, worth, type CostPiece, type CurrencyCode, type KnownTaken, type LegEffect, type Method, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
+import { assertFoldFits, foldPositions, formatDuration, isAddress, keepsLots, markUnknownOrder, msBetweenBlocks, normalizeAddress, orderMatters, shortHash, timestampOfBlock, unreadAssets, viewWallet, worth, type CostPiece, type CurrencyCode, type KnownTaken, type LegEffect, type Method, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type TaxReportResponse, type WalletResponse } from "./api.ts"
 import { emptyBook, linkedWallets, type Book } from "./book.ts"
 import { csvCell, microsCell, unitsCell } from "./csv.ts"
@@ -45,10 +54,12 @@ export type TaxCountry = {
   /** Its name in a sentence. */
   inSentence: string
   method: Method
+  /** What the report offers here, default first. Anything else isn't allowed here, so it isn't offered, and the server refuses it. */
+  methods: readonly Method[]
   scope: TaxScope
   currency: CurrencyCode
   /** Said when the method is overridden, because the file may then not be what this country's rules call for. */
-  methodWarning: string
+  methodWarnings: Partial<Record<Method, string>>
   scopeWarning: string
   /** Whether a market price from when something arrived from someone else is its real cost here, rather than an estimate of it. */
   marketIsCost: boolean
@@ -67,9 +78,10 @@ export const TAX_COUNTRIES: Record<TaxCountryCode, TaxCountry> = {
     name: "Canada",
     inSentence: "Canada",
     method: "average",
+    methods: ["average", "fifo"],
     scope: "pooled",
     currency: "CAD",
-    methodWarning: "Canada's rules average the cost of identical property, so Oldest first may not be accepted.",
+    methodWarnings: { fifo: "Canada's rules average the cost of identical property, so Oldest first may not be accepted." },
     scopeWarning: "Canada's rules average what you own wherever it's held, so calculating each wallet on its own may not be accepted.",
     marketIsCost: true,
     marketRowNote: "Part of its cost is what it was worth when it arrived, which is generally the cost of what you're paid or given in Canada.",
@@ -84,16 +96,21 @@ export const TAX_COUNTRIES: Record<TaxCountryCode, TaxCountry> = {
     name: "United States",
     inSentence: "the US",
     method: "fifo",
+    methods: ["fifo", "lifo", "hifo", "average"],
     scope: "per-wallet",
     currency: "USD",
-    methodWarning: "US rules use oldest first in each wallet unless you identify specific units, so Average may not be accepted.",
+    methodWarnings: {
+      average: "US rules use oldest first in each wallet unless you identify specific units, so Average may not be accepted.",
+      lifo: "US rules only allow Newest first if your own records said you'd use it before each time you sold, spent or sent any. If they didn't, Oldest first is what applies.",
+      hifo: "US rules only allow Highest cost first if your own records said you'd use it before each time you sold, spent or sent any. If they didn't, Oldest first is what applies.",
+    },
     scopeWarning: "US rules have tracked cost wallet by wallet since January 1, 2025, so calculating all wallets together may not be accepted.",
     marketIsCost: false,
     marketRowNote: "If it was pay, that price is its cost. If it was a gift, its cost is generally the giver's.",
     marketWarning: "In the US, that's the cost of what you're paid, but a gift generally keeps the giver's cost.",
     notes: [
-      "The Form 8949 file gives the date each sold unit was acquired, and splits short-term from long-term gains, which only works with Oldest first.",
-      "Choosing specific units to sell isn't available yet.",
+      "The Form 8949 file gives the date each sold unit was acquired, and splits short-term from long-term gains, which works with every method but Average.",
+      "Choosing specific units for each sale isn't available yet.",
       "The wash sale rule in section 1091 of the tax code covers stock and securities, and this report doesn't check for it. Ask an accountant whether it applies to crypto in your year.",
     ],
   },
@@ -104,6 +121,14 @@ export const TAX_COUNTRY_CODES = Object.keys(TAX_COUNTRIES) as TaxCountryCode[]
 export function isTaxCountryCode(value: string | null | undefined): value is TaxCountryCode {
   return TAX_COUNTRY_CODES.includes(value as TaxCountryCode)
 }
+
+/** Whether the report offers this method for this country, which is only what its rules can allow. */
+export function isTaxMethod(country: TaxCountryCode, value: string | null | undefined): value is Method {
+  return TAX_COUNTRIES[country].methods.includes(value as Method)
+}
+
+/** How a method reads in a file name. */
+const METHOD_SLUGS: Record<Method, string> = { average: "average", fifo: "oldest-first", lifo: "newest-first", hifo: "highest-cost-first" }
 
 export const SCOPE_LABELS: Record<TaxScope, string> = { pooled: "All wallets together", "per-wallet": "Each wallet on its own" }
 
@@ -195,11 +220,11 @@ const DIFFERENT_STARTS = "These wallets' histories start at different blocks, so
  * The pieces of known cost a debit took, oldest first, with each one's date: an exchange's purchase date when there is one,
  * since that's when it was bought, and otherwise when it reached a wallet, which an inherited piece keeps from the wallet
  * that sent it. When it reached a wallet is only its date if it was acquired then. An opening balance, or something that
- * arrived with a cost someone entered and no purchase date, has none, which the fold marks as `undated`. Only oldest first
- * keeps pieces apart, and only when they add up to the cost the row shows.
+ * arrived with a cost someone entered and no purchase date, has none, which the fold marks as `undated`. Every method but
+ * average keeps pieces apart, and only when they add up to the cost the row shows they're its pieces.
  */
 function acquiredOf({ before, taken }: LegEffect, knownCost: bigint, knownQty: bigint): Acquired[] | null {
-  if (before.method !== "fifo" || knownQty <= 0n || taken === null) return null
+  if (!keepsLots(before.method) || knownQty <= 0n || taken === null) return null
   const known = taken.filter((piece) => piece.costMicros !== null)
   const sum = (field: "qty" | "costMicros") => known.reduce((total, piece) => total + BigInt(piece[field] as string), 0n)
   if (sum("costMicros") !== knownCost || sum("qty") !== knownQty) return null
@@ -681,7 +706,8 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
   if (received.length > 0) warnings.push(`${plural(received.length, "thing")} you received from other addresses may be income, like pay or rewards. The full report lists ${received.length === 1 ? "it" : "them"} as Received, with what ${received.length === 1 ? "it was" : "each was"} worth when ${received.length === 1 ? "it" : "they"} arrived, so check ${received.length === 1 ? "it" : "each one"}.`)
   for (const { wallet, asset } of withheldIn(sources.flatMap(({ view }) => view.legs))) warnings.push(withheldSentence(wallet, asset))
   for (const source of sources) warnings.push(...walletWarnings(source, named))
-  if (method !== country.method) warnings.push(country.methodWarning)
+  const methodWarning = method === country.method ? undefined : country.methodWarnings[method]
+  if (methodWarning) warnings.push(methodWarning)
   if (scope !== country.scope) warnings.push(country.scopeWarning)
   if (!TAX_COUNTRY_CODES.some((other) => TAX_COUNTRIES[other].currency === currency)) warnings.unshift(`This report only knows ${TAX_COUNTRY_CODES.map((other) => TAX_COUNTRIES[other].inSentence).join(" and ")}, and neither reports in ${currency}. If you report in ${currency}, these rules and this layout may not apply where you do.`)
   else if (currency !== country.currency) warnings.push(`This is in ${currency}, and ${country.inSentence} reports in ${country.currency}. Change your main currency to export it in ${country.currency}.`)
@@ -700,7 +726,7 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
     ...COMMON_NOTES,
     ...country.notes,
   ]
-  const filename = `tax-report-${first.address.slice(0, 8)}-${year === null ? "" : `${year}-`}${code}-${method === "fifo" ? "oldest-first" : "average"}-${currency}.csv`
+  const filename = `tax-report-${first.address.slice(0, 8)}-${year === null ? "" : `${year}-`}${code}-${METHOD_SLUGS[method]}-${currency}.csv`
   const summary = `Prepared for ${country.inSentence}${year === null ? "" : `, ${year}`}: ${METHOD_LABELS[method].toLowerCase()}, ${SCOPE_LABELS[scope].toLowerCase()}, in ${currency}.`
 
   return {

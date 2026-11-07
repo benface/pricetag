@@ -1,6 +1,6 @@
 // Runs the fold over a wallet's priced legs, and adds up what can honestly be added up.
 
-import { applyLeg, applyLegTaking, costCanBeAnswered, emptyPosition, tallyOf, worth, valuePosition, type CostPiece, type KnownTaken, type LegApplied, type Method, type PositionState, type PositionTally, type PositionValues } from "./fold.ts"
+import { applyLeg, applyLegTaking, costCanBeAnswered, emptyPosition, keepsLots, tallyOf, worth, valuePosition, type CostPiece, type KnownTaken, type LegApplied, type Method, type PositionState, type PositionTally, type PositionValues } from "./fold.ts"
 import { timestampOfBlock } from "./chain.ts"
 import type { RateRound } from "./currency.ts"
 import { answerToMicros, isSanePrice, type PricedLeg, type Reference } from "./legs.ts"
@@ -120,7 +120,7 @@ export const unconfirmedAssets = (positions: readonly Position[], unread: readon
 /** Oldest first's lots, more than fit in this much memory. Average has no such limit. */
 export class OldestFirstTooBigError extends Error {
   constructor() {
-    super("This history is too long to work out by oldest first in this much memory. Average cost still works.")
+    super("This history is too long to work out purchase by purchase in this much memory. Average cost still works.")
     this.name = "OldestFirstTooBigError"
   }
 }
@@ -282,7 +282,7 @@ export function assertFoldsFit(histories: readonly FoldedHistory[], method: Meth
   const bytes = legsIn(histories) * (BYTES_PER_LEG + BYTES_PER_LEG_PER_OTHER_WALLET * (histories.length - 1))
   // One wallet's legs are what the budget it was read under already counted.
   if (histories.length > 1 && bytes > foldBytes) throw new WalletsTooBigError()
-  if (method !== "fifo") {
+  if (!keepsLots(method)) {
     if (bytes + averageMoveLines(histories) * BYTES_PER_MOVE_LINE > foldBytes) throw new WalletsTooBigError()
     return
   }
@@ -294,7 +294,7 @@ export function assertFoldsFit(histories: readonly FoldedHistory[], method: Meth
 /** Throws unless folding this wallet fits, with the others only there to say what it inherits. Only its fold is kept, but working out what it inherits holds all of what they pass around. */
 export function assertFoldFits(focus: FoldedHistory, others: readonly FoldedHistory[], method: Method) {
   if (foldBytes === Number.POSITIVE_INFINITY) return
-  if (method !== "fifo") {
+  if (!keepsLots(method)) {
     if (focus.legs.length * BYTES_PER_LEG + averageMoveLines([focus, ...others]) * BYTES_PER_MOVE_LINE > foldBytes) throw new WalletsTooBigError()
     return
   }
@@ -303,7 +303,7 @@ export function assertFoldFits(focus: FoldedHistory, others: readonly FoldedHist
 }
 
 export function foldPositions(legs: readonly PricedLeg[], method: Method, prices: LatestPrices, onchain?: Onchain): Position[] {
-  if (method === "fifo") assertFoldsFit([{ legs }], method)
+  if (keepsLots(method)) assertFoldsFit([{ legs }], method)
   const positions = new Map<string, { state: PositionState; effects: LegEffect[]; decimals: number }>()
   for (const leg of legs) {
     const position = positions.get(leg.asset) ?? { state: emptyPosition(method, leg.decimals), effects: [], decimals: leg.decimals }

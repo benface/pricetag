@@ -394,10 +394,10 @@ describe("taxReportOf", () => {
     const quiet = taxReportOf([wallet], { country: "US", method: "fifo", scope: "per-wallet" })
     assert.deepEqual(quiet.warnings, [])
     const us = taxReportOf([wallet], { country: "US", method: "average", scope: "pooled" })
-    assert.ok(us.warnings.includes(TAX_COUNTRIES.US.methodWarning))
+    assert.ok(us.warnings.includes(TAX_COUNTRIES.US.methodWarnings.average as string))
     assert.ok(us.warnings.includes(TAX_COUNTRIES.US.scopeWarning))
     const ca = taxReportOf([cad({ rates: demoRates("CAD") })], { country: "CA", method: "fifo", scope: "per-wallet" })
-    assert.ok(ca.warnings.includes(TAX_COUNTRIES.CA.methodWarning))
+    assert.ok(ca.warnings.includes(TAX_COUNTRIES.CA.methodWarnings.fifo as string))
     assert.ok(ca.warnings.includes(TAX_COUNTRIES.CA.scopeWarning))
   })
 

@@ -9,7 +9,13 @@
 // Money is in millionths of one currency, and the fold doesn't care which. Gains are only right when it runs in the
 // currency they're reported in, because a gain in CAD isn't a gain in USD at some later rate.
 
-export type Method = "average" | "fifo"
+/**
+ * average: every unit costs the same. fifo: oldest first. lifo: newest first. hifo: the highest cost per unit first, and oldest
+ * first among the same cost. What has no known cost could rank anywhere, so it goes first for now, and what it could change
+ * places with has no known cost either until it's answered (`lotsSplitBy`). Every method but average keeps lots apart, oldest
+ * first, and only differs in which it takes.
+ */
+export type Method = "average" | "fifo" | "lifo" | "hifo"
 export type CostLabel = "paid" | "inherited" | "received at market" | "self-reported" | "unknown"
 
 export type FoldLeg = {
@@ -38,7 +44,8 @@ export type FoldLeg = {
   purchaseSource?: string
   /**
    * Nothing says where this comes in its block, among other movements that depend on it, and the method it matters to:
-   * `always` when something left, and `fifo` when things only arrived, since those come to the same average either way.
+   * `always` when something left, and `fifo` when things only arrived, since those come to the same average either way, and the
+   * same highest cost first. Oldest and newest first both go by when each arrived, so it matters to both.
    * Where it matters, a credit takes no cost, and neither what a debit took nor what it left has one.
    */
   orderUnknown?: "always" | "fifo"
@@ -84,6 +91,11 @@ export type CostPiece = {
   boughtAt?: string
   /** The file that says this was bought then. A file makes one lot of a moment, so parts of one date that say the same are one purchase. Missing means nothing says what it's part of. */
   boughtIn?: string
+  /**
+   * Nothing says where this comes among the rest, from where it is on: newest first took from it or from a lot nothing placed,
+   * so this could be what's left of either, which could have been bought any time before. Missing means its place is known.
+   */
+  unplaced?: true
   /** It has no cost because of a lot only known as a whole, or an order nothing says, so no answer about where it came from can fix that. */
   unanswerable?: true
 }
@@ -122,6 +134,11 @@ export type Lot = {
   boughtAt?: string
   /** The file that says this was bought then. A file makes one lot of a moment, so parts of one date that say the same are one purchase. Missing means nothing says what it's part of. */
   boughtIn?: string
+  /**
+   * Nothing says where this comes among the rest, from where it is on: newest first took from it or from a lot nothing placed,
+   * so this could be what's left of either, which could have been bought any time before. Missing means its place is known.
+   */
+  unplaced?: true
   /** It has no cost because of a lot only known as a whole, or an order nothing says, so no answer about where it came from can fix that. An average lot is only this way when all of it is. */
   unanswerable?: true
 }
@@ -276,8 +293,9 @@ const unconfirmed = (...wallets: readonly (readonly string[] | undefined)[]): Pi
 }
 
 /** What says where this goes among the rest, which stays true whatever becomes of its cost. Only what's there, so a lot with none carries no field. */
-export const ranking = ({ wholeCostOnly, boughtAt, boughtIn }: Pick<CostPiece, "wholeCostOnly" | "boughtAt" | "boughtIn">): Pick<CostPiece, "wholeCostOnly" | "boughtAt" | "boughtIn"> => ({
+export const ranking = ({ wholeCostOnly, boughtAt, boughtIn, unplaced }: Pick<CostPiece, "wholeCostOnly" | "boughtAt" | "boughtIn" | "unplaced">): Pick<CostPiece, "wholeCostOnly" | "boughtAt" | "boughtIn" | "unplaced"> => ({
   ...(wholeCostOnly ? { wholeCostOnly } : {}),
+  ...(unplaced ? { unplaced } : {}),
   ...(boughtAt ? { boughtAt } : {}),
   ...(boughtIn ? { boughtIn } : {}),
 })
@@ -421,7 +439,7 @@ const noFacts = (): LotFacts => ({ boughtAt: false, undatedWhole: false, lastBlo
 
 const factsWith = (facts: LotFacts, lot: Ranked & Pick<Lot, "acquiredBlock">): LotFacts => ({
   boughtAt: facts.boughtAt || lot.boughtAt !== undefined,
-  undatedWhole: facts.undatedWhole || (lot.wholeCostOnly === true && !lot.boughtAt),
+  undatedWhole: facts.undatedWhole || anyTimeBefore(lot),
   lastBlock: Math.max(facts.lastBlock, lot.acquiredBlock ?? Number.NEGATIVE_INFINITY),
 })
 
@@ -449,9 +467,34 @@ function comesLast(lots: readonly Lot[], lot: Lot): boolean {
   return !facts.boughtAt && facts.lastBlock <= lot.acquiredBlock
 }
 
-/** Adds a lot to what's held. Oldest first changes `lots` in place, so it must be an array this step owns. Average makes a new one. */
+/** Whether this method keeps lots apart, oldest first, rather than averaging them. */
+export const keepsLots = (method: Method) => method !== "average"
+
+/** Whether which lot is taken depends on when it was acquired, so the order of what arrived together can matter. */
+const takesByDate = (method: Method) => method === "fifo" || method === "lifo"
+
+/** Whether this method takes lots in an order other than the one they're kept in. */
+const reorders = (method: Method): method is "lifo" | "hifo" => method === "lifo" || method === "hifo"
+
+/** Whether the first lot costs more per unit than the second, with no known cost above any. Ties are false. */
+function costsMore(a: Ranked, b: Ranked): boolean {
+  if (a.costMicros === null || b.costMicros === null) return a.costMicros === null && b.costMicros !== null
+  return BigInt(a.costMicros) * BigInt(b.qty) > BigInt(b.costMicros) * BigInt(a.qty)
+}
+
+/**
+ * Lots in the order this method takes them. They're kept oldest first, so newest first is that backwards, and highest cost
+ * first sorts them, keeping oldest first among the same cost. The order's the same array for oldest first and average.
+ */
+export function inTakeOrder<T extends Ranked>(lots: readonly T[], method: Method): readonly T[] {
+  if (method === "lifo") return [...lots].reverse()
+  if (method === "hifo") return [...lots].sort((a, b) => (costsMore(a, b) ? -1 : costsMore(b, a) ? 1 : 0))
+  return lots
+}
+
+/** Adds a lot to what's held. Every method but average changes `lots` in place, so it must be an array this step owns. Average makes a new one. */
 function addLot({ method, tracksPaidAt }: PositionState, lots: Lot[], lot: Lot): Lot[] {
-  if (method === "fifo") return arrayOf(insertByDate(whole(lots), lot))
+  if (keepsLots(method)) return arrayOf(insertByDate(whole(lots), lot))
   const known = lot.costMicros !== null
   const pool = lots.find((l) => (l.costMicros === null) === !known)
   if (!pool) return [...lots, lot]
@@ -476,14 +519,14 @@ function addLot({ method, tracksPaidAt }: PositionState, lots: Lot[], lot: Lot):
 }
 
 /** Whether this method's answer for this leg depends on an order nothing says. */
-export const orderMatters = ({ orderUnknown }: Pick<FoldLeg, "orderUnknown">, method: Method) => orderUnknown === "always" || (orderUnknown === "fifo" && method === "fifo")
+export const orderMatters = ({ orderUnknown }: Pick<FoldLeg, "orderUnknown">, method: Method) => orderUnknown === "always" || (orderUnknown === "fifo" && takesByDate(method))
 
 function credit(state: PositionState, held: Held, leg: FoldLeg, qty: bigint): Held {
   const added = arrivals(state, leg, qty)
   // Adding a lot, or merging it into a pool, adds its units and cost to what's held, so the sums only need what arrived.
   const sums = addSums({ ...held.sums }, added, 1n)
   if (added.length === 0) return { ...held, sums }
-  if (state.method !== "fifo") return { ...whole(added.reduce<Lot[]>((lots, lot) => addLot(state, lots, lot), arrayOf(held))), sums, owned: true }
+  if (!keepsLots(state.method)) return { ...whole(added.reduce<Lot[]>((lots, lot) => addLot(state, lots, lot), arrayOf(held))), sums, owned: true }
   // Oldest first adds to the end of the array this state shares with those before it, unless the fold didn't make it for the states
   // it made, or something has already added to it, and copies it otherwise. Either way, what it adds to is the fold's own.
   const start = held.owned && held.to === held.array.length ? held : whole(withFacts(copyOf(held), factsOf(held.array)))
@@ -550,7 +593,10 @@ function shrink(lot: Lot, qty: bigint): { rest: Lot | null; cost: bigint; estima
   return { rest, cost, estimated, given, ...(paidAt ? { paidAt } : {}) }
 }
 
-type Ranked = Pick<Lot, "qty" | "costMicros" | "wholeCostOnly" | "boughtAt" | "boughtIn" | "acquiredAt">
+type Ranked = Pick<Lot, "qty" | "costMicros" | "wholeCostOnly" | "boughtAt" | "boughtIn" | "acquiredAt" | "unplaced">
+
+/** Whether this could have been bought any time before where it is, so it could come before anything ahead of it by date. */
+const anyTimeBefore = (lot: Ranked) => (lot.wholeCostOnly === true && !lot.boughtAt) || lot.unplaced === true
 
 /**
  * What puts this in order with others of its date. The chain does for its own. Parts of one purchase don't need it, because only
@@ -598,12 +644,14 @@ function* runsInOrder<T extends Ranked>(lots: Iterable<T>, exchangeDates: boolea
 const untied = <T extends Ranked>(run: T[]): T[][] => (isTied(run) ? [run] : run.map((lot) => [lot]))
 
 /**
- * The lots with no known cost once this much is taken. A lot only known as a whole loses its cost when part of it stays behind,
- * and so do lots tied with each other, when only some of them go. One with no purchase date could have been bought before anything
- * ahead of it too, so what's taken could be either, and unless all of them go, none of them has a known cost.
+ * The lots with no known cost once this much is taken, from lots in the order this method takes them. A lot only known as a whole
+ * loses its cost when part of it stays behind, and so do lots tied with each other, when only some of them go. One with no
+ * purchase date could have been bought before anything ahead of it too, so what's taken could be either, and unless all of them
+ * go, none of them has a known cost. Newest and highest cost first have their own lots nothing places, which `floatingSplit` says.
  */
-export function lotsSplitBy<T extends Ranked>(state: { lots: readonly T[] }, qty: bigint): T[] {
+export function lotsSplitBy<T extends Ranked>(state: { lots: readonly T[] }, qty: bigint, method: Method = "fifo", unplaced?: Set<T>): T[] {
   if (qty <= 0n) return []
+  if (reorders(method)) return floatingSplit(state.lots, qty, method, unplaced)
   const lots = windowOf(state)
   const facts = factsOf(lots.array)
   // Only a lot known as a whole with no date makes what's ahead of it split, from wherever it is. Without one, nothing past what's
@@ -617,7 +665,7 @@ export function lotsSplitBy<T extends Ranked>(state: { lots: readonly T[] }, qty
     const before = through
     for (const lot of run) {
       through += BigInt(lot.qty)
-      if (through > qty && lot.wholeCostOnly && !lot.boughtAt) last = index
+      if (through > qty && anyTimeBefore(lot)) last = index
       index++
     }
     if (before < qty && through > qty && (run.length > 1 || run[0]?.wholeCostOnly)) split = run
@@ -628,14 +676,89 @@ export function lotsSplitBy<T extends Ranked>(state: { lots: readonly T[] }, qty
   return [...ahead, ...split.filter((lot) => !ahead.includes(lot))]
 }
 
+/**
+ * Whether nothing says where this lot's units come in this method's order. By highest cost first, one with no known cost could
+ * rank anywhere, and so could the parts of one only known as a whole, whatever they average, since a small part can cost more
+ * per unit than anything. By newest first, one known as a whole with no purchase date could have been bought any time before it
+ * arrived, so it could come anywhere after where it arrived.
+ */
+function floats(lot: Ranked, method: Method): boolean {
+  if (method === "hifo") return lot.costMicros === null || lot.wholeCostOnly === true
+  return method === "lifo" && anyTimeBefore(lot)
+}
+
+const qtyOf = (lots: readonly Ranked[]) => lots.reduce((sum, lot) => sum + BigInt(lot.qty), 0n)
+
+/**
+ * What loses its cost by newest or highest cost first, when some lots float: they could come anywhere from where they are on,
+ * which for highest cost first is anywhere at all. Whatever floats ahead of a lot could come after it instead, so a lot is surely
+ * all taken only if it would be with all of that ahead of it, and surely untouched only if what's surely ahead of it is enough.
+ * Any other lot near where the sale stops could be taken or not, so it has no known cost, nor does what's left of it, and what
+ * floats is taken from unless what's surely ahead is enough. What has no known cost already stays as it was. Selling everything
+ * takes everything, so its cost is known whatever the order.
+ */
+function floatingSplit<T extends Ranked>(lots: readonly T[], qty: bigint, method: "lifo" | "hifo", unplaced?: Set<T>): T[] {
+  if (qty >= qtyOf(lots)) return []
+  const split: T[] = []
+  // By cost, what floats could rank first, so it counts as ahead of everything, and some of it could always be taken.
+  let floating = 0n
+  if (method === "hifo") {
+    for (const lot of lots) {
+      if (!floats(lot, method)) continue
+      floating += BigInt(lot.qty)
+      if (lot.costMicros !== null) split.push(lot)
+    }
+  }
+  // What surely comes ahead, because it doesn't float.
+  let fixed = 0n
+  for (const run of method === "hifo" ? lots.map((lot) => [lot]) : runsInOrder(lots, true)) {
+    if (fixed >= qty) break
+    const runQty = qtyOf(run)
+    if (run.some((lot) => floats(lot, method))) {
+      if (method === "lifo") {
+        split.push(...run.filter((lot) => lot.costMicros !== null))
+        floating += runQty
+      }
+      continue
+    }
+    // Lots tied with each other, or one known as a whole, lose their cost whenever some of them could stay. Any other lot only
+    // does when what floats ahead of it changes how much of it goes.
+    const indivisible = run.length > 1 || run[0]?.wholeCostOnly === true
+    if (fixed + floating + runQty > qty && (indivisible || floating > 0n)) {
+      split.push(...run)
+      // By newest first, what's left of it could be what floated ahead of it instead, so it floats from here on too.
+      if (method === "lifo" && floating > 0n) for (const lot of run) unplaced?.add(lot)
+    }
+    fixed += runQty
+  }
+  return split
+}
+
+/**
+ * Whether answers could still fix what `lotsSplitBy` takes the cost from: by highest cost first, when all that floats is only
+ * waiting for an answer to its cost, since that answer says where it ranks. Nothing else that floats ever gets a place.
+ */
+export function splitIsAnswerable(lots: readonly (Ranked & { unanswerable?: true })[], method: Method): boolean {
+  if (method !== "hifo") return false
+  let any = false
+  for (const lot of lots) {
+    if (!floats(lot, method)) continue
+    if (lot.wholeCostOnly || lot.unanswerable) return false
+    any = true
+  }
+  return any
+}
+
 /** Whether an answer could fix any of the unknown cost in what this much takes. An average takes from all of what's unknown. */
-export function takesAnswerableCost(state: Pick<PositionState, "lots" | "method">, qty: bigint, split: ReadonlySet<Lot> = new Set(lotsSplitBy(state, qty))): boolean {
+export function takesAnswerableCost(state: Pick<PositionState, "lots" | "method">, qty: bigint, split?: ReadonlySet<Lot>): boolean {
+  const ordered = reorders(state.method) ? inTakeOrder(state.lots, state.method) : null
+  const splitBy = split ?? new Set(ordered ? lotsSplitBy({ lots: ordered }, qty, state.method) : lotsSplitBy(state, qty))
   let through = 0n
-  for (const lot of lotsIn(windowOf(state))) {
-    // Oldest first takes nothing past what adds up to this much.
-    if (state.method === "fifo" && through >= qty) return false
+  for (const lot of ordered ?? lotsIn(windowOf(state))) {
+    // Every method but average takes nothing past what adds up to this much.
+    if (keepsLots(state.method) && through >= qty) return false
     through += BigInt(lot.qty)
-    if (lot.costMicros === null && !lot.unanswerable && !split.has(lot)) return true
+    if (lot.costMicros === null && !lot.unanswerable && !splitBy.has(lot)) return true
   }
   return false
 }
@@ -647,16 +770,28 @@ export function costCanBeAnswered(leg: Pick<FoldLeg, "delta" | "pieces" | "order
   return delta > 0n ? (leg.pieces?.some((p) => p.costMicros === null && !p.unanswerable) ?? true) : takesAnswerableCost(before, -delta, split)
 }
 
-/** This lot with no cost anyone can rely on, which is where it stays among the rest. No answer brings that back. */
-const withoutCost = ({ qty, legId, unconfirmedBy, acquiredBlock, acquiredAt, undated, ...rest }: Lot): Lot => ({ qty, costMicros: null, label: "unknown", legId, ...unconfirmed(unconfirmedBy), ...(acquiredBlock === undefined ? {} : { acquiredBlock, acquiredAt: acquiredAt as string }), ...(undated ? { undated } : {}), ...ranking(rest), unanswerable: true })
+/**
+ * This lot with no cost anyone can rely on, which is where it stays among the rest. No answer brings that back, unless
+ * `answerable` says an answer elsewhere could, by saying which lots a sale took.
+ */
+const withoutCost = ({ qty, legId, unconfirmedBy, acquiredBlock, acquiredAt, undated, ...rest }: Lot, answerable = false, unplaced = false): Lot => ({ qty, costMicros: null, label: "unknown", legId, ...unconfirmed(unconfirmedBy), ...(acquiredBlock === undefined ? {} : { acquiredBlock, acquiredAt: acquiredAt as string }), ...(undated || unplaced ? { undated: true as const } : {}), ...ranking(rest), ...(unplaced ? { unplaced: true as const } : {}), ...(answerable ? {} : { unanswerable: true as const }) })
 
-/** FIFO takes the oldest lots first. Average takes from the known and unknown pools in proportion. */
+/**
+ * FIFO takes the oldest lots first, LIFO the newest and HIFO the costliest per unit. Average takes from the known and unknown pools
+ * in proportion. What's left stays oldest first, whichever it took.
+ */
 function take(state: PositionState, held: Held, qty: bigint): Taken {
   const before = held.sums
   const heldQty = before.qty
   const taking = qty < heldQty ? qty : heldQty
-  const split = new Set(lotsSplitBy(state, taking))
-  const kept: Lot[] = []
+  // Newest and highest cost first take from these lots in their own order, so they work on a copy. Oldest first and average take
+  // straight from what's held.
+  const stored = reorders(state.method) ? copyOf(held) : null
+  const ordered: Window<Lot> = stored ? whole(inTakeOrder(stored, state.method) as Lot[]) : held
+  const unplaced = new Set<Lot>()
+  const split = new Set(stored ? lotsSplitBy({ lots: ordered.array }, taking, state.method, unplaced) : lotsSplitBy(state, taking))
+  const answerable = stored !== null && split.size > 0 && splitIsAnswerable(stored, state.method)
+  let kept: Lot[] = []
   let left: Window<Lot> | null = null
   const result: Taken = { held, pieces: [], knownQty: 0n, knownCost: 0n, estimatedCost: 0n, givenCost: 0n, reportedQty: 0n, purchasedQty: 0n, purchaseSources: [], unknownQty: 0n, shortfall: qty - taking, split }
   // What's left adds up to what was held, less what lost its cost and what was taken.
@@ -664,28 +799,36 @@ function take(state: PositionState, held: Held, qty: bigint): Taken {
 
   let remaining = taking
   let splitLeft = split.size
-  const size = sizeOf(held)
+  // Where each lot left came from, so highest cost first can put them back oldest first.
+  const storedAt = stored && state.method === "hifo" ? new Map(stored.map((lot, i) => [lot, i])) : null
+  const from: number[] = []
+  const keep = (lot: Lot, source: Lot) => {
+    kept.push(lot)
+    if (storedAt) from.push(storedAt.get(source) as number)
+  }
+  const size = sizeOf(ordered)
   for (let i = 0; i < size; i++) {
-    // Oldest first is done once it's taken enough and nothing further on lost its cost, and leaves the rest as it was.
-    if (state.method === "fifo" && remaining === 0n && splitLeft === 0) {
-      left = leaving(held, i, kept)
+    // Every method but average is done once it's taken enough and nothing further on lost its cost, and leaves the rest as it was.
+    if (keepsLots(state.method) && remaining === 0n && splitLeft === 0) {
+      if (!stored) left = leaving(held, i, kept)
+      else for (let j = i; j < size; j++) keep(lotAt(ordered, j), lotAt(ordered, j))
       break
     }
-    const current = lotAt(held, i)
+    const current = lotAt(ordered, i)
     if (split.has(current)) splitLeft--
-    const lot = split.has(current) ? withoutCost(current) : current
+    const lot = split.has(current) ? withoutCost(current, answerable, unplaced.has(current)) : current
     if (lot !== current) addSums(addSums(sums, [current], -1n), [lot], 1n)
     const lotQty = BigInt(lot.qty)
     let n: bigint
-    if (state.method === "fifo") n = remaining < lotQty ? remaining : lotQty
+    if (keepsLots(state.method)) n = remaining < lotQty ? remaining : lotQty
     else n = i === size - 1 ? remaining : (taking * lotQty) / heldQty
     remaining -= n
     if (n === 0n) {
-      kept.push(lot)
+      keep(lot, current)
       continue
     }
     const { rest, cost, estimated, given, paidAt } = shrink(lot, n)
-    if (rest) kept.push(rest)
+    if (rest) keep(rest, current)
     addSums(sums, [lot], -1n)
     if (rest) addSums(sums, [rest], 1n)
     if (lot.costMicros === null) result.unknownQty += n
@@ -717,6 +860,8 @@ function take(state: PositionState, held: Held, qty: bigint): Taken {
   }
   // Units we never saw arrive have no cost anyone can carry.
   if (result.shortfall > 0n) result.pieces.push({ qty: result.shortfall.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0" })
+  if (state.method === "lifo") kept.reverse()
+  if (storedAt) kept = from.map((at, i) => [at, kept[i] as Lot] as const).sort(([a], [b]) => a - b).map(([, lot]) => lot)
   // What's left is some of what was held, and each lot keeps its dates, so what could be among them still could.
   // A copy is the fold's own, and what's left in the shared array belongs to whoever that array did.
   result.held = left ? { ...left, sums, owned: left.array === held.array ? held.owned : true } : { ...whole(withFacts(kept, factsOf(held.array))), sums, owned: true }
