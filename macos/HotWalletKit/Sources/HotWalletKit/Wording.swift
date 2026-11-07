@@ -72,6 +72,15 @@ public enum HotWalletWording {
         return "\(fits) stays in Spending Money, the rest goes to \(savings)."
     }
 
+    /// A purchase above what Spending Money has room for, through an address made just for it.
+    public static func buyThroughOneUseKey(savings: String) -> String {
+        "It all goes to \(savings), through a new address made just for this purchase, so nothing Spending Money has approved can touch it."
+    }
+
+    public static func buyNoGasThroughOneUseKey(_ symbol: String, savings: String) -> String {
+        "Spending Money needs a little ETH to pay the fee to move \(symbol) on to \(savings). Add some, or buy ETH this time."
+    }
+
     public static func buyNoGas(_ symbol: String, savings: String?) -> String {
         "This wallet doesn't have enough ETH to move \(symbol)\(savings.map { " to \($0)" } ?? ""), so it could get stuck here. Buy ETH this time."
     }
@@ -247,9 +256,23 @@ public enum HotWalletWording {
             case .unknownTransaction(let hash): "A transaction this app didn't sign took funds from this wallet: \(hash)."
             case .nonceAhead(let signed, let onchain): "This key has sent \(onchain) \(onchain == 1 ? "transaction" : "transactions"), and this app only signed \(signed)."
             case .nonceTaken(_, let ours): "Another transaction from this key took the place of one this app signed: \(ours)."
+            case .oneUseKeySpent(let address): "The address a purchase went to, \(address.checksummed), sent something this app didn't sign. Only this Mac had its key."
             }
         }.joined(separator: " ")
     }
+
+    // MARK: - Purchases through a one-use address
+
+    public static let purchaseNeedsGas = "A purchase is waiting to move to savings, and needs a little ETH in Spending Money to pay the fee. Add some, and it moves by itself."
+    public static func purchaseHeldByGas(_ symbols: [String]) -> String {
+        "A purchase's \(symbols.formatted(.list(type: .and))) would cost more in fees than it's worth to move to savings right now. It moves once fees come down."
+    }
+    public static func purchaseKeyHoldsOtherTokens(_ count: Int) -> String {
+        "The address a purchase went to also holds \(count == 1 ? "a token" : "\(count) tokens") this app doesn't move. Its key stays on this Mac until they're gone."
+    }
+    public static let purchaseKeyCantCheck = "A purchase has moved to savings. Its address is kept until Amp can confirm nothing else is on it."
+    public static let purchaseKeyMissing = "The key for the address a purchase went to is missing from this Mac, so what's there can't move to savings from here."
+    public static let shortPurchaseHeld = "Purchase not moved"
 
     /// For places with room for only a few words, like the menu bar.
     public static let alarmShort = "Key may be stolen"

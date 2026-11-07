@@ -282,10 +282,10 @@ struct SpendingMoneyPage<Overview: View>: View {
         return "Anything above the cap moves to your savings. \(ceiling)\(wallet.display.isConverted ? " \(HotWalletWording.capFollowsRate(wallet.display.main))" : "")"
     }
 
-    /// This Mac's, including what was bought for a key that's since been replaced, which may still be arriving.
+    /// This Mac's, including what was bought for a key that's since been replaced, or through a one-use address, which may still be arriving.
     private var shownPurchases: [TrackedPurchase] {
         guard let address else { return [] }
-        return purchases.purchases(of: Set(([address] + wallet.state.retired).map(\.lowercased)))
+        return purchases.purchases(of: Set(([address] + wallet.state.retired + wallet.purchaseKeys).map(\.lowercased)))
     }
 
     private var bought: some View {

@@ -6,6 +6,7 @@ import PricetagKit
 let hotAddress = EthereumAddress("0x1111111111111111111111111111111111111111")!
 let nextAddress = EthereumAddress("0x2222222222222222222222222222222222222222")!
 let coldAddress = EthereumAddress("0x1234567890123456789012345678901234567890")!
+let oneUseAddress = EthereumAddress("0x3333333333333333333333333333333333333333")!
 
 func token(_ symbol: String) -> Token {
     Base.tokens.first { $0.symbol == symbol }!
@@ -64,10 +65,20 @@ actor FakeChain: ChainClient {
         current = snapshot
     }
 
+    /// What other addresses read as. Any not here reads as `current`.
+    private var others: [EthereumAddress: ChainSnapshot] = [:]
+
     /// A new read always comes from after any receipt so far, unless a test says otherwise by not calling this.
     func set(_ snapshot: ChainSnapshot) {
         current = snapshot
         current.blockNumber = max(snapshot.blockNumber, receipts.values.map(\.blockNumber).max() ?? 0, current.blockNumber)
+    }
+
+    /// The same, for one address, like a one-use key's.
+    func set(_ snapshot: ChainSnapshot, for address: EthereumAddress) {
+        var read = snapshot
+        read.blockNumber = max(snapshot.blockNumber, receipts.values.map(\.blockNumber).max() ?? 0, others[address]?.blockNumber ?? 0, current.blockNumber)
+        others[address] = read
     }
 
     /// Receipts land in the block after the current read, like a node that's moved on since then.
@@ -113,7 +124,7 @@ actor FakeChain: ChainClient {
         if holdsSnapshots { await wait() }
         if !snapshotFailures.isEmpty { throw snapshotFailures.removeFirst() }
         if let readFailure { throw readFailure }
-        return current
+        return others[address] ?? current
     }
 
     func estimateGas(from: EthereumAddress, to: EthereumAddress, value: UInt128, data: [UInt8]) async throws -> UInt64 {
@@ -331,9 +342,9 @@ struct Rig {
     let portfolios: ScriptedPortfolios
 
     /// A wallet that exists already, with a cold wallet to sweep to unless told otherwise.
-    init(_ snapshot: ChainSnapshot = HotWalletKitTests.snapshot(), withCold: Bool = true, presence: Bool = true, userPresence: (any UserPresence)? = nil, portfolio read: Result<Portfolio, FetchError> = .success(portfolio()), moneyDisplay: @escaping @MainActor () -> MoneyDisplay = { MoneyDisplay(main: .USD) }, now: @escaping @Sendable () -> Date = { Date() }, tickDelay: Duration = .seconds(15), receiptDelay: Duration = .seconds(1)) async {
+    init(_ snapshot: ChainSnapshot = HotWalletKitTests.snapshot(), withCold: Bool = true, nextKeys: [EthereumAddress] = [nextAddress], presence: Bool = true, userPresence: (any UserPresence)? = nil, portfolio read: Result<Portfolio, FetchError> = .success(portfolio()), moneyDisplay: @escaping @MainActor () -> MoneyDisplay = { MoneyDisplay(main: .USD) }, now: @escaping @Sendable () -> Date = { Date() }, tickDelay: Duration = .seconds(15), receiptDelay: Duration = .seconds(1)) async {
         let chain = FakeChain(snapshot)
-        let signer = FakeSigner(keys: [hotAddress], next: [nextAddress])
+        let signer = FakeSigner(keys: [hotAddress], next: nextKeys)
         let stateStore = MemoryStateStore()
         var state = DeviceWalletState()
         state.active = hotAddress

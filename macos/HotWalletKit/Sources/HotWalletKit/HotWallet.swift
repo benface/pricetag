@@ -49,6 +49,9 @@ public final class HotWallet {
     public private(set) var isWorking = false
     /// What's keeping a rotation from deleting the old key. The user can still choose to leave it behind.
     public internal(set) var rotationHold: RotationHold?
+    /// Where each one-use key has got to, from its last look.
+    public internal(set) var oneUseHolds: [EthereumAddress: OneUseHold] = [:]
+    @ObservationIgnored var oneUseReads: [EthereumAddress: OneUseReads] = [:]
     /// What the last check of `signedPermits` found. One it hasn't looked at has no answer here.
     public internal(set) var permitChecks: [String: SignedPermit.Check] = [:]
     public internal(set) var isCheckingPermits = false
@@ -69,8 +72,8 @@ public final class HotWallet {
     @ObservationIgnored private let stateStore: any DeviceStateStore
     @ObservationIgnored private let presence: any UserPresence
     @ObservationIgnored private var lastAnswerAt: Date?
-    @ObservationIgnored private let portfolioSource: @MainActor () -> any PortfolioSource
-    @ObservationIgnored private let costMethod: @MainActor () -> CostMethod
+    @ObservationIgnored let portfolioSource: @MainActor () -> any PortfolioSource
+    @ObservationIgnored let costMethod: @MainActor () -> CostMethod
     @ObservationIgnored private let moneyDisplay: @MainActor () -> MoneyDisplay
     @ObservationIgnored private let makeChain: @Sendable (URL) -> any ChainClient
     @ObservationIgnored let now: @Sendable () -> Date
@@ -169,6 +172,7 @@ public final class HotWallet {
         readTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.readHistory()
+                await self?.readOneUseHistory()
                 guard let delay = self?.readDelay else { return }
                 try? await Task.sleep(for: delay)
             }
@@ -205,6 +209,12 @@ public final class HotWallet {
 
     private func lookAtChain() async {
         await deleteRetiredKeys()
+        await lookAtActiveKey()
+        // After Spending Money's own turn, so a fee it sends is from a read that's already settled.
+        await lookAtOneUseKeys()
+    }
+
+    private func lookAtActiveKey() async {
         guard availability == .ready, let address else {
             await reconcileKeys()
             return
@@ -294,7 +304,9 @@ public final class HotWallet {
     private func reconcileKeys() async {
         guard availability == .ready else { return }
         do {
-            let keys = try await signer.addresses().filter { !state.retired.contains($0) }
+            // A one-use key has its own way out, and is never Spending Money.
+            let oneUse = Set(oneUseKeys.map(\.address))
+            let keys = try await signer.addresses().filter { !state.retired.contains($0) && !oneUse.contains($0) }
             // The records were lost but the key wasn't: there's still only one hot wallet per device.
             if state.retired.isEmpty {
                 if let existing = keys.first { try activate(existing) }
@@ -400,12 +412,14 @@ public final class HotWallet {
     }
 
     /// Spending keys that have been replaced. Costs keep following them, and sends to them are refused.
-    public var replacedKeys: [String] { state.retired.map(\.lowercased) }
+    public var replacedKeys: [String] { state.retired.filter { !purchaseKeys.contains($0) }.map(\.lowercased) }
 
     public var linkedWallets: [String] {
         var wallets: [String] = []
         if let address { wallets.append(address.lowercased) }
         if let rotation { wallets.append(rotation.to.lowercased) }
+        // What's bought through a one-use key carries its cost on to savings, the way a rotation's does.
+        wallets += oneUseKeys.map(\.address.lowercased)
         wallets += state.retired.map(\.lowercased)
         wallets += settings.coldWallets.map(\.address.lowercased)
         wallets += settings.deviceAccounts.map(\.lowercased)
@@ -486,7 +500,7 @@ public final class HotWallet {
     public func problem(addingColdWallet address: EthereumAddress) -> ColdWalletProblem? {
         if address == .zero { return .isZero }
         if address == self.address { return .isThisHotWallet }
-        return state.retired.contains(address) ? .isARetiredKey : nil
+        return state.retired.contains(address) || purchaseKeys.contains(address) ? .isARetiredKey : nil
     }
 
     /// The address has to be what the user read on the device's screen. Nothing here can check that, so the sheet makes them say so.
@@ -564,6 +578,126 @@ public final class HotWallet {
             publishLinkedWallets()
             start()
         }
+    }
+
+    // MARK: - One-use keys
+
+    /// A key for one purchase, made like Spending Money's. It's on disk before its address goes anywhere, so a quit can't lose it
+    /// with money on the way, and it's only for when there's savings for what arrives to go on to.
+    public func createOneUseKey() async -> EthereumAddress? {
+        guard canTopUp, let destination = settings.sweepDestination else { return nil }
+        var made: EthereumAddress?
+        await work { [self] in
+            // An alarm or a replacement can start while this waits its turn.
+            guard canTopUp else { throw ChainError.rejected(HotWalletWording.changedWhileWaiting) }
+            let key = try await signer.createKey()
+            try await keepingKey(key) {
+                $0.oneUseKeys = ($0.oneUseKeys ?? []) + [OneUseKey(address: key, destination: destination, createdAt: now())]
+                $0.purchaseKeys = ($0.purchaseKeys ?? []) + [key]
+            }
+            oneUseHolds[key] = .waitingForPurchase
+            publishLinkedWallets()
+            made = key
+        }
+        return made
+    }
+
+    private func lookAtOneUseKeys() async {
+        guard availability == .ready else { return }
+        for key in oneUseKeys {
+            do {
+                try await lookAt(key.address)
+            } catch is CancellationError {
+                return
+            } catch is ChainError {
+                // The next tick tries again, and Spending Money's own read says so if the node's down.
+            } catch let error as KeychainSealedKeyStore.Failure where error == .notProvisioned {
+                availability = .notProvisioned
+                return
+            } catch {
+                lastActionProblem = HotWalletWording.problem(error)
+            }
+        }
+    }
+
+    /// Like Spending Money's turn: settle what's on its way, check nothing else has used the key, then move what's there, or retire it.
+    private func lookAt(_ address: EthereumAddress) async throws {
+        let snapshot = try await chain.snapshot(of: address)
+        guard snapshot.chainID == Base.chainID else { return }
+        guard try await signer.hasKey(address) else {
+            oneUseHolds[address] = .keyMissing
+            return
+        }
+        try await settlePending(address: address, snapshot: snapshot)
+        checkOneUseNonce(address, snapshot: snapshot)
+        guard let key = oneUseKeys.first(where: { $0.address == address }), snapshot.blockNumber >= key.settledThroughBlock ?? 0 else { return }
+        if (state.records[address] ?? []).contains(where: { $0.status == .pending }) {
+            oneUseHolds[address] = .moving
+            return
+        }
+        if let until = oneUseReads[address]?.pausedUntil, now() < until { return }
+        switch nextStep(for: key, snapshot: snapshot) {
+        case .move(let plan): try await execute(plan, from: address, to: destination(of: key), reason: .purchase, snapshot: snapshot)
+        case .sendGas(let wei): try await sendGas(wei, to: key, keyRead: snapshot)
+        case .wait: break
+        case .finish: try await retireOneUseKey(address)
+        }
+    }
+
+    private func checkOneUseNonce(_ address: EthereumAddress, snapshot: ChainSnapshot) {
+        guard !AlarmCheck.findings(onchainNonce: snapshot.nonce, records: state.records[address] ?? []).isEmpty else {
+            oneUseReads[address]?.nonceAheadTicks = 0
+            return
+        }
+        oneUseReads[address, default: OneUseReads()].nonceAheadTicks += 1
+        if oneUseReads[address]?.nonceAheadTicks ?? 0 >= Self.readsBeforeAlarm { raiseForOneUseKey(address) }
+    }
+
+    /// ETH from Spending Money for the fee to move a token that arrived without any. Only from a read of Spending Money that's settled,
+    /// with nothing of its own on the way, so it can't reuse a nonce or count ETH that's already gone.
+    private func sendGas(_ wei: UInt128, to key: OneUseKey, keyRead: ChainSnapshot) async throws {
+        // The last one is still on its way, so this is only waiting for it.
+        if let from = address, (state.records[from] ?? []).contains(where: { $0.status == .pending && $0.reason == .purchaseGas && $0.to == key.address }) { return }
+        // What the key holds has to be from after Spending Money's last transaction, which may be the fee it sent last time.
+        guard keyRead.blockNumber >= state.settledThroughBlock ?? 0 else { return }
+        guard let from = address, canSend, !isKeyMissing, let snapshot, snapshot.chainID == Base.chainID, snapshot.fees.isPlausible,
+              snapshot.blockNumber >= state.settledThroughBlock ?? 0, pausedUntil.map({ now() >= $0 }) ?? true,
+              !(state.records[from] ?? []).contains(where: { $0.status == .pending }),
+              snapshot.balances[Base.eth] ?? 0 >= wei + snapshot.fees.costWei(of: Base.eth)
+        else {
+            oneUseHolds[key.address] = .needsGas
+            return
+        }
+        // Counted before it's signed, so a crash in between can't let it go over.
+        try save { state in
+            guard let index = state.oneUseKeys?.firstIndex(where: { $0.address == key.address }) else { return }
+            state.oneUseKeys?[index].gasSends += 1
+        }
+        do {
+            try await signAndSend(to: key.address, value: wei, data: [], from: from, snapshot: snapshot) { hash, nonce in
+                SignedRecord(
+                    hash: hash, nonce: nonce, to: key.address, symbol: Base.eth.symbol, decimals: 18, amount: String(wei),
+                    usdMicros: snapshot.ethUsdMicros.map { String(Money.usdMicros(of: wei, priceMicros: $0, decimals: 18)) }, gainUsdMicros: "0",
+                    reason: .purchaseGas, createdAt: now(), status: .pending
+                )
+            }
+        } catch let ChainError.rejected(message) {
+            sweptOnItsOwnFailed(message, reason: .purchaseGas)
+            pause(key.address)
+        }
+    }
+
+    /// Like a rotation's last step: on disk first, then the key goes. If it won't delete or the app quits first, the next look deletes it.
+    private func retireOneUseKey(_ key: EthereumAddress) async throws {
+        try save {
+            $0.oneUseKeys?.removeAll { $0.address == key }
+            $0.retired.append(key)
+        }
+        oneUseHolds[key] = nil
+        oneUseReads[key] = nil
+        publishLinkedWallets()
+        retiredKeysAreGone = false
+        await deleteRetiredKeys()
     }
 
     /// What sweeping everything would move right now, for showing. It's worked out again from a fresh read before anything's signed.
@@ -864,7 +998,7 @@ public final class HotWallet {
     /// Why nothing can go to this address, if nothing can.
     public func problem(sendingTo recipient: EthereumAddress) -> SendProblem? {
         guard let address else { return nil }
-        return SendPlanner.problem(sendingTo: recipient, from: address, retired: state.retired)
+        return SendPlanner.problem(sendingTo: recipient, from: address, retired: state.retired + oneUseKeys.map(\.address))
     }
 
     /// Asks the person at the device, then signs exactly this, and checks it again against a fresh read. True once it's on its way.
@@ -1050,7 +1184,7 @@ public final class HotWallet {
     private func execute(_ plan: SweepPlan, from address: EthereumAddress, to destination: EthereumAddress, reason: SignedRecord.Reason, snapshot: ChainSnapshot) async throws {
         guard snapshot.fees.isPlausible else {
             sweptOnItsOwnFailed(HotWalletWording.feesLookWrong, reason: reason)
-            pausedUntil = now().addingTimeInterval(Self.pauseAfterFailure)
+            pause(address)
             return
         }
         var nonce = AlarmCheck.nextNonce(records: state.records[address] ?? [], onchainNonce: snapshot.nonce)
@@ -1080,9 +1214,19 @@ public final class HotWallet {
                 lastActionProblem = nil
             } catch let ChainError.rejected(message) {
                 sweptOnItsOwnFailed("A sweep of \(transfer.token.symbol) didn't go out. \(HotWalletWording.refusal(message))", reason: reason)
-                pausedUntil = now().addingTimeInterval(Self.pauseAfterFailure)
+                pause(address)
                 return
             }
+        }
+    }
+
+    /// Automatic moves from this key wait a while. Spending Money and each one-use key wait on their own, so one stuck doesn't hold up the others.
+    private func pause(_ address: EthereumAddress) {
+        let until = now().addingTimeInterval(Self.pauseAfterFailure)
+        if oneUseKeys.contains(where: { $0.address == address }) {
+            oneUseReads[address, default: OneUseReads()].pausedUntil = until
+        } else {
+            pausedUntil = until
         }
     }
 
@@ -1134,7 +1278,11 @@ public final class HotWallet {
                 missedReceipts[record.hash] = misses
                 if misses >= Self.readsBeforeAlarm {
                     updateRecord(hash: record.hash, address: address) { $0.status = .dropped }
-                    raise([.nonceTaken(nonce: record.nonce, ours: record.hash)], address: address)
+                    if oneUseKeys.contains(where: { $0.address == address }) {
+                        raiseForOneUseKey(address)
+                    } else {
+                        raise([.nonceTaken(nonce: record.nonce, ours: record.hash)], address: address)
+                    }
                     try persist()
                 }
             } else if now().timeIntervalSince(record.createdAt) > Self.pendingTimeout {
@@ -1151,17 +1299,22 @@ public final class HotWallet {
         }
         updateRecord(hash: record.hash, address: address) { $0.status = receipt.succeeded ? .confirmed : .failed }
         missedReceipts[record.hash] = nil
-        state.settledThroughBlock = max(state.settledThroughBlock ?? 0, receipt.blockNumber)
-        catchUpReads = Self.readsToCatchUp
+        if let index = state.oneUseKeys?.firstIndex(where: { $0.address == address }) {
+            let settled = max(state.oneUseKeys?[index].settledThroughBlock ?? 0, receipt.blockNumber)
+            state.oneUseKeys?[index].settledThroughBlock = settled
+        } else {
+            state.settledThroughBlock = max(state.settledThroughBlock ?? 0, receipt.blockNumber)
+            catchUpReads = Self.readsToCatchUp
+        }
         if receipt.succeeded, let gain = UInt128(record.gainUsdMicros), gain > 0 {
             let swept = state.sweptGains[address].flatMap { UInt128($0) } ?? 0
             state.sweptGains[address] = String(swept + gain)
         }
         if !receipt.succeeded {
             switch record.reason {
-            case .aboveCap, .manual, .rotation:
+            case .aboveCap, .manual, .rotation, .purchase, .purchaseGas:
                 lastActionProblem = "A sweep of \(record.symbol) failed onchain. Nothing moved, but its gas was spent."
-                pausedUntil = now().addingTimeInterval(Self.pauseAfterFailure)
+                pause(address)
             case .sent, .note, .revoke:
                 lastActionProblem = HotWalletWording.failedOnchain(record)
             case .site:
@@ -1201,9 +1354,16 @@ public final class HotWallet {
             alarm.findings += new
             state.alarm = alarm
         } else {
-            state.alarm = StolenKeyAlarm(address: address, findings: new, raisedAt: now())
+            // The alarm is about this Mac's keys, and it's Spending Money that it stops. A one-use key only makes it louder.
+            state.alarm = StolenKeyAlarm(address: oneUseKeys.contains { $0.address == address } ? self.address ?? address : address, findings: new, raisedAt: now())
         }
         persistOrSayWhy()
+    }
+
+    /// A one-use key's key never left this Mac, so anything it did that this app didn't sign means this Mac's keys can't be trusted.
+    /// What's on it keeps moving to savings, which is the safest place for it either way.
+    func raiseForOneUseKey(_ address: EthereumAddress) {
+        raise([.oneUseKeySpent(address: address)], address: address)
     }
 
     private func updateRecord(hash: String, address: EthereumAddress, _ change: (inout SignedRecord) -> Void) {

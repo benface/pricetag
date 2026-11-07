@@ -31,7 +31,7 @@ extension HotWallet {
         // Being over the cap with nowhere to sweep already says to add one.
         if settings.coldWallets.isEmpty, plan?.excessUsdMicros ?? 0 == 0 { notices.append(.init(.warning, HotWalletWording.addSavings(in: display), short: HotWalletWording.shortNoSavings, asksForSavings: true)) }
         if ampProblem { notices.append(.init(.info, HotWalletWording.cantCheckAmp)) }
-        return notices
+        return notices + oneUseNotices
     }
 
     /// Whether something needs the user, for places with room for only a triangle.

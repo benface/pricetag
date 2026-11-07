@@ -34,6 +34,10 @@ public struct SignedRecord: Codable, Equatable, Identifiable, Sendable {
         case note
         /// Approvals taken back. `to` is who could spend, `symbol` what they could spend, and nothing moved.
         case revoke
+        /// What a purchase brought to its one-use key, on its way to savings. See `OneUseKey`.
+        case purchase
+        /// ETH from Spending Money to a one-use key, for the fee to move a purchase that came without any.
+        case purchaseGas
     }
 
     public let hash: String
@@ -76,6 +80,8 @@ public struct StolenKeyAlarm: Codable, Equatable, Sendable {
         case nonceAhead(signed: UInt64, onchain: UInt64)
         /// Something else used a nonce this app signed for.
         case nonceTaken(nonce: UInt64, ours: String)
+        /// A key made for one purchase sent something this app didn't sign. Nothing but this Mac ever had that key.
+        case oneUseKeySpent(address: EthereumAddress)
 
         var isNonceCount: Bool {
             if case .nonceAhead = self { true } else { false }
@@ -100,6 +106,28 @@ public struct Rotation: Codable, Equatable, Sendable {
     }
 }
 
+/// A key made for one large purchase, so it arrives where no site has ever been approved and no old copy of a key can reach.
+/// What lands moves on to savings, and once the key's empty it's retired like a replaced one. Until then it stays in the vault,
+/// however long that takes, and whatever happens to Spending Money.
+public struct OneUseKey: Codable, Equatable, Sendable {
+    public let address: EthereumAddress
+    /// Savings when it was made, for when there's none set by the time it moves.
+    public let destination: EthereumAddress
+    public let createdAt: Date
+    /// Like `DeviceWalletState.settledThroughBlock`, for this key's own transactions.
+    public var settledThroughBlock: UInt64?
+    /// How many times Spending Money has sent it ETH for a fee. Capped, so nothing can drain Spending Money a little at a time.
+    public var gasSends: Int
+
+    public init(address: EthereumAddress, destination: EthereumAddress, createdAt: Date, settledThroughBlock: UInt64? = nil, gasSends: Int = 0) {
+        self.address = address
+        self.destination = destination
+        self.createdAt = createdAt
+        self.settledThroughBlock = settledThroughBlock
+        self.gasSends = gasSends
+    }
+}
+
 /// What only this device can know. Unlike settings, this never syncs, because each device has its own key and history.
 public struct DeviceWalletState: Codable, Equatable, Sendable {
     public var active: EthereumAddress?
@@ -121,6 +149,10 @@ public struct DeviceWalletState: Codable, Equatable, Sendable {
     public var connectedSites: [String]?
     /// Permits each key signed for sites that may still be used. Optional because older records don't have it.
     public var signedPermits: [EthereumAddress: [SignedPermit]]?
+    /// One-use keys still in use. Optional because older records don't have it.
+    public var oneUseKeys: [OneUseKey]?
+    /// Every one-use key this device has made, the retired ones included, so their purchases stay findable. Optional because older records don't have it.
+    public var purchaseKeys: [EthereumAddress]?
 
     public init() {}
 }
