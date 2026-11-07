@@ -3,7 +3,7 @@
 
 import type { CurrencyCode } from "./currency.ts"
 import { worth, type CostLabel, type FoldLeg } from "./fold.ts"
-import { ETH_ADDRESS, normalizeAddress, tokenByAddress, TOKENS, type Token } from "./tokens.ts"
+import { ETH_ADDRESS, normalizeAddress, tokenByAddress, tokenBySymbol, type Token } from "./tokens.ts"
 
 export type PriceSource = "oracle" | "swap" | "market"
 
@@ -71,6 +71,21 @@ export type SettledCredit = {
  * trade can be valued from it.
  */
 export const isUnwrapClaim = (row: LegRow) => row.kind === "unwrap" && row.side === "credit" && !row.settled
+
+/** A row's amount, negative when it left. Only for a row whose amount is a number. */
+export const signedAmount = (row: Pick<LegRow, "side" | "amount">) => (row.side === "credit" ? BigInt(row.amount) : -BigInt(row.amount))
+
+const abs = (value: bigint) => (value < 0n ? -value : value)
+
+/**
+ * What a block's ETH rows say arrived, to compare with what its balance did. Whether a claim counts differs on purpose: it's
+ * the one row that doesn't vouch for itself, so it explains nothing when what's checked is the claim, or anything else unseen.
+ */
+function arrivedIn(blockRows: readonly LegRow[], { claims }: { claims: boolean }): bigint {
+  let arrived = 0n
+  for (const row of blockRows) if (row.token === ETH_ADDRESS && (claims || !isUnwrapClaim(row))) arrived += signedAmount(row)
+  return arrived
+}
 
 /**
  * ETH that reached a wallet in a block with no row to show for it, and the transactions that took a token from the wallet
@@ -142,6 +157,8 @@ export type PricedLeg = FoldLeg & {
   priceSource: PriceSource | null
   /** Why this leg has no usable price. */
   priceNote: string | null
+  /** Its transaction also moved a token off the allowlist, and nothing says how what was paid or received splits between them. */
+  alsoMovedUnlisted?: true
   /** The rows this leg nets together, so a click can show them. */
   parts: LegPart[]
   /** Only on a leg converted out of USD. */
@@ -198,10 +215,10 @@ export function ptNet(amounts: string): PtNet {
     if (!/^-?\d+$/.test(part)) return none
     const amount = BigInt(part)
     net += amount
-    gross += amount < 0n ? -amount : amount
+    gross += abs(amount)
   }
   if (net === 0n) return none
-  const size = net < 0n ? -net : net
+  const size = abs(net)
   return { amount: size * 2n < gross ? "" : size.toString(), side: net > 0n ? "credit" : "debit" }
 }
 
@@ -289,7 +306,7 @@ function isOneWaySend(txRows: readonly LegRow[]): boolean {
   const nets = new Map<string, bigint>()
   for (const row of moved) {
     const asset = tokenByAddress(row.token)?.asset
-    if (asset && !isUnlisted(row)) nets.set(asset, (nets.get(asset) ?? 0n) + (row.side === "credit" ? BigInt(row.amount) : -BigInt(row.amount)))
+    if (asset && !isUnlisted(row)) nets.set(asset, (nets.get(asset) ?? 0n) + signedAmount(row))
   }
   const deltas = [...nets.values(), ...moves]
   return deltas.some((delta) => delta < 0n) && !deltas.some((delta) => delta > 0n)
@@ -362,12 +379,8 @@ function settleClaims({ rows, priced, references, ethBalances, feeUnknownTxs, ga
     const txs = new Set(blockRows.map((row) => row.tx_hash))
     if (before === undefined || after === undefined || gasUnknown.has(block) || [...txs].some((tx) => feeUnknown.has(tx))) continue
     const claims = new Map<string, bigint>()
-    let arrived = BigInt(after) - BigInt(before)
-    for (const row of blockRows) {
-      if (row.token !== ETH_ADDRESS) continue
-      if (isUnwrapClaim(row)) claims.set(row.tx_hash, (claims.get(row.tx_hash) ?? 0n) + BigInt(row.amount))
-      else arrived -= row.side === "credit" ? BigInt(row.amount) : -BigInt(row.amount)
-    }
+    for (const row of blockRows) if (row.token === ETH_ADDRESS && isUnwrapClaim(row)) claims.set(row.tx_hash, (claims.get(row.tx_hash) ?? 0n) + BigInt(row.amount))
+    const arrived = BigInt(after) - BigInt(before) - arrivedIn(blockRows, { claims: false })
     const claimedInBlock = [...claims.values()].reduce((sum, amount) => sum + amount, 0n)
     // Less than nothing means ETH left in a way we can't see, and more than it claims came from something we can't see.
     if (arrived < 0n || arrived > claimedInBlock || (txs.size > 1 && arrived !== 0n)) continue
@@ -432,10 +445,7 @@ function markUnseenEth({ rows, ethBalances, feeUnknownTxs, gasUnknownBlocks }: P
     if (before === undefined || after === undefined || gasUnknown.has(block)) continue
     const blockRows = byBlock.get(block) ?? []
     if (blockRows.some((row) => feeUnknown.has(row.tx_hash))) continue
-    let arrived = BigInt(after) - BigInt(before)
-    for (const row of blockRows) {
-      if (row.token === ETH_ADDRESS && !isUnwrapClaim(row)) arrived -= row.side === "credit" ? BigInt(row.amount) : -BigInt(row.amount)
-    }
+    const arrived = BigInt(after) - BigInt(before) - arrivedIn(blockRows, { claims: false })
     if (arrived > 0n) unseenEth.push({ blockNum: block, amount: arrived.toString(), txHashes })
   }
   const marked = new Set(unseenEth.flatMap((unseen) => unseen.txHashes))
@@ -469,7 +479,7 @@ export function unseenEthSearchBlocks({ rows, ethBalances, fromBlock, through }:
     let unexplained = BigInt(ethBalances.get(to)!) - BigInt(ethBalances.get(from)!)
     for (; next < moves.length && moves[next]!.block_num <= to; next++) {
       const row = moves[next]!
-      if (row.block_num > from) unexplained -= row.side === "credit" ? BigInt(row.amount) : -BigInt(row.amount)
+      if (row.block_num > from) unexplained -= signedAmount(row)
     }
     if (unexplained === 0n || to - from < 2) continue
     const points = Array.from({ length: SEARCH_SECTIONS - 1 }, (_, section) => from + Math.ceil(((to - from) * (section + 1)) / SEARCH_SECTIONS))
@@ -511,10 +521,8 @@ export function creditUnseenEth({ rows, ethBalances, feeUnknownTxs, gasUnknownBl
     if (before === undefined || block < fromBlock || block > through || gasUnknown.has(block)) continue
     const blockRows = byBlock.get(block) ?? []
     if (blockRows.some((row) => isUnwrapClaim(row) || feeUnknown.has(row.tx_hash))) continue
-    let arrived = BigInt(after) - BigInt(before)
-    for (const row of blockRows) {
-      if (row.token === ETH_ADDRESS) arrived -= row.side === "credit" ? BigInt(row.amount) : -BigInt(row.amount)
-    }
+    // A block with a claim was left out above, so whether claims count makes no difference here.
+    const arrived = BigInt(after) - BigInt(before) - arrivedIn(blockRows, { claims: true })
     if (arrived <= 0n) continue
     const payer = payers.get(block)
     credits.push({
@@ -632,9 +640,8 @@ function isExchangeForToken(net: { token: Token; delta: bigint }, usdMicros: str
   if (delta < 0n === net.delta < 0n) return false
   const price = tokenPrice(token, blockNum)
   if (price === null) return false
-  const abs = (value: bigint) => Number(value < 0n ? -value : value)
-  const listedUsd = (abs(net.delta) * Number(usdMicros)) / 10 ** net.token.decimals / 1e6
-  const ratio = (abs(delta) * price) / listedUsd
+  const listedUsd = (Number(abs(net.delta)) * Number(usdMicros)) / 10 ** net.token.decimals / 1e6
+  const ratio = (Number(abs(delta)) * price) / listedUsd
   return ratio >= ORACLE_BAND[0] && ratio <= ORACLE_BAND[1]
 }
 
@@ -725,8 +732,8 @@ export function buildLegs({ account, rows, references, priced, market, tokenPric
         unlisted.push(row)
         continue
       }
-      const net = nets.get(token.asset) ?? { token: TOKENS.find((t) => t.symbol === token.asset)!, delta: 0n, parts: [] }
-      net.delta += row.side === "credit" ? BigInt(row.amount) : -BigInt(row.amount)
+      const net = nets.get(token.asset) ?? { token: tokenBySymbol(token.asset)!, delta: 0n, parts: [] }
+      net.delta += signedAmount(row)
       net.parts.push(row)
       nets.set(token.asset, net)
     }
@@ -804,7 +811,6 @@ export function buildLegs({ account, rows, references, priced, market, tokenPric
     // With no feed on either side, what left is worth about its market price. That's an estimate, and it's labeled as one.
     const marketSide = isSwap && !oracleSide && !resolved.some((r) => r.rejected) ? (resolved.find((r) => r.net.delta < 0n && r.priceSource === "market") ?? resolved.find((r) => r.priceSource === "market")) : undefined
     const anchor = oracleSide ?? marketSide
-    const abs = (delta: bigint) => (delta < 0n ? -delta : delta)
     let tradeUsd = anchor ? worth(abs(anchor.net.delta), BigInt(anchor.price as string), anchor.net.token.decimals) : null
     const other = anchor && resolved.find((r) => r !== anchor)
     if (anchor && other && tradeUsd !== null) {
@@ -829,6 +835,8 @@ export function buildLegs({ account, rows, references, priced, market, tokenPric
       only.priceNote = null
     }
 
+    // Its market can settle that: then the trade's value is known, and only belongs to this leg.
+    const unsplit = hasUnlisted && !forToken ? { alsoMovedUnlisted: true as const } : {}
     for (const { net, price, priceSource, priceNote } of resolved) {
       // What was paid is known even when the token's price isn't: price and cost are separate facts.
       const value = tradeUsd === null ? null : tradeUsd.toString()
@@ -850,6 +858,7 @@ export function buildLegs({ account, rows, references, priced, market, tokenPric
         ...((marketSide || forToken) && value !== null ? { estimated: true } : {}),
         parts: net.parts.map(partOf),
         ...unsettled,
+        ...unsplit,
         ...(settledCredit ? { settledCredit } : {}),
       })
     }

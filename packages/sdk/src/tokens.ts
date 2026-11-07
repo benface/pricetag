@@ -83,7 +83,7 @@ export const SEED_TX = `0x${"0".repeat(64)}`
 
 /**
  * A swap price outside this range is rejected, and the leg has no usable price. Swaps can imply absurd prices:
- * WORK-319 saw up to 6.6e12× the oracle. The ranges are wide on purpose, so they only catch those.
+ * we've seen up to 6.6e12× the oracle. The ranges are wide on purpose, so they only catch those.
  */
 type Sanity = { usd: [min: number, max: number] } | { eth: [min: number, max: number] }
 
@@ -118,6 +118,11 @@ export function tokenByAddress(address: string): Token | undefined {
   // Nearly always already normalized, and this runs for every row a busy wallet has, several times a read.
   return BY_ADDRESS.get(address) ?? BY_ADDRESS.get(normalizeAddress(address))
 }
+
+const BY_SYMBOL = new Map(TOKENS.map((t) => [t.symbol, t]))
+
+/** By symbol, which is also how an asset names its main token: `ETH`, not `WETH`. */
+export const tokenBySymbol = (symbol: string): Token | undefined => BY_SYMBOL.get(symbol)
 
 export function normalizeAddress(address: string): string {
   const hex = address.toLowerCase()

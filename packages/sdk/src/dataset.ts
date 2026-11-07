@@ -55,7 +55,7 @@ export function blockRanges(blocks: readonly number[], span: number): string[] {
 }
 
 /** WHERE clauses for a list of transactions, with the same block range for Amp to skip files on. */
-export function txFilters(txs: readonly { block_num: number; tx_hash: string }[]): string[] {
+function txFilters(txs: readonly { block_num: number; tx_hash: string }[]): string[] {
   const sorted = [...txs].sort((a, b) => a.block_num - b.block_num)
   const result: string[] = []
   for (let i = 0; i < sorted.length; i += BLOCKS_PER_QUERY) {
@@ -107,8 +107,8 @@ export const followRawSql = (baseDataset: string) => `SELECT block_num FROM "${b
 /** A derived table runs a few seconds behind the head, and older than this isn't a current price. */
 const MAX_PRICE_AGE_MS = 120_000
 
-export const LEG_COLUMNS = "block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind"
-export const PRICED_COLUMNS = "block_num, tx_hash, account, sold_token, sold_amount, bought_token, bought_amount, priced"
+const LEG_COLUMNS = "block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind"
+const PRICED_COLUMNS = "block_num, tx_hash, account, sold_token, sold_amount, bought_token, bought_amount, priced"
 const ORACLE_COLUMNS = { eth: "eth_answer", usdc: "usdc_answer" }
 const REFERENCE_COLUMNS = `block_num, ${ORACLE_COLUMNS.eth} AS eth_usd, ${ORACLE_COLUMNS.usdc} AS usdc_usd, eth_tx, usdc_tx`
 
@@ -299,7 +299,7 @@ export function datasetReader(query: Query, config: { baseDataset: string; datas
       for (const filter of txFilters(txs)) {
         const legs = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.legs WHERE ${filter} AND kind <> 'gas'`)
         const unlisted = await query<Row>(`SELECT ${LEG_COLUMNS} FROM ${ds}.unlisted_legs WHERE ${filter}`)
-        result.push(...legs.map(toLegRow), ...unlisted.map(toLegRow))
+        for (const row of [...legs, ...unlisted]) result.push(toLegRow(row))
       }
       return result
     },
@@ -374,7 +374,7 @@ export function decodeRound(data: string | null | undefined): RateRound | null {
 
 /**
  * One query however many feeds and blocks: a wallet that holds several asks for them all at once, and a chart's points share one. The filter sits in an inner subquery
- * with a LIMIT, and the outer query reads no field of the result. WORK-320 found the other shapes can run eth_call on every block on the chain.
+ * with a LIMIT, and the outer query reads no field of the result. Other shapes were found to run eth_call on every block on the chain.
  */
 export function readFeedRoundsAt(query: Query, config: { baseDataset: string; network: string }): NonNullable<Source["readFeedRounds"]> {
   return async (assets, blocks) => {

@@ -1,10 +1,10 @@
 // How far apart Base's blocks are. The spacing is exact, so time can be worked out from block numbers with no read.
 
 /**
- * Base's first block of the 200 ms upgrade, set for November 5, 2026 at 18:00 UTC. Blocks are 2 s apart up to this one,
+ * Base's first block of the 200 ms upgrade, on November 5, 2026 at 18:00 UTC. Blocks are 2 s apart up to this one,
  * and 200 ms apart after it, several to a second, since `timestamp` stays in whole seconds. So order by block number.
  * This one starts a second exactly, as Base Sepolia's did.
- * It's the first block at or after that time, counting 2 s from genesis at 1686789347. Change it if Base moves the date.
+ * It's the first block at or after that time, counting 2 s from genesis at 1686789347.
  */
 export const LAST_2S_BLOCK = 53_556_127
 

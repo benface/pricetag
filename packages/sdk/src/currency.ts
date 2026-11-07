@@ -7,7 +7,7 @@
 import { timestampOfBlock } from "./chain.ts"
 import type { PricedLeg } from "./legs.ts"
 import { marketMarked, referenceMarks, type LatestPrices, type MarkEstimated, type MarkPrice } from "./portfolio.ts"
-import type { WalletData } from "./wallet.ts"
+import type { WalletData } from "./wallet-data.ts"
 
 export type CurrencyCode = "USD" | "CAD" | "EUR" | "GBP" | "CHF" | "AUD" | "NZD" | "SGD" | "MXN" | "BRL" | "TRY" | "ZAR"
 

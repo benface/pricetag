@@ -164,7 +164,29 @@ export type PositionState = {
 /** A position without its lots: what a step changed comes from these, and they don't grow with what's held. */
 export type PositionTally = Omit<PositionState, "lots">
 
-export const tallyOf = ({ lots: _, ...tally }: PositionState): PositionTally => tally
+/**
+ * Without reading its lots, which a state the fold made after a sale only puts together when they're read (see `made`). Field by
+ * field, so every tally, and every state made from one, has the same shape, which keeps each step quick.
+ */
+export function tallyOf(state: PositionState): PositionTally {
+  return {
+    method: state.method,
+    decimals: state.decimals,
+    ...(state.tracksPaidAt ? { tracksPaidAt: true } : {}),
+    realizedMicros: state.realizedMicros,
+    resolvedDisposedQty: state.resolvedDisposedQty,
+    unresolvedDisposedQty: state.unresolvedDisposedQty,
+    unknownCostDisposedQty: state.unknownCostDisposedQty,
+    unknownProceedsQty: state.unknownProceedsQty,
+    gasMicros: state.gasMicros,
+    unpricedGasQty: state.unpricedGasQty,
+    shortfallQty: state.shortfallQty,
+    transferredOutCostMicros: state.transferredOutCostMicros,
+    transferredOutUnknownQty: state.transferredOutUnknownQty,
+    transferredOutEstimatedMicros: state.transferredOutEstimatedMicros,
+    estimatedRealizedMicros: state.estimatedRealizedMicros,
+  }
+}
 
 /**
  * What a debit took that had a known cost, and where that cost came from, whatever each lot is labeled. Decimal strings, like the
@@ -198,7 +220,7 @@ export function worth(qty: bigint, unitMicros: bigint, decimals: number): bigint
   return (qty * unitMicros) / 10n ** BigInt(decimals)
 }
 
-/** Only what's there, so a lot with neither looks the way it always has. */
+/** Only what's there, so a lot with neither carries neither field, and stays as small as a plain lot. */
 const costSource = (reported: boolean | undefined, given: bigint): Pick<CostPiece, "reported" | "givenCostMicros"> => ({
   ...(reported ? { reported: true } : {}),
   ...(given > 0n ? { givenCostMicros: given.toString() } : {}),
@@ -247,13 +269,13 @@ function mergedPaidAt(a: Lot, b: Lot): PaidAt[] | null {
   return [...byBlock].map(([blockNum, { cost, qty }]) => ({ costMicros: cost.toString(), qty: qty.toString(), blockNum }))
 }
 
-/** Only what's there, so a lot with none looks the way it always has. */
+/** Only what's there, so a lot with none carries no field. */
 const unconfirmed = (...wallets: readonly (readonly string[] | undefined)[]): Pick<CostPiece, "unconfirmedBy"> => {
   const all = [...new Set(wallets.flatMap((list) => list ?? []))]
   return all.length > 0 ? { unconfirmedBy: all } : {}
 }
 
-/** What says where this goes among the rest, which stays true whatever becomes of its cost. Only what's there, so a lot with none looks the way it always has. */
+/** What says where this goes among the rest, which stays true whatever becomes of its cost. Only what's there, so a lot with none carries no field. */
 export const ranking = ({ wholeCostOnly, boughtAt, boughtIn }: Pick<CostPiece, "wholeCostOnly" | "boughtAt" | "boughtIn">): Pick<CostPiece, "wholeCostOnly" | "boughtAt" | "boughtIn"> => ({
   ...(wholeCostOnly ? { wholeCostOnly } : {}),
   ...(boughtAt ? { boughtAt } : {}),
@@ -283,20 +305,20 @@ function lotOf({ tracksPaidAt }: PositionState, piece: CostPiece, legId: string)
 
 const estimatedOf = (lot: Lot) => BigInt(lot.estimatedCostMicros ?? "0")
 
-/** What a position's lots add up to. Only a known cost's estimate counts, the way `valuePosition` has always counted it. */
+/** What a position's lots add up to. Only a known cost's estimate counts, as in `valuePosition`. */
 type LotSums = { qty: bigint; unknownCostQty: bigint; cost: bigint; estimatedCost: bigint }
 
 /**
- * Each lots array's sums, carried from one step to the next, so oldest first doesn't add up every lot it holds at every step
- * (WORK-559). Nothing changes a lots array once it's made, so a sum can't go stale, and state stays plain JSON.
+ * What a lots array the fold didn't make adds up to, so a state passed in more than once is only added up once. With its length,
+ * since a state the fold made can share its array with one passed in, and a later step can add to it.
  */
-const lotSums = new WeakMap<readonly Lot[], LotSums>()
+const lotSums = new WeakMap<readonly Lot[], { sums: LotSums; length: number }>()
 
 function sumsOf(lots: readonly Lot[]): LotSums {
   const known = lotSums.get(lots)
-  if (known) return known
+  if (known?.length === lots.length) return known.sums
   const sums = addSums(noSums(), lots, 1n)
-  lotSums.set(lots, sums)
+  lotSums.set(lots, { sums, length: lots.length })
   return sums
 }
 
@@ -316,11 +338,39 @@ function addSums(sums: LotSums, lots: readonly Lot[], sign: 1n | -1n): LotSums {
   return sums
 }
 
-/** Records what `lots` adds up to, when it's already known, and hands them back. */
-function withSums(lots: Lot[], sums: LotSums): Lot[] {
-  lotSums.set(lots, sums)
+/**
+ * The lots a state holds: `front`, then `array` from `from` up to `to`. Oldest first shares one array from step to step, so a
+ * purchase adds to its end (WORK-680) and a sale moves `from` past what it took (WORK-681), and neither copies every lot held.
+ * `front` has the few lots a sale changed without taking all of them, ahead of the rest. Nothing in `array` before `to` ever
+ * changes, so an earlier state still reads as it was made.
+ */
+type Window<T> = { array: T[]; front: readonly T[]; from: number; to: number }
+
+/**
+ * A state's lots, and what they add up to, carried from one step to the next so no step adds up every lot it holds. `owned` when
+ * its array is one the fold made for the states it made, the only kind it adds to. Lots in a state passed in belong to whoever
+ * passed it, even when that state is a copy of one the fold made and shares its array, and so do what's left of them after a sale.
+ */
+type Held = Window<Lot> & { sums: LotSums; owned: boolean }
+
+const whole = <T>(array: T[]): Window<T> => ({ array, front: [], from: 0, to: array.length })
+const isWhole = (w: Window<unknown>) => w.front.length === 0 && w.from === 0 && w.to === w.array.length
+const sizeOf = (w: Window<unknown>) => w.front.length + w.to - w.from
+const lotAt = <T>(w: Window<T>, i: number): T => (i < w.front.length ? w.front[i] : w.array[w.from + i - w.front.length]) as T
+
+function* lotsIn<T>(w: Window<T>): Generator<T> {
+  for (let i = 0; i < sizeOf(w); i++) yield lotAt(w, i)
+}
+
+/** These lots in a new array. Not `concat`: once anything defines `Symbol.isConcatSpreadable`, as Apache Arrow does, V8 makes every `concat` far slower. */
+function copyOf<T>(w: Window<T>): T[] {
+  const lots = w.front.slice()
+  for (let i = w.from; i < w.to; i++) lots.push(w.array[i] as T)
   return lots
 }
+
+/** These lots as one array, which is the shared one when they're all of it. */
+const arrayOf = <T>(w: Window<T>): T[] => (isWhole(w) ? w.array : copyOf(w))
 
 const dateOf = ({ boughtAt, acquiredAt }: Pick<Lot, "boughtAt" | "acquiredAt">) => boughtAt ?? acquiredAt
 
@@ -334,11 +384,28 @@ function isLater(lot: Lot, than: Lot): boolean {
   return a !== undefined && b !== undefined && a > b
 }
 
-/** Oldest first by when it was acquired, so an inherited or imported lot goes where its own date says, not where it arrived. */
-function insertByDate(lots: readonly Lot[], lot: Lot): Lot[] {
-  const at = lot.acquiredBlock === undefined && !lot.boughtAt ? -1 : comesLast(lots, lot) ? -1 : lots.findIndex((l) => isLater(l, lot))
-  const next = at < 0 ? lots.concat([lot]) : lots.slice(0, at).concat([lot], lots.slice(at))
-  return withFacts(next, factsWith(factsOf(lots), lot))
+/**
+ * Oldest first by when it was acquired, so an inherited or imported lot goes where its own date says, not where it arrived. Adding
+ * at the end, where blocks almost always put it, pushes onto the window's array, which must end where the window does and be one
+ * only this step adds to (see `credit`), so it doesn't copy every lot held. Earlier states can share that array, so a lot that goes
+ * anywhere else goes in a copy, which leaves it as it was.
+ */
+function insertByDate(lots: Window<Lot>, lot: Lot): Window<Lot> {
+  const facts = factsWith(factsOf(lots.array), lot)
+  let at = -1
+  if ((lot.acquiredBlock !== undefined || lot.boughtAt) && !comesLast(lots.array, lot)) {
+    for (let i = 0; i < sizeOf(lots) && at < 0; i++) if (isLater(lotAt(lots, i), lot)) at = i
+  }
+  if (at < 0) {
+    withFacts(lots.array, facts).push(lot)
+    return { ...lots, to: lots.to + 1 }
+  }
+  const next: Lot[] = []
+  for (let i = 0; i < sizeOf(lots); i++) {
+    if (i === at) next.push(lot)
+    next.push(lotAt(lots, i))
+  }
+  return whole(withFacts(next, facts))
 }
 
 /**
@@ -382,8 +449,9 @@ function comesLast(lots: readonly Lot[], lot: Lot): boolean {
   return !facts.boughtAt && facts.lastBlock <= lot.acquiredBlock
 }
 
-function addLot({ method, tracksPaidAt }: PositionState, lots: readonly Lot[], lot: Lot): Lot[] {
-  if (method === "fifo") return insertByDate(lots, lot)
+/** Adds a lot to what's held. Oldest first changes `lots` in place, so it must be an array this step owns. Average makes a new one. */
+function addLot({ method, tracksPaidAt }: PositionState, lots: Lot[], lot: Lot): Lot[] {
+  if (method === "fifo") return arrayOf(insertByDate(whole(lots), lot))
   const known = lot.costMicros !== null
   const pool = lots.find((l) => (l.costMicros === null) === !known)
   if (!pool) return [...lots, lot]
@@ -410,11 +478,16 @@ function addLot({ method, tracksPaidAt }: PositionState, lots: readonly Lot[], l
 /** Whether this method's answer for this leg depends on an order nothing says. */
 export const orderMatters = ({ orderUnknown }: Pick<FoldLeg, "orderUnknown">, method: Method) => orderUnknown === "always" || (orderUnknown === "fifo" && method === "fifo")
 
-function credit(state: PositionState, leg: FoldLeg, qty: bigint): Lot[] {
-  const before = sumsOf(state.lots)
+function credit(state: PositionState, held: Held, leg: FoldLeg, qty: bigint): Held {
   const added = arrivals(state, leg, qty)
   // Adding a lot, or merging it into a pool, adds its units and cost to what's held, so the sums only need what arrived.
-  return withSums(added.reduce<Lot[]>((lots, lot) => addLot(state, lots, lot), state.lots), addSums({ ...before }, added, 1n))
+  const sums = addSums({ ...held.sums }, added, 1n)
+  if (added.length === 0) return { ...held, sums }
+  if (state.method !== "fifo") return { ...whole(added.reduce<Lot[]>((lots, lot) => addLot(state, lots, lot), arrayOf(held))), sums, owned: true }
+  // Oldest first adds to the end of the array this state shares with those before it, unless the fold didn't make it for the states
+  // it made, or something has already added to it, and copies it otherwise. Either way, what it adds to is the fold's own.
+  const start = held.owned && held.to === held.array.length ? held : whole(withFacts(copyOf(held), factsOf(held.array)))
+  return { ...added.reduce(insertByDate, start), sums, owned: true }
 }
 
 /** The lots a credit adds, before any of them is merged with what's held. */
@@ -436,7 +509,8 @@ function arrivals(state: PositionState, leg: FoldLeg, qty: bigint): Lot[] {
 }
 
 type Taken = {
-  lots: Lot[]
+  /** What's left. */
+  held: Held
   pieces: CostPiece[]
   knownQty: bigint
   knownCost: bigint
@@ -501,9 +575,14 @@ function costsDiffer(a: Ranked, b: Ranked): boolean {
 
 /**
  * Lots next to each other with the same date and different costs, when nothing says which came first. Any other lot is on its own.
- * One at a time, so whoever only needs the first few needn't group them all.
+ * One at a time, so whoever only needs the first few needn't group them all. Without an exchange's date, the chain puts every lot
+ * in order, so none is tied, and many with one date needn't be grouped at each step.
  */
-function* runsInOrder<T extends Ranked>(lots: readonly T[]): Generator<T[]> {
+function* runsInOrder<T extends Ranked>(lots: Iterable<T>, exchangeDates: boolean): Generator<T[]> {
+  if (!exchangeDates) {
+    for (const lot of lots) yield [lot]
+    return
+  }
   let run: T[] = []
   for (const lot of lots) {
     const date = dateOf(lot)
@@ -523,16 +602,18 @@ const untied = <T extends Ranked>(run: T[]): T[][] => (isTied(run) ? [run] : run
  * and so do lots tied with each other, when only some of them go. One with no purchase date could have been bought before anything
  * ahead of it too, so what's taken could be either, and unless all of them go, none of them has a known cost.
  */
-export function lotsSplitBy<T extends Ranked>({ lots }: { lots: readonly T[] }, qty: bigint): T[] {
+export function lotsSplitBy<T extends Ranked>(state: { lots: readonly T[] }, qty: bigint): T[] {
   if (qty <= 0n) return []
+  const lots = windowOf(state)
+  const facts = factsOf(lots.array)
   // Only a lot known as a whole with no date makes what's ahead of it split, from wherever it is. Without one, nothing past what's
   // taken can, so oldest first needn't look through every purchase it still holds.
-  const anywhere = factsOf(lots).undatedWhole
+  const anywhere = facts.undatedWhole
   let through = 0n
   let last = -1
   let split: T[] = []
   let index = 0
-  for (const run of runsInOrder(lots)) {
+  for (const run of runsInOrder(lotsIn(lots), facts.boughtAt)) {
     const before = through
     for (const lot of run) {
       through += BigInt(lot.qty)
@@ -542,14 +623,15 @@ export function lotsSplitBy<T extends Ranked>({ lots }: { lots: readonly T[] }, 
     if (before < qty && through > qty && (run.length > 1 || run[0]?.wholeCostOnly)) split = run
     if (!anywhere && through >= qty) break
   }
-  const ahead = lots.slice(0, last + 1)
+  const ahead: T[] = []
+  for (let i = 0; i <= last; i++) ahead.push(lotAt(lots, i))
   return [...ahead, ...split.filter((lot) => !ahead.includes(lot))]
 }
 
 /** Whether an answer could fix any of the unknown cost in what this much takes. An average takes from all of what's unknown. */
 export function takesAnswerableCost(state: Pick<PositionState, "lots" | "method">, qty: bigint, split: ReadonlySet<Lot> = new Set(lotsSplitBy(state, qty))): boolean {
   let through = 0n
-  for (const lot of state.lots) {
+  for (const lot of lotsIn(windowOf(state))) {
     // Oldest first takes nothing past what adds up to this much.
     if (state.method === "fifo" && through >= qty) return false
     through += BigInt(lot.qty)
@@ -569,37 +651,41 @@ export function costCanBeAnswered(leg: Pick<FoldLeg, "delta" | "pieces" | "order
 const withoutCost = ({ qty, legId, unconfirmedBy, acquiredBlock, acquiredAt, undated, ...rest }: Lot): Lot => ({ qty, costMicros: null, label: "unknown", legId, ...unconfirmed(unconfirmedBy), ...(acquiredBlock === undefined ? {} : { acquiredBlock, acquiredAt: acquiredAt as string }), ...(undated ? { undated } : {}), ...ranking(rest), unanswerable: true })
 
 /** FIFO takes the oldest lots first. Average takes from the known and unknown pools in proportion. */
-function take(state: PositionState, qty: bigint): Taken {
-  const before = sumsOf(state.lots)
-  const held = before.qty
-  const taking = qty < held ? qty : held
+function take(state: PositionState, held: Held, qty: bigint): Taken {
+  const before = held.sums
+  const heldQty = before.qty
+  const taking = qty < heldQty ? qty : heldQty
   const split = new Set(lotsSplitBy(state, taking))
-  const result: Taken = { lots: [], pieces: [], knownQty: 0n, knownCost: 0n, estimatedCost: 0n, givenCost: 0n, reportedQty: 0n, purchasedQty: 0n, purchaseSources: [], unknownQty: 0n, shortfall: qty - taking, split }
+  const kept: Lot[] = []
+  let left: Window<Lot> | null = null
+  const result: Taken = { held, pieces: [], knownQty: 0n, knownCost: 0n, estimatedCost: 0n, givenCost: 0n, reportedQty: 0n, purchasedQty: 0n, purchaseSources: [], unknownQty: 0n, shortfall: qty - taking, split }
   // What's left adds up to what was held, less what lost its cost and what was taken.
   const sums = { ...before }
 
   let remaining = taking
   let splitLeft = split.size
-  for (const [i, current] of state.lots.entries()) {
+  const size = sizeOf(held)
+  for (let i = 0; i < size; i++) {
     // Oldest first is done once it's taken enough and nothing further on lost its cost, and leaves the rest as it was.
     if (state.method === "fifo" && remaining === 0n && splitLeft === 0) {
-      result.lots = result.lots.concat(state.lots.slice(i))
+      left = leaving(held, i, kept)
       break
     }
+    const current = lotAt(held, i)
     if (split.has(current)) splitLeft--
     const lot = split.has(current) ? withoutCost(current) : current
     if (lot !== current) addSums(addSums(sums, [current], -1n), [lot], 1n)
     const lotQty = BigInt(lot.qty)
     let n: bigint
     if (state.method === "fifo") n = remaining < lotQty ? remaining : lotQty
-    else n = i === state.lots.length - 1 ? remaining : (taking * lotQty) / held
+    else n = i === size - 1 ? remaining : (taking * lotQty) / heldQty
     remaining -= n
     if (n === 0n) {
-      result.lots.push(lot)
+      kept.push(lot)
       continue
     }
     const { rest, cost, estimated, given, paidAt } = shrink(lot, n)
-    if (rest) result.lots.push(rest)
+    if (rest) kept.push(rest)
     addSums(sums, [lot], -1n)
     if (rest) addSums(sums, [rest], 1n)
     if (lot.costMicros === null) result.unknownQty += n
@@ -632,8 +718,21 @@ function take(state: PositionState, qty: bigint): Taken {
   // Units we never saw arrive have no cost anyone can carry.
   if (result.shortfall > 0n) result.pieces.push({ qty: result.shortfall.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0" })
   // What's left is some of what was held, and each lot keeps its dates, so what could be among them still could.
-  withFacts(withSums(result.lots, sums), factsOf(state.lots))
+  // A copy is the fold's own, and what's left in the shared array belongs to whoever that array did.
+  result.held = left ? { ...left, sums, owned: left.array === held.array ? held.owned : true } : { ...whole(withFacts(kept, factsOf(held.array))), sums, owned: true }
   return result
+}
+
+/**
+ * What's left once the first `i` lots held are gone, with `kept` in their place: what a sale changed without taking all of it. The
+ * rest stays in the shared array, until more of it is gone than left, when what's left moves to a copy so the gone part can go.
+ */
+function leaving(held: Window<Lot>, i: number, kept: readonly Lot[]): Window<Lot> {
+  const left: Window<Lot> =
+    i < held.front.length
+      ? { array: held.array, front: [...kept, ...held.front.slice(i)], from: held.from, to: held.to }
+      : { array: held.array, front: kept, from: held.from + i - held.front.length, to: held.to }
+  return left.from * 2 > left.to ? whole(withFacts(copyOf(left), factsOf(held.array))) : left
 }
 
 /** What was taken, with no cost anyone can rely on, and no answer brings that back. */
@@ -653,12 +752,11 @@ function withoutCosts(taken: Taken): Taken {
 }
 
 /** What's still held, with no cost anyone can rely on, since how much of each lot is left depends on the same order. */
-function lotsWithoutCosts(state: PositionState, lots: readonly Lot[]): Lot[] {
-  const { qty } = sumsOf(lots)
-  return withSums(
-    lots.reduce<Lot[]>((kept, lot) => addLot(state, kept, withoutCost(lot)), []),
-    { qty, unknownCostQty: qty, cost: 0n, estimatedCost: 0n },
-  )
+function lotsWithoutCosts(state: PositionState, held: Held): Held {
+  const { qty } = held.sums
+  let lots: Lot[] = []
+  for (const lot of lotsIn(held)) lots = addLot(state, lots, withoutCost(lot))
+  return { ...whole(lots), sums: { qty, unknownCostQty: qty, cost: 0n, estimatedCost: 0n }, owned: true }
 }
 
 /** Applies a leg, and says what a debit took, which is what a transfer to a linked wallet carries with it. */
@@ -671,18 +769,78 @@ export type LegApplied = {
   split: ReadonlySet<Lot> | null
 }
 
+/** What each state the fold made holds. Its `lots` can be longer, once a later step has added to the array it shares. */
+const helds = new WeakMap<PositionState, Held>()
+
+/** The states whose `lots` is only put together when it's read, because they don't hold all of their array, and what it was once read. */
+const lazy = new WeakMap<PositionState, Lot[] | null>()
+
+/** One accessor for every such state, so they share a shape, which a new pair of functions for each would cost them. */
+const lazyLots: PropertyDescriptor = {
+  enumerable: true,
+  configurable: true,
+  get(this: PositionState) {
+    let lots = lazy.get(this)
+    if (!lots) lazy.set(this, (lots = copyOf(helds.get(this) as Held)))
+    return lots
+  },
+  // Then it holds whatever it's given, like a state the fold didn't make.
+  set(this: PositionState, value: Lot[]) {
+    Object.defineProperty(this, "lots", { value, writable: true, enumerable: true, configurable: true })
+    helds.delete(this)
+    lazy.delete(this)
+  },
+}
+
+/**
+ * A state holding these lots. Its `lots` is the shared array when it holds all of it, as it does after a purchase. Otherwise it's
+ * put together the first time it's read, so a sale doesn't copy every lot held, and the fold never reads it.
+ */
+function made(tally: PositionTally, held: Held): PositionState {
+  let state: PositionState
+  if (isWhole(held)) state = { ...tally, lots: held.array }
+  else {
+    state = Object.defineProperty({ ...tally } as PositionState, "lots", lazyLots)
+    lazy.set(state, null)
+  }
+  helds.set(state, held)
+  return state
+}
+
+/** What the fold made this state hold, unless something has given it other lots since. */
+function madeHeld(state: PositionState): Held | undefined {
+  const held = helds.get(state)
+  return held && (lazy.has(state) || state.lots === held.array) ? held : undefined
+}
+
+/** What this state holds. One the fold didn't make, a copy of one it did included, holds its `lots`, and nothing here adds to them. */
+const heldOf = (state: PositionState): Held => madeHeld(state) ?? { ...whole(state.lots), sums: sumsOf(state.lots), owned: false }
+
+/** Whether this state's `lots` reads as what it holds, which a state the fold made stops doing once a later step adds to its array. */
+const readsAsHeld = (state: PositionState, held: Held) => lazy.has(state) || held.to === held.array.length
+
+function windowOf<T>(state: { lots: readonly T[] }): Window<T> {
+  return (madeHeld(state as unknown as PositionState) as Window<T> | undefined) ?? whole(state.lots as T[])
+}
+
+/**
+ * Applying a leg can add to the lots array of the state it's applied to, so read a state's lots before applying a leg to it, or
+ * read them from the state that leg made. Every function here that takes a state reads it as it was, whatever came after it.
+ */
 export function applyLegTaking(state: PositionState, leg: FoldLeg): LegApplied {
+  const held = heldOf(state)
   const delta = BigInt(leg.delta)
-  if (delta === 0n) return { state, taken: [], known: null, split: null }
-  if (delta > 0n) return { state: { ...state, lots: credit(state, leg, delta) }, taken: [], known: null, split: null }
+  // Nothing changes, but a state whose array a later step has added to is handed back as it was made, so its `lots` says so.
+  if (delta === 0n) return { state: readsAsHeld(state, held) ? state : made(tallyOf(state), held), taken: [], known: null, split: null }
+  if (delta > 0n) return { state: made(tallyOf(state), credit(state, held, leg, delta)), taken: [], known: null, split: null }
 
   const qty = -delta
   const orderless = orderMatters(leg, state.method)
-  const taken = orderless ? withoutCosts(take(state, qty)) : take(state, qty)
-  const applied = (next: PositionState): LegApplied => ({ state: next, taken: taken.pieces, known: knownTaken(taken), split: taken.split })
-  const next: PositionState = {
-    ...state,
-    lots: orderless ? lotsWithoutCosts(state, taken.lots) : taken.lots,
+  const taken = orderless ? withoutCosts(take(state, held, qty)) : take(state, held, qty)
+  const left = orderless ? lotsWithoutCosts(state, taken.held) : taken.held
+  const applied = (next: PositionTally): LegApplied => ({ state: made(next, left), taken: taken.pieces, known: knownTaken(taken), split: taken.split })
+  const next: PositionTally = {
+    ...tallyOf(state),
     shortfallQty: (BigInt(state.shortfallQty) + taken.shortfall).toString(),
   }
 
@@ -755,7 +913,7 @@ export type PositionValues = {
 }
 
 export function valuePosition(state: PositionState, priceMicros: string | null): PositionValues {
-  const { qty, unknownCostQty, cost, estimatedCost } = sumsOf(state.lots)
+  const { qty, unknownCostQty, cost, estimatedCost } = heldOf(state).sums
   const costKnown = unknownCostQty === 0n
   const value = priceMicros === null ? null : worth(qty, BigInt(priceMicros), state.decimals)
   return {

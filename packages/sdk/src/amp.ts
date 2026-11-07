@@ -141,7 +141,8 @@ export function createQuery(url: string, token: string | undefined, { timeoutMs:
       while (true) {
         const next = await Promise.race([iterator.next(), timeout])
         if (next.done) return rows
-        rows.push(...(next.value as readonly T[]))
+        // Not `push(...batch)`: spreading a big batch into arguments overflows the stack, at about 120,000 rows on Node 26.
+        for (const row of next.value as readonly T[]) rows.push(row)
       }
     } catch (error) {
       // Stop the stream, without waiting on a server that may not answer.
