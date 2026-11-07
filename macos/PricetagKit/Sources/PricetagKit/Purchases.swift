@@ -325,6 +325,8 @@ public final class PurchaseTracker {
         }
         purchases.removeAll { $0.ref == purchase.ref }
         save()
+        // It's hidden now, so saying it can't be is out of date. Another problem stays until the next check.
+        if problem == PurchaseWording.cantForgetYet { problem = nil }
     }
 
     /// Whether there's nothing more to learn about it. How long it's been never settles this: an order can appear after any wait, and so can a delivery's block.

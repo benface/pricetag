@@ -199,6 +199,7 @@ struct PurchaseTrackerTests {
         fails = false
         tracker.dismiss(row)
         #expect(tracker.purchases.isEmpty)
+        #expect(tracker.problem == nil, "a retry that works takes the explanation away too")
     }
 
     @Test func recordsNoCostUntilAnOrderSaysAllOfIt() {

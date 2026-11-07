@@ -64,6 +64,9 @@ private struct HotWalletSetup: View {
                 }
                 if let purchases, !stillGoing.isEmpty {
                     DetailsSection("Purchases") {
+                        if let problem = purchases.problem {
+                            WarningText(problem).font(.callout)
+                        }
                         ForEach(stillGoing) { purchase in
                             PurchaseRow(purchase: purchase, phase: purchases.phase(of: purchase), main: wallet.display.main) { purchases.dismiss(purchase) }
                         }
