@@ -73,6 +73,23 @@ const BOOKS: [string, (cost: Money) => Book][] = [
 
 const legOf = (changes: Partial<WalletResponse>, book: Book) => foldBook(wallet(ME, [received], changes), [], "average", book).legs[0]!
 
+describe("an imported withdrawal's purchases when the main currency changes", () => {
+  const paidRates = { CAD: { 10: round("75000000") } }
+  const lots = [{ units: (10n * E6).toString(), micros: "1", at: "2026-01-01T00:00:00.000Z" }, { units: (90n * E6).toString(), micros: "90000000", at: "2026-01-02T00:00:00.000Z" }]
+  const book: Book = { ...emptyBook(), withdrawals: [{ ...withdrawal(CAD_90), fifoCostMicros: "90000001", fifoLots: lots }] }
+
+  it("add up to what all of it converts to, however each one rounds", () => {
+    const leg = foldBook(wallet(ME, [received], { paidRates }), [], "fifo", book).legs[0]!
+    assert.equal(leg.costMicros, ((90000001n * 75n) / 100n).toString())
+    assert.equal(leg.pieces?.reduce((sum, piece) => sum + BigInt(piece.costMicros as string), 0n).toString(), leg.costMicros)
+  })
+
+  it("stay unknown with no rate, rather than a CAD amount read as USD", () => {
+    const leg = foldBook(wallet(ME, [received]), [], "fifo", book).legs[0]!
+    assert.deepEqual([leg.costLabel, leg.costMicros], ["unknown", null])
+  })
+})
+
 for (const [what, bookOf] of BOOKS) {
   describe(`${what} when the main currency changes`, () => {
     const book = bookOf(CAD_90)

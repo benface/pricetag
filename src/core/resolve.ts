@@ -4,10 +4,10 @@
 // or from a provider's order that matches a movement exactly. The rest come from here, and the fold then runs on the result.
 // An unanswered sender stays unknown: it could be the user's own wallet, so assuming otherwise would be a guess.
 
-import { applyLegTaking, assertFoldFits, emptyPosition, firstMarks, foldWallet, unconfirmedAssets, formatAmount, formatPaid, historyGaps, lessPaidAt, normalizeAddress, orderMatters, plainAmount, sharePaidAt, shortHash, usableAnswer, usdView, viewWallet, withoutCurrency, worth, type CostPiece, type CurrencyCode, type HistoryGap, type HoldComparison, type Method, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { applyLegTaking, assertFoldFits, emptyPosition, firstMarks, foldWallet, unconfirmedAssets, formatAmount, formatPaid, historyGaps, lessPaidAt, lotsSplitBy, normalizeAddress, orderMatters, plainAmount, ranking, sharePaidAt, shortHash, usableAnswer, usdView, viewWallet, withoutCurrency, worth, type CostPiece, type CurrencyCode, type HistoryGap, type HoldComparison, type Method, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import { NO_FACTS, legsByTransaction, transactionFacts } from "./activity.ts"
 import type { BookPoint, BookPreview, WalletResponse } from "./api.ts"
-import { costKey, isDemoWallet, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type ExchangeWithdrawal, type Money, type Purchase, type Receipt, type SenderAnswer } from "./book.ts"
+import { costKey, isDemoWallet, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type ExchangeLot, type ExchangeWithdrawal, type Money, type Purchase, type Receipt, type SenderAnswer } from "./book.ts"
 import { unitsOfDecimal } from "./decimal.ts"
 import { matchWithdrawals, type ExchangeArrival } from "./exchange-import.ts"
 import { MINT_ADDRESS, knownSender, type KnownSender } from "./senders.ts"
@@ -72,9 +72,13 @@ function moneyIn(side: Side, money: Money, leg: PricedLeg): string | null {
   return from === null || to === null ? null : ((BigInt(money.micros) * from) / to).toString()
 }
 
+/** Part of a piece whose cost is only known for all of it, so this part has none, and neither does the rest. */
+const withoutItsCost = (piece: CostPiece, units: bigint): CostPiece => ({ qty: units.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0", unanswerable: true, ...(piece.unconfirmedBy ? { unconfirmedBy: piece.unconfirmedBy } : {}), ...(piece.acquiredBlock === undefined ? {} : { acquiredBlock: piece.acquiredBlock, acquiredAt: piece.acquiredAt as string }), ...ranking(piece) })
+
 /** Part of a piece, with its share of the cost. Taking it all takes all of the cost, so rounding never loses any. */
 function slice(piece: CostPiece, qty: bigint): CostPiece {
   const whole = BigInt(piece.qty)
+  if (piece.wholeCostOnly && qty !== whole) return withoutItsCost(piece, qty)
   const share = (micros: string) => (qty === whole ? BigInt(micros) : (BigInt(micros) * qty) / whole).toString()
   const cost = piece.costMicros === null ? null : share(piece.costMicros)
   return {
@@ -89,6 +93,7 @@ function slice(piece: CostPiece, qty: bigint): CostPiece {
 
 /** What's left of a piece after a slice of it is gone. */
 function without(piece: CostPiece, taken: CostPiece): CostPiece {
+  if (piece.wholeCostOnly) return withoutItsCost(piece, BigInt(piece.qty) - BigInt(taken.qty))
   const less = (micros: string | null, gone: string | null) => (micros === null ? null : (BigInt(micros) - BigInt(gone as string)).toString())
   return {
     ...piece,
@@ -114,10 +119,24 @@ function recipientsOf(leg: PricedLeg): Source[] | null {
 /**
  * What a debit took, split between everyone it went to, whether or not their wallets are read. That way a recipient's cost
  * can't depend on which wallet is open, and nothing's counted twice or lost. Oldest first gives the first transfer the oldest
- * lots. Average gives each one the same mix, because that's what it means: every unit cost the same.
+ * lots. Average gives each one the same mix, because that's what it means: every unit cost the same. Oldest first can't say
+ * who got what when nothing says which came first, and then only what goes to one wallet together keeps its cost, which is why
+ * transfers in a row to one wallet count as one.
  */
-export function allocateTaken(taken: readonly CostPiece[], recipients: readonly Source[], method: Method): Map<string, CostPiece[]> {
-  let left = [...taken]
+export function allocateTaken(taken: readonly CostPiece[], transfers: readonly Source[], method: Method): Map<string, CostPiece[]> {
+  const recipients = transfers.reduce<Source[]>((all, { address, units }) => {
+    const last = all.at(-1)
+    return last?.address === address ? [...all.slice(0, -1), { address, units: last.units + units }] : [...all, { address, units }]
+  }, [])
+  const divided = new Set<CostPiece>()
+  if (method === "fifo") {
+    let through = 0n
+    for (const { units } of recipients) {
+      through += units
+      for (const piece of lotsSplitBy({ lots: taken }, through)) divided.add(piece)
+    }
+  }
+  let left = taken.map((piece) => (divided.has(piece) ? withoutItsCost(piece, BigInt(piece.qty)) : piece))
   const allocated = new Map<string, CostPiece[]>()
   for (const { address, units } of recipients) {
     const pieces: CostPiece[] = []
@@ -237,6 +256,33 @@ const purchaseCost = (side: Side, { cost, costUsdMicros }: Purchase, leg: Priced
 /** What a withdrawal cost by this method. An average never stands in for oldest first, so with no figure for that, it stays unknown. */
 const withdrawalCost = ({ cost, fifoCostMicros }: ExchangeWithdrawal, method: Method): Money | undefined => (method === "average" ? cost : fifoCostMicros === null ? undefined : { micros: fifoCostMicros, currency: cost.currency })
 
+/**
+ * What arrived from a withdrawal oldest first, purchase by purchase, each going by when it was bought, so spending part of what's
+ * held takes the oldest. The network kept a little of each, in proportion, and what's left still cost all of it, so nothing here
+ * depends on how much it kept. Saved before its lots were kept, it's one cost for all of it, because treating that as one
+ * purchase would be a guess.
+ */
+function piecesOfWithdrawal(side: Side, { units, cost, fifoCostMicros, fifoLots, fileId }: ExchangeWithdrawal, leg: PricedLeg): CostPiece[] | null {
+  if (fifoCostMicros === null) return null
+  const lots: readonly ExchangeLot[] = fifoLots ?? [{ units, micros: fifoCostMicros, wholeCostOnly: true }]
+  const [sent, arrived] = [BigInt(units), BigInt(leg.delta)]
+  const pieces: CostPiece[] = []
+  let [unitsUpTo, microsUpTo, unitsGiven, microsGiven] = [0n, 0n, 0n, 0n]
+  for (const lot of lots) {
+    unitsUpTo += BigInt(lot.units)
+    microsUpTo += BigInt(lot.micros)
+    const qty = (unitsUpTo * arrived) / sent - unitsGiven
+    if (qty === 0n) continue
+    // Converted as a running total, so the pieces add up to exactly what all of it comes to.
+    const upTo = moneyIn(side, { micros: microsUpTo.toString(), currency: cost.currency }, leg)
+    if (upTo === null) return null
+    pieces.push({ qty: qty.toString(), costMicros: (BigInt(upTo) - microsGiven).toString(), label: "self-reported", estimatedCostMicros: "0", ...(lot.wholeCostOnly ? { wholeCostOnly: true as const } : {}), ...(lot.at ? { boughtAt: lot.at, ...(fileId ? { boughtIn: fileId } : {}) } : {}) })
+    unitsGiven += qty
+    microsGiven = BigInt(upTo)
+  }
+  return pieces
+}
+
 export function resolveLegs(sides: readonly Side[], method: Method, book: Book): Resolved {
   const linked = new Set(linkedWallets(book))
   const read = new Map(sides.map((side) => [normalizeAddress(side.wallet.address), side]))
@@ -286,7 +332,11 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     // Nothing can be answered about one whose cost depends on an order nothing says, and what it paid doesn't settle that.
     if (BigInt(leg.delta) > 0n && orderMatters(leg, method)) {
       const { estimated: _, ...rest } = leg
-      return { ...rest, costLabel: "unknown", costMicros: null }
+      const address = normalizeAddress(side.wallet.address)
+      const withdrawal = method === "fifo" && !book.costs[costKey(address, leg.id)] ? withdrawals.get(costKey(address, leg.id)) : undefined
+      // Still from those purchases, so it goes where they do, whatever that makes of what's ahead of it.
+      const lots = withdrawal ? piecesOfWithdrawal(side, withdrawal, leg) : null
+      return { ...rest, costLabel: "unknown", costMicros: null, ...(lots ? { pieces: lots.map((piece) => withoutItsCost(piece, BigInt(piece.qty))) } : {}) }
     }
     if (!isOpenCredit(leg)) return leg
     const { wallet } = side
@@ -346,6 +396,9 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     // What's inherited wins, unless part of it can't be, or can't be yet, since an entered cost is for all of what arrived.
     if ((unvouched.length > 0 || !pieces.some((p) => p.label === "inherited" && p.costMicros !== null)) && report !== null) {
       // When what was already held got paid for isn't known, so there's no rate for that day, only the one when the history starts.
+      const fromWithdrawal = withdrawal && method === "fifo" && !book.costs[costKey(address, leg.id)] && !note
+      const lots = fromWithdrawal ? piecesOfWithdrawal(side, withdrawal, leg) : null
+      if (lots) return withPieces(leg, lots)
       const approximate = leg.opening && reportedMoney && reportedMoney.currency !== side.view.currency
       return approximate ? { ...reported(leg, report), estimated: true, enteredAs: reportedMoney } : reported(leg, report)
     }

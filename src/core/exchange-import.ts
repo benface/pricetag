@@ -2,8 +2,10 @@
 // out rather than guessed: it stays a question. Nothing in a file says whether it starts at the account's beginning, and what
 // was bought before it changes every cost in it, so only the person who downloaded it can vouch for that.
 
+import { sha256 } from "@noble/hashes/sha2"
+import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils"
 import { ASSETS, decimalsOf, isAddress, normalizeAddress, type CurrencyCode } from "@pricetag/sdk/core"
-import type { Book, ExchangeWithdrawal } from "./book.ts"
+import { MAX_EXCHANGE_LOTS, type Book, type ExchangeLot, type ExchangeWithdrawal } from "./book.ts"
 import { unitsOfDecimal } from "./decimal.ts"
 
 export type ExchangeImport = {
@@ -72,9 +74,13 @@ function addLot(lots: Lot[], at: number, units: bigint, cost: bigint) {
   }
 }
 
-/** What these units cost, this far along the lots. Null when that can't be said, or the budget ran out before it could. */
-function costAlong({ lots, oldest }: Pool, from: bigint, units: bigint, budget: Budget): bigint | null {
-  let total: bigint | null = 0n
+/** Part of a lot, as taken: how much, what it cost, when it was bought, and whether a file says which came first within it. */
+type Part = { at: number; units: bigint; cost: bigint; tied: boolean }
+
+/** What these units cost lot by lot, this far along the lots. Null when that can't be said, or the budget ran out before it could. */
+function partsAlong({ lots, oldest }: Pool, from: bigint, units: bigint, budget: Budget): Part[] | null {
+  const parts: Part[] = []
+  let known = true
   let skip = from
   let left = units
   for (let i = oldest; i < lots.length && left > 0n; i++) {
@@ -85,13 +91,19 @@ function costAlong({ lots, oldest }: Pool, from: bigint, units: bigint, budget: 
       continue
     }
     const taken = left < lot.units - skip ? left : lot.units - skip
-    const cost = lot.cost === null || (lot.tied && taken < lot.units) ? null : (lot.cost * taken) / lot.units
-    total = total === null || cost === null ? null : total + cost
+    if (lot.cost === null || (lot.tied && taken < lot.units)) known = false
+    else parts.push({ at: lot.at, units: taken, cost: (lot.cost * taken) / lot.units, tied: lot.tied })
     skip = 0n
     left -= taken
   }
-  return total
+  return known ? parts : null
 }
+
+const costOf = (parts: readonly Part[]) => parts.reduce((sum, { cost }) => sum + cost, 0n)
+
+const within = (a: bigint, b: bigint, rounding: bigint) => a - b <= rounding && b - a <= rounding
+
+const sameParts = (a: readonly Part[], b: readonly Part[], rounding: bigint) => a.length === b.length && a.every(({ at, units, cost, tied }, i) => at === b[i]?.at && units === b[i]?.units && tied === b[i]?.tied && within(cost, b[i].cost, rounding))
 
 /** Takes the oldest of these units, which leaves the rest. Rounding never loses any, because taking a whole lot takes all of its cost. */
 function takeOldest(pool: Pool, units: bigint) {
@@ -141,19 +153,24 @@ function positionsAfter(moment: ReadonlyMap<bigint, number>, size: bigint, budge
 /**
  * What a withdrawal this size cost oldest first, when that's the same whichever of its moment's other disposals went first.
  * Otherwise null. Dividing a lot can round differently from one position to the next, by up to a millionth per lot, which isn't
- * a different cost.
+ * a different cost. The same total can come from different purchases, and then only all of it has that cost, with no one date,
+ * as it does when there are too many lots to keep.
  */
-function costInAnyOrder(pool: Pool, moment: ReadonlyMap<bigint, number>, size: bigint, budget: Budget): bigint | null {
+function costInAnyOrder(pool: Pool, moment: ReadonlyMap<bigint, number>, size: bigint, budget: Budget): { cost: bigint; lots: ExchangeLot[] } | null {
   const positions = positionsAfter(moment, size, budget)
   if (positions === null) return null
-  const first = costAlong(pool, 0n, size, budget)
+  const first = partsAlong(pool, 0n, size, budget)
   if (first === null) return null
+  const cost = costOf(first)
   const rounding = BigInt(pool.lots.length - pool.oldest)
+  let settled = first.length <= MAX_EXCHANGE_LOTS
   for (const position of positions) {
-    const cost = costAlong(pool, position, size, budget)
-    if (cost === null || cost - first > rounding || first - cost > rounding) return null
+    const parts = partsAlong(pool, position, size, budget)
+    if (parts === null || !within(costOf(parts), cost, rounding)) return null
+    settled &&= sameParts(first, parts, rounding)
   }
-  return first
+  const lots = settled ? first.map((part) => ({ units: part.units.toString(), micros: part.cost.toString(), at: new Date(part.at).toISOString(), ...(part.tied ? { wholeCostOnly: true as const } : {}) })) : [{ units: size.toString(), micros: cost.toString(), wholeCostOnly: true as const }]
+  return { cost, lots }
 }
 
 /**
@@ -172,11 +189,14 @@ function settleDisposals(pool: Pool) {
   const moment = new Map([...counts].sort(([a], [b]) => (a < b ? -1 : 1)))
   const withdrawn = new Set(disposals.filter(({ withdrawal }) => withdrawal).map(({ units }) => units))
   const budget = disposals.length > 1 ? pool.budget : { left: Infinity }
-  const costs = new Map<bigint, bigint | null>()
+  const costs = new Map<bigint, { cost: bigint; lots: ExchangeLot[] } | null>()
   for (const size of moment.keys()) if (withdrawn.has(size)) costs.set(size, costInAnyOrder(pool, moment, size, budget))
   for (const { units, withdrawal } of disposals) {
-    const cost = costs.get(units) ?? null
-    if (withdrawal) withdrawal.fifoCostMicros = cost === null ? null : cost.toString()
+    const found = costs.get(units) ?? null
+    if (withdrawal && found) {
+      withdrawal.fifoCostMicros = found.cost.toString()
+      withdrawal.fifoLots = found.lots
+    }
   }
   takeOldest(pool, disposals.reduce((sum, { units }) => sum + units, 0n))
 }
@@ -186,6 +206,7 @@ export function parseCoinbaseCsv(text: string): ExchangeImport | null {
   // Coinbase puts a few lines about the account before the header.
   const headerAt = lines.findIndex((line) => /(^|,)Timestamp(,|$)/.test(line) && /Transaction Type/.test(line))
   if (headerAt < 0) return null
+  const fileId = bytesToHex(sha256(utf8ToBytes(text)))
   const header = parseCsvLine(lines[headerAt] as string).map((h) => h.trim().toLowerCase())
   const column = (start: string) => header.findIndex((h) => h.startsWith(start))
   const at = { time: column("timestamp"), type: column("transaction type"), asset: column("asset"), qty: column("quantity"), currency: header.findIndex((h) => h.endsWith("currency")), total: column("total"), notes: column("notes") }
@@ -251,7 +272,7 @@ export function parseCoinbaseCsv(text: string): ExchangeImport | null {
       if (SENDS.has(type)) {
         if (enough) {
           const to = (cells[at.notes] ?? "").match(/0x[0-9a-fA-F]{40}/)?.[0]
-          withdrawal = { exchange: "Coinbase", asset, units: units.toString(), at: new Date(time).toISOString(), cost: { micros: cost.toString(), currency: pool.currency as CurrencyCode }, fifoCostMicros: null, toAddress: to && isAddress(to) ? normalizeAddress(to) : null }
+          withdrawal = { exchange: "Coinbase", asset, units: units.toString(), at: new Date(time).toISOString(), cost: { micros: cost.toString(), currency: pool.currency as CurrencyCode }, fifoCostMicros: null, fileId, toAddress: to && isAddress(to) ? normalizeAddress(to) : null }
           withdrawals.push(withdrawal)
         } else skipped++
       }

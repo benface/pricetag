@@ -779,6 +779,16 @@ public struct BookPreview: Codable, Sendable, Equatable {
     }
 }
 
+/// Part of a withdrawal, oldest first: how much of it, and what that cost.
+public struct ExchangeLot: Codable, Sendable, Equatable, Hashable {
+    public let units: String
+    public let micros: String
+    /// A file can't say which came first within it, so only all of it has a cost.
+    public var wholeCostOnly: Bool? = nil
+    /// When it was bought. Only a part only known as a whole can be without one, when it could be from several moments.
+    public var at: String? = nil
+}
+
 /// A withdrawal found in an exchange's history, with what it cost.
 public struct ExchangeWithdrawal: Codable, Sendable, Equatable {
     public let exchange: String
@@ -790,6 +800,10 @@ public struct ExchangeWithdrawal: Codable, Sendable, Equatable {
     public let toAddress: String?
     /// The same going oldest first, in the same currency. Nil when that can't be said, or it was saved before this was worked out.
     public var fifoCostMicros: String? = nil
+    /// What `fifoCostMicros` is made of, oldest first. Nil means it was saved before this was kept, so only all of it has that cost.
+    public var fifoLots: [ExchangeLot]? = nil
+    /// Which file this came from, which is how two lots with one date are known to be one purchase. Nil means it was saved before this was kept.
+    public var fileId: String? = nil
 }
 
 public struct ExchangeImport: Codable, Sendable, Equatable {

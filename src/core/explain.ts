@@ -1,6 +1,6 @@
 // What a click on a number explains: a sentence for how it's worked out, and the legs behind it.
 
-import { CURRENCIES, TOKENS, TOKEN_FEEDS, formatAmount, formatMoney, formatPaid, formatPrice, formatRate, formatReturn, returnBps, orderMatters, formatSignedMoney, holdEffects, shortHash, tokenByAddress, worth, type CostLabel, type CurrencyCode, type HoldComparison, type LegEffect, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { CURRENCIES, TOKENS, TOKEN_FEEDS, formatAmount, formatMoney, formatPaid, formatPrice, formatRate, formatReturn, returnBps, orderMatters, formatSignedMoney, holdEffects, shortHash, takesAnswerableCost, tokenByAddress, worth, type CostLabel, type CurrencyCode, type HoldComparison, type LegEffect, type PnlPoint, type Position, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import { COST_WORDS, AVERAGE_PRICE_PAID, BALANCE_CHECK, CHECK_LABELS, ESTIMATE_LINE, HOLD_ETH, HOLD_PAST, METHOD_LABELS, NETWORK_FEES, currentPriceSource, est, holdCaveatSentence, holdDifferenceSentence, tokenLabel, unrecordedSentence, unseenEthCause } from "./wording.ts"
 
 export type Metric = "amount" | "average" | "price" | "value" | "return" | "realized" | "unrealized" | "onchain"
@@ -142,8 +142,9 @@ export function summarizeEffect({ leg, before, after }: LegEffect, currency: Cur
   const what = (micros: bigint | string | null, about = false) => (micros === null ? amount(qty) : `${about ? "about " : ""}${money(micros)} of ${leg.asset}`)
   // What it's worth at a market price is an estimate, and it's only ever that price that says so.
   const atMarket = leg.priceSource === "market"
-  // Nobody can answer which came first, or what the chain hasn't confirmed yet.
-  const orderUnknown = orderMatters(leg, before.method)
+  // Nobody can answer which came first, or what the chain hasn't confirmed yet, or which of an exchange's purchases this was.
+  const costCanBeAnswered = BigInt(leg.delta) > 0n ? (leg.pieces?.some((p) => p.costMicros === null && !p.unanswerable) ?? true) : takesAnswerableCost(before, qty)
+  const orderUnknown = orderMatters(leg, before.method) || !costCanBeAnswered
   if (BigInt(leg.delta) > 0n) {
     const unknown = leg.costMicros !== null ? null : leg.pieces?.some((p) => p.costMicros !== null) ? "What part of this cost isn't known yet." : "What this cost isn't known yet."
     const facts = { unknown, answerable: unknown !== null && !orderUnknown && !leg.unsettledCredit }

@@ -1,10 +1,156 @@
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import { describe, it } from "node:test"
-import { applyLeg, emptyPosition, returnBps, valuePosition, type FoldLeg, type Method } from "@pricetag/sdk/core"
+import { applyLeg, applyLegTaking, emptyPosition, lotsSplitBy, returnBps, takesAnswerableCost, valuePosition, type FoldLeg, type Method } from "@pricetag/sdk/core"
 
 const USD = 1_000_000n
 const ETH = 10n ** 18n
+
+describe("a lot whose cost is only known for all of it", () => {
+  const pieces = [{ qty: (2n * ETH).toString(), costMicros: (4000n * USD).toString(), label: "self-reported" as const, estimatedCostMicros: "0", wholeCostOnly: true as const }]
+  const arrived: FoldLeg = { id: "in", delta: (2n * ETH).toString(), decimals: 18, kind: "transfer", priceMicros: null, costMicros: (4000n * USD).toString(), proceedsMicros: null, costLabel: "self-reported", pieces }
+  const held = applyLeg(emptyPosition("fifo", 18), arrived)
+  const sold = (qty: bigint, usd: bigint): FoldLeg => ({ id: "out", delta: (-qty).toString(), decimals: 18, kind: "swap", priceMicros: null, costMicros: null, proceedsMicros: ((qty * usd * USD) / ETH).toString(), costLabel: "unknown" })
+
+  it("keeps its cost while it's all there, and it all goes together", () => {
+    assert.equal(valuePosition(held, null).costMicros, (4000n * USD).toString())
+    const after = applyLeg(held, sold(2n * ETH, 3000n))
+    assert.deepEqual([after.realizedMicros, after.unresolvedDisposedQty], [(2000n * USD).toString(), "0"])
+  })
+
+  it("has no known cost for what's taken or what's left once part of it goes", () => {
+    const { state, taken } = applyLegTaking(held, sold(ETH, 3000n))
+    assert.deepEqual([state.realizedMicros, state.unknownCostDisposedQty, taken[0]?.costMicros, state.lots[0]?.costMicros], ["0", ETH.toString(), null, null])
+    assert.deepEqual([valuePosition(state, null).costMicros, valuePosition(state, null).unknownCostQty, valuePosition(state, null).realizedMicros], [null, ETH.toString(), null])
+  })
+
+  it("is only split by what doesn't reach the end of it", () => {
+    assert.deepEqual(lotsSplitBy(held, ETH), [held.lots[0]])
+    assert.deepEqual(lotsSplitBy(held, 2n * ETH), [])
+    assert.deepEqual(lotsSplitBy(held, 3n * ETH), [])
+    assert.deepEqual(lotsSplitBy(held, 0n), [])
+  })
+
+  it("says no answer can fix what its split left, in what's taken and what stays", () => {
+    const { state, taken } = applyLegTaking(held, sold(ETH, 3000n))
+    assert.equal(taken[0]?.unanswerable, true)
+    assert.equal(state.lots[0]?.unanswerable, true)
+    assert.equal(takesAnswerableCost(held, ETH), false)
+    assert.equal(takesAnswerableCost(state, ETH / 2n), false)
+  })
+
+  it("can be from any time before it arrived when it has no date, so it needs all that's ahead of it to go too", () => {
+    const dated = { id: "older", delta: ETH.toString(), decimals: 18, kind: "transfer" as const, priceMicros: null, costMicros: (2000n * USD).toString(), proceedsMicros: null, costLabel: "paid" as const, blockNum: 1, timestamp: "2026-10-02T00:00:00.000Z" }
+    const both = applyLeg(applyLeg(emptyPosition("fifo", 18), dated), { ...arrived, blockNum: 2, timestamp: "2026-10-03T00:00:00.000Z" })
+    assert.equal(lotsSplitBy(both, ETH).length, 2, "what's taken could be either")
+    assert.deepEqual(lotsSplitBy(both, 3n * ETH), [])
+    const after = applyLeg(both, sold(ETH, 3000n))
+    assert.equal(valuePosition(after, null).costMicros, null)
+    assert.equal(after.realizedMicros, "0")
+    assert.equal(applyLeg(both, sold(3n * ETH, 3000n)).realizedMicros, (3000n * USD).toString())
+  })
+
+  it("can still be from before anything ahead of it once its cost is gone", () => {
+    const after = applyLeg(applyLeg(emptyPosition("fifo", 18), { ...arrived, blockNum: 2, timestamp: "2026-10-03T00:00:00.000Z" }), sold(ETH / 2n, 3000n))
+    const later: FoldLeg = { id: "later", delta: ETH.toString(), decimals: 18, kind: "transfer", priceMicros: null, costMicros: (2500n * USD).toString(), proceedsMicros: null, costLabel: "self-reported", blockNum: 3, timestamp: "2026-10-05T00:00:00.000Z", pieces: [{ qty: ETH.toString(), costMicros: (2500n * USD).toString(), label: "self-reported", estimatedCostMicros: "0", boughtAt: "2026-10-02T12:00:00.000Z" }] }
+    const held = applyLeg(after, later)
+    assert.deepEqual(held.lots.map((lot) => lot.legId), ["later", "in"], "bought before the undated one arrived")
+    assert.deepEqual(applyLegTaking(held, sold(ETH, 3000n)).taken.map((piece) => piece.costMicros), [null])
+    assert.equal(valuePosition(applyLeg(held, sold(ETH, 3000n)), null).costMicros, null)
+  })
+})
+
+describe("purchases at the same moment", () => {
+  const AT = "2026-10-01T00:00:00.000Z"
+  const onchain = (usd: bigint, qty = ETH): FoldLeg => ({ id: "chain", delta: qty.toString(), decimals: 18, kind: "transfer", priceMicros: null, costMicros: (usd * USD).toString(), proceedsMicros: null, costLabel: "paid", blockNum: 1, timestamp: AT })
+  const bought = (id: string, usd: bigint, qty = ETH, purchase = id): FoldLeg => ({ id, delta: qty.toString(), decimals: 18, kind: "transfer", priceMicros: null, costMicros: (usd * USD).toString(), proceedsMicros: null, costLabel: "self-reported", blockNum: 5, timestamp: "2026-10-03T00:00:00.000Z", pieces: [{ qty: qty.toString(), costMicros: (usd * USD).toString(), label: "self-reported", estimatedCostMicros: "0", boughtAt: AT, boughtIn: purchase }] })
+  const sold = (qty: bigint, usd: bigint): FoldLeg => ({ id: "out", delta: (-qty).toString(), decimals: 18, kind: "swap", priceMicros: null, costMicros: null, proceedsMicros: (usd * USD).toString(), costLabel: "unknown" })
+  const hold = (method: Method, ...legs: FoldLeg[]) => legs.reduce(applyLeg, emptyPosition(method, 18))
+
+  it("has no known cost for part of them when they cost different amounts, whichever arrives first", () => {
+    for (const legs of [[onchain(2000n), bought("cb", 1000n)], [bought("cb", 1000n), onchain(2000n)]]) {
+      const held = hold("fifo", ...legs)
+      assert.equal(lotsSplitBy(held, ETH).length, 2)
+      assert.equal(takesAnswerableCost(held, ETH), false)
+      const after = applyLeg(held, sold(ETH, 2500n))
+      assert.deepEqual([after.realizedMicros, after.unknownCostDisposedQty, valuePosition(after, null).costMicros], ["0", ETH.toString(), null])
+    }
+  })
+
+  it("keeps the known total when all of them go, or by average", () => {
+    const all = applyLeg(hold("fifo", onchain(2000n), bought("cb", 1000n)), sold(2n * ETH, 5000n))
+    assert.deepEqual([all.realizedMicros, all.unresolvedDisposedQty], [(2000n * USD).toString(), "0"])
+    const average = applyLeg(hold("average", onchain(2000n), bought("cb", 1000n)), sold(ETH, 2500n))
+    assert.deepEqual([average.realizedMicros, average.unresolvedDisposedQty], [(1000n * USD).toString(), "0"])
+  })
+
+  it("makes no difference when they cost the same, down to rounding", () => {
+    const same = applyLeg(hold("fifo", onchain(2000n), bought("cb", 2000n)), sold(ETH, 2500n))
+    assert.deepEqual([same.realizedMicros, same.unresolvedDisposedQty, valuePosition(same, null).costMicros], [(500n * USD).toString(), "0", (2000n * USD).toString()])
+    const third = (ETH * 2n) / 3n
+    const near = hold("fifo", { ...onchain(0n, third), costMicros: "1333333333" }, { ...bought("cb", 2000n), delta: ETH.toString() })
+    assert.deepEqual(lotsSplitBy(near, ETH / 2n), [])
+  })
+
+  it("isn't a tie between parts of one purchase, whose fees can leave them at slightly different costs", () => {
+    const held = hold("fifo", bought("a", 2000n, (ETH * 999n) / 1000n, "one"), bought("b", 2000n, ETH, "one"))
+    assert.deepEqual(lotsSplitBy(held, ETH / 2n), [])
+  })
+
+  it("is a tie between two purchases, however they're described, or when one says nothing", () => {
+    const held = hold("fifo", bought("a", 2000n, ETH, "one"), bought("b", 1000n, ETH, "two"))
+    assert.equal(lotsSplitBy(held, ETH / 2n).length, 2)
+    assert.deepEqual(lotsSplitBy(held, 2n * ETH), [])
+    const { boughtIn: _, ...undescribed } = bought("c", 1000n).pieces![0]!
+    for (const legs of [[bought("a", 2000n, ETH, "one"), { ...bought("c", 1000n), pieces: [undescribed] }], [{ ...bought("c", 3000n), pieces: [{ ...undescribed, costMicros: (3000n * USD).toString() }] }, { ...bought("d", 1000n), pieces: [undescribed] }]]) {
+      assert.equal(lotsSplitBy(hold("fifo", ...legs), ETH / 2n).length, 2)
+    }
+  })
+
+  it("is a tie with a lot only known as a whole, even at the same average, unless nothing else shares its date", () => {
+    const whole = (id: string, usd: bigint, qty: bigint, purchase = id): FoldLeg => {
+      const leg = bought(id, usd, qty, purchase)
+      return { ...leg, pieces: [{ ...leg.pieces![0]!, wholeCostOnly: true }] }
+    }
+    for (const legs of [[whole("a", 4000n, 2n * ETH), bought("b", 2000n)], [whole("a", 4000n, 2n * ETH), onchain(2000n)], [bought("b", 2000n), whole("a", 4000n, 2n * ETH)]]) {
+      const held = hold("fifo", ...legs)
+      assert.equal(lotsSplitBy(held, 2n * ETH).length, 2)
+      assert.deepEqual(lotsSplitBy(held, 3n * ETH), [])
+    }
+    assert.deepEqual(lotsSplitBy(hold("fifo", whole("a", 4000n, 2n * ETH)), 2n * ETH), [])
+  })
+
+  it("counts one with no cost, since what's taken could be that one", () => {
+    const unknown: FoldLeg = { ...onchain(0n), costMicros: null, costLabel: "unknown" }
+    const held = hold("fifo", unknown, bought("cb", 1000n))
+    assert.equal(lotsSplitBy(held, ETH / 2n).length, 2)
+    assert.equal(applyLegTaking(held, sold(ETH / 2n, 1000n)).state.realizedMicros, "0")
+  })
+
+  it("leaves chain lots in the order the chain gives them", () => {
+    const held = hold("fifo", onchain(2000n), { ...onchain(1000n), id: "same-second", blockNum: 2 })
+    assert.deepEqual(lotsSplitBy(held, ETH / 2n), [])
+  })
+})
+
+describe("a purchase an exchange dates", () => {
+  const credit = (id: string, qty: bigint, usd: bigint, blockNum: number, timestamp: string, boughtAt?: string): FoldLeg => ({ id, delta: qty.toString(), decimals: 18, kind: "transfer", priceMicros: null, costMicros: (usd * USD).toString(), proceedsMicros: null, costLabel: "self-reported", blockNum, timestamp, pieces: [{ qty: qty.toString(), costMicros: (usd * USD).toString(), label: "self-reported", estimatedCostMicros: "0", ...(boughtAt ? { boughtAt } : {}) }] })
+  const held = (...legs: FoldLeg[]) => legs.reduce(applyLeg, emptyPosition("fifo", 18)).lots.map((lot) => lot.legId)
+
+  it("goes by when it was bought, not when it arrived", () => {
+    const wallet = credit("wallet", ETH, 2000n, 5, "2026-10-02T12:00:00.000Z")
+    assert.deepEqual(held(wallet, credit("old", ETH, 1000n, 9, "2026-10-03T00:00:00.000Z", "2026-10-01T00:00:00.000Z")), ["old", "wallet"])
+    assert.deepEqual(held(wallet, credit("new", ETH, 3000n, 9, "2026-10-03T00:00:00.000Z", "2026-10-02T13:00:00.000Z")), ["wallet", "new"])
+  })
+
+  it("keeps its place when nothing says what it cost anymore", () => {
+    const wallet = credit("wallet", ETH, 2000n, 5, "2026-10-02T12:00:00.000Z")
+    const tied = { ...credit("old", 2n * ETH, 4000n, 9, "2026-10-03T00:00:00.000Z", "2026-10-01T00:00:00.000Z") }
+    tied.pieces = [{ ...tied.pieces![0]!, wholeCostOnly: true }]
+    const state = [wallet, tied, { id: "out", delta: (-ETH).toString(), decimals: 18, kind: "transfer" as const, priceMicros: null, costMicros: null, proceedsMicros: null, costLabel: "unknown" as const }].reduce(applyLeg, emptyPosition("fifo", 18))
+    assert.deepEqual(state.lots.map((lot) => [lot.legId, lot.costMicros, lot.boughtAt]), [["old", null, "2026-10-01T00:00:00.000Z"], ["wallet", (2000n * USD).toString(), undefined]])
+  })
+})
 
 function leg(partial: Partial<Omit<FoldLeg, "delta">> & { delta: bigint }): FoldLeg {
   const { delta, ...rest } = partial

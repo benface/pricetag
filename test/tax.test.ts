@@ -5,8 +5,9 @@ import { after, before, describe, it } from "node:test"
 import { ASSETS, ETH_ADDRESS, foldPositions, type LegPart, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
 import type { Source } from "@pricetag/sdk/internal"
 import type { PortfolioResponse, TaxReportResponse, WalletResponse } from "../src/core/api.ts"
-import { costKey, emptyBook, type Book } from "../src/core/book.ts"
+import { costKey, emptyBook, parseBook, type Book } from "../src/core/book.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
+import { keepingImport, parseCoinbaseCsv } from "../src/core/exchange-import.ts"
 import { foldBook } from "../src/core/resolve.ts"
 import { TAX_COUNTRIES, parseTaxYear, readOtherWallets, savedOtherWallets, taxReportOf, taxRows, type TaxYear } from "../src/core/tax.ts"
 import { createApi } from "../server/app.ts"
@@ -579,6 +580,171 @@ describe("the user's answers in a report", () => {
     const book: Book = { ...emptyBook(), withdrawals: [{ exchange: "Coinbase", asset: "ETH", units: E18.toString(), at, cost: { micros: usd(1200), currency: "USD" }, fifoCostMicros: usd(1200), toAddress: A }] }
     const [row] = eventsOf(taxReportOf([wallet], US, { book }))
     assert.deepEqual([row?.Cost, row?.Status], ["1200.000000", "SELF-REPORTED"])
+  })
+
+  describe("selling part of what an exchange withdrawal brought", () => {
+    const file = (...rows: string[]) => parseCoinbaseCsv(`Timestamp,Transaction Type,Asset,Quantity Transacted,Price Currency,Price at Transaction,Subtotal,Total (inclusive of fees and/or spread),Fees and/or Spread,Notes\n${rows.join("\n")}\n`)!
+    const row = (when: string, type: string, quantity: string, total = "$0") => `${when},${type},ETH,${quantity},USD,$0,$0,${total},$0,x`
+    const twoEth = leg(10, 2n * E18, { kind: "transfer", parts: [part(A, "credit", 2n * E18, SELLER)] })
+    const at = twoEth.timestamp
+    const withdrawn = row(at, "Send", "2")
+    const bookOf = (...buys: string[]): Book => ({ ...emptyBook(), withdrawals: file(...buys, withdrawn).withdrawals })
+    const wallet = held([twoEth, sell(30, 1n, 2500)])
+    const DATED = [row("2026-10-01T10:00:00Z", "Buy", "1", "$1000"), row("2026-10-02T10:00:00Z", "Buy", "1", "$3000")]
+    const TIED = [row("2026-10-01T10:00:00Z", "Buy", "1", "$1000"), row("2026-10-01T10:00:00Z", "Buy", "1", "$3000")]
+
+    it("costs the oldest purchase, and the average in a report that averages", () => {
+      const [oldest] = eventsOf(taxReportOf([wallet], US, { book: bookOf(...DATED) }))
+      assert.deepEqual([oldest?.Cost, oldest?.Gain, oldest?.Status], ["1000.000000", "1500.000000", "SELF-REPORTED"])
+      const [average] = eventsOf(taxReportOf([wallet], { ...US, method: "average" }, { book: bookOf(...DATED) }))
+      assert.deepEqual([average?.Cost, average?.Gain], ["2000.000000", "500.000000"])
+    })
+
+    it("has no cost or gain when nothing says which purchase came first", () => {
+      const report = taxReportOf([wallet], US, { book: bookOf(...TIED) })
+      const rows = eventsOf(report)
+      assert.deepEqual(rows.map((r) => [r.Amount, r.Cost, r.Gain, r.Status]), [["1", "unknown", "unknown", "UNKNOWN GAIN"]])
+      assert.equal(report.gainMicros, foldBook(wallet, [], "fifo", bookOf(...TIED)).positions[0]?.values.realizedMicros)
+    })
+
+    it("still has all of it at its known cost, if all of it's sold", () => {
+      const [all] = eventsOf(taxReportOf([held([twoEth, sell(30, 2n, 5000)])], US, { book: bookOf(...TIED) }))
+      assert.deepEqual([all?.Cost, all?.Gain, all?.Status], ["4000.000000", "1000.000000", "SELF-REPORTED"])
+    })
+
+    describe("next to what the wallet already holds", () => {
+      const own = leg(5, E18, { kind: "transfer", parts: [part(A, "credit", E18, SELLER)], timestamp: "2026-10-02T12:00:00.000Z" })
+      const late = { ...twoEth, timestamp: "2026-10-03T10:00:00.000Z" }
+      const dated = [row("2026-10-01T10:00:00Z", "Buy", "1", "$1000"), row("2026-10-02T10:00:00Z", "Buy", "1", "$3000"), row(late.timestamp, "Send", "2")]
+      const mixed = (legs = [own, late, sell(30, 1n, 2500)]) => held(legs)
+      const key = costKey(A, own.id)
+      const bookFor = (withdrawals: Book["withdrawals"]): Book => ({ ...emptyBook(), withdrawals, costs: { [key]: { micros: "2000000000", currency: "USD" } } })
+      const fresh = () => bookFor(file(...dated).withdrawals)
+
+      it("costs the oldest purchase, not what arrived first, and again after being saved", () => {
+        for (const book of [fresh(), parseBook(JSON.parse(JSON.stringify(fresh())))!]) {
+          const [sale] = eventsOf(taxReportOf([mixed()], US, { book }))
+          assert.deepEqual([sale?.Cost, sale?.Gain], ["1000.000000", "1500.000000"])
+        }
+      })
+
+      it("has no cost or gain from a withdrawal saved with no dates, until all of what could be first has gone", () => {
+        const old = file(...dated).withdrawals.map(({ fifoLots: _, ...rest }) => rest)
+        const book = bookFor(parseBook({ withdrawals: old })!.withdrawals)
+        assert.deepEqual(eventsOf(taxReportOf([mixed()], US, { book })).map((r) => [r.Cost, r.Gain]), [["unknown", "unknown"]])
+        const [all] = eventsOf(taxReportOf([mixed([own, late, sell(30, 3n, 7500)])], US, { book }))
+        assert.deepEqual([all?.Cost, all?.Gain], ["6000.000000", "1500.000000"])
+      })
+    })
+
+    describe("when nothing says which came first", () => {
+      const stamped = (block: number, units: bigint, timestamp: string) => leg(block, units, { kind: "transfer", parts: [part(A, "credit", units, SELLER)], timestamp })
+      const own = stamped(5, E18, "2026-10-01T00:00:00.000Z")
+      const costOfOwn = { [costKey(A, own.id)]: { micros: "2000000000", currency: "USD" as const } }
+      const oldAt = "2026-10-03T00:00:00.000Z"
+      const oldArrival = stamped(10, 2n * E18, oldAt)
+      const oldSaved = file(row("2026-09-20T00:00:00Z", "Buy", "2", "$4000"), row(oldAt, "Send", "2")).withdrawals.map(({ fifoLots: _, ...rest }) => rest)
+      const newAt = "2026-10-05T00:00:00.000Z"
+      const newArrival = stamped(14, E18, newAt)
+      const newer = file(row("2026-10-02T12:00:00Z", "Buy", "1", "$2500"), row(newAt, "Send", "1")).withdrawals
+      const halfOut = leg(12, -E18 / 2n, { kind: "transfer", parts: [part(A, "debit", E18 / 2n, SELLER)] })
+
+      it("stays unknown after the first split, even past a later import", () => {
+        const book = parseBook(JSON.parse(JSON.stringify({ ...emptyBook(), withdrawals: [...oldSaved, ...newer], costs: costOfOwn })))!
+        const legs = [own, oldArrival, halfOut, newArrival, sell(30, 1n, 3000)]
+        const report = taxReportOf([held(legs)], US, { book })
+        assert.deepEqual(eventsOf(report).map((r) => [r.Amount, r.Cost, r.Gain]), [["0.5", "unknown", "unknown"], ["1", "unknown", "unknown"]])
+        const { positions } = foldBook(held(legs), [], "fifo", book)
+        assert.deepEqual([positions[0]?.values.costMicros, positions[0]?.values.unknownCostQty], [null, ((5n * E18) / 2n).toString()])
+      })
+
+      describe("between a wallet's purchase and an exchange's at the same moment", () => {
+        const moment = "2026-10-01T10:00:00.000Z"
+        const tied = stamped(5, E18, moment)
+        const arriving = stamped(10, E18, oldAt)
+        const costs = { [costKey(A, tied.id)]: { micros: "2000000000", currency: "USD" as const } }
+        const book: Book = { ...emptyBook(), costs, withdrawals: file(row(moment, "Buy", "1", "$1000"), row(oldAt, "Send", "1")).withdrawals }
+
+        it("has no cost or gain for part of them, in either order they arrived", () => {
+          assert.deepEqual(eventsOf(taxReportOf([held([tied, arriving, sell(30, 1n, 2500)])], US, { book })).map((r) => [r.Cost, r.Gain]), [["unknown", "unknown"]])
+          // Sold in two parts: the second still isn't known.
+          const twice = [tied, arriving, leg(20, -E18 / 2n, { proceedsMicros: usd(1250) }), leg(30, -E18 / 2n, { proceedsMicros: usd(1250) })]
+          assert.ok(eventsOf(taxReportOf([held(twice)], US, { book })).every((r) => r.Cost === "unknown"))
+        })
+
+        it("has the known total for all of them, and by average", () => {
+          const [all] = eventsOf(taxReportOf([held([tied, arriving, sell(30, 2n, 5000)])], US, { book }))
+          assert.deepEqual([all?.Cost, all?.Gain], ["3000.000000", "2000.000000"])
+          const [average] = eventsOf(taxReportOf([held([tied, arriving, sell(30, 1n, 2500)])], { ...US, method: "average" }, { book }))
+          assert.deepEqual([average?.Cost, average?.Gain], ["1500.000000", "1000.000000"])
+        })
+      })
+
+      describe("between two exchange files' purchases at the same moment", () => {
+        const moment = "2026-10-01T10:00:00.000Z"
+        const later = "2026-10-05T00:00:00.000Z"
+        const legs = (out: bigint, usdOut: number) => [stamped(10, E18, oldAt), stamped(14, E18, later), sell(30, out, usdOut)]
+        const imported = keepingImport(keepingImport(emptyBook(), file(row(moment, "Buy", "1", "$1000"), row(oldAt, "Send", "1"))), file(row(moment, "Buy", "1", "$2000"), row(later, "Send", "1")))
+
+        it("has no cost or gain for part of them, the known total for all of them, and the average, also after being saved", () => {
+          for (const book of [imported, parseBook(JSON.parse(JSON.stringify(imported)))!]) {
+            assert.deepEqual(eventsOf(taxReportOf([held(legs(1n, 2500))], US, { book })).map((r) => [r.Cost, r.Gain]), [["unknown", "unknown"]])
+            const [all] = eventsOf(taxReportOf([held(legs(2n, 5000))], US, { book }))
+            assert.deepEqual([all?.Cost, all?.Gain], ["3000.000000", "2000.000000"])
+            const [average] = eventsOf(taxReportOf([held(legs(1n, 2500))], { ...US, method: "average" }, { book }))
+            assert.deepEqual([average?.Cost, average?.Gain], ["1500.000000", "1000.000000"])
+          }
+        })
+
+        it("isn't one purchase because two files say the same amount and price", () => {
+          const same = keepingImport(keepingImport(emptyBook(), file(row(moment, "Buy", "1", "$2000"), row(oldAt, "Send", "1"))), file(row(moment, "Buy", "1", "$2000"), row(later, "Send", "1")))
+          const short = (E18 * 99n) / 100n
+          for (const book of [same, parseBook(JSON.parse(JSON.stringify(same)))!]) {
+            for (const amounts of [[short, E18], [E18, short]]) {
+              const landed = [stamped(10, amounts[0]!, oldAt), stamped(14, amounts[1]!, later)]
+              assert.deepEqual(eventsOf(taxReportOf([held([...landed, sell(30, 1n, 2500)])], US, { book })).map((r) => [r.Cost, r.Gain]), [["unknown", "unknown"]])
+              const [average] = eventsOf(taxReportOf([held([...landed, sell(30, 1n, 2500)])], { ...US, method: "average" }, { book }))
+              assert.notEqual(average?.Cost, "unknown")
+            }
+          }
+          const [whole] = eventsOf(taxReportOf([held(legs(2n, 5000))], US, { book: same }))
+          assert.deepEqual([whole?.Cost, whole?.Gain], ["4000.000000", "1000.000000"])
+        })
+
+        it("has no cost for part of them when one is only known as a whole, even at the same average", () => {
+          const nested = keepingImport(keepingImport(emptyBook(), file(row(moment, "Buy", "1", "$1000"), row(moment, "Buy", "1", "$3000"), row(oldAt, "Send", "2"))), file(row(moment, "Buy", "1", "$2000"), row(later, "Send", "1")))
+          const landed = [stamped(10, 2n * E18, oldAt), stamped(14, E18, later)]
+          for (const book of [nested, parseBook(JSON.parse(JSON.stringify(nested)))!]) {
+            assert.deepEqual(eventsOf(taxReportOf([held([...landed, sell(30, 2n, 5000)])], US, { book })).map((r) => [r.Cost, r.Gain]), [["unknown", "unknown"]])
+            const [all] = eventsOf(taxReportOf([held([...landed, sell(30, 3n, 9000)])], US, { book }))
+            assert.deepEqual([all?.Cost, all?.Gain], ["6000.000000", "3000.000000"])
+            const [average] = eventsOf(taxReportOf([held([...landed, sell(30, 2n, 5000)])], { ...US, method: "average" }, { book }))
+            assert.deepEqual([average?.Cost, average?.Gain], ["4000.000000", "1000.000000"])
+          }
+        })
+
+        it("costs the oldest part when they're two withdrawals of one purchase", () => {
+          const book: Book = { ...emptyBook(), withdrawals: file(row(moment, "Buy", "2", "$4000"), row(oldAt, "Send", "1"), row(later, "Send", "1")).withdrawals }
+          const [sale] = eventsOf(taxReportOf([held(legs(1n, 2500))], US, { book }))
+          assert.deepEqual([sale?.Cost, sale?.Gain], ["2000.000000", "500.000000"])
+        })
+      })
+
+      it("still goes by a purchase's date when its arrival's place in its block isn't known", () => {
+        const wallet = stamped(5, E18, "2026-10-02T12:00:00.000Z")
+        const uncertain = { ...stamped(10, E18, oldAt), orderUnknown: "fifo" as const }
+        const book: Book = { ...emptyBook(), costs: { [costKey(A, wallet.id)]: { micros: "2000000000", currency: "USD" } }, withdrawals: file(row("2026-10-01T00:00:00Z", "Buy", "1", "$1000"), row(oldAt, "Send", "1")).withdrawals }
+        assert.deepEqual(eventsOf(taxReportOf([held([wallet, uncertain, sell(30, 1n, 2500)])], US, { book })).map((r) => [r.Cost, r.Gain]), [["unknown", "unknown"]])
+      })
+    })
+
+    it("keeps the row for what's known when the same sale also splits it", () => {
+      const oneThenTied = [row("2026-09-01T10:00:00Z", "Buy", "1", "$500"), ...TIED]
+      const threeEth = leg(10, 3n * E18, { kind: "transfer", parts: [part(A, "credit", 3n * E18, SELLER)] })
+      const book: Book = { ...emptyBook(), withdrawals: file(...oneThenTied, row(at, "Send", "3")).withdrawals }
+      const rows = eventsOf(taxReportOf([held([threeEth, sell(30, 2n, 5000)])], US, { book }))
+      assert.deepEqual(rows.map((r) => [r.Amount, r.Cost, r.Gain, r.Status]), [["1", "500.000000", "2000.000000", "SELF-REPORTED"], ["1", "unknown", "unknown", "UNKNOWN GAIN"]])
+    })
   })
 
   it("uses a cost entered for an exchange account, and marks it", () => {
