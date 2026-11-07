@@ -86,7 +86,7 @@ describe("attentionOf", () => {
     assert.equal(attention?.details[0], "Couldn't check the balance of USDC, so its value is an estimate.")
   })
 
-  it("moves what used to be separate notices into one place", () => {
+  it("puts every notice in one place", () => {
     const attention = attentionOf(facts({ gasUnknownTxs: ["0x1"], l1FeeUnknownTxs: ["0x2", "0x3"], withheld: [{ wallet: "0x1234567890abcdef1234567890abcdef12345678", asset: "ETH" }], currency: "CAD", missingRateTxs: ["0x4"], hasCurrentRate: false, totals: totals({ unpricedGas: true }), pnlStatus: "partial" }))
     assert.equal(attention?.details.length, 5)
     assert.match(attention?.title ?? "", /no price at the time/)

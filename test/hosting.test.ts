@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { createServer, request, type IncomingMessage, type Server } from "node:http"
+import { connect } from "node:net"
 import { after, before, describe, it } from "node:test"
 import { ASSETS } from "@pricetag/sdk/core"
 import type { Source } from "@pricetag/sdk/internal"
@@ -157,6 +158,52 @@ describe("a local shutdown", () => {
       server.closeAllConnections()
       server.close()
     }
+  })
+})
+
+/** A raw request, so the test can send any `Host`, or two of them, the way a rebound domain or a browser would. */
+function raw(server: Server, path: string, headers: string): Promise<number> {
+  const { port } = server.address() as { port: number }
+  return new Promise((resolve, reject) => {
+    const socket = connect(port, "127.0.0.1", () => socket.end(`GET ${path} HTTP/1.1\r\n${headers}Connection: close\r\n\r\n`))
+    let text = ""
+    socket.on("data", (chunk) => (text += chunk))
+    socket.on("end", () => resolve(Number(/^HTTP\/1\.1 (\d{3})/.exec(text)?.[1] ?? 0)))
+    socket.on("error", reject)
+  })
+}
+
+describe("a local server, without invites", () => {
+  let server: Server
+
+  before(async () => {
+    server = createServer(createHandler(gate(createApi({}, null, null), hostingOf({}), () => ({ amp: false, buying: false })), null))
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  })
+  after(() => server.close())
+
+  it("answers this Mac's own names, with or without a port, from the Mac app, curl or its own pages", async () => {
+    for (const host of ["localhost", "localhost:8787", "LOCALHOST:8787", "127.0.0.1", "127.0.0.1:8787", "[::1]", "[::1]:8787"]) assert.equal(await raw(server, "/api/rules", `Host: ${host}\r\n`), 200, host)
+    for (const site of ["same-origin", "none"]) assert.equal(await raw(server, "/api/rules", `Host: 127.0.0.1:8787\r\nSec-Fetch-Site: ${site}\r\n`), 200, site)
+  })
+
+  it("turns away a site that points its own name at this Mac, on every path", async () => {
+    for (const host of ["evil.example", "evil.example:8787", "localhost.evil.example", "127.0.0.1.evil.example", "127.0.0.2", "0.0.0.0:8787", "localhost.:8787", "[::1].evil.example"])
+      for (const path of ["/api/rules", "/api/wallet/demo", "/healthz", "/"]) assert.equal(await raw(server, path, `Host: ${host}\r\n`), 403, `${host} ${path}`)
+  })
+
+  it("turns away a request without one name for itself", async () => {
+    // Node turns some of these away itself, before the gate sees them.
+    for (const headers of ["", "Host: 127.0.0.1\r\nHost: evil.example\r\n", "Host: 127.0.0.1\r\nHost: 127.0.0.1\r\n"]) assert.ok([400, 403].includes(await raw(server, "/api/rules", headers)), JSON.stringify(headers))
+  })
+
+  it("turns away other sites' pages calling the API, however the path is spelled", async () => {
+    for (const site of ["cross-site", "same-site"])
+      for (const path of ["/api/rules", "/%61pi/rules"]) assert.equal(await raw(server, path, `Host: 127.0.0.1:8787\r\nSec-Fetch-Site: ${site}\r\n`), 403, `${site} ${path}`)
+  })
+
+  it("still lets another site link to the app itself", async () => {
+    assert.equal(await raw(server, "/", "Host: 127.0.0.1:8787\r\nSec-Fetch-Site: cross-site\r\n"), 404)
   })
 })
 

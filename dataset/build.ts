@@ -49,7 +49,7 @@ const allowlist = ERC20_ADDRESSES.map((a) => `X'${hex(a)}'`).join(", ")
 const ethToken = `arrow_cast(X'${hex(ETH_ADDRESS)}', 'FixedSizeBinary(20)')`
 const logColumns = "block_num, timestamp, tx_hash, tx_index, log_index, address AS token"
 const legColumns = "block_num, timestamp, tx_hash, tx_index, log_index, token, account, side, amount, kind"
-// Who was on the other side, for what names one: an ERC-20 transfer or a transaction's own ETH. A wallet's read used to look this up in the raw tables.
+// Who was on the other side, for what names one: an ERC-20 transfer or a transaction's own ETH. So a wallet's read doesn't have to look it up in the raw tables.
 const legsWithCounterparty = `${legColumns}, counterparty`
 const noCounterparty = "arrow_cast(NULL, 'FixedSizeBinary(20)') AS counterparty"
 

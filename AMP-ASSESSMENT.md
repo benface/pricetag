@@ -2,6 +2,8 @@
 
 An honest account of building Pricetag on Amp, November 4 to 6, 2026. Private to this repo.
 
+**A snapshot from November 6, 2026, and not maintained.** It describes the code, staging and the plans as they were then, so "now" and "after the demo" mean that day. For how the app works today, see the [README](README.md) and [docs/](docs/NUMBERS.md).
+
 **How to read it.** Every claim says where it comes from: **measured** (we ran it, on the date of its issue), **code** (read from source), or **docs** (read from docs, not tested). An estimate says so. `WORK-n` links to an issue in this project's Multica workspace, which needs access to it, and `#n` links to `edgeandnode/amp`.
 
 **What was tested.** Mostly `ampd` v0.0.42 locally, and staging's hosted Amp: workers at `584222f` on November 4 (measured, [WORK-321]), with `edgeandnode/base_mainnet@0.0.2`. Docs and code were read at `e0d7a394c`, and the points in [section 4](#4-where-it-falls-short) marked "Current" were rechecked on `5c966c6f3`, the latest `main` when we looked on November 5, and still the latest on November 6. Numbers dated Nov 6 are read-only reads of staging from 12:00 to 12:25 UTC, on `main` at `a25c96a9`, against `benface/pricetag@0.3.0`. Staging is a shared test environment, so its numbers say little about a production service, good or bad.
@@ -31,7 +33,7 @@ An honest account of building Pricetag on Amp, November 4 to 6, 2026. Private to
 | "Correct through reorgs" | [ampdb.com](https://ampdb.com) | Held locally, but slowly for deep ones, and not every time. We forced 22 reorgs of 5 to 400 blocks through a local `ampd` on an Anvil fork of Base ([WORK-497]). Raw tables matched the new chain in 2–12 s, and 17 s once with the compactor off. `legs` took 3–18 s for up to 26 blocks, 22–49 s for 119–136, and 44–125 s for 277–353, because a derived job walks back to the fork one block at a time (`crates/atlatl/src/streaming_query.rs:1515` at v0.0.42). `priced_legs`, last in the chain, took longer: 18 s for 22 blocks, 58–79 s for 122–132, 72 s for 282 and 172–182 s for 339–343 (measured in 7 of the runs), and not within the 150 s we gave it at 353. Until then they return the old rows with no error, after a few seconds of failing queries. Four times in 12 reorgs over 250 blocks, Amp didn't recover while we watched: three times raw tables kept the old blocks for the whole 150 s or more, and once 4 derived tables failed every query ([WORK-519]). The app's streaming client matched the new chain every time Amp did, after a fix to where our stream resumes: in 20 s, 63 s, 73 s and 200 s in 4 of those runs, and 81 s for 132 blocks and 199 s for 339 with the final version of the fix. One that only polls used to miss a reorg older than a minute. Now it checks the last block it was told about on each poll ([WORK-520]), and in the one run since it said a 321-block reorg in 6 s and matched the new chain in 36 s. Only Anvil, so it says nothing about a real Base reorg | measured, code | **Held, slow when deep** |
 | "Query as of a pinned revision and get the same answer every time" | [ampdb.com](https://ampdb.com) | Pinned hashes held: a wrong hash fails ([WORK-365]), a replay with different batches differed on 0 of 926 blocks ([WORK-330]), and two deployments matched on every row sampled ([WORK-376]). Two exceptions: a failed `eth_call` can commit a permanent NULL ([WORK-326]), and JS functions can see the clock and random numbers ([WORK-322]). Tags can move, as documented, and did so silently on us | measured | **Held, with gaps** |
 | "Bad RPC data never lands": "With `--verify`, Amp recomputes header hashes and Merkle roots" | [ampdb.com](https://ampdb.com) | Can't work on Base. OP Stack deposits are unsupported, and every Base block starts with one. The feature is marked [experimental in the docs](https://github.com/edgeandnode/amp/blob/5c966c6f37203fe242175a9e407c1d7ec1fb5dec/docs/feat/verification.md), not on the site. `ampctl verify` fails every Base block with no reason given ([WORK-378], [#1819]) | measured, docs | **Not on Base** |
-| "Stream results... with signals that tell your application which rows to replace" | [docs.ampdb.com](https://docs.ampdb.com) | The server does this. The TypeScript SDK's `client.stream` drops the block ranges those signals are, and dies on the 30 s keepalive, so we read Flight directly ([WORK-356], `packages/sdk/src/amp.ts:202`). Fixes are approved but unreleased: npm is still at 0.0.55, checked Nov 6 ([WORK-141], [142][WORK-142], [144][WORK-144]) | measured | **Server yes, SDK no** |
+| "Stream results... with signals that tell your application which rows to replace" | [docs.ampdb.com](https://docs.ampdb.com) | The server does this. The TypeScript SDK's `client.stream` drops the block ranges those signals are, and dies on the 30 s keepalive, so we read Flight directly ([WORK-356], `createFollow` in `packages/sdk/src/amp.ts`). Fixes are approved but unreleased: npm is still at 0.0.55, checked Nov 6 ([WORK-141], [142][WORK-142], [144][WORK-144]) | measured | **Server yes, SDK no** |
 | "Any EVM chain" | [ampdb.com](https://ampdb.com) | The SQL carries over, and correct gas doesn't. On `ethereum_mainnet`, all 16 tables deployed with no SQL change, only constants, and came within 30 s of head in under 3 minutes (900 blocks, plus 7,500 back for feeds). But `tx_gas` assumes index 0 is an OP deposit, so it dropped the gas leg for 801 of 178,896 transactions, one per block. Polygon and BSC have ordinary transactions at index 0 too. Blob fees aren't in gas either, 0.8% to 24.8% of the total in 4 samples. Matched the chain: execution gas in 15 of 15 receipts, ETH and USDC prices at 2 of 2 blocks, and balances to the wei for 3 wallets, one of those only because an inferred arrival absorbed the dropped fee ([WORK-612]). Other raw datasets have Base's schema on Arbitrum, OP Mainnet and BSC, and Polygon differs. At head when checked: Ethereum, Arbitrum, Polygon, OP Mainnet, BSC. **Stale:** Avalanche (Aug 14), Linea (Aug 4), Unichain (Oct 11). Gnosis returned no watermark, and others weren't checked. `rpc.polygon_mainnet` fails, because that network's name is `matic`. No full deployment anywhere but Ethereum, and Arbitrum's gas wasn't tried. On Base itself, the shared schema still loses what OP Stack adds (L1 fee, deposit fields), and `gas_used` is cumulative ([WORK-338], [366][WORK-366], [605][WORK-605]) | measured | **SQL runs unchanged on Ethereum. Correct gas needs per-chain work, and only some raw datasets are fresh** |
 | "Turns any RPC endpoint into Parquet you own" | [ampdb.com](https://ampdb.com) | True, but the public RPC stalled a local Amp for good until we added a relay of our own to pace requests ([WORK-333]). On 200 ms blocks a local Amp keeps up only once prices come from logs ([WORK-395], Base Sepolia) | measured | **Held, needs a real RPC** |
 | Quickstart "takes about 10 minutes" | [docs.ampdb.com](https://docs.ampdb.com/get-started/quickstart) | Not timed as written. Its managed Postgres can't start on this Mac (`shmget` fails), so we used Docker ([WORK-319]) | measured | **Not tested** |
@@ -128,7 +130,7 @@ Ranked by what it cost us. "Current" says what was checked against `main` at `5c
 ### 2. Facts that stay on RPC receipts
 
 **Cost: high, and it never goes away.** Three separate gaps:
-- **No L1 fee** ([WORK-366]). Every Base transaction pays one, so computed ETH drifts without it, and a derived dataset can't add it. So the server reads receipts from an RPC (`packages/sdk/src/receipts.ts:90`). On the public one that's about 10 a second, and a wallet sending about 10 transactions a second never gets checked (measured). `BASE_RPC_RATE_LIMIT` now lets a dedicated RPC go faster ([WORK-369]), but the demo stays on the public one, and it's still an RPC.
+- **No L1 fee** ([WORK-366]). Every Base transaction pays one, so computed ETH drifts without it, and a derived dataset can't add it. So the server reads receipts from an RPC (`createL1FeeReader` in `packages/sdk/src/receipts.ts`). On the public one that's about 10 a second, and a wallet sending about 10 transactions a second never gets checked (measured). `BASE_RPC_RATE_LIMIT` now lets a dedicated RPC go faster ([WORK-369]), but the demo stays on the public one, and it's still an RPC.
 - **`gas_used` is the block's running total** ([WORK-338]), with no note in the schema doc, and `gas_price` is NULL on type 2 transactions. Getting a fee takes the previous row plus the base fee, which is why `tx_gas` exists. It does reproduce the receipt exactly (measured).
 - **No deposit fields** (`sourceHash`, `mint`, `isSystemTx`), so a deposit's hash can't be rebuilt from Amp ([WORK-378]).
 
@@ -212,33 +214,33 @@ Moving prices to logs ([WORK-381]) removed the first two from the dataset's path
 
 Checked against `main` at `a25c96a9`, with a search for `eth_call`, `fetch` and JSON-RPC methods. `dataset/local.ts` and `scripts/` also make RPC calls, but they're local tools.
 
-**Through Amp, nothing to do** (code): the chain head and new-block signal (`packages/sdk/src/dataset.ts:72`, `packages/sdk/src/amp.ts:208`), a wallet's legs and prices (`dataset.ts:170–195`), its counterparties, now a `legs` column that replaced raw `logs` and `transactions` scans ([WORK-493]), its approvals from the `approvals` table (`server/approvals.ts`), ETH and USDC prices, market prices, cost notes (`server/source.ts:78`), payouts (`dataset.ts:333`), block rows for Verify (`server/block.ts:81`), and dataset hashes. The web and Mac apps read all of these through our server. Only raw mode, the fallback with no dataset, still scans `logs` and `transactions` for a wallet (`server/source.ts:138–193`, `server/approvals.ts:207`).
+**Through Amp, nothing to do** (code): the chain head and new-block signal (`readHead` in `packages/sdk/src/dataset.ts`, `createRangeStream` in `packages/sdk/src/amp.ts`), a wallet's legs and prices (`followedWindowSql`), its counterparties, now a `legs` column that replaced raw `logs` and `transactions` scans ([WORK-493]), its approvals from the `approvals` table (`server/approvals.ts`), ETH and USDC prices, market prices, cost notes (`readNotesAt` in `server/source.ts`), payouts (`readPayoutTxsAt`), block rows for Verify (`readBlock` in `server/block.ts`), and dataset hashes. The web and Mac apps read all of these through our server. Only raw mode, the fallback with no dataset, still scans `logs` and `transactions` for a wallet (`readReferences` in `server/source.ts`, and `readRaw` in `server/approvals.ts`).
 
 **Through Amp, but an RPC call underneath:**
 
 | Data | Where | Could it avoid the call? | Worth it? |
 |---|---|---|---|
-| Exchange rates | `updateRounds`, or `feedRounds` without a rates dataset, `packages/sdk/src/rates.ts:18` | **Built and running, but the demo's `.env.local` doesn't turn it on.** `benface/pricetag_rates@0.1.0` is at head, and logs matched `eth_call` on 231 of 231 and 30 of 30 ([WORK-479]). The head and recent blocks still read the contract, since the table only has rows on updates and `updateRounds` only looks at rows, not the progress Amp reports ([WORK-628]). Verify doesn't cover rates | **Yes, after the demo.** One env line, and the job watch then covers it too. A demo in USD reads no rates, so it doesn't matter on stage |
-| Current prices for the other 8 tokens | `readFeedRoundsAt`, `packages/sdk/src/dataset.ts:367`, `updateFeedRounds`, `server/source.ts:39` | **Partly done.** History and Verify's proofs read logs from `benface/pricetag_feeds@0.1.0`, and logs matched contract reads on 240 of 240 and 48 of 48. What's held now stays on `eth_call`, because the table only has rows on updates and `updateFeedRounds` only looks at rows ([WORK-494]). That's our reader's limit, not Amp's: query metadata already says how far such a table has reached, with `feed_updates` through block 53888641 and its newest row at 53887517 (measured, Nov 6) | **Maybe, after the demo.** Reading that metadata is untested here, for correctness and speed ([WORK-628]). Logs didn't make reads faster, and the gain was proofs for all 10 tokens |
-| Whether an approval is still active | `server/approvals.ts:256` | No. An allowance is state, and the event only says what was granted | **No** |
-| Balance checks and finding unseen ETH | `packages/sdk/src/balances.ts:81`, `dataset.ts:308` | No. Balances aren't in logs. Amp has no state table | **No.** This is Amp at its best |
-| Raw mode's prices | `server/source.ts:106` | Not needed | **No.** It's the fallback |
+| Exchange rates | `updateRounds`, or `feedRounds` without a rates dataset, in `packages/sdk/src/rates.ts` | **Built and running, but the demo's `.env.local` doesn't turn it on.** `benface/pricetag_rates@0.1.0` is at head, and logs matched `eth_call` on 231 of 231 and 30 of 30 ([WORK-479]). The head and recent blocks still read the contract, since the table only has rows on updates and `updateRounds` only looks at rows, not the progress Amp reports ([WORK-628]). Verify doesn't cover rates | **Yes, after the demo.** One env line, and the job watch then covers it too. A demo in USD reads no rates, so it doesn't matter on stage |
+| Current prices for the other 8 tokens | `readFeedRoundsAt` in `packages/sdk/src/dataset.ts`, and `updateFeedRounds` in `server/source.ts` | **Partly done.** History and Verify's proofs read logs from `benface/pricetag_feeds@0.1.0`, and logs matched contract reads on 240 of 240 and 48 of 48. What's held now stays on `eth_call`, because the table only has rows on updates and `updateFeedRounds` only looks at rows ([WORK-494]). That's our reader's limit, not Amp's: query metadata already says how far such a table has reached, with `feed_updates` through block 53888641 and its newest row at 53887517 (measured, Nov 6) | **Maybe, after the demo.** Reading that metadata is untested here, for correctness and speed ([WORK-628]). Logs didn't make reads faster, and the gain was proofs for all 10 tokens |
+| Whether an approval is still active | `check` in `server/approvals.ts` | No. An allowance is state, and the event only says what was granted | **No** |
+| Balance checks and finding unseen ETH | `readBalancesAt` in `packages/sdk/src/balances.ts`, `readEthBalancesAt` in `packages/sdk/src/dataset.ts` | No. Balances aren't in logs. Amp has no state table | **No.** This is Amp at its best |
+| Raw mode's prices | `readReferences` in `server/source.ts` | Not needed | **No.** It's the fallback |
 
 **Around Amp:**
 
 | Data | Where | Could Amp do it? What's missing | Worth it? |
 |---|---|---|---|
-| L1 fees | `packages/sdk/src/receipts.ts:90` | Yes, if `transactions` had `l1_fee` ([WORK-366]). Its provider already reads receipts (code) | **Yes.** Top ask after traces. Removes the public RPC's 10/s cap and an RPC from the read path |
-| Deposit fields for Verify | `server/block.ts:147` | Yes, with 3 more columns ([WORK-378]) | **Yes,** and it's needed for OP Stack verification anyway |
-| Verify's check against Base's node | `server/block.ts:168` | Not usefully. It's new since Nov 5, and it's there to compare Amp's block hash with someone other than Amp | **No,** on purpose |
-| New-aggregator checks at start, now for prices, rates and token feeds | `server/feeds.ts:18` | Yes, with `rpc.eth_call` today | **No.** Saves a few calls a start |
-| Block of a Coinbase delivery | `server/coinbase.ts:152` | Not as fast. Finding a hash in `transactions` is a scan, and the row arrives later | **No** |
-| Spending Money's balance, nonce, gas and prices | `macos/HotWalletKit/.../Chain.swift:150`, `HotWallet.swift:214` | Mostly, through our server. It needs "latest" right now, and the wallet shouldn't depend on our server to move money | **No,** on purpose |
+| L1 fees | `createL1FeeReader` in `packages/sdk/src/receipts.ts` | Yes, if `transactions` had `l1_fee` ([WORK-366]). Its provider already reads receipts (code) | **Yes.** Top ask after traces. Removes the public RPC's 10/s cap and an RPC from the read path |
+| Deposit fields for Verify | `createDepositReader` in `server/block.ts` | Yes, with 3 more columns ([WORK-378]) | **Yes,** and it's needed for OP Stack verification anyway |
+| Verify's check against Base's node | `createBlockHashReader` in `server/block.ts` | Not usefully. It's new since Nov 5, and it's there to compare Amp's block hash with someone other than Amp | **No,** on purpose |
+| New-aggregator checks at start, now for prices, rates and token feeds | `warnOfNew` in `server/feeds.ts` | Yes, with `rpc.eth_call` today | **No.** Saves a few calls a start |
+| Block of a Coinbase delivery | `blockOf` in `server/coinbase.ts` | Not as fast. Finding a hash in `transactions` is a scan, and the row arrives later | **No** |
+| Spending Money's balance, nonce, gas and prices | `Chain.snapshot` and `HotWallet.lookAtChain` in `macos/HotWalletKit` | Mostly, through our server. It needs "latest" right now, and the wallet shouldn't depend on our server to move money | **No,** on purpose |
 | A device's balance, activity and ETH price, on its pages | `src/core/device-read.ts` | Mostly, through our server, and for the same reason it shouldn't | **No,** on purpose |
-| Sends, gas estimates, receipts of sends | `Chain.swift:201–216`, `src/core/cold.ts:199` | No. Amp doesn't send or estimate | **No** |
-| Sites' reads through the extension | `.../Sites/SiteBridge.swift:165` | No. It's a passthrough of any RPC read | **No** |
-| Simulating a call | `.../Sites/CallPreview.swift:58` | No. `eth_simulateV1` isn't an Amp function | **No** |
-| Coinbase purchases | `server/coinbase.ts:172` | No. Not chain data | **No** |
+| Sends, gas estimates, receipts of sends | `Chain.estimateGas`, `send` and `receipt`, and `sendFromCold` in `src/core/cold.ts` | No. Amp doesn't send or estimate | **No** |
+| Sites' reads through the extension | `SiteBridge.reads` | No. It's a passthrough of any RPC read | **No** |
+| Simulating a call | `CallSimulation` in `CallPreview.swift` | No. `eth_simulateV1` isn't an Amp function | **No** |
+| Coinbase purchases | `checkout` in `server/coinbase.ts` | No. Not chain data | **No** |
 
 **So:** still true. The app's reads could all come through Amp except for two columns' worth of data, L1 fees and deposit fields. Everything else around it is sending, a deliberate second opinion, or money-moving code that should stay independent.
 
@@ -354,39 +356,6 @@ Ranked by what it would change for an app like this.
 | 14 | **Say which layer "under a second" means, that `--verify` excludes OP Stack, and which chains' raw data is current** | See [section 2](#claims). Someone evaluating Base would hit the first two. Avalanche, Linea and Unichain's raw datasets were weeks to months stale on Nov 6, and `rpc.polygon_mainnet` isn't the name that works | None |
 
 No new issues were filed in the `amp` project: everything that meets its bar already has one. Ask 11 is not filed, and whether the `provider list` output needs telling its owners is benface's call ([WORK-605]).
-
-## 9. What's safe to say in the demo
-
-**Safe, as `DEMO.md` says it:**
-- One derived dataset with no fork, validators or contracts.
-- "There's no indexer of ours to run." True on staging, where Edge & Node runs Amp. If asked: we also run a small script through the demo that restarts a job if it dies.
-- Verify "recomputes the block's hashes from what Amp returned," and the list of what it doesn't prove.
-- Prices come from Chainlink's logs and each swap's implied rate. Every position's balance is checked against the chain. That's the balance, not each fee ([WORK-612]). Nothing on Base is known to trigger that gap.
-- A pricing rule is a dataset version, with no app code for the rule.
-- Every listed token's current price has a proof with a log behind it. All 10 passed on real wallets, and the price itself is still read from the contract ([WORK-494]).
-- "No traces, so we found it from the balance," in step 5. It's honest, and it's the right thing to tell this audience.
-
-**Change these. [WORK-452] has been told:**
-
-| `DEMO.md` says | Problem | Say instead |
-|---|---|---|
-| "Three things are hard anywhere else" | Too strong. [Section 7](#7-alternatives-compared-honestly) shows others can do parts of each | "Three things this made easy" |
-| "At most 6 s behind the chain (*measured*)" | Not true now. On Nov 6, `priced_legs` was a median of about 7 s behind and at most about 15 s, over 54 samples. `legs` was about 3 s, at most about 7 s. It was measured before the switch | "Seconds behind the chain." If asked: "Transfers about 3 seconds, prices about 7" |
-| "About 4 GB" (`main`), "about 2 GB" (PR #103) | It was 4.81 GB at 12:09 UTC on Nov 6, growing about 0.14 GB an hour (estimate) | "About 5 GB," or drop it |
-| "Verify proves a price," under "Why it needs Amp" | Our server's check, not Amp's. `ampctl verify` fails on every Base block, and deposit fields come from an RPC | "Amp's data lets us check a price against the block." If asked: "Amp's own verifier doesn't support Base yet, so we wrote this one" |
-
-**Don't say:**
-- "Under a second" or "verified by Amp," without what's above.
-- "Any EVM chain." Say: "The same SQL ran on Ethereum, but correct gas needs per-chain work, and only some chains' raw data is fresh."
-- "Bloom filters made it fast." The demo wallet's cold read barely moved, a median of 23 to 22 s over five runs per version, with overlapping ranges, so that gain is inconclusive. A very busy wallet's went from 178 to 46 s, one run per version. A read past the first is what's quick.
-- "Correct through reorgs," with nothing after it. We forced them locally on Anvil, not on Base ([WORK-497]), and deep ones took Amp up to about 3 minutes, or didn't recover. Say: "We forced reorgs through a local Amp. Up to 136 blocks, 27 seconds of Base, the app fixed itself within a minute and a half."
-- "All through Amp." L1 fees and deposit fields come from an RPC, and sends always will.
-- "We could add PnL leaderboards." It can't be a shared table, and it isn't this product anyway.
-- "Nobody else prices transfers." Goldsky Feeds sells a price per transfer. Ours is different because it's an open dataset with source labels, a forkable rule, and an honest `unknown`.
-
-**If someone asks what was hard:** traces, then wallet read speed, then a job dying silently on the night before. It's better to say so.
-
-**For the morning of the demo:** cold reads were 13 s, 14 s and 33 s on Nov 6, and the next reads 1.5–3.5 s, so read the wallet before going on. Don't stop or deploy staging jobs (see [section 2](#reliability-on-staging)). Anything that says otherwise predates the 04:39 death. These numbers are one early morning's, and the gateway is still the biggest risk.
 
 [WORK-141]: https://multica.ai/benface-work/issues/01a19dbd-28fc-7ea3-ba4b-246d0de8190f
 [WORK-142]: https://multica.ai/benface-work/issues/01a19dbd-2b3e-7c8b-a8d6-9e5065528833

@@ -1,7 +1,7 @@
 // What a transaction did to a wallet, as a row in a list of them: what moved, who with, what it was worth and what it
 // realized. Like every other number, the server works it out, and a client only shows it.
 
-import { costCanBeAnswered, normalizeAddress, orderMatters, worth, type LegEffect, type Method, type Position, type PricedLeg } from "@pricetag/sdk/core"
+import { normalizeAddress, orderMatters, worth, type LegEffect, type Method, type Position, type PricedLeg } from "@pricetag/sdk/core"
 
 /**
  * in or out: something only arrived, or only left. trade: things went both ways. fee: only a network fee was paid.
@@ -126,7 +126,7 @@ function leftUnknown(leg: PricedLeg, effects: ReadonlyMap<string, LegEffect>): b
 /** Whether an answer could fix what a leg's cost is missing, going by what was held before it. */
 function answerable(leg: PricedLeg, effects: ReadonlyMap<string, LegEffect>): boolean {
   const effect = effects.get(leg.id)
-  return effect !== undefined && !leg.unsettledCredit && costCanBeAnswered(leg, effect.before)
+  return effect !== undefined && !leg.unsettledCredit && effect.answerable
 }
 
 /** A wallet's legs, by the transaction they're in. What it held before the first block read isn't in one. */

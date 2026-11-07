@@ -168,7 +168,7 @@ describe("following the chain", FOLLOWING, () => {
   })
 
   it("says a reorg that replaced the last streamed block while polling, however deep, once the stream is back", async (t) => {
-    // Found on a real Amp (WORK-497): a derived table took longer than the stall timeout to recover from a 328-block reorg.
+    // On a real Amp: a derived table took longer than the stall timeout to recover from a 328-block reorg.
     const hand = handStream()
     let mark = MARK
     const chain = following(t, { stream: hand.stream, readMark: async () => mark, stallMs: 5, retryMs: 20 })
@@ -218,7 +218,7 @@ describe("following the chain", FOLLOWING, () => {
     }
 
     it("says a deep reorg that made the chain longer, from after the newest block it said that's still there", async (t) => {
-      // Found on a real Amp (WORK-497): 343 blocks replaced, with the stream down, and no tick ever said so.
+      // On a real Amp: 343 blocks replaced, with the stream down, and no tick ever said so.
       const chain = polledChain(100)
       const follow = following(t, chain.config)
       assert.deepEqual(await follow.next(), { kind: "block", blockNum: 100, reorgFrom: null, via: "polling" })
@@ -290,7 +290,7 @@ describe("following the chain", FOLLOWING, () => {
     })
 
     it("says a reorg that comes between a poll's two reads, and then the new head", async (t) => {
-      // Found in WORK-520's review: the check saw the old chain, the head the new one, and only that head got checked after.
+      // The check saw the old chain, the head the new one, and only that head got checked after.
       const chain = polledChain(100)
       let between: (() => void) | null = null
       const afterRead = <T,>(result: T) => {
@@ -350,7 +350,7 @@ describe("following the chain", FOLLOWING, () => {
   })
 
   it("counts what polling said after the last streamed block as replaced, when the stream comes back past it on another chain", async (t) => {
-    // Found in WORK-497's review: block 101 still holds, so Amp resumes with plain new blocks and reports nothing.
+    // Block 101 still holds, so Amp resumes with plain new blocks and reports nothing.
     const hand = handStream()
     let mark = MARK
     const chain = following(t, { stream: hand.stream, readMark: async () => mark, retryMs: 20 })
@@ -386,7 +386,7 @@ describe("following the chain", FOLLOWING, () => {
   })
 
   it("remembers the first block polling said through a stream that dies catching up", async (t) => {
-    // Found in WORK-497's review: the next try resumes from block 300, but the replaced blocks can be before it.
+    // The next try resumes from block 300, but the replaced blocks can be before it.
     const hand = handStream()
     let mark = MARK
     const chain = following(t, { stream: hand.stream, readMark: async () => mark, retryMs: 20 })
@@ -634,7 +634,7 @@ describe("watchWallet", FOLLOWING, () => {
 
   // Before the fix, no update came, so this would wait forever.
   it("replaces a reorg that made the chain longer, past the blocks it would re-read anyway, with no stream at all", { timeout: 5_000 }, async (t) => {
-    // Found on a real Amp (WORK-497): the replaced transfers stayed, and only the balance check said something was wrong.
+    // On a real Amp: the replaced transfers stayed, and only the balance check said something was wrong.
     const { chain, client } = chainAt(100, { legs: [], reference_prices: [{ ...REFERENCE, block_num: "100" }], balances: balancesThrough(600, "0") }, undefined, { stream: null })
     const updates = client.watchWallet(ADDRESS, { signal: t.signal })
     assert.deepEqual(legsOf((await updates.next()).value as WalletUpdate), [])
@@ -658,7 +658,7 @@ describe("watchWallet", FOLLOWING, () => {
   })
 
   it("replaces a transfer when a reorg comes between a poll's two reads, with no stream at all", { timeout: 5_000 }, async (t) => {
-    // Found in WORK-520's review: the wallet kept 160:0xdd:1 for good, though the dataset no longer had it.
+    // The wallet kept 160:0xdd:1 for good, though the dataset no longer had it.
     let between: (() => void) | null = null
     let seen: string | null = null
     const onQuery = (sql: string) => {
