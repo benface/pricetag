@@ -158,10 +158,10 @@ export const tallyOf = ({ lots: _, ...tally }: PositionState): PositionTally => 
 
 /**
  * What a debit took that had a known cost, and where that cost came from, whatever each lot is labeled. Decimal strings, like the
- * rest of a state. `purchaseSource` is the last exchange named among the known lots held before, the way the tax report has always
- * named it, and only when part of what was taken came from an exchange.
+ * rest of a state. `purchaseSources` names who says what was paid for the lots it took with a known cost, each once, in the order
+ * it took them. An average's pool keeps the first it was told.
  */
-export type KnownTaken = { qty: string; costMicros: string; estimatedMicros: string; givenMicros: string; reportedQty: string; purchasedQty: string; purchaseSource: string | null }
+export type KnownTaken = { qty: string; costMicros: string; estimatedMicros: string; givenMicros: string; reportedQty: string; purchasedQty: string; purchaseSources: string[] }
 
 export function emptyPosition(method: Method, decimals: number, tracksPaidAt = false): PositionState {
   return {
@@ -427,6 +427,8 @@ type Taken = {
   givenCost: bigint
   reportedQty: bigint
   purchasedQty: bigint
+  /** Who says what was paid for what it took with a known cost, each once, in the order it took them. */
+  purchaseSources: string[]
   unknownQty: bigint
   shortfall: bigint
   /** What lost its cost by being taken from, which `lotsSplitBy` says. */
@@ -554,7 +556,7 @@ function take(state: PositionState, qty: bigint): Taken {
   const held = before.qty
   const taking = qty < held ? qty : held
   const split = new Set(lotsSplitBy(state, taking))
-  const result: Taken = { lots: [], pieces: [], knownQty: 0n, knownCost: 0n, estimatedCost: 0n, givenCost: 0n, reportedQty: 0n, purchasedQty: 0n, unknownQty: 0n, shortfall: qty - taking, split }
+  const result: Taken = { lots: [], pieces: [], knownQty: 0n, knownCost: 0n, estimatedCost: 0n, givenCost: 0n, reportedQty: 0n, purchasedQty: 0n, purchaseSources: [], unknownQty: 0n, shortfall: qty - taking, split }
   // What's left adds up to what was held, less what lost its cost and what was taken.
   const sums = { ...before }
 
@@ -589,7 +591,10 @@ function take(state: PositionState, qty: bigint): Taken {
       result.estimatedCost += estimated
       result.givenCost += given
       if (lot.reported) result.reportedQty += n
-      if (lot.purchaseSource) result.purchasedQty += n
+      if (lot.purchaseSource) {
+        result.purchasedQty += n
+        if (!result.purchaseSources.includes(lot.purchaseSource)) result.purchaseSources.push(lot.purchaseSource)
+      }
     }
     result.pieces.push({
       qty: n.toString(),
@@ -623,6 +628,7 @@ function withoutCosts(taken: Taken): Taken {
     givenCost: 0n,
     reportedQty: 0n,
     purchasedQty: 0n,
+    purchaseSources: [],
     unknownQty: taken.unknownQty + taken.knownQty,
   }
 }
@@ -654,7 +660,7 @@ export function applyLegTaking(state: PositionState, leg: FoldLeg): LegApplied {
   const qty = -delta
   const orderless = orderMatters(leg, state.method)
   const taken = orderless ? withoutCosts(take(state, qty)) : take(state, qty)
-  const applied = (next: PositionState): LegApplied => ({ state: next, taken: taken.pieces, known: knownTaken(state, taken), split: taken.split })
+  const applied = (next: PositionState): LegApplied => ({ state: next, taken: taken.pieces, known: knownTaken(taken), split: taken.split })
   const next: PositionState = {
     ...state,
     lots: orderless ? lotsWithoutCosts(state, taken.lots) : taken.lots,
@@ -695,14 +701,7 @@ export function applyLegTaking(state: PositionState, leg: FoldLeg): LegApplied {
   return applied(next)
 }
 
-function knownTaken(state: PositionState, taken: Taken): KnownTaken {
-  let purchaseSource: string | null = null
-  if (taken.purchasedQty > 0n) {
-    for (let i = state.lots.length - 1; i >= 0 && purchaseSource === null; i--) {
-      const lot = state.lots[i] as Lot
-      if (lot.costMicros !== null && lot.purchaseSource && !taken.split.has(lot)) purchaseSource = lot.purchaseSource
-    }
-  }
+function knownTaken(taken: Taken): KnownTaken {
   return {
     qty: taken.knownQty.toString(),
     costMicros: taken.knownCost.toString(),
@@ -710,7 +709,7 @@ function knownTaken(state: PositionState, taken: Taken): KnownTaken {
     givenMicros: taken.givenCost.toString(),
     reportedQty: taken.reportedQty.toString(),
     purchasedQty: taken.purchasedQty.toString(),
-    purchaseSource,
+    purchaseSources: taken.purchaseSources,
   }
 }
 

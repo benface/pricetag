@@ -116,6 +116,17 @@ describe("taxRows", () => {
     }
   })
 
+  it("names where the cost of what a sale took came from, not of what's still held", () => {
+    const bought = (block: number, paid: number, source: string) => leg(block, E18, { costMicros: usd(paid), costLabel: "paid", purchaseSource: source })
+    const reasons = (legs: PricedLeg[], method: "fifo" | "average") => taxRows([walletOf(A, legs)], { method, scope: "per-wallet" }).map((row) => row.reason)
+    const twoExchanges = [bought(10, 1000, "Bought on Coinbase"), bought(20, 3000, "Bought on Kraken")]
+    assert.deepEqual(reasons([...twoExchanges, sell(30, 1n, 2500)], "fifo"), ["Some or all of its cost: Bought on Coinbase, fees included."])
+    assert.deepEqual(reasons([...twoExchanges, sell(30, 1n, 2500), sell(40, 1n, 2500)], "fifo"), ["Some or all of its cost: Bought on Coinbase, fees included.", "Some or all of its cost: Bought on Kraken, fees included."])
+    assert.deepEqual(reasons([...twoExchanges, sell(30, 2n, 5000)], "fifo"), ["Some or all of its cost: several exchange purchases, fees included."])
+    // A lot bought on the chain has no exchange to name, even when one held after it does.
+    assert.deepEqual(reasons([buy(5, 1n, 1000), bought(10, 3000, "Bought on Kraken"), sell(30, 1n, 2500)], "fifo"), [null])
+  })
+
   it("splits a sale that's part known and part unknown, so the known part still adds up", () => {
     const wallet = walletOf(A, [leg(5, E18), buy(10, 1n, 1000), sell(30, 2n, 5000)])
     const rows = taxRows([wallet], { method: "fifo", scope: "per-wallet" })
