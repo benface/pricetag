@@ -3,7 +3,7 @@ import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
 import { ASSETS, ETH_ADDRESS, USDC_ADDRESS, buildLegs, derivePricedRows, foldPositions, type LegPart, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
-import type { Source } from "@pricetag/sdk/internal"
+import { createRates, type RoundReader, type Source } from "@pricetag/sdk/internal"
 import type { PortfolioResponse, TaxReportResponse, WalletResponse } from "../src/core/api.ts"
 import { costKey, emptyBook, parseBook, type Book } from "../src/core/book.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
@@ -917,18 +917,50 @@ describe("the user's answers in a report", () => {
       assert.deepEqual(rows.map((row) => [row.Amount, row["Value when received"]]), [["3", "6000.000000"]])
     })
 
-    it("lists what someone sent even when as much or more left in the same transaction, from the chain's rows", () => {
+    /** A funded wallet that gets 3 USDC from someone else in block 10 and sends `sentBack` back in the same transaction, built from the chain's rows. */
+    const sentBackWallet = (sentBack: bigint) => {
       const E6 = 1_000_000n
       const row = (block: number, side: LegRow["side"], amount: bigint, counterparty: string): LegRow => ({ block_num: block, timestamp: new Date(Date.UTC(2026, 10, 4) + block * 2000).toISOString(), tx_hash: hash(block), tx_index: 0, log_index: side === "credit" ? 0 : 1, token: USDC_ADDRESS, account: A, side, amount: (amount * E6).toString(), kind: "erc20", counterparty })
       const references = [5, 10].map((blockNum) => ({ blockNum, ethUsd: "200000000000", usdcUsd: "100000000" }))
+      const rows = [row(5, "credit", 10n, `0x${"f".repeat(40)}`), row(10, "credit", 3n, SELLER), row(10, "debit", sentBack, B)]
+      const { legs, netted } = buildLegs({ account: A, rows, references, priced: derivePricedRows(rows, references) })
+      return walletOf(A, legs, netted.length > 0 ? { netted } : {})
+    }
+
+    it("lists what someone sent even when as much or more left in the same transaction, from the chain's rows", () => {
       for (const sentBack of [2n, 3n, 4n]) {
-        const rows = [row(5, "credit", 10n, `0x${"f".repeat(40)}`), row(10, "credit", 3n, SELLER), row(10, "debit", sentBack, B)]
-        const { legs, netted } = buildLegs({ account: A, rows, references, priced: derivePricedRows(rows, references) })
-        const wallet = walletOf(A, legs, netted.length > 0 ? { netted } : {})
+        const wallet = sentBackWallet(sentBack)
         for (const settings of [US, { ...US, method: "average" as const }]) {
           const rowsOf = receivedOf(taxReportOf([wallet], settings)).filter((r) => r.Transaction?.endsWith(hash(10)))
           assert.deepEqual(rowsOf.map((r) => [r.Amount, r["Value when received"]]), [["3", "3.000000"]], `sent back ${sentBack}, ${settings.method}`)
         }
+      }
+    })
+
+    it("reads the exchange rate where what arrived netted to nothing, and a rate the feed doesn't have stays unknown", async () => {
+      const wallet = sentBackWallet(3n)
+      assert.ok(wallet.netted?.some((l) => l.blockNum === 10) && !wallet.legs.some((l) => l.blockNum === 10), "block 10 has no leg, only what netted")
+      // 0.80 USD for one CAD, at every block the feed is asked for, except the ones left out.
+      const readerWithout = (missing: number[]) => {
+        const asked: number[] = []
+        const read: RoundReader = async (_currency, blocks) => {
+          asked.push(...blocks)
+          return new Map(blocks.filter((block) => !missing.includes(block)).map((block) => [block, { answer: "80000000", updatedAt: Date.parse(leg(block, 0n).timestamp) / 1000 }]))
+        }
+        return { read, asked }
+      }
+      for (const method of ["fifo", "average"] as const) {
+        const settings = { country: "CA", method, scope: "pooled" } as const
+        const { read, asked } = readerWithout([])
+        const rates = await createRates(read)("CAD", wallet)
+        assert.ok(asked.includes(10), method)
+        const [row] = receivedOf(taxReportOf([{ ...wallet, currency: "CAD", rates }], settings)).filter((r) => r.Transaction?.endsWith(hash(10)))
+        assert.deepEqual([row?.Amount, row?.["Value when received"], row?.Currency], ["3", "3.750000", "CAD"], method)
+
+        const gap = readerWithout([10])
+        const without = await createRates(gap.read)("CAD", wallet)
+        const [unknown] = receivedOf(taxReportOf([{ ...wallet, currency: "CAD", rates: without }], settings)).filter((r) => r.Transaction?.endsWith(hash(10)))
+        assert.equal(unknown?.["Value when received"], "unknown", method)
       }
     })
 

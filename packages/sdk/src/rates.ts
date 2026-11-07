@@ -71,10 +71,11 @@ export function updateRounds(query: Query, dataset: string, exact: RoundReader):
 }
 
 /**
+ * Reads the blocks of the legs, of what netted to nothing (whose receipts the tax report lists), and of the chart's samples.
  * `held` also reads the block a wallet's history starts from, which only a cost stored for what it already held needs.
  * `chainHead` is the chain's head, for a wallet read as of an earlier block, whose `latest` can't say what's settled. It defaults to `latest`.
  */
-export type ReadRates = (currency: CurrencyCode, wallet: Pick<WalletData, "legs" | "latest" | "priceSamples">, options?: { held?: boolean; chainHead?: number | undefined }) => Promise<Rates | null>
+export type ReadRates = (currency: CurrencyCode, wallet: Pick<WalletData, "legs" | "netted" | "latest" | "priceSamples">, options?: { held?: boolean; chainHead?: number | undefined }) => Promise<Rates | null>
 
 /** Reads rates, and forgets the ones from blocks a reorg replaced, when it can. */
 export type RatesReader = ReadRates & { rewind?(block: number): void }
@@ -96,7 +97,7 @@ export function createRates(readRounds: RoundReader): RatesReader {
     settled.set(currency, known)
     const asOf = wallet.latest.blockNum
     const chain = chainHead ?? asOf
-    const blocks = [...new Set([...wallet.legs.filter((leg) => held || !leg.opening).map((leg) => leg.blockNum), ...(wallet.priceSamples ?? []).map((sample) => sample.blockNum)])]
+    const blocks = [...new Set([...wallet.legs.filter((leg) => held || !leg.opening).map((leg) => leg.blockNum), ...(wallet.netted ?? []).map((leg) => leg.blockNum), ...(wallet.priceSamples ?? []).map((sample) => sample.blockNum)])]
     const current = newest.get(currency)
     // What's kept is taken now, since this read or another can let go of it while this one waits.
     const cached = new Map<number, RateRound>()

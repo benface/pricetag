@@ -252,7 +252,12 @@ A wallet nobody's said is theirs takes no costs from the others.
 The demo wallet can't be combined with anything.
 All together needs one consistent history, so the report stops at the last block every wallet has reached and says what that leaves out. If their histories start at different blocks, which only happens on the raw dataset, every cost is `unknown`.
 
-The report doesn't check Canada's superficial loss rule, split US short-term from long-term gains, or list what was received, and it says so.
+The report doesn't check Canada's superficial loss rule or split US short-term from long-term gains, and it says so.
+
+What arrived from other addresses is listed after the sales as **Received**, with the status `POSSIBLY INCOME` and its worth when it arrived in a **Value when received** column, which is `unknown`, never 0, when there's no price or exchange rate. Pay is income at fair market value in both countries ([ITA s. 52(1)](https://laws-lois.justice.gc.ca/eng/acts/I-3.3/section-52.html), [IRS FAQ Q59](https://www.irs.gov/individuals/international-taxpayers/frequently-asked-questions-on-digital-asset-transactions)), but a gift generally isn't, so a row is never called certain income, and its note names the sender.
+Moves between the report's wallets, what's answered as "mine" or "my exchange", purchases, matched exchange withdrawals, bridges and mints aren't listed. An entered cost or a note doesn't take a row off, since what it cost doesn't say whether it was pay, but the note says that if it was bought, it isn't income.
+A sender's whole credit is listed, even when as much or more of that token left in the same transaction. When it nets to nothing, it comes from the wallet's `netted`, which nothing folds, and its block's exchange rate is read like a leg's.
+Received rows follow the year asked for, but aren't sales, so they're left out of `rowCount`, Form 8949 and Schedule 3, which say they're only in the full report.
 On an older wallet, most rows start with an unknown gain, until the user answers for what it held before the first block read.
 In a currency neither country reports in, like EUR, it warns first that those rules may not apply.
 
