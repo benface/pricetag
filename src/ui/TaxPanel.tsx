@@ -2,7 +2,8 @@ import { useEffect, useId, useMemo, useRef, useState } from "react"
 import { formatSignedMoney, isAddress, shortHash, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import type { TaxReportResponse } from "../core/api.ts"
 import { failureOf, jsonPost, readResponse, type ReadFailure } from "../core/read-failure.ts"
-import { isDemoWallet, type Book } from "../core/book.ts"
+import { forgetUnitChoices, isDemoWallet, recordUnitChoices, type Book } from "../core/book.ts"
+import { UNIT_CHOICE_COLUMNS, parseUnitChoicesCsv } from "../core/unit-choices.ts"
 import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, isTaxMethod, typedOtherWallets, walletsInReport, type TaxCountryCode, type TaxScope, type TaxYear } from "../core/tax.ts"
 import { METHOD_LABELS, METHOD_NAME, answerQuestionsLabel, est, panelProblem } from "../core/wording.ts"
 import { ProblemNotice } from "./ProblemNotice.tsx"
@@ -58,12 +59,22 @@ function unknownSentence({ unknownCount: count, soldCount, feeCount, sentCount }
   return `${n(count)} of these ${n(total)} ${count === 1 ? "has" : "have"} an unknown gain, in whole or in part. What's unknown is left out of the total.`
 }
 
-export function TaxPanel({ address, alongside, currency, book, year, onYear, overviewMethod, questionsIn, onResolve, onLink, onUnlink, fromDevice, onClose }: {
+/** What became of a file of named units, said once it's read. */
+function importedSentence(count: number, skipped: readonly number[]): string {
+  const read = count === 0 ? "Nothing in that file could be used." : `Added ${count.toLocaleString("en-US")} ${count === 1 ? "sale or send" : "sales and sends"}.`
+  if (skipped.length === 0) return read
+  const lines = skipped.length > 5 ? `${skipped.slice(0, 5).join(", ")} and ${(skipped.length - 5).toLocaleString("en-US")} more` : skipped.join(", ")
+  return `${read} ${skipped.length === 1 ? "Line" : "Lines"} ${lines} couldn't be read, so ${skipped.length === 1 ? "its sale or send was" : "their sales and sends were"} left out whole.`
+}
+
+export function TaxPanel({ address, alongside, currency, book, onRecords, year, onYear, overviewMethod, questionsIn, onResolve, onLink, onUnlink, fromDevice, onClose }: {
   address: string
   /** Wallets the report always covers with this one, on top of the ones the answers say are the user's. */
   alongside: readonly string[]
   currency: CurrencyCode
   book: Book
+  /** Saves records the user kept, which aren't answers. */
+  onRecords: (update: (latest: Book) => Book) => void
   /** Held by the page, so it stays the same while the report closes to answer another wallet's questions. */
   year: TaxYear
   onYear: (year: TaxYear) => void
@@ -94,12 +105,20 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
   const [attempt, setAttempt] = useState(0)
   const [error, setError] = useState<ReadFailure | null>(null)
   const [loading, setLoading] = useState(true)
+  const [namedMessage, setNamedMessage] = useState<string | null>(null)
 
   const rules = TAX_COUNTRIES[country]
   // One the country doesn't allow, like one remembered from another, goes back to what it calls for.
   const method = isTaxMethod(country, chosenMethod) ? chosenMethod : rules.method
   const scope = chosenScope ?? rules.scope
   const isDemo = address === "demo" || isDemoWallet(address)
+  const importNamed = async (file: File | undefined) => {
+    if (!file) return
+    const imported = parseUnitChoicesCsv(await file.text())
+    if (!imported) return setNamedMessage(`That file needs these columns: ${UNIT_CHOICE_COLUMNS.join(", ")}.`)
+    if (imported.choices.length > 0) onRecords((latest) => recordUnitChoices(latest, imported.choices))
+    setNamedMessage(importedSentence(imported.choices.length, imported.skipped))
+  }
 
   useModal(dialog, close)
 
@@ -159,6 +178,7 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
   const ready = report !== null && !loading
   // From the book rather than the report, so a wallet that makes the report fail can still be taken out.
   const covered = useMemo(() => walletsInReport(book, address, alongside), [book, address, alongside])
+  const namedCount = (book.unitChoices ?? []).filter((choice) => covered.includes(choice.wallet)).length
 
   const addWallet = () => {
     const next = adding.trim()
@@ -295,6 +315,32 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
             <span className="small muted">Adding a wallet says it's yours everywhere, so what moves between your wallets isn't counted as a sale.</span>
           </div>
         )}
+        {country === "US" && !isDemo ? (
+          <div className="field">
+            <span className="small muted">Units your records named</span>
+            <p className="small muted">
+              If your own records said which units a sale or send took, no later than when it happened, import them and this report uses those units for it. One row per purchase it took from, with these columns: {UNIT_CHOICE_COLUMNS.join(", ")}. Bought on is a day or a moment in UTC, and Amount is in whole tokens.
+            </p>
+            <div className="tax-named">
+              <label className="file-button">
+                Import records
+                <input type="file" accept=".csv,text/csv" className="visually-hidden" onChange={(e) => { void importNamed(e.target.files?.[0]); e.target.value = "" }} />
+              </label>
+              {namedCount > 0 ? (
+                <>
+                  <span className="small">Named for {namedCount.toLocaleString("en-US")} {namedCount === 1 ? "sale or send" : "sales or sends"}</span>
+                  <button type="button" className="link" onClick={() => {
+                      onRecords((latest) => forgetUnitChoices(latest, covered))
+                      setNamedMessage(null)
+                    }}>
+                    Remove
+                  </button>
+                </>
+              ) : null}
+            </div>
+            {namedMessage ? <p className="small" role="status">{namedMessage}</p> : null}
+          </div>
+        ) : null}
         {badAdd ? <p id={addError} className="notice warn" role="alert">⚠ {badAdd} isn't a Base address.</p> : null}
         {error ? (
           <ProblemNotice

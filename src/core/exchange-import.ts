@@ -16,7 +16,7 @@ export type ExchangeImport = {
   firstSeen: Record<string, string>
 }
 
-function parseCsvLine(line: string): string[] {
+export function parseCsvLine(line: string): string[] {
   const cells: string[] = []
   let cell = ""
   let quoted = false

@@ -1,0 +1,367 @@
+import assert from "node:assert/strict"
+import { describe, it } from "node:test"
+import { applyLeg, applyLegTaking, emptyPosition, type FoldLeg, type Method, type PricedLeg } from "@pricetag/sdk/core"
+import type { WalletResponse } from "../src/core/api.ts"
+import { emptyBook, forgetUnitChoices, parseBook, recordUnitChoices, type Book, type UnitChoice } from "../src/core/book.ts"
+import { DEMO_WALLET } from "../src/core/fixtures.ts"
+import { TAX_COUNTRIES, taxReportOf, taxRows } from "../src/core/tax.ts"
+import { parseUnitChoicesCsv } from "../src/core/unit-choices.ts"
+
+const USD = 1_000_000n
+const ETH = 10n ** 18n
+const day = (block: number) => `2026-10-${String(block).padStart(2, "0")}T00:00:00.000Z`
+
+const bought = (id: string, block: number, usd: bigint | null, qty = ETH, fields: Partial<FoldLeg> = {}): FoldLeg => ({
+  id,
+  delta: qty.toString(),
+  decimals: 18,
+  kind: "swap",
+  priceMicros: null,
+  costMicros: usd === null ? null : (usd * USD).toString(),
+  proceedsMicros: null,
+  costLabel: usd === null ? "unknown" : "paid",
+  blockNum: block,
+  timestamp: day(block),
+  ...fields,
+})
+const sold = (qty: bigint, usd: bigint, takes?: FoldLeg["takes"]): FoldLeg => ({ id: "out", delta: (-qty).toString(), decimals: 18, kind: "swap", priceMicros: null, costMicros: null, proceedsMicros: ((qty * usd * USD) / ETH).toString(), costLabel: "unknown", blockNum: 20, timestamp: day(20), ...(takes ? { takes } : {}) })
+const hold = (method: Method, ...legs: FoldLeg[]) => legs.reduce(applyLeg, emptyPosition(method, 18))
+
+describe("units a sale's records named", () => {
+  // Bought at $100, then $300, then $200, one ETH each.
+  const legs = [bought("a", 1, 100n), bought("b", 2, 300n), bought("c", 3, 200n)]
+
+  for (const method of ["fifo", "lifo", "hifo"] as const) {
+    it(`takes what they name instead of ${method}'s order, and leaves the rest oldest first`, () => {
+      const { state, chosen, taken } = applyLegTaking(hold(method, ...legs), sold(ETH, 500n, [{ at: day(3), qty: ETH.toString() }]))
+      assert.equal(chosen, "used")
+      assert.equal(state.realizedMicros, (300n * USD).toString())
+      assert.deepEqual(taken.map((piece) => piece.acquiredAt), [day(3)])
+      assert.deepEqual(state.lots.map((lot) => lot.legId), ["a", "b"])
+    })
+  }
+
+  it("names purchases by their UTC day, and takes from several in the order given", () => {
+    const { state, taken } = applyLegTaking(hold("fifo", ...legs), sold(ETH + ETH / 2n, 500n, [{ at: "2026-10-02", qty: (ETH / 2n).toString() }, { at: "2026-10-03", qty: ETH.toString() }]))
+    assert.deepEqual(taken.map((piece) => [piece.acquiredAt, piece.costMicros]), [[day(2), (150n * USD).toString()], [day(3), (200n * USD).toString()]])
+    assert.deepEqual(state.lots.map((lot) => [lot.legId, lot.qty]), [["a", ETH.toString()], ["b", (ETH / 2n).toString()]])
+  })
+
+  it("refuses what isn't held, more than is, or what doesn't add up to the sale, and goes by the method instead", () => {
+    const refusals: FoldLeg["takes"][] = [
+      [{ at: day(9), qty: ETH.toString() }],
+      [{ at: day(3), qty: (2n * ETH).toString() }],
+      [{ at: day(3), qty: (ETH / 2n).toString() }],
+      [{ at: day(3), qty: ETH.toString() }, { at: day(3), qty: ETH.toString() }],
+    ]
+    for (const takes of refusals) {
+      const qty = (takes ?? []).reduce((sum, take) => sum + BigInt(take.qty), 0n) === 2n * ETH ? 2n * ETH : ETH
+      const { state, chosen } = applyLegTaking(hold("fifo", ...legs), sold(qty, 500n, takes))
+      assert.equal(chosen, "refused", JSON.stringify(takes))
+      assert.deepEqual(state, applyLeg(hold("fifo", ...legs), sold(qty, 500n)))
+    }
+  })
+
+  it("refuses part of a day whose purchases cost different amounts, since that doesn't say which", () => {
+    const sameDay = [bought("a", 1, 100n), bought("b", 1, 300n, ETH, { timestamp: "2026-10-01T05:00:00.000Z" })]
+    assert.equal(applyLegTaking(hold("fifo", ...sameDay), sold(ETH, 500n, [{ at: "2026-10-01", qty: ETH.toString() }])).chosen, "refused")
+    // All of that day is fine, and so is naming the moment.
+    assert.equal(applyLegTaking(hold("fifo", ...sameDay), sold(2n * ETH, 500n, [{ at: "2026-10-01", qty: (2n * ETH).toString() }])).chosen, "used")
+    const moment = applyLegTaking(hold("fifo", ...sameDay), sold(ETH, 500n, [{ at: "2026-10-01T05:00:00.000Z", qty: ETH.toString() }]))
+    assert.equal(moment.chosen, "used")
+    assert.equal(moment.state.realizedMicros, (200n * USD).toString())
+  })
+
+  it("keeps an unknown cost unknown when that's what was named", () => {
+    const { state, chosen } = applyLegTaking(hold("fifo", bought("a", 1, 100n), bought("b", 2, null)), sold(ETH, 500n, [{ at: day(2), qty: ETH.toString() }]))
+    assert.equal(chosen, "used")
+    assert.equal(state.unknownCostDisposedQty, ETH.toString())
+    assert.equal(state.realizedMicros, "0")
+    assert.equal(state.lots[0]?.costMicros, (100n * USD).toString())
+  })
+
+  it("leaves a purchase it names none of untouched, even one whose cost is only known for all of it", () => {
+    const later = "2026-10-01T05:00:00.000Z"
+    const whole = bought("b", 1, 2000n, 2n * ETH, { timestamp: later, pieces: [{ qty: (2n * ETH).toString(), costMicros: (2000n * USD).toString(), label: "paid", estimatedCostMicros: "0", wholeCostOnly: true, boughtAt: later }] })
+    for (const method of ["fifo", "lifo", "hifo"] as const) {
+      const { state, chosen } = applyLegTaking(hold(method, bought("a", 1, 1000n), whole), sold(ETH, 1500n, [{ at: "2026-10-01", qty: ETH.toString() }]))
+      assert.equal(chosen, "used", method)
+      assert.equal(state.realizedMicros, (500n * USD).toString(), method)
+      assert.deepEqual(state.lots.map((lot) => [lot.legId, lot.costMicros, lot.unanswerable ?? false]), [["b", (2000n * USD).toString(), false]], method)
+      // So what's sold of it later has a known gain.
+      const after = applyLeg(state, { ...sold(2n * ETH, 1500n), id: "out2", blockNum: 21, timestamp: day(21) })
+      assert.deepEqual([after.realizedMicros, after.unknownCostDisposedQty], [(1500n * USD).toString(), "0"], method)
+    }
+  })
+
+  it("isn't used by average, which mixes everything", () => {
+    const applied = applyLegTaking(hold("average", ...legs), sold(ETH, 500n, [{ at: day(3), qty: ETH.toString() }]))
+    assert.equal(applied.chosen, undefined)
+    assert.equal(applied.state.realizedMicros, (300n * USD).toString())
+  })
+})
+
+const A = `0x${"a".repeat(40)}`
+const hash = (n: number) => `0x${n.toString(16).padStart(64, "0")}`
+const at = (block: number) => new Date(Date.UTC(2026, 10, 4) + block * 2000).toISOString()
+
+const leg = (block: number, delta: bigint, fields: Partial<PricedLeg> = {}): PricedLeg => ({
+  id: `${hash(block)}:ETH`,
+  asset: "ETH",
+  decimals: 18,
+  delta: delta.toString(),
+  kind: "swap",
+  priceMicros: (2000n * USD).toString(),
+  priceSource: "oracle",
+  priceNote: null,
+  costMicros: null,
+  proceedsMicros: null,
+  costLabel: "unknown",
+  blockNum: block,
+  timestamp: at(block),
+  txHash: hash(block),
+  txIndex: 0,
+  parts: [],
+  ...fields,
+})
+const buy = (block: number, units: bigint, paid: bigint) => leg(block, units * ETH, { costMicros: (paid * USD).toString(), costLabel: "paid" })
+const sell = (block: number, units: bigint, received: bigint, fields: Partial<PricedLeg> = {}) => leg(block, -units * ETH, { proceedsMicros: (received * USD).toString(), ...fields })
+
+function walletOf(address: string, legs: PricedLeg[]): WalletResponse {
+  const amounts: Record<string, string> = {}
+  for (const l of legs) amounts[l.asset] = (BigInt(amounts[l.asset] ?? 0) + BigInt(l.delta)).toString()
+  return {
+    ...DEMO_WALLET,
+    address,
+    mode: "dataset",
+    coverage: { fromBlock: 1, toBlock: 1000 },
+    latest: { blockNum: 1000, timestamp: at(1000) },
+    legs,
+    balances: { blockNum: 1000, amounts },
+    lastBalances: {},
+    lastCheckableEth: null,
+    unreadBalances: [],
+    openingUnread: [],
+    gasUnknownTxs: [],
+    l1FeeUnknownTxs: [],
+    currency: "USD",
+    rates: null,
+  }
+}
+
+describe("a US tax report with named units", () => {
+  // Bought 1 ETH at $1,000, then 1 at $3,000, then sold 1 for $2,000.
+  const wallet = walletOf(A, [buy(10, 1n, 1000n), buy(20, 1n, 3000n), sell(30, 1n, 2000n)])
+  const choice = (recordedAt: string, boughtAt = at(20)): UnitChoice => ({ wallet: A, txHash: hash(30), asset: "ETH", recordedAt, takes: [{ boughtAt, units: ETH.toString() }] })
+  const book = (...choices: UnitChoice[]): Book => recordUnitChoices(emptyBook(), choices)
+  const US = { country: "US", method: "fifo", scope: "per-wallet" } as const
+  const sale = (report: ReturnType<typeof taxReportOf>) => report.csv.split("\r\n").find((line) => line.includes(",Sold,")) as string
+
+  it("uses them when they were named no later than the sale, and says so on the row", () => {
+    const [row] = taxRows([wallet], { ...US }, { book: book(choice(at(30))) }).filter((r) => r.type === "Sold")
+    assert.equal(row?.gainMicros, (-1000n * USD).toString())
+    assert.equal(row?.chosenUnits, "used")
+    assert.match(row?.reason ?? "", /units your records named/)
+    const report = taxReportOf([wallet], US, { book: book(choice(at(29))) })
+    assert.equal(report.gainMicros, (-1000n * USD).toString())
+    assert.match(sale(report), /Units you named/)
+    assert.ok(report.notes.some((note) => /1 sale or send uses the units your records named/.test(note)))
+  })
+
+  it("doesn't use them when they were named after the sale, and says why", () => {
+    const report = taxReportOf([wallet], US, { book: book(choice(at(31))) })
+    assert.equal(report.gainMicros, (1000n * USD).toString())
+    assert.ok(report.warnings.some((warning) => /only named units for 1 sale or send after it happened/.test(warning)))
+    assert.match(sale(report), /Oldest first/)
+  })
+
+  it("says when they don't match what was held, or name nothing here", () => {
+    const refused = taxReportOf([wallet], US, { book: book(choice(at(29), at(25))) })
+    assert.equal(refused.gainMicros, (1000n * USD).toString())
+    assert.ok(refused.warnings.some((warning) => /don't match what was held then/.test(warning)))
+    const elsewhere = taxReportOf([wallet], US, { book: book({ ...choice(at(29)), txHash: hash(31) }) })
+    assert.ok(elsewhere.warnings.some((warning) => /1 record of the units you named is about a sale or send that isn't in this wallet/.test(warning)))
+  })
+
+  it("aren't used under Average, or for Canada, whose rules average", () => {
+    const average = taxReportOf([wallet], { ...US, method: "average" }, { book: book(choice(at(29))) })
+    assert.ok(average.warnings.some((warning) => /Average mixes everything bought/.test(warning)))
+    const canada = taxReportOf([wallet], { country: "CA", method: "fifo", scope: "per-wallet" }, { book: book(choice(at(29))) })
+    assert.equal(canada.gainMicros, (1000n * USD).toString())
+    assert.ok(![...canada.warnings, ...canada.notes].some((line) => /named/.test(line)))
+  })
+
+  it("no longer says choosing units isn't available, and stays in plain words", () => {
+    assert.ok(!TAX_COUNTRIES.US.notes.some((note) => /isn't available/.test(note)))
+    const JARGON = /\b(legs?|oracle|FIFO|LIFO|HIFO|lots?|traces?|allowlist)\b/i
+    for (const recordedAt of [at(29), at(31)]) {
+      const report = taxReportOf([wallet], US, { book: book(choice(recordedAt)) })
+      assert.doesNotMatch([...report.warnings, ...report.notes].join(" "), JARGON)
+    }
+  })
+})
+
+describe("a US tax report with named units for a send between your wallets", () => {
+  const B = `0x${"b".repeat(40)}`
+  const part = (account: string, side: "credit" | "debit", counterparty: string) => ({ logIndex: 0, token: "0x0", account, side, amount: ETH.toString(), kind: "eth" as const, counterparty })
+  // A buys 1 ETH at $1,000 and 1 at $3,000, sends 1 to B, and B sells it for $2,000.
+  const a = walletOf(A, [buy(10, 1n, 1000n), buy(20, 1n, 3000n), leg(30, -ETH, { kind: "transfer", parts: [part(A, "debit", B)] })])
+  const b = walletOf(B, [leg(30, ETH, { kind: "transfer", parts: [part(B, "credit", A)] }), sell(40, 1n, 2000n)])
+  const choice = (recordedAt: string, boughtAt = at(20)): UnitChoice => ({ wallet: A, txHash: hash(30), asset: "ETH", recordedAt, takes: [{ boughtAt, units: ETH.toString() }] })
+  const US = { country: "US", method: "fifo", scope: "per-wallet" } as const
+  // The server only takes costs from a wallet the user has said is theirs.
+  const report = (choice: UnitChoice, method: Method = "fifo", wallets = [a, b], costsFrom: WalletResponse[] = []) =>
+    taxReportOf(wallets, { ...US, method }, { book: { ...recordUnitChoices(emptyBook(), [choice]), ...(costsFrom.length > 0 ? { linked: [A] } : {}) }, costsFrom })
+  const aboutNames = (report: ReturnType<typeof taxReportOf>) => report.warnings.filter((warning) => /named/.test(warning))
+
+  it("uses them for the cost it carries, and counts the send", () => {
+    const used = report(choice(at(29)))
+    assert.equal(used.gainMicros, (-1000n * USD).toString())
+    assert.ok(used.notes.some((note) => /1 sale or send uses the units your records named/.test(note)))
+    assert.deepEqual(aboutNames(used), [])
+  })
+
+  it("warns when they were named late, don't match, or Average can't use them", () => {
+    const late = report(choice(at(31)))
+    assert.equal(late.gainMicros, (1000n * USD).toString())
+    assert.ok(late.warnings.some((warning) => /only named units for 1 sale or send after it happened/.test(warning)))
+    const refused = report(choice(at(29), at(25)))
+    assert.equal(refused.gainMicros, (1000n * USD).toString())
+    assert.ok(refused.warnings.some((warning) => /named units for 1 sale or send that don't match what was held then/.test(warning)))
+    assert.ok(aboutNames(report(choice(at(29)), "average")).some((warning) => /Average mixes everything bought, so the units your records named for 1 sale or send/.test(warning)))
+  })
+
+  it("warns about a wallet the report only takes costs from, too", () => {
+    const late = report(choice(at(31)), "fifo", [b], [a])
+    assert.equal(late.gainMicros, (1000n * USD).toString())
+    assert.ok(late.warnings.some((warning) => /only named units for 1 sale or send after it happened/.test(warning)))
+    const used = report(choice(at(29)), "fifo", [b], [a])
+    assert.equal(used.gainMicros, (-1000n * USD).toString())
+    assert.deepEqual(aboutNames(used), [])
+  })
+})
+
+describe("a US tax report with named units the listed rows don't show", () => {
+  const B = `0x${"b".repeat(40)}`
+  const C = `0x${"c".repeat(40)}`
+  const part = (account: string, side: "credit" | "debit", counterparty: string, units = 1n) => ({ logIndex: 0, token: "0x0", account, side, amount: (units * ETH).toString(), kind: "eth" as const, counterparty })
+  const US = { country: "US", method: "fifo", scope: "per-wallet" } as const
+  const aboutNames = (report: ReturnType<typeof taxReportOf>) => report.warnings.filter((warning) => /named/.test(warning))
+  const reportOf = (wallets: WalletResponse[], choice: UnitChoice, settings: Partial<Parameters<typeof taxReportOf>[1]> = {}, costsFrom: WalletResponse[] = []) =>
+    taxReportOf(wallets, { ...US, ...settings }, { book: { ...recordUnitChoices(emptyBook(), [choice]), ...(costsFrom.length > 0 ? { linked: costsFrom.map((wallet) => wallet.address) } : {}) }, costsFrom })
+
+  describe("an earlier year's sale", () => {
+    // In 2026, A buys 1 ETH at $1,000 and 1 at $3,000, sells 1, then sends the other to B. B sells it for $2,000 in 2027.
+    const a = walletOf(A, [buy(10, 1n, 1000n), buy(20, 1n, 3000n), sell(25, 1n, 2000n), leg(30, -ETH, { kind: "transfer", parts: [part(A, "debit", B)] })])
+    const b = walletOf(B, [leg(30, ETH, { kind: "transfer", parts: [part(B, "credit", A)] }), sell(40, 1n, 2000n, { timestamp: "2027-01-05T00:00:00.000Z" })])
+    const choice = (recordedAt: string, boughtAt = at(20)): UnitChoice => ({ wallet: A, txHash: hash(25), asset: "ETH", recordedAt, takes: [{ boughtAt, units: ETH.toString() }] })
+    const cases = [
+      ["in a later year's report", (c: UnitChoice, method: Method = "fifo") => reportOf([a, b], c, { method, year: 2027 })],
+      ["from a wallet it only takes costs from", (c: UnitChoice, method: Method = "fifo") => reportOf([b], c, { method }, [a])],
+    ] as const
+    for (const [name, report] of cases) {
+      it(`still counts, used, late, refused or averaged, ${name}`, () => {
+        const used = report(choice(at(24)))
+        assert.equal(used.gainMicros, (1000n * USD).toString())
+        assert.ok(used.notes.some((note) => /1 sale or send uses the units your records named/.test(note)))
+        assert.deepEqual(aboutNames(used), [])
+        const late = report(choice(at(26)))
+        assert.equal(late.gainMicros, (-1000n * USD).toString())
+        assert.ok(late.warnings.some((warning) => /only named units for 1 sale or send after it happened/.test(warning)))
+        const refused = report(choice(at(24), at(15)))
+        assert.equal(refused.gainMicros, (-1000n * USD).toString())
+        assert.ok(refused.warnings.some((warning) => /named units for 1 sale or send that don't match what was held then/.test(warning)))
+        assert.ok(aboutNames(report(choice(at(24)), "average")).some((warning) => /Average mixes everything bought, so the units your records named for 1 sale or send/.test(warning)))
+      })
+    }
+
+    it("leaves out a later year's records, which can't change an earlier year", () => {
+      // B's 2027 sale names a day nothing was bought, so it's refused, but only from 2027 on.
+      const later = { ...choice(at(39), at(15)), txHash: hash(40), wallet: B }
+      const report = (year: number) => taxReportOf([a, b], { ...US, year }, { book: recordUnitChoices(emptyBook(), [later]) })
+      assert.deepEqual(aboutNames(report(2026)), [])
+      assert.ok(aboutNames(report(2027)).some((warning) => /don't match what was held then/.test(warning)))
+    })
+  })
+
+  it("counts a send that only partly went to the report's wallets", () => {
+    // A buys 2 ETH at $1,000 each, then 2 at $3,000 each, then sends 1 to B and 1 to C, which isn't read. B sells for $2,000.
+    const a = walletOf(A, [buy(10, 2n, 2000n), buy(20, 2n, 6000n), leg(30, -2n * ETH, { kind: "transfer", parts: [part(A, "debit", B), { ...part(A, "debit", C), logIndex: 1 }] })])
+    const b = walletOf(B, [leg(30, ETH, { kind: "transfer", parts: [part(B, "credit", A)] }), sell(40, 1n, 2000n)])
+    const choice = (recordedAt: string, boughtAt = at(20)): UnitChoice => ({ wallet: A, txHash: hash(30), asset: "ETH", recordedAt, takes: [{ boughtAt, units: (2n * ETH).toString() }] })
+    const used = reportOf([b], choice(at(29)), {}, [a])
+    assert.equal(used.gainMicros, (-1000n * USD).toString())
+    assert.ok(used.notes.some((note) => /1 sale or send uses the units your records named/.test(note)))
+    assert.deepEqual(aboutNames(used), [])
+    const late = reportOf([b], choice(at(31)), {}, [a])
+    assert.equal(late.gainMicros, (1000n * USD).toString())
+    assert.ok(late.warnings.some((warning) => /only named units for 1 sale or send after it happened/.test(warning)))
+    const refused = reportOf([b], choice(at(29), at(15)), {}, [a])
+    assert.equal(refused.gainMicros, (1000n * USD).toString())
+    assert.ok(refused.warnings.some((warning) => /don't match what was held then/.test(warning)))
+    assert.ok(aboutNames(reportOf([b], choice(at(29)), { method: "average" }, [a])).some((warning) => /Average mixes everything bought/.test(warning)))
+  })
+})
+
+describe("records of named units in the book", () => {
+  const choice: UnitChoice = { wallet: A, txHash: hash(30), asset: "ETH", recordedAt: at(29), takes: [{ boughtAt: "2026-11-04", units: ETH.toString() }] }
+
+  it("go through a request, and anything malformed refuses the book", () => {
+    assert.deepEqual(parseBook({ unitChoices: [choice] })?.unitChoices, [choice])
+    for (const date of ["2026-02-30", "2026-02-29", "2026-04-31", "2026-13-01"]) {
+      assert.equal(parseBook({ unitChoices: [{ ...choice, takes: [{ boughtAt: date, units: "1" }] }] }), null, date)
+      assert.equal(parseBook({ unitChoices: [{ ...choice, takes: [{ boughtAt: `${date}T00:00:00.000Z`, units: "1" }] }] }), null, date)
+      assert.equal(parseBook({ unitChoices: [{ ...choice, recordedAt: `${date}T00:00:00.000Z` }] }), null, date)
+    }
+    assert.ok(parseBook({ unitChoices: [{ ...choice, takes: [{ boughtAt: "2028-02-29", units: "1" }] }] }))
+    for (const bad of [{ ...choice, txHash: "0x12" }, { ...choice, recordedAt: "yesterday" }, { ...choice, takes: [] }, { ...choice, takes: [{ boughtAt: "soon", units: "1" }] }, { ...choice, takes: [{ boughtAt: "2026-11-04", units: "0" }] }]) {
+      assert.equal(parseBook({ unitChoices: [bad] }), null, JSON.stringify(bad))
+    }
+  })
+
+  it("take over for an earlier record of the same sale, and can be forgotten for a wallet", () => {
+    const later = { ...choice, recordedAt: at(28) }
+    const both = recordUnitChoices(recordUnitChoices(emptyBook(), [choice]), [later])
+    assert.deepEqual(both.unitChoices, [later])
+    assert.equal(recordUnitChoices(both, [later]), both)
+    assert.deepEqual(forgetUnitChoices(both, [A.toUpperCase().replace("0X", "0x")]), emptyBook())
+  })
+})
+
+describe("importing named units from a file", () => {
+  const header = "Recorded at,Wallet,Transaction,Asset,Bought on,Amount"
+
+  it("makes one record of a sale's rows, recorded when the last of them was", () => {
+    const csv = [header, `2026-11-04T10:00:00Z,${A},${hash(30)},ETH,2026-11-01,0.5`, `2026-11-04 11:00:00+00:00,${A},${hash(30)},WETH,2026-11-02T08:00:00Z,"1,000.25"`, `2026-11-04T09:00:00Z,${A},${hash(31)},USDC,2026-11-01,10`].join("\r\n")
+    const imported = parseUnitChoicesCsv(csv)
+    assert.deepEqual(imported?.skipped, [])
+    assert.deepEqual(imported?.choices, [
+      { wallet: A, txHash: hash(30), asset: "ETH", recordedAt: "2026-11-04T11:00:00.000Z", takes: [{ boughtAt: "2026-11-01", units: (ETH / 2n).toString() }, { boughtAt: "2026-11-02T08:00:00.000Z", units: (100025n * ETH / 100n).toString() }] },
+      { wallet: A, txHash: hash(31), asset: "USDC", recordedAt: "2026-11-04T09:00:00.000Z", takes: [{ boughtAt: "2026-11-01", units: "10000000" }] },
+    ])
+  })
+
+  it("leaves out a whole record when any of its rows can't be read, and isn't fooled by other files", () => {
+    const csv = [header, `2026-11-04T10:00:00Z,${A},${hash(30)},ETH,2026-11-01,0.5`, `2026-11-04T10:00:00,${A},${hash(30)},ETH,2026-11-02,0.5`, `2026-11-04T10:00:00Z,${A},${hash(31)},USDC,2026-11-01,0.0000001`, `2026-11-04T10:00:00Z,${A},${hash(32)},PEPE,2026-11-01,1`].join("\n")
+    const imported = parseUnitChoicesCsv(csv)
+    assert.deepEqual(imported?.choices, [])
+    assert.deepEqual(imported?.skipped, [2, 3, 4, 5])
+    assert.equal(parseUnitChoicesCsv("Timestamp,Transaction Type,Asset\n"), null)
+  })
+
+  it("leaves out a record with a day the calendar doesn't have, rather than reading it as another", () => {
+    const row = (recorded: string, boughtOn: string, tx = 30) => `${recorded},${A},${hash(tx)},ETH,${boughtOn},1`
+    const csv = [
+      header,
+      row("2026-02-30T00:00:00Z", "2026-02-30T00:00:00Z"),
+      row("2026-03-03T00:00:00Z", "2026-02-29", 31),
+      row("2026-02-29T10:00:00+05:00", "2026-03-01", 32),
+      row("2026-03-03T24:00:00Z", "2026-03-01", 33),
+      row("2026-03-03T00:00:00Z", "2026-03-01", 34),
+      row("2026-03-03T00:00:00Z", "2026-03-01T00:00:00Z", 34),
+    ].join("\n")
+    const imported = parseUnitChoicesCsv(csv)
+    assert.deepEqual(imported?.skipped, [2, 3, 4, 5])
+    assert.deepEqual(imported?.choices.map((choice) => choice.txHash), [hash(34)])
+  })
+})

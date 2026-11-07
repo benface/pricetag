@@ -61,7 +61,7 @@ export function App() {
   const [taxYear, setTaxYear] = useState<TaxYear>("latest")
   const [chosenCurrency, setChosenCurrency] = useState<CurrencyCode>(readCurrency)
   const { rules, chosen: chosenRule, choose: chooseRule } = useRules()
-  const { book, change, undo, canUndo, notSaved, linkAccounts, addPurchase } = useBook()
+  const { book, change, undo, canUndo, notSaved, linkAccounts, addPurchase, changeRecords } = useBook()
   const unreadableSaved = useUnreadableSaved()
   const { purchases, problem: purchasesProblem, begin: beginPurchase, dismiss: dismissPurchase } = usePurchases(addPurchase)
   const [buying, setBuying] = useState(false)
@@ -427,6 +427,7 @@ export function App() {
           alongside={isAll ? yours : NONE}
           currency={chosenCurrency}
           book={book}
+          onRecords={changeRecords}
           year={taxYear}
           onYear={setTaxYear}
           overviewMethod={method}

@@ -33,11 +33,15 @@ export type LegEffect = {
   known: KnownTaken | null
   /** Debits only: the pieces it took, oldest first under FIFO, each with its cost and when it was acquired. */
   taken: CostPiece[] | null
+  /** Debits whose units the user's records named: whether it took those, or they were refused. See `FoldLeg.takes`. */
+  chosen?: "used" | "refused"
 }
 
 /** What a leg did to a position, from what applying it already worked out, so no step goes through every lot again. */
-export function effectOf(leg: PricedLeg, before: PositionState, { state: after, known, split, taken }: LegApplied): LegEffect {
-  return { leg, before: tallyOf(before), after: tallyOf(after), answerable: costCanBeAnswered(leg, before, split ?? undefined), known, taken: known === null ? null : taken }
+export function effectOf(leg: PricedLeg, before: PositionState, { state: after, known, split, taken, chosen }: LegApplied): LegEffect {
+  // What was named is all it took, so only an answer for one of those could fix its cost.
+  const answerable = chosen === "used" ? taken.some((piece) => piece.costMicros === null && !piece.unanswerable) : costCanBeAnswered(leg, before, split ?? undefined)
+  return { leg, before: tallyOf(before), after: tallyOf(after), answerable, known, taken: known === null ? null : taken, ...(chosen ? { chosen } : {}) }
 }
 
 /** Which of a position's numbers rest on an estimate, so they can look different from exact ones. */

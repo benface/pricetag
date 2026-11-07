@@ -25,6 +25,8 @@
 //   identifier such as purchase date or price. A rule like these, recorded before selling, names them that way. That they count as a standing rule is our reading,
 //   and an accountant should confirm it. Choosing units after the fact, which a report would be doing, doesn't count. IRS digital
 //   asset FAQs Q82 says the same goes for units you transfer, so the rule has to cover sending and spending too, not only selling.
+//   So the report only uses units named for one sale or send when the user's records say they named them no later than it
+//   happened (`UnitChoice.recordedAt`), and says so on its row. Named any later, they're listed and not used.
 //
 // What something received from someone else costs, which decides whether its market price is a cost or an estimate:
 // - Canada, the market price is the cost: Income Tax Act s. 69(1)(c) deems a gift acquired at fair market value, and
@@ -46,7 +48,7 @@ import { hasStarted, isBehind, type TaxReportResponse, type WalletResponse } fro
 import { emptyBook, isDemoWallet, linkedWallets, type Book } from "./book.ts"
 import { csvCell, microsCell, unitsCell } from "./csv.ts"
 import { rateSource } from "./explain.ts"
-import { resolveLegs, withheldIn, type Received } from "./resolve.ts"
+import { choiceInTime, choiceLeg, resolveLegs, withheldIn, type Received } from "./resolve.ts"
 import { knownSender } from "./senders.ts"
 import { taxFormOf } from "./tax-forms.ts"
 import { UK_TIME_ZONE, dayNumber, localDate, matchUk, startOfDate } from "./tax-matching.ts"
@@ -156,7 +158,7 @@ export const TAX_COUNTRIES: Record<TaxCountryCode, TaxCountry> = {
     marketWarning: "In the US, that's the cost of what you're paid, but a gift generally keeps the giver's cost.",
     notes: [
       "The Form 8949 file gives the date each sold unit was acquired, and splits short-term from long-term gains, which works with every method but Average.",
-      "Choosing specific units for each sale isn't available yet.",
+      "Where your own records named which units a sale or send took, no later than when it happened, this report uses those units for it, and says so on its row. Units named afterwards don't count, so those use the method above. Records you import are yours to keep, since the chain can't confirm when they were made.",
       "The wash sale rule in section 1091 of the tax code covers stock and securities, and this report doesn't check for it. Ask an accountant whether it applies to crypto in your year.",
     ],
     yearStart: "01-01",
@@ -223,7 +225,14 @@ export type TaxRow = {
   acquired: Acquired[] | null
   /** A loss that a country's rules may not let you deduct. Missing means none was found. */
   lossRule?: LossRule
+  /**
+   * The user's records named which units this took. used: this took them. refused: they don't match what was held then. late: they
+   * were named after it happened. averaged: Average can't use them. In every case but used, it goes by the report's method.
+   */
+  chosenUnits?: ChosenUnits
 }
+
+export type ChosenUnits = "used" | "refused" | "late" | "averaged"
 
 /** Part of what a sale took, with its cost and when it was acquired, or null when nothing says. */
 export type Acquired = { qty: string; costMicros: string; at: string | null }
@@ -343,7 +352,17 @@ function rowsOf(effect: LegEffect, wallet: string, unconfirmed: string | null, c
   return rows
 }
 
-type Source = { wallet: WalletResponse; view: WalletView; unconfirmed: Map<string, string>; unread: string[]; received?: Received[] }
+type Source = {
+  wallet: WalletResponse
+  view: WalletView
+  unconfirmed: Map<string, string>
+  unread: string[]
+  received?: Received[]
+  /** The ids of sales and sends whose units the records only named after they happened. */
+  namedLate?: Set<string>
+  /** How many of the records for this wallet name nothing in its history. */
+  namedNothing?: number
+}
 
 /** What the chain can't back up in a wallet. Balances only depend on amounts, so this doesn't need the answers. */
 function checksOf(wallet: WalletResponse, view: WalletView, method: Method): Pick<Source, "unconfirmed" | "unread"> {
@@ -355,14 +374,33 @@ function checksOf(wallet: WalletResponse, view: WalletView, method: Method): Pic
   return { unconfirmed, unread: unreadAssets(positions, wallet) }
 }
 
-/** What else goes into a report: the user's answers, and wallets whose costs it needs but whose rows it doesn't list. */
-export type TaxContext = { book?: Book; costsFrom?: readonly WalletResponse[] }
+/**
+ * What else goes into a report: the user's answers, and wallets whose costs it needs but whose rows it doesn't list. `namedUnits`
+ * says whether units the user's records named count, which only US rules allow. Without it, they do.
+ */
+export type TaxContext = { book?: Book; costsFrom?: readonly WalletResponse[]; namedUnits?: boolean }
+
+/** Which of a wallet's records were made too late to count, and which name nothing in its history. */
+function namedIn(book: Book, wallet: WalletResponse, legs: readonly PricedLeg[]): Pick<Source, "namedLate" | "namedNothing"> {
+  const address = normalizeAddress(wallet.address)
+  const namedLate = new Set<string>()
+  let namedNothing = 0
+  for (const choice of book.unitChoices ?? []) {
+    if (choice.wallet !== address) continue
+    const leg = choiceLeg(choice, legs)
+    if (!leg) namedNothing++
+    else if (!choiceInTime(choice, leg)) namedLate.add(leg.id)
+  }
+  return { namedLate, namedNothing }
+}
 
 /**
  * Each wallet with what the user has said filled in, the same way the apps do it. The wallets in a report are the user's
  * own, because that's what asking for them together says, so costs carry between them whatever else has been answered.
  */
-function sourcesOf(wallets: readonly WalletResponse[], method: Method, { book = emptyBook(), costsFrom = [] }: TaxContext, country: TaxCountry | null = null): Source[] {
+function sourcesOf(wallets: readonly WalletResponse[], method: Method, { book: given = emptyBook(), costsFrom = [], namedUnits = true }: TaxContext, country: TaxCountry | null = null): { sources: Source[]; lenders: Source[] } {
+  const { unitChoices: _, ...withoutChoices } = given
+  const book: Book = namedUnits ? given : withoutChoices
   const sides = [...wallets, ...costsFrom].map((wallet) => {
     const view = viewWallet(wallet)
     return { wallet, view, ...checksOf(wallet, view, method) }
@@ -373,10 +411,11 @@ function sourcesOf(wallets: readonly WalletResponse[], method: Method, { book = 
   for (const history of histories.slice(0, wallets.length)) assertFoldFits(history, histories.filter((other) => other !== history), method)
   // Matching needs to know when what an exchange withdrew was bought, and what each purchase cost, not only its average.
   const { legs, received } = resolveLegs(sides, method, linking, { datedLots: method === "average" && country?.matchesAcquisitions === true })
-  return sides.slice(0, wallets.length).map((side) => {
+  const all = sides.map((side) => {
     const address = normalizeAddress(side.wallet.address)
-    return { ...side, view: { ...side.view, legs: legs.get(address) as PricedLeg[] }, received: received.filter((item) => item.wallet === address) }
+    return { ...side, view: { ...side.view, legs: legs.get(address) as PricedLeg[] }, received: received.filter((item) => item.wallet === address), ...namedIn(book, side.wallet, side.view.legs) }
   })
+  return { sources: all.slice(0, wallets.length), lenders: all.slice(wallets.length) }
 }
 
 const moveKey = (leg: PricedLeg) => `${leg.txHash}:${leg.asset}`
@@ -568,6 +607,52 @@ export type TaxPreviewRow = Pick<TaxRow, "timestamp" | "type" | "asset" | "amoun
 
 const PREVIEW_ROWS = 5
 
+const NAMED_USED = "Uses the units your records named for it."
+const namedRefused = (method: Method) => `Your records named units for it that don't match what was held then, so this uses ${METHOD_LABELS[method].toLowerCase()} instead.`
+const namedLate = (method: Method) => `Your records only named units for it after it happened, which doesn't count, so this uses ${METHOD_LABELS[method].toLowerCase()} instead.`
+const NAMED_AVERAGED = "Average mixes everything bought, so the units your records named for it aren't used."
+
+/** What became of the units the records named for this sale or send, if they named any. */
+function chosenOf({ leg, chosen }: LegEffect, late: ReadonlySet<string> | undefined): ChosenUnits | null {
+  if (late?.has(leg.id)) return "late"
+  if (chosen) return chosen
+  return leg.takes ? "averaged" : null
+}
+
+function markChosen(rows: TaxRow[], chosen: ChosenUnits | null, method: Method): TaxRow[] {
+  if (chosen === null) return rows
+  const note = chosen === "used" ? NAMED_USED : chosen === "refused" ? namedRefused(method) : chosen === "late" ? namedLate(method) : NAMED_AVERAGED
+  for (const row of rows) {
+    row.chosenUnits = chosen
+    row.reason = [row.reason, note].filter(Boolean).join(" ")
+  }
+  return rows
+}
+
+/** What became of each named choice, by `<wallet>:<leg id>`, with when its sale or send happened. */
+type Outcomes = Map<string, { chosen: ChosenUnits; timestamp: string }>
+
+function noteOutcome(outcomes: Outcomes, wallet: string, effect: LegEffect, late: ReadonlySet<string> | undefined): ChosenUnits | null {
+  const chosen = chosenOf(effect, late)
+  if (chosen !== null) outcomes.set(`${wallet}:${effect.leg.id}`, { chosen, timestamp: effect.leg.timestamp })
+  return chosen
+}
+
+/**
+ * What became of the units named in a wallet the report only takes costs from. Any of its sales or sends decides which of its
+ * purchases are left to pass on, so a record it couldn't use changes what arrived cost as much as a sale's would.
+ */
+function lenderChoices(lenders: readonly Source[], method: Method, outcomes: Outcomes): void {
+  for (const { wallet, view, namedLate } of lenders) {
+    if (!view.legs.some((leg) => leg.takes || namedLate?.has(leg.id))) continue
+    for (const position of foldPositions(view.legs, method, {})) for (const effect of position.effects) noteOutcome(outcomes, wallet.address, effect, namedLate)
+  }
+}
+
+/**
+ * Every row, and what became of every named choice the fold met, listed or not: a move between the report's wallets isn't a row,
+ * but its record still decides what's left to sell. Pooled, such a move takes nothing from the pool, so it has no outcome.
+ */
 const LATER_BUYS = "Part of its cost is what was bought in the 30 days after it, which UK rules match to it first."
 const TENTATIVE = {
   day: "The rest of its day hasn't been read yet, and everything bought that day counts as one purchase, at that day's average cost, which UK rules match to it first, so its cost may still change.",
@@ -586,8 +671,10 @@ function effectsOf(legs: readonly PricedLeg[], method: Method, country: TaxCount
   return foldPositions(legs, method, {}).map(({ asset, effects }) => ({ asset, effects: effects.map((effect) => ({ leg: effect.leg, effect, notes: [] })) }))
 }
 
-function rowsFrom(sources: readonly Source[], method: Method, scope: TaxScope, country: TaxCountry | null): TaxRow[] {
+function rowsFrom(sources: readonly Source[], method: Method, scope: TaxScope, country: TaxCountry | null): { rows: TaxRow[]; outcomes: Outcomes } {
   const rows: TaxRow[] = []
+  const outcomes: Outcomes = new Map()
+  const lateIn = new Map(sources.map((source) => [source.wallet.address, source.namedLate]))
   const add = (made: TaxRow[], notes: readonly string[]) => {
     for (const row of made) rows.push(notes.length === 0 ? row : { ...row, reason: [row.reason, ...notes].filter(Boolean).join(" ") })
   }
@@ -598,7 +685,10 @@ function rowsFrom(sources: readonly Source[], method: Method, scope: TaxScope, c
     const unconfirmed = new Map(sources.flatMap(({ wallet, unconfirmed, unread }) => [...[...unread, ...wallet.openingUnread].map((asset) => [asset, UNCHECKED] as [string, string]), ...unconfirmed]))
     for (const position of effectsOf(legs, method, country, readThroughOf(sources))) {
       const reason = sameStart ? (unconfirmed.get(position.asset) ?? null) : DIFFERENT_STARTS
-      for (const { leg, effect, notes } of position.effects) add(rowsOf(effect, walletOf.get(leg) as string, reason, country), notes)
+      for (const { leg, effect, notes } of position.effects) {
+        const wallet = walletOf.get(leg) as string
+        add(markChosen(rowsOf(effect, wallet, reason, country), noteOutcome(outcomes, wallet, effect, lateIn.get(wallet)), method), notes)
+      }
     }
   } else {
     const moves = movesBetween(sources)
@@ -606,13 +696,14 @@ function rowsFrom(sources: readonly Source[], method: Method, scope: TaxScope, c
       const { wallet, view, unconfirmed } = source
       for (const position of effectsOf(view.legs, method, country, readThroughOf([source]))) {
         for (const { leg, effect, notes } of position.effects) {
-          if (!isMove(leg, moves)) add(rowsOf(effect, wallet.address, unconfirmed.get(position.asset) ?? null, country), notes)
+          const chosen = noteOutcome(outcomes, wallet.address, effect, lateIn.get(wallet.address))
+          if (!isMove(leg, moves)) add(markChosen(rowsOf(effect, wallet.address, unconfirmed.get(position.asset) ?? null, country), chosen, method), notes)
         }
       }
     }
   }
   const feeFirst = (row: TaxRow) => (row.type === "Network fee" ? 0 : 1)
-  return rows.sort((a, b) => a.blockNum - b.blockNum || a.txIndex - b.txIndex || feeFirst(a) - feeFirst(b))
+  return { rows: rows.sort((a, b) => a.blockNum - b.blockNum || a.txIndex - b.txIndex || feeFirst(a) - feeFirst(b)), outcomes }
 }
 
 const NO_VALUE = "There's no price for it from when it arrived, so what it was worth isn't known."
@@ -662,7 +753,7 @@ function receivedRowsOf(sources: readonly Source[]): ReceivedRow[] {
 /** Every row, oldest first, with a transaction's fee before what it did, the way the fold reads them. */
 export function taxRows(wallets: readonly WalletResponse[], { method, scope, country }: Pick<TaxSettings, "method" | "scope"> & { country?: TaxCountryCode }, context: TaxContext = {}): TaxRow[] {
   const rules = country ? TAX_COUNTRIES[country] : null
-  return rowsFrom(sourcesOf(wallets, method, context, rules), method, scope, rules)
+  return rowsFrom(sourcesOf(wallets, method, context, rules).sources, method, scope, rules).rows
 }
 
 /**
@@ -720,6 +811,9 @@ const money = (micros: string | null) => (micros === null ? "unknown" : microsCe
 
 const STATUS_LABELS: Record<TaxRowStatus, string> = { resolved: "OK", estimated: "ESTIMATED", "self-reported": "SELF-REPORTED", unresolved: "UNKNOWN GAIN" }
 
+/** The Method column of a row that took the units the records named. */
+const NAMED_UNITS_LABEL = "Units you named"
+
 const CSV_HEADER = ["Date (UTC)", "Type", "Asset", "Amount", "Proceeds", "Cost", "Gain", "Value when received", "Currency", "Method", "Calculation", "Price source", "Status", "Notes", "Wallet", "Transaction"]
 
 /**
@@ -738,7 +832,7 @@ export function taxCsv(rows: readonly TaxRow[], notes: readonly string[], { meth
     money(row.gainMicros),
     "",
     currency,
-    methodLabel,
+    row.chosenUnits === "used" ? NAMED_UNITS_LABEL : methodLabel,
     SCOPE_LABELS[scope],
     row.priceSource === null ? "None" : PRICE_SOURCE_LABELS[row.priceSource],
     STATUS_LABELS[row.status],
@@ -776,11 +870,12 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
   const country = TAX_COUNTRIES[code]
   const first = wallets[0] as WalletResponse
   const { currency } = first
-  const sources = sourcesOf(wallets, method, context, country)
+  const { sources, lenders } = sourcesOf(wallets, method, { ...context, namedUnits: code === "US" }, country)
   const named = wallets.length > 1
   const years = yearsOf(wallets, country)
   const year = settings.year === "latest" ? (years[0] ?? null) : settings.year === "all" || settings.year === undefined ? null : settings.year
-  const allRows = rowsFrom(sources, method, scope, country)
+  const { rows: allRows, outcomes } = rowsFrom(sources, method, scope, country)
+  lenderChoices(lenders, method, outcomes)
   if (code === "CA") flagSuperficialLosses(allRows, sources, context.book)
   const rows = year === null ? allRows : allRows.filter((row) => taxYearOf(row.timestamp, country) === year)
   const received = receivedRowsOf(sources).filter((row) => year === null || taxYearOf(row.timestamp, country) === year)
@@ -810,6 +905,18 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
   if (superficial > 0) warnings.push(`${plural(superficial, "loss", "losses")} may be superficial, because more of the same asset was acquired within 30 days. A superficial loss can't be deducted, so check ${superficial === 1 ? "it" : "them"} before filing.`)
   if (tentative > 0) warnings.push(`${plural(tentative, "sale or fee", "sales or fees")} happened less than 30 days before the end of what's been read, so ${tentative === 1 ? "its" : "their"} cost may still change with what's bought next.`)
   if (received.length > 0) warnings.push(`${plural(received.length, "thing")} you received from other addresses may be income, like pay or rewards. The full report lists ${received.length === 1 ? "it" : "them"} as Received, with what ${received.length === 1 ? "it was" : "each was"} worth when ${received.length === 1 ? "it" : "they"} arrived, so check ${received.length === 1 ? "it" : "each one"}.`)
+  // A record decides what's left for every later sale too, so one from an earlier year, a move or a wallet this only takes costs from counts as well. One from after the year can't change it.
+  const chosenIn = [...outcomes.values()].filter(({ timestamp }) => year === null || taxYearOf(timestamp, country) <= year)
+  const chosenEvents = (chosen: ChosenUnits) => chosenIn.filter((outcome) => outcome.chosen === chosen).length
+  const salesOrSends = (count: number) => plural(count, "sale or send", "sales or sends")
+  const refused = chosenEvents("refused")
+  const late = chosenEvents("late")
+  const averaged = chosenEvents("averaged")
+  const namedNothing = sources.reduce((sum, source) => sum + (source.namedNothing ?? 0), 0)
+  if (refused > 0) warnings.push(`Your records named units for ${salesOrSends(refused)} that don't match what was held then, so ${refused === 1 ? "it uses" : "they use"} ${METHOD_LABELS[method].toLowerCase()} instead. Check ${refused === 1 ? "that record" : "those records"}.`)
+  if (late > 0) warnings.push(`Your records only named units for ${salesOrSends(late)} after ${late === 1 ? "it" : "they"} happened. US rules only count units named no later than the sale, so ${late === 1 ? "it uses" : "they use"} ${METHOD_LABELS[method].toLowerCase()}.`)
+  if (averaged > 0) warnings.push(`Average mixes everything bought, so the units your records named for ${salesOrSends(averaged)} aren't used.`)
+  if (namedNothing > 0) warnings.push(`${plural(namedNothing, "record")} of the units you named ${namedNothing === 1 ? "is" : "are"} about a sale or send that isn't in ${named ? "these wallets" : "this wallet"}' history, or that doesn't say which of several it means, so ${namedNothing === 1 ? "it isn't" : "they aren't"} used.`)
   for (const { wallet, asset } of withheldIn(sources.flatMap(({ view }) => view.legs))) warnings.push(withheldSentence(wallet, asset))
   for (const source of sources) warnings.push(...walletWarnings(source, named))
   const methodWarning = method === country.method ? undefined : country.methodWarnings[method]
@@ -824,7 +931,9 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
 
   const answered = new Set(linkedWallets(context.book ?? emptyBook()))
   const fromAnswers = wallets.slice(1).map((wallet) => wallet.address).filter((address) => answered.has(address.toLowerCase()))
+  const used = chosenEvents("used")
   const notes = [
+    ...(used > 0 ? [`${salesOrSends(used)} ${used === 1 ? "uses" : "use"} the units your records named for ${used === 1 ? "it" : "them"} when ${used === 1 ? "it" : "they"} happened, rather than ${METHOD_LABELS[method].toLowerCase()}.`] : []),
     ...(fromAnswers.length > 0 ? [`This includes the wallets you've said are yours: ${fromAnswers.map(shortHash).join(", ")}.`] : []),
     ...sources.map((source) => coverageNote(source, named)),
     ...(currency === "USD" ? [] : [`Amounts convert at the rate when each transaction happened, from ${rateSource(currency)}. A tax authority may expect another source.`]),

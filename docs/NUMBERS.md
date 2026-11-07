@@ -258,6 +258,16 @@ A wallet nobody's said is theirs takes no costs from the others.
 The demo wallet can't be combined with anything.
 All together needs one consistent history, so the report stops at the last block every wallet has reached and says what that leaves out. If their histories start at different blocks, which only happens on the raw dataset, every cost is `unknown`.
 
+### Units your records named (US)
+
+[Treas. Reg. 1.1012-1(j)(2)](https://www.ecfr.gov/current/title-26/section-1.1012-1) lets you identify which units a sale took from your own wallet, but only if your books and records named them no later than the date and time of the sale. A report choosing them afterwards wouldn't count, so the report only uses a choice that was recorded in time.
+
+- **Where they live:** `Book.unitChoices`, beside the answers, so the server gets them like the rest and stores nothing. Each names a wallet, a transaction and an asset, when it was recorded, and each purchase it took from by its date (a UTC day, which means every purchase that day, or a moment) and how many units.
+- **Where they come from:** for now, a CSV the user already kept, imported in the web app's tax report (`src/core/unit-choices.ts`): one row per purchase, with the columns `Recorded at, Wallet, Transaction, Asset, Bought on, Amount`. A record whose rows don't all read, including a date the calendar doesn't have, like February 30, is left out whole. The book refuses one too.
+- **What the fold does** (`FoldLeg.takes` in `packages/sdk/src/fold.ts`): a sale or send with a choice takes exactly those units instead of the method's order, and what's left stays oldest first. It's refused, never stretched, and the method's order applies, when the units don't add up to what left, or name something that isn't held, more than is left of it, part of a day's purchases that cost different amounts, or something that could have been bought at any time before. Average mixes everything bought, so it never uses them. Network fees aren't named.
+- **What the report says:** a row that used them says so, and its Method column says `Units you named`. A choice recorded after its sale, a refused one, one under Average, and one about a transaction that isn't in the wallet's history, or isn't only one sale or send of that asset, each get a warning, and those rows use the report's method. That counts every sale or send whose choice decides what the report's units cost, listed or not: a send between the report's wallets, any sale or send from a wallet it only takes costs from, and one from an earlier year than the report's. One after the report's year can't change it, so it's left out. A purchase a choice names none of keeps its cost, even one only known for all of it. Canada's report ignores them, since its rules average.
+- The chain can't confirm when a record was made, so the records are the user's to keep.
+
 ### Form 8949 (US)
 
 Lines follow the IRS instructions for Form 8949, in box I (short-term, Part I) or box L (long-term, Part II), which are for digital assets no Form 1099-DA or 1099-B reported. If a broker sent one, the user should use the box it names, and the file says so.
@@ -294,7 +304,7 @@ Received rows follow the year asked for, but aren't sales, so they're left out o
 ### What it still doesn't do
 
 - It doesn't adjust a superficial loss, or check the US wash sale rule, which the report says to ask an accountant about.
-- Choosing specific units to sell isn't available.
+- The Mac app can't import units your records named yet, and neither app records them when you send.
 - It only knows what reached these wallets. Something that arrived with no history behind it has no date unless an exchange file gives one, and its original cost stays unknown unless an exchange file or an answer gives it. A bridge deposit or a mint is the exception: without either, it's still valued at the market price when it arrived, as an estimate, not what was first paid for it.
 - An unknown amount stays `unknown` in every file and every total, never $0.
 
