@@ -1657,7 +1657,7 @@ final class FixtureSource: PortfolioSource {
     /// The same rate as the demo's CAD portfolio.
     func currentRate(currency: CurrencyCode) async throws -> String? { hasRate ? "1398601" : nil }
 
-    func portfolio(_ read: ReadContext, timeout: Duration) async throws -> Portfolio {
+    func portfolio(_ context: ReadContext, timeout: Duration) async throws -> Portfolio {
         let read = reads.withLock { reads in
             reads += 1
             return reads
@@ -1781,10 +1781,10 @@ final class FixtureSource: PortfolioSource {
                 object["questions"] = [Any]()
                 object["meter"] = ["open": 0, "answered": 0, "waiting": 0]
             }
-        case .empty: return try newWallet(started: true, readingLinked: false, address: read.address)
-        case .emptyReadingLinked: return try newWallet(started: true, readingLinked: true, address: read.address)
-        case .notStarted: return try newWallet(started: false, readingLinked: false, address: read.address)
-        case .firstRun: return try firstRun(address: read.address)
+        case .empty: return try newWallet(started: true, readingLinked: false, address: context.address)
+        case .emptyReadingLinked: return try newWallet(started: true, readingLinked: true, address: context.address)
+        case .notStarted: return try newWallet(started: false, readingLinked: false, address: context.address)
+        case .firstRun: return try firstRun(address: context.address)
         case .neverAnswers, .updating: try await Task.sleep(for: .seconds(600))
         case .serverDown: throw FetchError.unreachable
         case .stopsAnswering: if read > 1 { throw FetchError.unreachable }
@@ -1801,7 +1801,7 @@ final class FixtureSource: PortfolioSource {
             if read > 2 { try await Task.sleep(for: .seconds(600)) }
         case .notStartedFails: throw FetchError.ampUnavailable("Couldn't read this wallet's data.")
         }
-        return try Self.decode(fixture("demo-portfolio", read.currency))
+        return try Self.decode(fixture("demo-portfolio", context.currency))
     }
 
     func lastRead(_ read: ReadContext) async throws -> Portfolio? {
