@@ -15,7 +15,7 @@
 // what's held now, less what that ETH would be worth now.
 
 import { applyLegTaking, emptyPosition, worth, type CostPiece, type FoldLeg, type PositionState } from "./fold.ts"
-import { PRICE_NOTES, type PricedLeg } from "./legs.ts"
+import type { PricedLeg } from "./legs.ts"
 import { isUnconfirmed, type LatestPrices, type LegEffect, type MarkPrice, type PnlStatus, type Position, type Totals } from "./portfolio.ts"
 
 const ETH_DECIMALS = 18
@@ -189,7 +189,7 @@ export function compareWithHoldingEth(positions: readonly Position[], totals: To
       for (const follower of followers) {
         const gave = follower.gave.get(leg.txHash)
         // It also gave up a token nothing here can see, which could be what paid for all of this.
-        const qty = gave && gave.qty > 0n && !(follower.theLeast && leg.priceNote === PRICE_NOTES.unlisted) ? (delta * gave.inEth) / gave.qty : 0n
+        const qty = gave && gave.qty > 0n && !(follower.theLeast && leg.alsoMovedUnlisted) ? (delta * gave.inEth) / gave.qty : 0n
         credit(follower, leg, [...(qty > 0n ? [followedPiece(qty, true, leg.blockNum)] : []), ...(delta > qty ? [followedPiece(delta - qty, false, leg.blockNum)] : [])])
       }
       continue

@@ -15,7 +15,7 @@ import type { WalletResponse } from "../src/core/api.ts"
 import { holdingsRenderer, type HoldingsRenderer } from "./support/render-holdings.ts"
 import { E18 } from "./support/units.ts"
 
-// The real wallet and payout behind WORK-424: a contract paid it 0.00206183 ETH, and the transaction doesn't name it as `to`.
+// A real wallet and payout: a contract paid it 0.00206183 ETH, and the transaction doesn't name it as `to`.
 const ME = "0x3762620fbcb400b0f98365da4aad7d2a250e5d89"
 const PAYOUT_BLOCK = 53525052
 const PAYOUT_AMOUNT = 2061830000000000n
@@ -76,7 +76,7 @@ const unseenAmount = (wallet: { legs: { id: string; delta: string }[] }, block: 
 const ethOf = (wallet: Parameters<typeof portfolioOf>[0]) => portfolioOf(wallet, "average").positions.find((p) => p.asset === "ETH")!
 const unseenLeg = (wallet: { legs: { id: string }[] }) => wallet.legs.find((leg) => leg.id === `unseen:${PAYOUT_BLOCK}:ETH`) as Awaited<ReturnType<ReturnType<typeof createWallets>["get"]>>["legs"][number]
 
-describe("the batched payout WORK-424 found", () => {
+describe("a real batched payout", () => {
   it("finds the block, counts exactly what arrived, and ETH matches the chain to the wei", async () => {
     const wallet = await chain().wallets.get(ME)
     const leg = unseenLeg(wallet)
@@ -264,7 +264,7 @@ describe("a deposit through the Base bridge", () => {
   })
 })
 
-describe("a fee missing from the rows, in a block where ETH arrived (WORK-612)", () => {
+describe("a fee missing from the rows, in a block where ETH arrived", () => {
   // The real case, from Ethereum: 10 ETH arrived, and the wallet's own transaction there has no gas row.
   const BLOCK = 53526000
   const ARRIVED = 10n * 10n ** 18n

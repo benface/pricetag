@@ -5,7 +5,7 @@ import { asNumber, isNotStarted, type Query } from "./amp.ts"
 import { blockBefore } from "./chain.ts"
 import { CURRENCIES, MAX_ROUND_AGE_SECONDS, type CurrencyCode, type Rates, type RateRound } from "./currency.ts"
 import { blockFilters, decodeRound, type Row } from "./dataset.ts"
-import type { WalletData } from "./wallet.ts"
+import type { WalletData } from "./wallet-data.ts"
 import { settledThrough } from "./wallets.ts"
 
 /** A currency's answer at each block, leaving out blocks where the read failed. */

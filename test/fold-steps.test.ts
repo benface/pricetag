@@ -1,4 +1,4 @@
-// What a fold's steps say, checked against the way it was worked out before WORK-559: from every lot, before and after each leg.
+// What a fold's steps say, checked against working it out from every lot, before and after each leg.
 
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
