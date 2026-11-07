@@ -1,6 +1,6 @@
 // Runs the fold over a wallet's priced legs, and adds up what can honestly be added up.
 
-import { applyLeg, costCanBeAnswered, emptyPosition, knownCostOf, lotsSplitBy, tallyOf, worth, valuePosition, type KnownCost, type Method, type PositionState, type PositionTally, type PositionValues } from "./fold.ts"
+import { applyLeg, applyLegTaking, costCanBeAnswered, emptyPosition, tallyOf, worth, valuePosition, type KnownTaken, type LegApplied, type Method, type PositionState, type PositionTally, type PositionValues } from "./fold.ts"
 import { timestampOfBlock } from "./chain.ts"
 import type { RateRound } from "./currency.ts"
 import { answerToMicros, isSanePrice, type PricedLeg, type Reference } from "./legs.ts"
@@ -29,18 +29,13 @@ export type LegEffect = {
   after: PositionTally
   /** Whether an answer could fix any of this leg's unknown cost, going by what was held before it. */
   answerable: boolean
-  /**
-   * Debits only: what was held with a known cost before, leaving out what this leg's taking cost its known cost, and after.
-   * What it took is the difference.
-   */
-  known: { before: KnownCost; after: KnownCost } | null
+  /** Debits only: what it took with a known cost. Nothing a lot lost by this leg's taking part of it counts. */
+  known: KnownTaken | null
 }
 
-/** What a leg did to a position, worked out while both states are at hand. */
-export function effectOf(leg: PricedLeg, before: PositionState, after: PositionState): LegEffect {
-  const delta = BigInt(leg.delta)
-  const known = delta < 0n ? { before: knownCostOf(before.lots, lotsSplitBy(before, -delta)), after: knownCostOf(after.lots) } : null
-  return { leg, before: tallyOf(before), after: tallyOf(after), answerable: costCanBeAnswered(leg, before), known }
+/** What a leg did to a position, from what applying it already worked out, so no step goes through every lot again. */
+export function effectOf(leg: PricedLeg, before: PositionState, { state: after, known, split }: LegApplied): LegEffect {
+  return { leg, before: tallyOf(before), after: tallyOf(after), answerable: costCanBeAnswered(leg, before, split ?? undefined), known }
 }
 
 /** Which of a position's numbers rest on an estimate, so they can look different from exact ones. */
@@ -306,9 +301,9 @@ export function foldPositions(legs: readonly PricedLeg[], method: Method, prices
   const positions = new Map<string, { state: PositionState; effects: LegEffect[]; decimals: number }>()
   for (const leg of legs) {
     const position = positions.get(leg.asset) ?? { state: emptyPosition(method, leg.decimals), effects: [], decimals: leg.decimals }
-    const after = applyLeg(position.state, leg)
-    position.effects.push(effectOf(leg, position.state, after))
-    position.state = after
+    const applied = applyLegTaking(position.state, leg)
+    position.effects.push(effectOf(leg, position.state, applied))
+    position.state = applied.state
     positions.set(leg.asset, position)
   }
   // Whether something's held is a separate question from whether it can be checked. The chain says it's here, or said so

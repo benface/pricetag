@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { applyLeg, effectOf, emptyPosition, firstMarks, pnlOverTime, usdView, viewWallet, type LegEffect, type Method, type PricedLeg } from "@pricetag/sdk/core"
+import { applyLeg, applyLegTaking, effectOf, emptyPosition, firstMarks, pnlOverTime, usdView, viewWallet, type LegEffect, type Method, type PricedLeg } from "@pricetag/sdk/core"
 import type { ExplanationResponse, WalletResponse } from "../src/core/api.ts"
 import { foldBook } from "../src/core/resolve.ts"
 import { emptyBook } from "../src/core/book.ts"
@@ -22,7 +22,7 @@ function leg(delta: bigint, rest: Partial<PricedLeg> = {}): PricedLeg {
 /** The effect of `last` after `earlier`. */
 function effect(earlier: readonly PricedLeg[], last: PricedLeg): LegEffect {
   const before = earlier.reduce((state, l) => applyLeg(state, l), emptyPosition(method, 18))
-  return effectOf(last, before, applyLeg(before, last))
+  return effectOf(last, before, applyLegTaking(before, last))
 }
 
 describe("explaining an estimate", () => {

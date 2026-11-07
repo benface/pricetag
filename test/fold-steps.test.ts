@@ -2,7 +2,8 @@
 
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { applyLeg, costCanBeAnswered, emptyPosition, foldPositions, lotsSplitBy, tallyOf, valuePosition, type CostLabel, type CostPiece, type FoldLeg, type Lot, type Method, type PositionState, type PricedLeg } from "@pricetag/sdk/core"
+import { applyLeg, buildPortfolio, emptyPosition, foldPositions, lotsSplitBy, tallyOf, valuePosition, type CostLabel, type CostPiece, type FoldLeg, type KnownTaken, type Lot, type Method, type PositionState, type PricedLeg } from "@pricetag/sdk/core"
+import { costCanBeAnsweredBefore, lotsSplitByBefore } from "./support/fold-before.ts"
 import { randomFrom, randomLegs } from "./support/random-legs.ts"
 
 const METHODS: readonly Method[] = ["average", "fifo"]
@@ -86,6 +87,25 @@ function knownBefore(lots: readonly Lot[], leavingOut: readonly Lot[] = []) {
   return known
 }
 
+/** What the tax report took a debit's known cost to be: what was held with one before, less the lots it split, and after. */
+function takenBefore(before: PositionState, after: PositionState, qty: bigint): KnownTaken {
+  const was = knownBefore(before.lots, lotsSplitByBefore(before, qty))
+  const is = knownBefore(after.lots)
+  const purchasedQty = was.purchasedQty - is.purchasedQty
+  return {
+    qty: (was.qty - is.qty).toString(),
+    costMicros: (was.cost - is.cost).toString(),
+    estimatedMicros: (was.estimated - is.estimated).toString(),
+    givenMicros: (was.given - is.given).toString(),
+    reportedQty: (was.reportedQty - is.reportedQty).toString(),
+    purchasedQty: purchasedQty.toString(),
+    // Only ever named when some of what it took was bought.
+    purchaseSource: purchasedQty > 0n ? was.purchaseSource : null,
+  }
+}
+
+const NOTHING_KNOWN: KnownTaken = { qty: "0", costMicros: "0", estimatedMicros: "0", givenMicros: "0", reportedQty: "0", purchasedQty: "0", purchaseSource: null }
+
 const priced = (legs: readonly FoldLeg[]): PricedLeg[] =>
   legs.map((leg, i) => ({ ...leg, asset: "AERO", blockNum: i + 1, timestamp: leg.timestamp as string, txHash: `0x${(i + 1).toString(16)}`, txIndex: 0, priceSource: null, priceNote: null, parts: [] }))
 
@@ -128,14 +148,49 @@ describe("a fold's steps, against every lot before and after", () => {
               assert.ok(effect, where)
               assert.equal(effect.leg, leg, where)
               assert.deepEqual([effect.before, effect.after], [tallyOf(before), tallyOf(state)], where)
-              assert.equal(effect.answerable, costCanBeAnswered(leg, before), where)
+              assert.equal(effect.answerable, costCanBeAnsweredBefore(leg, before), where)
               const qty = -BigInt(leg.delta)
-              assert.deepEqual(effect.known, qty > 0n ? { before: knownBefore(before.lots, lotsSplitBy(before, qty)), after: knownBefore(state.lots) } : null, where)
+              assert.deepEqual(lotsSplitBy(before, qty), lotsSplitByBefore(before, qty), where)
+              // When the order matters, nothing it took has a known cost, which the tax report has always said whatever the lots said.
+              const orderless = leg.orderUnknown === "always" || (leg.orderUnknown === "fifo" && method === "fifo")
+              assert.deepEqual(effect.known, qty <= 0n ? null : orderless ? NOTHING_KNOWN : takenBefore(before, state, qty), where)
             })
             assert.deepEqual(position.state, state, `seed ${seed}, ${method}`)
           }
         }
       }
+    }
+  })
+
+  it("says what a history that keeps buying did, with every purchase still held", () => {
+    // Short random histories often sell everything they hold, so they never get to many lots at once.
+    const legs: FoldLeg[] = []
+    for (let i = 0; i < 300; i++) legs.push({ id: `buy-${i}`, kind: "swap", delta: "1000000", decimals: 6, costMicros: String(1000 + i), costLabel: "paid", priceMicros: PRICE, proceedsMicros: null, timestamp: new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString(), ...(i % 7 === 0 ? { purchaseSource: "Coinbase" } : {}) })
+    for (let i = 0; i < 300; i++) legs.push({ id: `gas-${i}`, kind: "gas", delta: i % 50 === 0 ? "-2500000" : "-1", decimals: 6, costMicros: null, costLabel: "unknown", priceMicros: PRICE, proceedsMicros: null, timestamp: new Date(Date.UTC(2026, 0, 2, 0, 0, i)).toISOString() })
+    for (const method of METHODS) {
+      const history = priced(legs)
+      const [position] = foldPositions(history, method, {})
+      let state = emptyPosition(method, 6)
+      history.forEach((leg, i) => {
+        const before = state
+        state = applyLeg(state, leg)
+        const qty = -BigInt(leg.delta)
+        assert.deepEqual(position?.effects[i]?.known, qty > 0n ? takenBefore(before, state, qty) : null, `${method}, ${leg.id}`)
+        assert.equal(position?.effects[i]?.answerable, costCanBeAnsweredBefore(leg, before), `${method}, ${leg.id}`)
+      })
+    }
+  })
+
+  it("can be saved as JSON, debits included", () => {
+    const legs = priced([
+      { id: "in", kind: "swap", delta: "100", decimals: 6, costMicros: "1000", costLabel: "paid", priceMicros: PRICE, proceedsMicros: null, timestamp: "2026-01-01T00:00:00.000Z" },
+      { id: "out", kind: "transfer", delta: "-10", decimals: 6, costMicros: null, costLabel: "unknown", priceMicros: PRICE, proceedsMicros: null, timestamp: "2026-01-01T00:00:01.000Z" },
+    ])
+    for (const method of METHODS) {
+      const portfolio = buildPortfolio(legs, method)
+      const saved = JSON.parse(JSON.stringify(portfolio))
+      assert.deepEqual(saved.positions[0].effects[1].known, { ...NOTHING_KNOWN, qty: "10", costMicros: "100" }, method)
+      for (const seed of SEEDS.slice(0, 20)) assert.doesNotThrow(() => JSON.stringify(foldPositions(priced(tangledLegs(seed, 60, 18)), method, {})), `seed ${seed}, ${method}`)
     }
   })
 

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
-import { ASSETS, CURRENCIES, CURRENCY_CODES, ETH_ADDRESS, ETH_USD_FEED, KNOWN_CONTRACTS, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, applyLeg, blockBefore, effectOf, buildPricedLegs, chartMoneyTicks, derivePricedRows, emptyPosition, formatChartSpan, msBetweenBlocks, encodeNote, foldPositions, pnlOverTime, referenceMarks, formatAmount, formatDuration, formatExactUsd, formatMoney, formatPaid, formatPrice, formatReturn, formatSignedAmount, formatSignedMoney, labelUsd, plainAmount, sumTotals, type LegRow, type Method, type PricedLeg } from "@pricetag/sdk/core"
+import { ASSETS, CURRENCIES, CURRENCY_CODES, ETH_ADDRESS, ETH_USD_FEED, KNOWN_CONTRACTS, LAST_2S_BLOCK, PRICE_NOTES, TOKENS, TOKEN_FEEDS, USDC_ADDRESS, USDC_USD_FEED, WETH_ADDRESS, applyLeg, applyLegTaking, blockBefore, effectOf, buildPricedLegs, chartMoneyTicks, derivePricedRows, emptyPosition, formatChartSpan, msBetweenBlocks, encodeNote, foldPositions, pnlOverTime, referenceMarks, formatAmount, formatDuration, formatExactUsd, formatMoney, formatPaid, formatPrice, formatReturn, formatSignedAmount, formatSignedMoney, labelUsd, plainAmount, sumTotals, type LegRow, type Method, type PricedLeg } from "@pricetag/sdk/core"
 import type { ExplanationResponse, PortfolioResponse, WalletResponse } from "../src/core/api.ts"
 import { END_LABEL_GAP, TICK_GAP, chartLeftMargin, chartRightMargin, placeChartTimes } from "../src/core/chart-times.ts"
 import { describeEffect, describeNetting, summarizeEffect } from "../src/core/explain.ts"
@@ -206,7 +206,7 @@ describe("portfolioOf", () => {
     const saysIn = (method: Method, legs: PricedLeg[]) => {
       const last = legs.at(-1) as PricedLeg
       const before = legs.slice(0, -1).reduce(applyLeg, emptyPosition(method, 18))
-      const { unknown, answerable } = summarizeEffect(effectOf(last, before, applyLeg(before, last)), "USD")
+      const { unknown, answerable } = summarizeEffect(effectOf(last, before, applyLegTaking(before, last)), "USD")
       return [unknown, answerable]
     }
     const says = (...legs: PricedLeg[]) => saysIn("average", legs)
