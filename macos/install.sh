@@ -19,6 +19,19 @@ logs="$HOME/Library/Logs/Patina"
 name=$(sed -n 's/^APP_NAME = //p' "$here/Config/App.xcconfig")
 installed="$HOME/Applications/$name.app"
 
+# The pid launchd gives this server while it runs, if it does.
+job_pid() { launchctl print "$domain/$label" 2>/dev/null | sed -n 's/^[[:space:]]*pid = \([0-9][0-9]*\)$/\1/p' | head -n 1; }
+# Whatever's listening on the port, except this server.
+others_on_port() {
+  ours=$(job_pid)
+  lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | sort -u | while read -r pid; do
+    [ "$pid" = "$ours" ] || echo "$pid"
+  done
+}
+port_taken() { # pids
+  echo "Something else is listening on port $port (pid $(echo "$1" | tr '\n' ' ' | sed 's/ $//')), like pnpm mac's server. Stop it, then run this again." >&2
+}
+
 stop_server() {
   launchctl bootout "$domain/$label" 2>/dev/null || true
   # bootout returns before the server has let go of its port.
@@ -53,8 +66,15 @@ fi
 node=$(command -v node) || { echo "No node on PATH." >&2; exit 1; }
 case "$repo$node$logs" in *[\<\>\&]*) echo "Can't write a path with <, > or & into the launchd file." >&2; exit 1 ;; esac
 
-"$here/run.sh" --build-only
+# Before anything changes: launchd would keep restarting a server that can't have its port, while that other one answers for it.
+others=$(others_on_port)
+[ -z "$others" ] || { port_taken "$others"; exit 1; }
+
+# Always Release, whatever CONFIGURATION says, since that's the folder it copies from.
+CONFIGURATION=Release "$here/run.sh" --build-only
 app="$here/build/Build/Products/Release/$name.app"
+[ -x "$app/Contents/MacOS/$name" ] && codesign --verify --strict "$app" ||
+  { echo "The build didn't leave a signed app at $app, so the installed one stays as it was." >&2; exit 1; }
 
 cd "$repo"
 # The Top Up and Publish buttons open the web app's hardware wallet flow, which this server serves from the build.
@@ -66,9 +86,15 @@ while pgrep -f "$installed/Contents/MacOS/" >/dev/null; do sleep 0.2; done
 # The build's copy too, so only one of the two is running.
 pkill -f "$app/Contents/MacOS/" 2>/dev/null || true
 mkdir -p "$HOME/Applications"
-rm -rf "$installed"
-# ditto keeps the signature and the provisioning profile as they are.
-ditto "$app" "$installed"
+# Copied next to it first, so a copy that fails leaves the installed app as it was. ditto keeps the signature and the provisioning profile as they are.
+staged="$HOME/Applications/.$name.app.new"
+old="$HOME/Applications/.$name.app.old"
+rm -rf "$staged" "$old"
+ditto "$app" "$staged" && codesign --verify --strict "$staged" ||
+  { rm -rf "$staged"; echo "Couldn't copy $app to ~/Applications, so the installed one stays as it was." >&2; exit 1; }
+[ ! -e "$installed" ] || mv "$installed" "$old"
+mv "$staged" "$installed"
+rm -rf "$old"
 # The browser extension now finds this copy.
 "$here/install-bridge.sh" "$installed"
 
@@ -113,14 +139,23 @@ PLIST
 plutil -lint -s "$agent"
 launchctl bootstrap "$domain" "$agent"
 
-is_serving() { curl -fs -o /dev/null --max-time 2 "http://127.0.0.1:$port/api/portfolio/demo"; }
+# An answer only counts if it's this server's: something that took the port since the check above could answer for it.
+is_serving() {
+  pid=$(job_pid)
+  [ -n "$pid" ] && lsof -nP -a -p "$pid" -iTCP:"$port" -sTCP:LISTEN -t >/dev/null 2>&1 &&
+    curl -fs -o /dev/null --max-time 2 "http://127.0.0.1:$port/api/portfolio/demo"
+}
 tries=0
 until is_serving || [ "$tries" -ge 50 ]; do
   sleep 0.2
   tries=$((tries + 1))
 done
 if ! is_serving; then
-  echo "The server didn't answer on port $port. What it said is in $logs/server.log. Is something else using that port, like pnpm mac?" >&2
+  others=$(others_on_port)
+  if [ -n "$others" ]; then port_taken "$others"; else echo "The server didn't answer on port $port. What it said is in $logs/server.log." >&2; fi
+  # So it doesn't try again at every login either.
+  stop_server
+  rm -f "$agent"
   exit 1
 fi
 
