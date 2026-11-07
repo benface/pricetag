@@ -21,6 +21,7 @@ struct MacApp: App {
     @State private var siteBridge: SiteBridge
     @State private var purchases: PurchaseTracker
     @State private var notifications: MoneyNotifications
+    @State private var launchAtLogin = LaunchAtLogin()
     @State private var bridgeServer: BridgeServer?
     @State private var firstRun: FirstRun
 
@@ -191,7 +192,7 @@ struct MacApp: App {
         .restorationBehavior(.disabled)
 
         Settings {
-            SettingsView(store: store, notifications: notifications, tab: Bindable(navigation).settingsPane)
+            SettingsView(store: store, notifications: notifications, launchAtLogin: launchAtLogin, tab: Bindable(navigation).settingsPane)
                 .holdsDockPresence()
         }
     }

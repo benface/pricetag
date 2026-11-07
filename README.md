@@ -53,6 +53,7 @@ Patina is a native menu bar app.
 ```sh
 pnpm mac              # builds the app, opens it, and runs the server until you press Ctrl-C
 pnpm mac:build        # only builds it, to macos/build/
+pnpm mac:install      # puts it in ~/Applications, and keeps its server running at every login (--uninstall stops that)
 pnpm check:mac        # the Swift queue's tests, the Swift tests, the app's build, and the shared packages' builds for iOS
 pnpm check:mac:quick  # only the Swift tests, for while you're working
 pnpm check:keychain   # the real Secure Enclave and Keychain, with a throwaway key, from a signed debug build

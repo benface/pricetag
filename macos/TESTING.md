@@ -159,7 +159,7 @@ What each message means, and how a run's processes are cleaned up, is in the hea
 The lock is at `~/Library/Caches/patina-swift-queue/`, outside the repo so that every worktree shares it. Don't delete it: a run waiting on the old file wouldn't see the new one.
 
 Run `pnpm check:swift-queue` whenever you change `swift-queue.sh`, because this lock protects every run on this Mac.
-A full `pnpm check:mac` runs those tests first, and `--quick` skips them.
+A full `pnpm check:mac` runs those tests first, and `--quick` skips them. It also runs `pnpm check:mac-install`, which tests `install.sh` (`pnpm mac:install`) with a stubbed build and launchd, a home of its own and a free port, so it never touches the installed app or this Mac's login agents. Run it whenever you change `install.sh`.
 
 ## Which check to run
 
