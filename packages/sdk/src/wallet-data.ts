@@ -26,6 +26,8 @@ export type WalletData = {
    */
   coverage: { fromBlock: number; toBlock: number }
   legs: PricedLeg[]
+  /** What moved both ways in a transaction and netted to nothing, from `buildLegs`. Only for who sent what. Left out by older servers. */
+  netted?: PricedLeg[]
   references: Reference[]
   prices: LatestPrices
   latest: Head

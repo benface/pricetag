@@ -201,6 +201,9 @@ public struct TaxReportView: View {
             if report.sentCount > 0 {
                 countRow("Sent to other addresses", report.sentCount)
             }
+            if let received = report.receivedCount, received > 0 {
+                countRow("Received, may be income", received)
+            }
             LabeledContent("Total gain") {
                 if let gain = report.gainMicros, let text = report.gainText {
                     LiveNumber(text, tone: Tone(signed: gain))
@@ -287,8 +290,14 @@ public struct TaxReportView: View {
     private func previewSection(_ report: TaxReport) -> some View {
         Section {
             if report.preview.isEmpty {
-                Text(report.year.map { "Nothing to report in \(String($0))." } ?? "Nothing to report.")
-                    .secondaryText()
+                // What was received isn't in the preview, but it's still in the file.
+                if (report.receivedCount ?? 0) > 0 {
+                    Text(report.year.map { "No sales, fees or sends in \(String($0)). The file lists what you received." } ?? "No sales, fees or sends. The file lists what you received.")
+                        .secondaryText()
+                } else {
+                    Text(report.year.map { "Nothing to report in \(String($0))." } ?? "Nothing to report.")
+                        .secondaryText()
+                }
             }
             ForEach(Array(report.preview.enumerated()), id: \.offset) { _, row in
                 previewRow(row, currency: report.currency)

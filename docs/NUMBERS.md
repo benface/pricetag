@@ -284,9 +284,15 @@ The report checks this across the wallets in it, and **only warns**: it marks th
 When the 30 days after haven't all been read yet, it says the loss may turn out to be superficial.
 It can't see a spouse's or a company's wallets, which the rule counts too, and doesn't count something that arrived with no history behind it, like a bridge deposit, as a new purchase, unless an exchange file says when it was bought.
 
+### Received (possibly income)
+
+What arrived from other addresses is listed after the sales as **Received**, with the status `POSSIBLY INCOME` and its worth when it arrived in a **Value when received** column, which is `unknown`, never 0, when there's no price or exchange rate. Pay is income at fair market value in both countries ([ITA s. 52(1)](https://laws-lois.justice.gc.ca/eng/acts/I-3.3/section-52.html), [IRS FAQ Q59](https://www.irs.gov/individuals/international-taxpayers/frequently-asked-questions-on-digital-asset-transactions)), but a gift generally isn't, so a row is never called certain income, and its note names the sender.
+Moves between the report's wallets, what's answered as "mine" or "my exchange", purchases, matched exchange withdrawals, bridges and mints aren't listed. An entered cost or a note doesn't take a row off, since what it cost doesn't say whether it was pay, but the note says that if it was bought, it isn't income.
+A sender's whole credit is listed, even when as much or more of that token left in the same transaction. When it nets to nothing, it comes from the wallet's `netted`, which nothing folds, and its block's exchange rate is read like a leg's.
+Received rows follow the year asked for, but aren't sales, so they're left out of `rowCount`, Form 8949 and Schedule 3, which say they're only in the full report.
+
 ### What it still doesn't do
 
-- It doesn't list what was received, so pay and other income aren't in it.
 - It doesn't adjust a superficial loss, or check the US wash sale rule, which the report says to ask an accountant about.
 - Choosing specific units to sell isn't available.
 - It only knows what reached these wallets. Something that arrived with no history behind it has no date unless an exchange file gives one, and its original cost stays unknown unless an exchange file or an answer gives it. A bridge deposit or a mint is the exception: without either, it's still valued at the market price when it arrived, as an estimate, not what was first paid for it.

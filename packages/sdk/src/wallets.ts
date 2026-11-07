@@ -5,7 +5,7 @@
 
 import { describeError, type Logger } from "./amp.ts"
 import { priceSampleBlocks, timestampOfBlock } from "./chain.ts"
-import { buildPricedLegs, derivePricedRows, isUnwrapClaim, signedAmount, unwrapBalanceBlocks, type GasUnknownTx, type LegRow, type PayoutTx, type PricedRow, type Reference } from "./legs.ts"
+import { buildLegs, derivePricedRows, isUnwrapClaim, signedAmount, unwrapBalanceBlocks, type GasUnknownTx, type LegRow, type PayoutTx, type PricedRow, type Reference } from "./legs.ts"
 import { WalletTooBigError, createRowBudget, rowsThatFit, type RowBudget } from "./memory.ts"
 import type { FeedMarks, MarketMarks, MarketTrade } from "./market.ts"
 import type { TokenActivity } from "./token-market.ts"
@@ -535,11 +535,13 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
       const times = new Map(rows.map((row) => [row.block_num, row.timestamp]))
       return (token: string, block: number) => (use(marketKey({ asset: token, bucket: bucketOf(block) })) ? pricing.tokenPriceAt(token, block, times.get(block) as string) : null)
     }
+    const built = buildLegs({ account: address, rows, references, priced, market: marketAt, tokenPrice: tokenPriceOf(rows) })
     return {
       address,
       mode: source.mode,
       coverage: { fromBlock: wallet.fromBlock, toBlock: wallet.coveredTo },
-      legs: [...(opening ? openingLegs(opening, openedAt) : []), ...buildPricedLegs({ account: address, rows, references, priced, market: marketAt, tokenPrice: tokenPriceOf(rows) })],
+      legs: [...(opening ? openingLegs(opening, openedAt) : []), ...built.legs],
+      ...(built.netted.length > 0 ? { netted: built.netted } : {}),
       references,
       prices: wallet.prices,
       latest: wallet.latest,

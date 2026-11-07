@@ -650,7 +650,16 @@ function isExchangeForToken(net: { token: Token; delta: bigint }, usdMicros: str
  * then labels each leg's price and cost. Gas stays its own leg. Ordered for the fold: by block, then transaction,
  * with gas first because it's paid before the transaction runs.
  */
-export function buildPricedLegs({ account, rows, references, priced, market, tokenPrice }: Input): PricedLeg[] {
+export function buildPricedLegs(input: Input): PricedLeg[] {
+  return buildLegs(input).legs
+}
+
+/**
+ * The legs, and what each transaction moved both ways that netted to nothing, per asset. Those aren't legs, because the
+ * balance didn't change, so nothing folds them. They're only for saying who sent what, as a credit from someone else is
+ * still a receipt when the same transaction sent as much back out. Its delta is 0, and its parts are every row.
+ */
+export function buildLegs({ account, rows, references, priced, market, tokenPrice }: Input): { legs: PricedLeg[]; netted: PricedLeg[] } {
   const me = normalizeAddress(account)
   const refs = new Map(references.map((r) => [r.blockNum, r]))
   const pricedByTx = new Map<string, PricedRow>()
@@ -661,6 +670,7 @@ export function buildPricedLegs({ account, rows, references, priced, market, tok
   const ordered = [...unseen, ...byTx(own.filter((row) => row.kind !== "unseen_eth")).values()].sort((a, b) => a[0]!.block_num - b[0]!.block_num || a[0]!.tx_index - b[0]!.tx_index)
 
   const legs: PricedLeg[] = []
+  const netted: PricedLeg[] = []
   for (const txRows of ordered) {
     const first = txRows[0]!
     const ref = refs.get(first.block_num)
@@ -728,6 +738,27 @@ export function buildPricedLegs({ account, rows, references, priced, market, tok
       nets.set(token.asset, net)
     }
     const moved = [...nets.values()].filter((n) => n.delta !== 0n)
+    for (const net of nets.values()) {
+      if (net.delta !== 0n || !net.parts.some((row) => row.side === "credit" && row.counterparty)) continue
+      const oraclePrice = oracle(net.token)
+      const price = oraclePrice ?? (net.token.oracle ? null : (market?.(net.token.asset, first.block_num) ?? null))
+      netted.push({
+        ...base,
+        id: `${first.tx_hash}:${net.token.asset}`,
+        asset: net.token.asset,
+        delta: "0",
+        decimals: net.token.decimals,
+        kind: "transfer",
+        priceMicros: price,
+        priceSource: price === null ? null : oraclePrice === null ? "market" : "oracle",
+        priceNote: price === null ? (net.token.oracle ? PRICE_NOTES.feedFailed : PRICE_NOTES.noExchange) : null,
+        costMicros: null,
+        proceedsMicros: null,
+        costLabel: "unknown",
+        parts: net.parts.map(partOf),
+        ...unsettled,
+      })
+    }
     // One token out and one in is only a swap if nothing else moved. Otherwise the payment could be for both.
     const { moves: unlistedMoves, unreadable: unlistedUnreadable, nets: unlistedNets } = netUnlisted(unlisted)
     const hasUnlisted = unlistedUnreadable || unlistedMoves.length > 0
@@ -832,5 +863,5 @@ export function buildPricedLegs({ account, rows, references, priced, market, tok
       })
     }
   }
-  return markUnknownOrder(legs)
+  return { legs: markUnknownOrder(legs), netted }
 }

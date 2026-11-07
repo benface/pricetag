@@ -20,13 +20,18 @@
 // That only goes for what the user said came from someone else. A bridge or a mint could be their own money arriving from
 // elsewhere, and CRA's crypto guide doesn't count moving between your own wallets as a disposition, so that keeps what they
 // first paid, which we can't see. Those stay estimates in every country, and the report says why.
+//
+// What was received that may be income, listed apart from the sales: Canada's Income Tax Act s. 52(1) and IRS digital asset
+// FAQs Q59 both value what you're paid at its fair market value when you receive it, and neither treats a gift as the
+// receiver's income. We can't tell pay from a gift, or from the user's own money, so these are only ever "possibly income".
 
 import { assertFoldFits, foldPositions, formatDuration, isAddress, markUnknownOrder, msBetweenBlocks, normalizeAddress, orderMatters, shortHash, timestampOfBlock, unreadAssets, viewWallet, worth, type CostPiece, type CurrencyCode, type KnownTaken, type LegEffect, type Method, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type TaxReportResponse, type WalletResponse } from "./api.ts"
 import { emptyBook, linkedWallets, type Book } from "./book.ts"
 import { csvCell, microsCell, unitsCell } from "./csv.ts"
 import { rateSource } from "./explain.ts"
-import { resolveLegs, withheldIn } from "./resolve.ts"
+import { resolveLegs, withheldIn, type Received } from "./resolve.ts"
+import { knownSender } from "./senders.ts"
 import { taxFormOf } from "./tax-forms.ts"
 import { METHOD_LABELS, withheldSentence } from "./wording.ts"
 
@@ -107,7 +112,7 @@ export const TAX_DISCLAIMER = "Not tax advice. Rules differ by country and chang
 const COMMON_NOTES = [
   "Network fees are their own rows, because paying one in ETH counts as selling that ETH. They aren't added to what you bought or taken off what you sold, which an accountant may want to adjust.",
   "The gain total adds up every row it knows. Realized in the app leaves out a whole asset when any of its sales is unknown, so the two can differ.",
-  "What you received isn't listed. Some of it, like pay or rewards, may be income when it arrives.",
+  "What arrived from other addresses is listed after the sales, as Received, with what it was worth when it arrived. Pay and rewards are generally income at that value, but gifts generally aren't, and neither is your own money moved from somewhere else, so check each one. Moves between the wallets in this report, what you bought, what came off your exchange accounts, and what came through a bridge or was newly created aren't listed.",
   "What arrives from a bridge or is newly created counts at its market price when it arrived, as an estimate. If it was your own, moved from elsewhere, its cost is what you first paid.",
 ]
 
@@ -147,6 +152,26 @@ export type TaxRow = {
 
 /** Part of what a sale took, with its cost and when it was acquired, or null when nothing says. */
 export type Acquired = { qty: string; costMicros: string; at: string | null }
+
+/** Something that arrived from another address, which may be income, like pay or rewards, or may not, like a gift. */
+export type ReceivedRow = {
+  blockNum: number
+  txIndex: number
+  timestamp: string
+  asset: string
+  /** In the token's smallest unit. */
+  amount: string
+  decimals: number
+  /** What it was worth when it arrived. null is unknown, which is never 0. */
+  valueMicros: string | null
+  priceSource: PriceSource | null
+  from: string
+  /** given: the user said it came from someone else. unanswered: nobody has said who sent it. */
+  why: Received["why"]
+  reason: string
+  wallet: string
+  txHash: string
+}
 
 /** superficial: bought again within 30 days and still held after them. maybe: bought again, but the 30 days after aren't all read yet. */
 export type LossRule = "superficial" | "maybe-superficial"
@@ -243,7 +268,7 @@ function rowsOf(effect: LegEffect, wallet: string, unconfirmed: string | null, c
   return rows
 }
 
-type Source = { wallet: WalletResponse; view: WalletView; unconfirmed: Map<string, string>; unread: string[] }
+type Source = { wallet: WalletResponse; view: WalletView; unconfirmed: Map<string, string>; unread: string[]; received?: Received[] }
 
 /** What the chain can't back up in a wallet. Balances only depend on amounts, so this doesn't need the answers. */
 function checksOf(wallet: WalletResponse, view: WalletView, method: Method): Pick<Source, "unconfirmed" | "unread"> {
@@ -271,8 +296,11 @@ function sourcesOf(wallets: readonly WalletResponse[], method: Method, { book = 
   // Working out what each inherits walks every lot, so a fold that can't fit stops here, before any of that.
   const histories = sides.map(({ wallet }) => ({ address: normalizeAddress(wallet.address), legs: wallet.legs }))
   for (const history of histories.slice(0, wallets.length)) assertFoldFits(history, histories.filter((other) => other !== history), method)
-  const { legs } = resolveLegs(sides, method, linking)
-  return sides.slice(0, wallets.length).map((side) => ({ ...side, view: { ...side.view, legs: legs.get(normalizeAddress(side.wallet.address)) as PricedLeg[] } }))
+  const { legs, received } = resolveLegs(sides, method, linking)
+  return sides.slice(0, wallets.length).map((side) => {
+    const address = normalizeAddress(side.wallet.address)
+    return { ...side, view: { ...side.view, legs: legs.get(address) as PricedLeg[] }, received: received.filter((item) => item.wallet === address) }
+  })
 }
 
 const moveKey = (leg: PricedLeg) => `${leg.txHash}:${leg.asset}`
@@ -470,6 +498,50 @@ function rowsFrom(sources: readonly Source[], method: Method, scope: TaxScope, c
   return rows.sort((a, b) => a.blockNum - b.blockNum || a.txIndex - b.txIndex || feeFirst(a) - feeFirst(b))
 }
 
+const NO_VALUE = "There's no price for it from when it arrived, so what it was worth isn't known."
+
+/** Why something received is listed, which is never because it's certainly income. */
+function receivedReason({ sender, why, costEntered }: Received, valued: boolean): string {
+  const known = knownSender(sender)
+  const from = `From ${sender}${known ? ` (${known.name})` : ""}.`
+  const income = "If it was pay or a reward, it's generally income at what it was worth when it arrived."
+  const notes =
+    why === "given"
+      ? [from, "You said it came from someone else.", income, "A gift generally isn't."]
+      : known?.kind === "reward"
+        ? [from, `${known.name} pays rewards, and also returns deposits, and nobody has said which this was.`, income]
+        : known?.kind === "exchange"
+          ? [from, `If it came from your own ${known.name} account, it isn't income, so say so in the app to take it off this list.`, income]
+          : [from, "Nobody has said who sent it. If it was your own, from another wallet or an exchange account, it isn't income, so say so in the app to take it off this list.", income]
+  return [...notes, ...(costEntered ? ["You entered what it cost, so if you bought it, it isn't income."] : []), ...(valued ? [] : [NO_VALUE])].join(" ")
+}
+
+/** What arrived from other addresses that may be income, oldest first. */
+function receivedRowsOf(sources: readonly Source[]): ReceivedRow[] {
+  const rows = sources.flatMap(({ wallet, received = [] }) =>
+    received.map((item): ReceivedRow => {
+      const { leg } = item
+      const valueMicros = leg.priceMicros === null ? null : worth(item.units, BigInt(leg.priceMicros), leg.decimals).toString()
+      return {
+        blockNum: leg.blockNum,
+        txIndex: leg.txIndex,
+        timestamp: leg.timestamp,
+        asset: leg.asset,
+        amount: item.units.toString(),
+        decimals: leg.decimals,
+        valueMicros,
+        priceSource: valueMicros === null ? null : leg.priceSource,
+        from: item.sender,
+        why: item.why,
+        reason: receivedReason(item, valueMicros !== null),
+        wallet: wallet.address,
+        txHash: leg.txHash,
+      }
+    }),
+  )
+  return rows.sort((a, b) => a.blockNum - b.blockNum || a.txIndex - b.txIndex)
+}
+
 /** Every row, oldest first, with a transaction's fee before what it did, the way the fold reads them. */
 export function taxRows(wallets: readonly WalletResponse[], { method, scope, country }: Pick<TaxSettings, "method" | "scope"> & { country?: TaxCountryCode }, context: TaxContext = {}): TaxRow[] {
   return rowsFrom(sourcesOf(wallets, method, context), method, scope, country ? TAX_COUNTRIES[country] : null)
@@ -519,10 +591,13 @@ const money = (micros: string | null) => (micros === null ? "unknown" : microsCe
 
 const STATUS_LABELS: Record<TaxRowStatus, string> = { resolved: "OK", estimated: "ESTIMATED", "self-reported": "SELF-REPORTED", unresolved: "UNKNOWN GAIN" }
 
-const CSV_HEADER = ["Date (UTC)", "Type", "Asset", "Amount", "Proceeds", "Cost", "Gain", "Currency", "Method", "Calculation", "Price source", "Status", "Notes", "Wallet", "Transaction"]
+const CSV_HEADER = ["Date (UTC)", "Type", "Asset", "Amount", "Proceeds", "Cost", "Gain", "Value when received", "Currency", "Method", "Calculation", "Price source", "Status", "Notes", "Wallet", "Transaction"]
 
-/** Notes are rows too, right under the header where they'll be seen, and every row has every column, so the file still parses. */
-export function taxCsv(rows: readonly TaxRow[], notes: readonly string[], { method, scope, currency }: Pick<TaxSettings, "method" | "scope"> & { currency: CurrencyCode }): string {
+/**
+ * Notes are rows too, right under the header where they'll be seen, and every row has every column, so the file still parses.
+ * What was received comes after the sales, fees and sends, since it isn't one of them and has no gain.
+ */
+export function taxCsv(rows: readonly TaxRow[], notes: readonly string[], { method, scope, currency }: Pick<TaxSettings, "method" | "scope"> & { currency: CurrencyCode }, received: readonly ReceivedRow[] = []): string {
   const noteRow = (note: string) => CSV_HEADER.map((column) => (column === "Type" ? "Note" : column === "Notes" ? note : ""))
   const eventRow = (row: TaxRow) => [
     row.timestamp.slice(0, 19).replace("T", " "),
@@ -532,6 +607,7 @@ export function taxCsv(rows: readonly TaxRow[], notes: readonly string[], { meth
     money(row.proceedsMicros),
     money(row.costMicros),
     money(row.gainMicros),
+    "",
     currency,
     METHOD_LABELS[method],
     SCOPE_LABELS[scope],
@@ -541,7 +617,25 @@ export function taxCsv(rows: readonly TaxRow[], notes: readonly string[], { meth
     row.wallet,
     `https://basescan.org/tx/${row.txHash}`,
   ]
-  return `${[CSV_HEADER, ...notes.map(noteRow), ...rows.map(eventRow)].map((cells) => cells.map(csvCell).join(",")).join("\r\n")}\r\n`
+  const receivedRow = (row: ReceivedRow) => [
+    row.timestamp.slice(0, 19).replace("T", " "),
+    "Received",
+    row.asset,
+    unitsCell(row.amount, row.decimals),
+    "",
+    "",
+    "",
+    money(row.valueMicros),
+    currency,
+    "",
+    "",
+    row.priceSource === null ? "None" : PRICE_SOURCE_LABELS[row.priceSource],
+    "POSSIBLY INCOME",
+    row.reason,
+    row.wallet,
+    `https://basescan.org/tx/${row.txHash}`,
+  ]
+  return `${[CSV_HEADER, ...notes.map(noteRow), ...rows.map(eventRow), ...received.map(receivedRow)].map((cells) => cells.map(csvCell).join(",")).join("\r\n")}\r\n`
 }
 
 /**
@@ -560,6 +654,7 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
   const allRows = rowsFrom(sources, method, scope, country)
   if (code === "CA") flagSuperficialLosses(allRows, sources, context.book)
   const rows = year === null ? allRows : allRows.filter((row) => yearOf(row.timestamp) === year)
+  const received = receivedRowsOf(sources).filter((row) => year === null || yearOf(row.timestamp) === year)
   const partialYear = year === null ? null : partialYearNote(year, historyStart(wallets))
   const count = (status: TaxRowStatus) => rows.filter((row) => row.status === status).length
   const unresolved = count("unresolved")
@@ -583,6 +678,7 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
   if (selfReported > 0) warnings.push(`${plural(selfReported, "row")} of ${rows.length.toLocaleString("en-US")} ${selfReported === 1 ? "uses" : "use"} a cost you entered or imported, which the chain can't confirm, so keep your records for it.`)
   if (given > 0) warnings.push(`${plural(given, "row")} of ${rows.length.toLocaleString("en-US")} ${given === 1 ? "uses" : "use"} a market price from when something you said came from someone else arrived. ${country.marketWarning}`)
   if (superficial > 0) warnings.push(`${plural(superficial, "loss", "losses")} may be superficial, because more of the same asset was acquired within 30 days. A superficial loss can't be deducted, so check ${superficial === 1 ? "it" : "them"} before filing.`)
+  if (received.length > 0) warnings.push(`${plural(received.length, "thing")} you received from other addresses may be income, like pay or rewards. The full report lists ${received.length === 1 ? "it" : "them"} as Received, with what ${received.length === 1 ? "it was" : "each was"} worth when ${received.length === 1 ? "it" : "they"} arrived, so check ${received.length === 1 ? "it" : "each one"}.`)
   for (const { wallet, asset } of withheldIn(sources.flatMap(({ view }) => view.legs))) warnings.push(withheldSentence(wallet, asset))
   for (const source of sources) warnings.push(...walletWarnings(source, named))
   if (method !== country.method) warnings.push(country.methodWarning)
@@ -621,6 +717,7 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
     soldCount: events.filter((event) => event.type === "Sold").length,
     feeCount: events.filter((event) => event.type === "Network fee").length,
     sentCount: events.filter((event) => event.type === "Sent").length,
+    receivedCount: received.length,
     unknownCount: events.filter((event) => event.unknown).length,
     unknownWallets: wallets.map((wallet) => wallet.address.toLowerCase()).filter((address) => unknownIn.has(address)),
     unresolvedCount: unresolved,
@@ -632,7 +729,7 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
     notes,
     preview: rows.slice(0, PREVIEW_ROWS).map(({ timestamp, type, asset, amount, decimals, gainMicros, status }) => ({ timestamp, type, asset, amount, decimals, gainMicros, status })),
     filename,
-    csv: taxCsv(rows, [TAX_DISCLAIMER, summary, ...warnings, ...notes], { method, scope, currency }),
+    csv: taxCsv(rows, [TAX_DISCLAIMER, summary, ...warnings, ...notes], { method, scope, currency }, received),
     form: taxFormOf(code, rows, [TAX_DISCLAIMER, summary, ...warnings], filename),
   }
 }

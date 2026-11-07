@@ -112,6 +112,7 @@ const FORM_8949_NOTES = [
   "A sale of units held for different lengths of time is split into a short-term and a long-term line, with its proceeds shared by units. VARIOUS means several purchases.",
   "Dates are in UTC, so a sale late in the day may fall on the next day where you live.",
   "Sends to other addresses aren't sales, so they're only in the full report.",
+  "What you received isn't a sale either, so it's only in the full report. If any of it is income, like pay or rewards, it's reported as income, not on this form.",
 ]
 
 const SCHEDULE_3_HEADER = ["Line", "Number of units and description", "Year of acquisition", "Proceeds of disposition", "Adjusted cost base", "Outlays and expenses", "Gain (or loss)", "Date of disposition (UTC)", "Status", "Notes", "Wallet", "Transaction"]
@@ -120,6 +121,7 @@ const SCHEDULE_3_NOTES = [
   "Lines follow Part 3 of Schedule 3: crypto-assets go on line 7, with total proceeds on line 15200 and the total gain or loss on line 15301.",
   "Network fees are their own lines rather than outlays and expenses, as in the full report, so that column is empty.",
   "Sends to other addresses aren't sales, so they're only in the full report.",
+  "What you received isn't a sale either, so it's only in the full report. If any of it is income, like pay or rewards, it's reported as income, not on this schedule.",
 ]
 
 const statusOf = (row: TaxRow) => ({ resolved: "OK", estimated: "ESTIMATED", "self-reported": "SELF-REPORTED", unresolved: "UNKNOWN GAIN" })[row.status]
