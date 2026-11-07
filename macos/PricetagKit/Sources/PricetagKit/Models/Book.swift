@@ -1,4 +1,4 @@
-// What the user tells the app, and what the server asks them, so it stays on this device.
+// What the server asks the user, and what they answer, which stays on this device.
 
 import Foundation
 

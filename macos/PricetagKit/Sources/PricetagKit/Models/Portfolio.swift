@@ -226,7 +226,7 @@ public enum PnlStatus: String, Codable, Sendable {
 
 public struct PnlPoint: Codable, Sendable, Equatable, Identifiable {
     public let blockNum: Int
-    public let timestamp: String
+    @ParsedTimestamp public var timestamp: String
     public let txHash: String?
     /// nil when nothing is known at this point, which isn't $0.
     public let pnlMicros: String?
@@ -258,34 +258,34 @@ public struct PnlPoint: Codable, Sendable, Equatable, Identifiable {
     var valueEstimated = false
 
     public var id: String { "\(blockNum):\(txHash ?? "latest")" }
-    public var date: Date? { parseTimestamp(timestamp) }
+    public var date: Date? { _timestamp.date }
 }
 
 extension PnlPoint {
+    /// Everything but `valueEstimated`, which never comes from a server.
     private enum CodingKeys: String, CodingKey {
         case blockNum, timestamp, txHash, pnlMicros, excludedCount, summary, valueMicros, valueBeforeMicros, valueExcludedCount, valueContinues, valueRead, assets, counterparty, amount, gain, unknownCost, wallets
     }
+}
 
-    /// A server from before a transaction had facts still sends the rest.
+/// A server's timestamp, with its date worked out once. A chart reads the date of every point each time it draws.
+@propertyWrapper
+public struct ParsedTimestamp: Codable, Sendable, Equatable {
+    public let wrappedValue: String
+    let date: Date?
+
+    public init(wrappedValue: String) {
+        self.wrappedValue = wrappedValue
+        date = parseTimestamp(wrappedValue)
+    }
+
     public init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        blockNum = try container.decode(Int.self, forKey: .blockNum)
-        timestamp = try container.decode(String.self, forKey: .timestamp)
-        txHash = try container.decodeIfPresent(String.self, forKey: .txHash)
-        pnlMicros = try container.decodeIfPresent(String.self, forKey: .pnlMicros)
-        excludedCount = try container.decode(Int.self, forKey: .excludedCount)
-        summary = try container.decodeIfPresent(String.self, forKey: .summary)
-        valueMicros = try container.decodeIfPresent(String.self, forKey: .valueMicros)
-        valueBeforeMicros = try container.decodeIfPresent(String.self, forKey: .valueBeforeMicros)
-        valueExcludedCount = try container.decodeIfPresent(Int.self, forKey: .valueExcludedCount)
-        valueContinues = try container.decodeIfPresent(Bool.self, forKey: .valueContinues)
-        valueRead = try container.decodeIfPresent(Bool.self, forKey: .valueRead)
-        assets = try container.decodeIfPresent([String].self, forKey: .assets) ?? []
-        counterparty = try container.decodeIfPresent(String.self, forKey: .counterparty)
-        amount = try container.decodeIfPresent(TransactionAmount.self, forKey: .amount)
-        gain = try container.decodeIfPresent(TransactionGain.self, forKey: .gain)
-        unknownCost = try container.decodeIfPresent([String].self, forKey: .unknownCost) ?? []
-        wallets = try container.decodeIfPresent([String].self, forKey: .wallets)
+        try self.init(wrappedValue: decoder.singleValueContainer().decode(String.self))
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(wrappedValue)
     }
 }
 

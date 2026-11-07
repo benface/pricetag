@@ -18,11 +18,33 @@ public struct PnlChartView: View {
     let reveal: CGFloat
     /// Which transaction a scene holds the pointer on, since a test can't point at anything.
     let scrubbedIndex: Int?
+    /// Worked out when the chart's given its points, because pointing at it draws it again with the same ones.
+    private let lines: Lines
     /// Which transaction is pointed at. Only its ID, so what's shown for it is always what the points say now, after a refresh or an answer too.
     @State private var hoveredID: String?
     @FocusState private var isFocused: Bool
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// What's in view and the whole line, for the metric showing.
+    private enum Lines {
+        case pnl(PnlSeries, whole: PnlSeries)
+        case value(ValueSeries, whole: ValueSeries)
+
+        var inView: any PlottedSeries {
+            switch self {
+            case .pnl(let series, _): series
+            case .value(let series, _): series
+            }
+        }
+
+        var gaps: [ClosedRange<Date>] {
+            switch self {
+            case .pnl(_, let whole): whole.gaps
+            case .value(_, let whole): whole.gaps
+            }
+        }
+    }
 
     public init(points: [PnlPoint], history: [PnlPoint]? = nil, currency: CurrencyCode, isLive: Bool, metric: ChartMetric = .pnl, reveal: CGFloat = 1, scrubbedIndex: Int? = nil, onSelect: @escaping (String) -> Void) {
         self.points = points
@@ -33,12 +55,23 @@ public struct PnlChartView: View {
         self.reveal = reveal
         self.scrubbedIndex = scrubbedIndex
         self.onSelect = onSelect
+        lines = switch metric {
+        case .value: .value(ValueSeries(points: points), whole: ValueSeries(points: self.history))
+        case .pnl: .pnl(PnlSeries(points: points), whole: PnlSeries(points: self.history))
+        }
     }
 
     private var spokenSummary: String {
-        switch metric {
-        case .value: Spoken.chartSummary(ValueSeries(points: points), currency, isLive: isLive)
-        case .pnl: Spoken.chartSummary(PnlSeries(points: points), currency, isLive: isLive)
+        switch lines {
+        case .value(let series, _): Spoken.chartSummary(series, currency, isLive: isLive)
+        case .pnl(let series, _): Spoken.chartSummary(series, currency, isLive: isLive)
+        }
+    }
+
+    private var moneyTicks: [ChartAxis.MoneyTick] {
+        switch lines {
+        case .value(let series, _): ChartAxis.moneyTicks(series.values, currency, includingZero: false)
+        case .pnl(let series, _): ChartAxis.moneyTicks(series.plotted.compactMap(\.value), currency)
         }
     }
 
@@ -51,25 +84,22 @@ public struct PnlChartView: View {
     }
 
     public var body: some View {
-        let series = PnlSeries(points: points)
-        let drawn = PnlSeries(points: history)
-        let values = ValueSeries(points: points)
-        let drawnValues = ValueSeries(points: history)
-        let lookup: any PlottedSeries = metric == .value ? values : series
+        let lookup = lines.inView
         let hovered = lookup.transaction(id: hoveredID)
-        let moneyTicks = metric == .value ? ChartAxis.moneyTicks(values.values, currency, includingZero: false) : ChartAxis.moneyTicks(series.plotted.compactMap(\.value), currency)
-        let timeAxis = ChartAxis.TimeAxis(dates: series.plotted.map(\.date))
+        let moneyTicks = self.moneyTicks
+        let timeAxis = ChartAxis.TimeAxis(dates: lookup.plotted.map(\.date))
         Chart {
-            ForEach(Array((metric == .value ? drawnValues.gaps : drawn.gaps).enumerated()), id: \.offset) { _, gap in
+            ForEach(Array(lines.gaps.enumerated()), id: \.offset) { _, gap in
                 RectangleMark(xStart: .value("Unknown from", gap.lowerBound), xEnd: .value("Unknown to", gap.upperBound))
                     .foregroundStyle(Color.secondary.opacity(Self.gapOpacity(contrast)))
                     // The summary and the steps say where it's unknown. Each mark on its own would only be a stretch of time.
                     .accessibilityHidden(true)
             }
-            if metric == .value {
-                valueMarks(drawnValues, hovered: hovered, showsEveryDot: values.plotted.count { $0.point.txHash != nil } <= 60)
-            } else {
-                pnlMarks(drawn, hovered: hovered)
+            switch lines {
+            case .value(let series, let whole):
+                valueMarks(whole, hovered: hovered, showsEveryDot: series.plotted.count { $0.point.txHash != nil } <= 60)
+            case .pnl(_, let whole):
+                pnlMarks(whole, hovered: hovered)
             }
             if let hovered {
                 RuleMark(x: .value("Time", hovered.date)).foregroundStyle(Color.secondary.opacity(0.6)).accessibilityHidden(true)
