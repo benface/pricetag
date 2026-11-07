@@ -35,7 +35,7 @@ private extension Rig {
     /// A key made for a purchase whose page has opened, so the provider has its address.
     func startPurchase() async throws {
         _ = try #require(await wallet.createOneUseKey())
-        wallet.purchaseChanged(tracked(nil), wallet: oneUseAddress.lowercased)
+        try wallet.purchaseChanged(tracked(nil), wallet: oneUseAddress.lowercased)
     }
 
     /// An empty key, read enough times, with its history read, to be retired if anything allows it.
@@ -114,7 +114,7 @@ private extension Rig {
         #expect(await rig.signer.hasKey(oneUseAddress), "until its order says it's delivered, more could come")
         #expect(rig.wallet.oneUseHolds[oneUseAddress] == .waitingForPurchase)
 
-        rig.wallet.purchaseChanged(tracked(.succeeded), wallet: oneUseAddress.lowercased)
+        try rig.wallet.purchaseChanged(tracked(.succeeded), wallet: oneUseAddress.lowercased)
         #expect(rig.stateStore.saved.oneUseKeys?.first?.delivery == .delivered(block: 1000))
         await rig.wallet.tick()
         await rig.wallet.readOneUseHistory()
@@ -323,7 +323,7 @@ private extension Rig {
         await rig.chain.confirmAll()
         await rig.chain.set(snapshot(eth: dust, nonce: 1), for: oneUseAddress)
         // Still pending: the provider hasn't said it's done.
-        rig.wallet.purchaseChanged(tracked(.pending), wallet: oneUseAddress.lowercased)
+        try rig.wallet.purchaseChanged(tracked(.pending), wallet: oneUseAddress.lowercased)
         await rig.readEmptyUntilRetirable()
         #expect(await rig.signer.hasKey(oneUseAddress))
     }
@@ -345,7 +345,7 @@ private extension Rig {
         await rig.wallet.tick()
         try await rig.startPurchase()
         await rig.chain.set(snapshot(eth: 0), for: oneUseAddress)
-        rig.wallet.purchaseChanged(tracked(.succeeded, block: 5000), wallet: oneUseAddress.lowercased)
+        try rig.wallet.purchaseChanged(tracked(.succeeded, block: 5000), wallet: oneUseAddress.lowercased)
         await rig.readEmptyUntilRetirable()
         #expect(await rig.signer.hasKey(oneUseAddress), "the node hasn't seen the block it was delivered in")
     }
@@ -355,7 +355,7 @@ private extension Rig {
         await rig.wallet.tick()
         try await rig.startPurchase()
         await rig.chain.set(snapshot(eth: 0), for: oneUseAddress)
-        rig.wallet.purchaseChanged(tracked(.failed), wallet: oneUseAddress.lowercased)
+        try rig.wallet.purchaseChanged(tracked(.failed), wallet: oneUseAddress.lowercased)
         await rig.readEmptyUntilRetirable()
         #expect(await rig.signer.hasKey(oneUseAddress) == false)
         #expect(rig.wallet.oneUseKeys.isEmpty)
@@ -368,18 +368,18 @@ private extension Rig {
         try await rig.startPurchase()
         #expect(rig.wallet.oneUseKeys.first?.delivery == .expected)
         // Someone saying they didn't buy it goes back to the wait for a page nobody paid on, from when the key was made.
-        rig.wallet.purchaseChanged(nil, wallet: oneUseAddress.lowercased)
+        try rig.wallet.purchaseChanged(nil, wallet: oneUseAddress.lowercased)
         #expect(rig.wallet.oneUseKeys.first?.delivery == .notStarted)
-        rig.wallet.purchaseChanged(tracked(.pending), wallet: oneUseAddress.lowercased)
+        try rig.wallet.purchaseChanged(tracked(.pending), wallet: oneUseAddress.lowercased)
         #expect(rig.wallet.oneUseKeys.first?.delivery == .ordered)
         // Once there's an order, nil can't undo it, whatever sends it.
-        rig.wallet.purchaseChanged(nil, wallet: oneUseAddress.lowercased)
+        try rig.wallet.purchaseChanged(nil, wallet: oneUseAddress.lowercased)
         #expect(rig.wallet.oneUseKeys.first?.delivery == .ordered)
-        rig.wallet.purchaseChanged(tracked(.succeeded), wallet: oneUseAddress.lowercased)
+        try rig.wallet.purchaseChanged(tracked(.succeeded), wallet: oneUseAddress.lowercased)
         #expect(rig.wallet.oneUseKeys.first?.delivery == .delivered(block: 1000))
         // Dismissing a delivered one, or reading an older answer, changes nothing.
-        rig.wallet.purchaseChanged(nil, wallet: oneUseAddress.lowercased)
-        rig.wallet.purchaseChanged(tracked(.pending), wallet: oneUseAddress.lowercased)
+        try rig.wallet.purchaseChanged(nil, wallet: oneUseAddress.lowercased)
+        try rig.wallet.purchaseChanged(tracked(.pending), wallet: oneUseAddress.lowercased)
         #expect(rig.wallet.oneUseKeys.first?.delivery == .delivered(block: 1000))
         #expect(rig.stateStore.saved.oneUseKeys?.first?.delivery == .delivered(block: 1000))
     }
@@ -417,8 +417,8 @@ private extension Rig {
         let portfolios = ScriptedPortfolios(.success(keyHistory))
         let tracker = PurchaseTracker(store: PortfolioStore(defaults: defaults, makeSource: { _ in portfolios }), defaults: defaults, now: { clock.now }, matchOf: { _ in .waiting })
         // As MacApp wires it: every tracked purchase at launch, then each change.
-        for row in tracker.purchases { wallet.purchaseChanged(row, wallet: row.wallet) }
-        tracker.onChange = { wallet.purchaseChanged($1, wallet: $0) }
+        for row in tracker.purchases { try wallet.purchaseChanged(row, wallet: row.wallet) }
+        tracker.onChange = { try wallet.purchaseChanged($1, wallet: $0) }
         clock.advance(3 * 60 * 60)
         let phase = tracker.phase(of: purchase)
         #expect(phase == (costKnown ? .costUnknown : .costNotSaid))
@@ -449,7 +449,7 @@ private extension Rig {
         await rig.wallet.tick()
         try await rig.startPurchase()
         rig.stateStore.failSaves(with: CocoaError(.fileWriteNoPermission))
-        rig.wallet.purchaseChanged(tracked(.failed), wallet: oneUseAddress.lowercased)
+        #expect(throws: RecordsNotSaved.self) { try rig.wallet.purchaseChanged(tracked(.failed), wallet: oneUseAddress.lowercased) }
         #expect(rig.wallet.oneUseKeys.first?.delivery == .expected)
     }
 

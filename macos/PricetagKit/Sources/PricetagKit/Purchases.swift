@@ -121,6 +121,8 @@ public enum PurchaseWording {
     /// The one thing the flow says about who the provider is, along with where its page is.
     public static let provider = "Coinbase"
     static let providerHosts: Set<String> = ["pay.coinbase.com"]
+    /// A one-use address could lose track of what's coming to it, so the row stays until this Mac can save again.
+    public static let cantForgetYet = "This purchase can't be hidden yet, because this Mac can't save right now. Check that it has free disk space, then try again."
 
     /// What the order says once it says, because the amount can be changed on the page. Until then, what was chosen.
     public static func title(_ purchase: TrackedPurchase, beside main: CurrencyCode) -> String {
@@ -183,7 +185,8 @@ public final class PurchaseTracker {
     /// Told when a purchase starts, when its order changes, and when someone dismisses it. Nil only means someone said they didn't buy
     /// it, from a page with no order. Hiding a row with an order sends that order again, since its delivery may still be coming, or its
     /// block unknown. It's after the change is saved, so whatever holds the address it went to can tell when nothing more is coming.
-    @ObservationIgnored public var onChange: (@MainActor (_ wallet: String, _ purchase: TrackedPurchase?) -> Void)?
+    /// It throws when it couldn't write that down. Then no page opens, and a dismissed row stays, so it's told again at the next launch.
+    @ObservationIgnored public var onChange: (@MainActor (_ wallet: String, _ purchase: TrackedPurchase?) throws -> Void)?
 
     @ObservationIgnored private let store: PortfolioStore
     @ObservationIgnored private let defaults: UserDefaults
@@ -252,7 +255,14 @@ public final class PurchaseTracker {
         let purchase = TrackedPurchase(ref: checkout.ref, wallet: wallet.lowercased(), asset: asset, dollars: dollars, typed: typed, startedAt: now())
         purchases.append(purchase)
         save()
-        onChange?(purchase.wallet, purchase)
+        do {
+            // Before the page opens: what holds the address has to know a purchase may be coming, even after a restart.
+            try onChange?(purchase.wallet, purchase)
+        } catch {
+            purchases.removeAll { $0.ref == purchase.ref }
+            save()
+            throw error
+        }
         start()
         return page
     }
@@ -288,7 +298,8 @@ public final class PurchaseTracker {
                 if purchases[index].order != order {
                     purchases[index].order = order
                     save()
-                    onChange?(purchases[index].wallet, purchases[index])
+                    // If it isn't written down, it's still tracked here, and told again at the next launch.
+                    try? onChange?(purchases[index].wallet, purchases[index])
                 }
                 if let recorded = order.purchase { store.recordPurchase(recorded) }
                 if isResolved(purchases[index]) { justFinished.insert(purchase.ref) }
@@ -302,12 +313,18 @@ public final class PurchaseTracker {
     }
 
     /// Someone who's left the page without paying says so, or hides a finished row. Only the first says nothing was bought.
+    /// It's only forgotten once whatever holds its address has written that down. Otherwise it stays, and `problem` says why.
     public func dismiss(_ purchase: TrackedPurchase) {
         // What's tracked now, not the row's copy, which may be from before its order turned up.
         let current = purchases.first { $0.ref == purchase.ref } ?? purchase
+        do {
+            try onChange?(current.wallet, current.order == nil ? nil : current)
+        } catch {
+            problem = PurchaseWording.cantForgetYet
+            return
+        }
         purchases.removeAll { $0.ref == purchase.ref }
         save()
-        onChange?(current.wallet, current.order == nil ? nil : current)
     }
 
     /// Whether there's nothing more to learn about it. How long it's been never settles this: an order can appear after any wait, and so can a delivery's block.

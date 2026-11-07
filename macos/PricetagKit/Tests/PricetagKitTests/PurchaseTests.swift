@@ -180,6 +180,27 @@ struct PurchaseTrackerTests {
         #expect(told.last! == nil, "I Didn't Buy It, from a page with no order")
     }
 
+    /// What holds the address has to have written the purchase down: without that, no page opens, and a dismissed row stays.
+    @Test func nothingOpensOrIsForgottenUntilItsWrittenDown() async throws {
+        struct CantSave: Error {}
+        let (tracker, _, _, _) = setup()
+        var fails = true
+        tracker.onChange = { _, _ in if fails { throw CantSave() } }
+        await #expect(throws: CantSave.self) { _ = try await tracker.begin(wallet: wallet, asset: "ETH", dollars: 25, cryptoAmount: "0.008") }
+        #expect(tracker.purchases.isEmpty)
+
+        fails = false
+        _ = try await tracker.begin(wallet: wallet, asset: "ETH", dollars: 25, cryptoAmount: "0.008")
+        let row = try #require(tracker.purchases.first)
+        fails = true
+        tracker.dismiss(row)
+        #expect(tracker.purchases.count == 1)
+        #expect(tracker.problem == PurchaseWording.cantForgetYet)
+        fails = false
+        tracker.dismiss(row)
+        #expect(tracker.purchases.isEmpty)
+    }
+
     @Test func recordsNoCostUntilAnOrderSaysAllOfIt() {
         #expect(delivered(cost: nil).purchase == nil, "Nothing said what it cost")
         #expect(delivered(cost: nil, usd: "25810000").purchase?.cost == paid, "Its USD total is still what it cost")

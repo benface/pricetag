@@ -193,6 +193,8 @@ struct BuySheet: View {
             openURL(page)
             started()
             dismiss()
+        } catch is RecordsNotSaved {
+            failure = HotWalletWording.cantSaveRecords
         } catch {
             failure = failureMessage(for: error)
         }

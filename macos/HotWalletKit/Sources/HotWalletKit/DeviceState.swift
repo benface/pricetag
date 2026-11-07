@@ -177,7 +177,8 @@ public struct DeviceWalletState: Codable, Equatable, Sendable {
 }
 
 /// The real failure can name a local file, so nothing past here gets to repeat it.
-struct RecordsNotSaved: Error {}
+/// The device records couldn't be written. Public so the app can word it, since it's this Mac's problem and not the server's.
+public struct RecordsNotSaved: Error {}
 
 public protocol DeviceStateStore: Sendable {
     func load() throws -> DeviceWalletState

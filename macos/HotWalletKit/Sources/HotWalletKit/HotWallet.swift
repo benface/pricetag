@@ -693,18 +693,26 @@ public final class HotWallet {
     /// Nil is someone saying they didn't buy it, which `PurchaseTracker` only sends for a page with no order. Only moves forward, except
     /// that nil takes a page with no order back to waiting a while. Once there's an order, nil changes nothing, so a key is only deleted
     /// once its order says nothing more is coming, or nobody could have paid for a long time.
-    public func purchaseChanged(_ purchase: TrackedPurchase?, wallet: String) {
+    /// Throws when the change couldn't be written down. The tracker then opens no page, and keeps a dismissed row so it can tell this
+    /// again at launch: otherwise a restart would read the key as never having had a purchase, and could let it go.
+    public func purchaseChanged(_ purchase: TrackedPurchase?, wallet: String) throws {
         guard let index = state.oneUseKeys?.firstIndex(where: { $0.address.lowercased == wallet.lowercased() }), let key = state.oneUseKeys?[index] else { return }
         let new = Self.delivery(of: purchase)
         let old = key.delivery ?? .expected
-        guard new != old, Self.rank(new) > Self.rank(old) || (new == .notStarted && old == .expected) else { return }
-        if new == .expected || new == .ordered {
-            // Keeping it is always safe, so that's true now, even if it can't be written down yet.
+        guard new != old, Self.rank(new) > Self.rank(old) || (new == .notStarted && old == .expected) else {
+            // Nothing new, but what's here may not be on disk yet, like an order from a read whose save failed. The tracker only forgets
+            // a purchase once this returns, so it has to be.
+            if hasUnsavedRecords { try persist() }
+            return
+        }
+        if new == .ordered {
+            // Someone may have paid, so keeping it is true now, even if it can't be written down yet. Each tick tries again.
             state.oneUseKeys?[index].delivery = new
-            persistOrSayWhy()
+            try persist()
         } else {
-            // Anything that lets it go only counts once it's on disk. If that fails, it waits for the next change, or the next launch.
-            try? save { $0.oneUseKeys?[index].delivery = new }
+            // A page about to open only opens once this is on disk, so if it isn't, nothing's coming and nothing changes. Anything that
+            // lets the key go only counts once it's on disk too.
+            try save { $0.oneUseKeys?[index].delivery = new }
         }
     }
 
