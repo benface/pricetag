@@ -21,7 +21,7 @@
 // elsewhere, and CRA's crypto guide doesn't count moving between your own wallets as a disposition, so that keeps what they
 // first paid, which we can't see. Those stay estimates in every country, and the report says why.
 
-import { applyLegTaking, assertFoldFits, foldPositions, formatDuration, isAddress, lotsSplitBy, markUnknownOrder, msBetweenBlocks, normalizeAddress, orderMatters, shortHash, timestampOfBlock, unreadAssets, viewWallet, worth, type CurrencyCode, type LegEffect, type Lot, type Method, type PositionState, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
+import { applyLegTaking, assertFoldFits, foldPositions, formatDuration, isAddress, lotsSplitBy, markUnknownOrder, msBetweenBlocks, normalizeAddress, orderMatters, shortHash, timestampOfBlock, unreadAssets, viewWallet, worth, type CostPiece, type CurrencyCode, type LegEffect, type Lot, type Method, type PositionState, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type TaxReportResponse, type WalletResponse } from "./api.ts"
 import { emptyBook, linkedWallets, type Book } from "./book.ts"
 import { csvCell, microsCell, unitsCell } from "./csv.ts"
@@ -70,7 +70,7 @@ export const TAX_COUNTRIES: Record<TaxCountryCode, TaxCountry> = {
     marketRowNote: "Part of its cost is what it was worth when it arrived, which is generally the cost of what you're paid or given in Canada.",
     marketWarning: "In Canada, that's generally the cost of what you're paid or given.",
     notes: [
-      "A loss can be denied if the same asset is acquired within 30 days before or after selling it, and still held 30 days after (a superficial loss). This report flags those it finds in these wallets, but can't see a spouse's or a company you control, which count too. It doesn't change any amount.",
+      "A loss can be denied if the same asset is acquired within 30 days before or after selling it, and still held 30 days after (a superficial loss). This report flags those it finds in these wallets, but can't see a spouse's or a company you control, which count too, or when something that arrived from elsewhere was bought unless an exchange file says. It doesn't change any amount.",
       "Every gain here is shown in full, as if it's capital. Canada generally taxes half of a capital gain, and frequent trading can count as business income instead.",
     ],
   },
@@ -187,14 +187,16 @@ function knownOf(state: PositionState, leavingOut: readonly Lot[] = []) {
 /**
  * The pieces of known cost a debit took, oldest first, with each one's date: an exchange's purchase date when there is one,
  * since that's when it was bought, and otherwise when it reached a wallet, which an inherited piece keeps from the wallet
- * that sent it. Only oldest first keeps pieces apart, and only when they add up to the cost the row shows.
+ * that sent it. When it reached a wallet is only its date if it was acquired then. An opening balance, or something that
+ * arrived with a cost someone entered and no purchase date, has none, which the fold marks as `undated`. Only oldest first
+ * keeps pieces apart, and only when they add up to the cost the row shows.
  */
 function acquiredOf({ leg, before }: LegEffect, knownCost: bigint, knownQty: bigint): Acquired[] | null {
   if (before.method !== "fifo" || knownQty <= 0n) return null
   const known = applyLegTaking(before, leg).taken.filter((piece) => piece.costMicros !== null)
   const sum = (field: "qty" | "costMicros") => known.reduce((total, piece) => total + BigInt(piece[field] as string), 0n)
   if (sum("costMicros") !== knownCost || sum("qty") !== knownQty) return null
-  return known.map((piece) => ({ qty: piece.qty, costMicros: piece.costMicros as string, at: piece.boughtAt ?? piece.acquiredAt ?? null }))
+  return known.map((piece) => ({ qty: piece.qty, costMicros: piece.costMicros as string, at: piece.undated ? null : piece.boughtAt || piece.acquiredAt || null }))
 }
 
 /** The rows a debit becomes: a sale with both a known and an unknown cost splits, so the known part still adds up. */
@@ -359,6 +361,19 @@ const DAY_MS = 86_400_000
 /** A UTC date, `days` from this time's, as YYYY-MM-DD, which sorts as text. */
 const dayOf = (timestamp: string, days = 0) => new Date(Date.parse(timestamp.slice(0, 10)) + days * DAY_MS).toISOString().slice(0, 10)
 
+/**
+ * When what a credit brought was acquired, as far as anything says: when it was bought here, paid for on its way in or received,
+ * the dates an exchange gives for what it withdrew, or when another of the user's wallets acquired it. Something that arrived from elsewhere with no such date says nothing, and an
+ * opening balance was already held, so neither is evidence of acquiring more.
+ */
+function acquisitionDates(leg: PricedLeg): string[] {
+  const here = !leg.opening && (leg.kind === "swap" || leg.costLabel === "paid" || leg.costLabel === "received at market")
+  if (!leg.pieces) return here ? [leg.timestamp] : []
+  // A piece from another of the user's wallets keeps when it was first acquired there, if anything says.
+  const dateOf = (piece: CostPiece) => piece.boughtAt || (piece.acquiredAt && !piece.undated ? piece.acquiredAt : null) || (!leg.opening && (leg.kind === "swap" || piece.label === "paid" || piece.label === "received at market") ? leg.timestamp : null)
+  return leg.pieces.map(dateOf).filter((at) => at !== null)
+}
+
 const SUPERFICIAL = "More of it was acquired within 30 days of this loss, and some was still held 30 days after, so this may be a superficial loss, which can't be deducted. It's usually added to the cost of what was acquired instead."
 const MAYBE_SUPERFICIAL = "More of it was acquired within 30 days of this loss, and the 30 days after haven't all been read yet, so this may turn out to be a superficial loss."
 
@@ -367,15 +382,20 @@ const MAYBE_SUPERFICIAL = "More of it was acquired within 30 days of this loss, 
  * 30 calendar days before or after the sale, and is still held 30 calendar days after it. This only sees the wallets in the
  * report, not a spouse's or a company's, which the rule also counts. It flags rows and changes no amount.
  */
-export function flagSuperficialLosses(rows: TaxRow[], sources: readonly Pick<Source, "wallet" | "view">[]): void {
+export function flagSuperficialLosses(rows: TaxRow[], sources: readonly Pick<Source, "wallet" | "view">[], book: Book = emptyBook()): void {
   const moves = movesBetween(sources)
   const legs = sources.flatMap(({ view }) => view.legs)
+  // What an exchange file says was bought there and later withdrawn. Buying it there is acquiring it, whenever it's withdrawn, and
+  // whichever method the report uses, which decides whether the wallet's legs carry those dates.
+  const exchangeBuys = book.withdrawals.flatMap(({ asset, fifoLots }) => (fifoLots ?? []).flatMap(({ at }) => (at ? [{ asset, at }] : [])))
   // The last moment every wallet has been read through, since a balance after that could still change.
   const readThrough = sources.map(({ wallet }) => timestampOfBlock(wallet.coverage.toBlock, wallet.latest)).reduce((a, b) => (a < b ? a : b))
   for (const row of rows) {
     if (row.gainMicros === null || BigInt(row.gainMicros) >= 0n || row.type === "Sent") continue
     const [from, to] = [dayOf(row.timestamp, -30), dayOf(row.timestamp, 30)]
-    const acquiredAgain = legs.some((leg) => leg.asset === row.asset && BigInt(leg.delta) > 0n && !leg.opening && leg.txHash !== row.txHash && !isMove(leg, moves) && dayOf(leg.timestamp) >= from && dayOf(leg.timestamp) <= to)
+    const within = (at: string) => dayOf(at) >= from && dayOf(at) <= to
+    const acquiredAgain =
+      legs.some((leg) => leg.asset === row.asset && BigInt(leg.delta) > 0n && leg.txHash !== row.txHash && !isMove(leg, moves) && acquisitionDates(leg).some(within)) || exchangeBuys.some((buy) => buy.asset === row.asset && within(buy.at))
     if (!acquiredAgain) continue
     // Held at the end of the 30th day, across every wallet here. Moves between them add up to nothing.
     const end = `${to}T23:59:59.999Z`
@@ -557,7 +577,7 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
   const years = yearsOf(wallets)
   const year = settings.year === "latest" ? (years[0] ?? null) : settings.year === "all" || settings.year === undefined ? null : settings.year
   const allRows = rowsFrom(sources, method, scope, country)
-  if (code === "CA") flagSuperficialLosses(allRows, sources)
+  if (code === "CA") flagSuperficialLosses(allRows, sources, context.book)
   const rows = year === null ? allRows : allRows.filter((row) => yearOf(row.timestamp) === year)
   const partialYear = year === null ? null : partialYearNote(year, historyStart(wallets))
   const count = (status: TaxRowStatus) => rows.filter((row) => row.status === status).length

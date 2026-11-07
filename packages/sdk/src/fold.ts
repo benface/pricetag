@@ -44,6 +44,8 @@ export type FoldLeg = {
   orderUnknown?: "always" | "fifo"
   blockNum?: number
   timestamp?: string
+  /** What the wallet already held before the first block read. It isn't a transaction, so its moment isn't when any of it was acquired. */
+  opening?: boolean
 }
 
 /** Part of a cost, how many units it paid for, and the block it was paid at. */
@@ -68,6 +70,11 @@ export type CostPiece = {
   unconfirmedBy?: string[]
   acquiredBlock?: number
   acquiredAt?: string
+  /**
+   * `acquiredAt` is only when it reached a wallet, and nothing says when it was acquired: an opening balance, or something that
+   * arrived from elsewhere with a cost someone entered. It still goes by that moment among the rest. Only on a known cost.
+   */
+  undated?: true
   /** What an average mixed together, paid at different moments. Missing means all of it at `acquiredBlock`. */
   paidAt?: PaidAt[]
   /** Its cost is only known for all of it, so part of it has no known cost, and neither does the rest. */
@@ -101,6 +108,8 @@ export type Lot = {
   /** When these units were first acquired, which an inherited lot keeps from the wallet that sent it. */
   acquiredBlock?: number
   acquiredAt?: string
+  /** `acquiredAt` is only when it reached a wallet, and nothing says when it was acquired. Only on a known cost. */
+  undated?: true
   /** When a position tracks it: what this lot mixes together. Missing means all of it at `acquiredBlock`. */
   paidAt?: PaidAt[]
   /**
@@ -251,6 +260,7 @@ function lotOf({ tracksPaidAt }: PositionState, piece: CostPiece, legId: string)
     ...(known && piece.purchaseSource ? { purchaseSource: piece.purchaseSource, ...(piece.purchasePartly ? { purchasePartly: true as const } : {}) } : {}),
     ...unconfirmed(known ? [] : piece.unconfirmedBy),
     ...(piece.acquiredBlock === undefined ? {} : { acquiredBlock: piece.acquiredBlock, acquiredAt: piece.acquiredAt as string }),
+    ...(known && piece.undated ? { undated: true as const } : {}),
     // Otherwise every leg's state would keep a copy of it, and the leg already has it for whoever needs it.
     ...(tracksPaidAt && known && piece.paidAt ? { paidAt: piece.paidAt } : {}),
     ...ranking(piece),
@@ -296,6 +306,7 @@ function addLot({ method, tracksPaidAt }: PositionState, lots: readonly Lot[], l
     ...(pool.purchaseSource || lot.purchaseSource ? { purchaseSource: (pool.purchaseSource ?? lot.purchaseSource) as string, ...(pool.purchaseSource !== lot.purchaseSource || pool.purchasePartly || lot.purchasePartly ? { purchasePartly: true as const } : {}) } : {}),
     ...unconfirmed(pool.unconfirmedBy, lot.unconfirmedBy),
     ...(acquired.acquiredBlock === undefined ? {} : { acquiredBlock: acquired.acquiredBlock, acquiredAt: acquired.acquiredAt as string }),
+    ...(known && acquired.undated ? { undated: true as const } : {}),
     ...(paidAt ? { paidAt } : {}),
     ...(pool.unanswerable && lot.unanswerable ? { unanswerable: true as const } : {}),
   }
@@ -311,8 +322,12 @@ function credit(state: PositionState, leg: FoldLeg, qty: bigint): Lot[] {
   const parts: readonly (Pick<CostPiece, "qty" | "wholeCostOnly" | "boughtAt" | "boughtIn">)[] = leg.pieces ?? [{ qty: qty.toString() }]
   if (orderMatters(leg, state.method)) return parts.reduce<Lot[]>((lots, piece) => addLot(state, lots, lotOf(state, { qty: piece.qty, costMicros: null, label: "unknown", estimatedCostMicros: "0", unanswerable: true, ...dated, ...ranking(piece) }, leg.id)), state.lots)
   const estimated = (leg.estimated || leg.costLabel === "received at market") && leg.costMicros !== null ? leg.costMicros : "0"
-  // A piece with its own date got it from the wallet that first acquired it. Any other was acquired here and now.
-  const pieces = leg.pieces?.map((piece) => ({ ...dated, ...piece })) ?? [{ qty: qty.toString(), costMicros: leg.costMicros, label: leg.costLabel, estimatedCostMicros: estimated, ...(leg.purchaseSource ? { purchaseSource: leg.purchaseSource } : {}), ...dated }]
+  // A piece with its own date got it from the wallet that first acquired it. Any other reached a wallet here and now, which is
+  // when it was acquired if it was bought here, paid for on its way in, or received as itself. Anything else arrived from
+  // somewhere that knows when it was acquired, or was already held, so its moment here says when it arrived, not more.
+  const undated = (label: CostLabel, boughtAt: string | undefined) => !boughtAt && (leg.opening || !(leg.kind === "swap" || label === "paid" || label === "received at market"))
+  const own = (piece: CostPiece): CostPiece => ({ ...dated, ...piece, ...(piece.acquiredBlock === undefined && leg.blockNum !== undefined && undated(piece.label, piece.boughtAt) ? { undated: true as const } : {}) })
+  const pieces = leg.pieces?.map(own) ?? [own({ qty: qty.toString(), costMicros: leg.costMicros, label: leg.costLabel, estimatedCostMicros: estimated, ...(leg.purchaseSource ? { purchaseSource: leg.purchaseSource } : {}) })]
   return pieces.reduce<Lot[]>((lots, piece) => addLot(state, lots, lotOf(state, piece, leg.id)), state.lots)
 }
 
@@ -457,6 +472,7 @@ function take(state: PositionState, qty: bigint): Taken {
       ...(lot.costMicros !== null && lot.purchaseSource ? { purchaseSource: lot.purchaseSource, ...(lot.purchasePartly ? { purchasePartly: true as const } : {}) } : {}),
       ...unconfirmed(lot.unconfirmedBy),
       ...(lot.acquiredBlock === undefined ? {} : { acquiredBlock: lot.acquiredBlock, acquiredAt: lot.acquiredAt as string }),
+      ...(lot.costMicros !== null && lot.undated ? { undated: true as const } : {}),
       ...(paidAt ? { paidAt } : {}),
       ...ranking(lot),
       ...(lot.unanswerable ? { unanswerable: true as const } : {}),

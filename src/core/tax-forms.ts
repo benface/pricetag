@@ -28,13 +28,15 @@ const dateOf = (timestamp: string) => timestamp.slice(0, 10)
 
 /**
  * Whether something held from `acquired` to `sold` was held more than a year: counting starts the day after it was acquired and
- * includes the day it was sold, so it's long-term from the day after its first anniversary. One acquired on February 29 has its
- * anniversary on March 1, which only ever makes a gain short-term a day longer.
+ * includes the day it was sold, so the year is up on its first anniversary, and it's long-term from the day after. One acquired on
+ * February 29 starts counting on March 1, so its year is up on February 28, and it's long-term from March 1.
  */
 export function termOf(acquired: string | null, sold: string): Term {
   if (acquired === null) return "unknown"
-  const day = new Date(`${dateOf(acquired)}T00:00:00.000Z`)
-  const anniversary = new Date(Date.UTC(day.getUTCFullYear() + 1, day.getUTCMonth(), day.getUTCDate())).toISOString().slice(0, 10)
+  const [year, month, day] = dateOf(acquired).split("-").map(Number) as [number, number, number]
+  // The same day a year later, or the last day of that month when it has no such day.
+  const lastDay = new Date(Date.UTC(year + 1, month, 0)).getUTCDate()
+  const anniversary = `${year + 1}-${String(month).padStart(2, "0")}-${String(Math.min(day, lastDay)).padStart(2, "0")}`
   return dateOf(sold) > anniversary ? "long" : "short"
 }
 
@@ -81,14 +83,21 @@ const usDate = (date: string) => `${date.slice(5, 7)}/${date.slice(8, 10)}/${dat
 
 const toCsv = (cells: string[][]) => `${cells.map((line) => line.map(csvCell).join(",")).join("\r\n")}\r\n`
 
-/** The total of the lines whose amounts are all known, and how many it leaves out. */
+/**
+ * The total of the lines whose amounts are all known, and how many it leaves out. With lines and none of them known, there's no
+ * total at all: adding up nothing would say $0, which nothing here says.
+ */
 function totalOf(lines: readonly Line[]) {
   const known = lines.filter((line) => line.proceeds !== null && line.cost !== null && line.gain !== null)
-  const sum = (field: "proceeds" | "cost" | "gain") => known.reduce((total, line) => total + (line[field] as bigint), 0n)
+  const sum = (field: "proceeds" | "cost" | "gain") => (known.length === 0 && lines.length > 0 ? null : known.reduce((total, line) => total + (line[field] as bigint), 0n))
   return { proceeds: sum("proceeds"), cost: sum("cost"), gain: sum("gain"), counted: known.length, left: lines.length - known.length }
 }
 
-const leftOut = (left: number) => (left === 0 ? "" : `Leaves out ${left} ${left === 1 ? "line" : "lines"} with an unknown amount, which ${left === 1 ? "has" : "have"} to be worked out first.`)
+function leftOut({ counted, left }: { counted: number; left: number }): string {
+  if (left === 0) return ""
+  if (counted === 0) return `There's no total yet, because ${left === 1 ? "this line has" : `all ${left} lines have`} an unknown amount, which ${left === 1 ? "has" : "have"} to be worked out first.`
+  return `Leaves out ${left} ${left === 1 ? "line" : "lines"} with an unknown amount, which ${left === 1 ? "has" : "have"} to be worked out first.`
+}
 
 const FORM_8949_HEADER = ["Part", "Box", "(a) Description of property", "(b) Date acquired", "(c) Date sold or disposed of", "(d) Proceeds", "(e) Cost or other basis", "(f) Code", "(g) Amount of adjustment", "(h) Gain or (loss)", "Status", "Notes", "Wallet", "Transaction"]
 
@@ -130,7 +139,7 @@ function form8949(rows: readonly TaxRow[], notes: readonly string[]): string {
     // Lines whose holding period isn't known can't be added to either part.
     if (term === "unknown") continue
     const total = totalOf(part)
-    out.push([name, box, "Total", "", "", money(total.proceeds), money(total.cost), "", "", money(total.gain), "", leftOut(total.left), "", ""])
+    out.push([name, box, "Total", "", "", money(total.proceeds), money(total.cost), "", "", money(total.gain), "", leftOut(total), "", ""])
   }
   return toCsv(out)
 }
@@ -146,7 +155,7 @@ function schedule3(rows: readonly TaxRow[], notes: readonly string[]): string {
   }
   const total = totalOf(lines)
   const superficial = lines.filter((line) => line.row.lossRule !== undefined).length
-  const totalNotes = [leftOut(total.left), superficial === 0 ? "" : `Includes ${superficial} ${superficial === 1 ? "loss that" : "losses that"} may be superficial, which may not be deductible.`].filter(Boolean).join(" ")
+  const totalNotes = [leftOut(total), superficial === 0 ? "" : `Includes ${superficial} ${superficial === 1 ? "loss that" : "losses that"} may be superficial, which may not be deductible.`].filter(Boolean).join(" ")
   out.push(["Total", "Proceeds go on line 15200 and the gain (or loss) on line 15301", "", money(total.proceeds), money(total.cost), "", money(total.gain), "", "", totalNotes, "", ""])
   return toCsv(out)
 }
