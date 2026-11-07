@@ -296,6 +296,11 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
         <button type="button" className="primary" disabled={!ready} onClick={() => report && downloadCsv(report.csv, report.filename)}>
           {loading && !badOther ? "Working it out…" : "Download CSV"}
         </button>
+        {report?.form ? (
+          <button type="button" disabled={!ready} onClick={() => report.form && downloadCsv(report.form.csv, report.form.filename)}>
+            Download as {report.form.name}
+          </button>
+        ) : null}
 
         {report && !badOther ? (
           <details className="small tax-notes">
