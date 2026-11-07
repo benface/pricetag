@@ -3,7 +3,9 @@ import Foundation
 extension HotWallet {
     /// Everything worth telling the user right now, worst first. The alarm has its own banner.
     public var notices: [Notice] {
-        guard address != nil, availability == .ready else { return [] }
+        guard availability == .ready else { return [] }
+        // A purchase still on its way to savings keeps going without Spending Money, and so does what it needs from the user.
+        guard address != nil else { return oneUseNotices }
         var notices: [Notice] = []
         if isKeyMissing { notices.append(.init(.warning, HotWalletWording.keyMissing, short: HotWalletWording.shortKeyMissing)) }
         if hasUnsavedRecords { notices.append(.init(.warning, HotWalletWording.cantSaveRecordsYet, short: HotWalletWording.shortCantSaveRecords)) }

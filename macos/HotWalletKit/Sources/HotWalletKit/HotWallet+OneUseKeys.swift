@@ -61,7 +61,19 @@ extension HotWallet {
         }
     }
 
-    /// How long a key nothing ever arrived at is kept. A provider can deliver long after its page closed, so this is generous.
+    /// Whether nothing more can arrive for the purchase it was made for. Only its order can say so, except for one nobody was ever
+    /// given a page for, or that someone said they didn't make: that waits this long, in case they paid anyway.
+    func purchaseIsOver(_ key: OneUseKey, snapshot: ChainSnapshot) -> Bool {
+        switch key.delivery ?? .expected {
+        case .expected: false
+        case .notStarted: now().timeIntervalSince(key.createdAt) >= Self.unusedOneUseKeyLifetime
+        // A read from before the delivery's block would show it empty only because it hasn't got there.
+        case .delivered(let block): snapshot.blockNumber >= block
+        case .failed: true
+        }
+    }
+
+    /// How long a key with no purchase on its way is kept. A provider can deliver long after its page closed, so this is generous.
     static let unusedOneUseKeyLifetime: TimeInterval = 14 * 24 * 60 * 60
     /// How many times Spending Money pays a fee for one key. A purchase needs one, and a fee that rises in between a second.
     static let gasSendsPerKey = 3
@@ -88,8 +100,9 @@ extension HotWallet {
             oneUseHolds[address] = .notWorthTheGas(everything.notWorthTheGas.map(\.symbol))
             return .wait
         }
-        // Nothing's arrived, and nothing's gone. A provider can still deliver, so it waits, up to a point.
-        if snapshot.nonce == 0, now().timeIntervalSince(key.createdAt) < Self.unusedOneUseKeyLifetime {
+        // Empty, but its purchase can still bring something, however long that takes. Something else arriving and moving on, or part of
+        // the purchase, doesn't say it's done.
+        guard purchaseIsOver(key, snapshot: snapshot) else {
             resetOneUseEmptyReads(address)
             oneUseHolds[address] = .waitingForPurchase
             return .wait
@@ -169,7 +182,7 @@ extension HotWallet {
         var notices: [Notice] = []
         for key in oneUseKeys {
             switch oneUseHolds[key.address] {
-            case .needsGas: notices.append(.init(.warning, HotWalletWording.purchaseNeedsGas, short: HotWalletWording.shortPurchaseHeld))
+            case .needsGas: notices.append(.init(.warning, address == nil ? HotWalletWording.purchaseNeedsGasAndSpendingMoney : HotWalletWording.purchaseNeedsGas, short: HotWalletWording.shortPurchaseHeld))
             case .notWorthTheGas(let symbols): notices.append(.init(.warning, HotWalletWording.purchaseHeldByGas(symbols), short: HotWalletWording.shortPurchaseHeld))
             case .otherTokens(let count): notices.append(.init(.warning, HotWalletWording.purchaseKeyHoldsOtherTokens(count), short: HotWalletWording.shortPurchaseHeld))
             case .cantCheckOtherTokens: notices.append(.init(.info, HotWalletWording.purchaseKeyCantCheck))

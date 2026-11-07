@@ -668,13 +668,15 @@ public final class HotWallet {
             oneUseHolds[key.address] = .needsGas
             return
         }
-        // Counted before it's signed, so a crash in between can't let it go over.
-        try save { state in
-            guard let index = state.oneUseKeys?.firstIndex(where: { $0.address == key.address }) else { return }
-            state.oneUseKeys?[index].gasSends += 1
-        }
         do {
-            try await signAndSend(to: key.address, value: wei, data: [], from: from, snapshot: snapshot) { hash, nonce in
+            // Counted on disk just before it's signed, so a crash in between can't let it go over. Not before: an estimate that fails, or
+            // a check that stops it, sends nothing, and mustn't use up what the key gets.
+            try await signAndSend(to: key.address, value: wei, data: [], from: from, snapshot: snapshot, beforeSigning: {
+                try save { state in
+                    guard let index = state.oneUseKeys?.firstIndex(where: { $0.address == key.address }) else { return }
+                    state.oneUseKeys?[index].gasSends += 1
+                }
+            }) { hash, nonce in
                 SignedRecord(
                     hash: hash, nonce: nonce, to: key.address, symbol: Base.eth.symbol, decimals: 18, amount: String(wei),
                     usdMicros: snapshot.ethUsdMicros.map { String(Money.usdMicros(of: wei, priceMicros: $0, decimals: 18)) }, gainUsdMicros: "0",
@@ -684,6 +686,44 @@ public final class HotWallet {
         } catch let ChainError.rejected(message) {
             sweptOnItsOwnFailed(message, reason: .purchaseGas)
             pause(key.address)
+        }
+    }
+
+    /// What the app knows about the purchase a one-use key was made for, each time that changes, and for every purchase at launch.
+    /// Nil is someone saying they didn't buy it. Only moves forward, except that saying so takes an order nobody's placed back to waiting
+    /// a while: a key is only deleted once its order says nothing more is coming, or nobody could have paid for a long time.
+    public func purchaseChanged(_ purchase: TrackedPurchase?, wallet: String) {
+        guard let index = state.oneUseKeys?.firstIndex(where: { $0.address.lowercased == wallet.lowercased() }), let key = state.oneUseKeys?[index] else { return }
+        let new = Self.delivery(of: purchase)
+        let old = key.delivery ?? .expected
+        guard new != old, Self.rank(new) > Self.rank(old) || (new == .notStarted && old == .expected) else { return }
+        if new == .expected {
+            // Keeping it is always safe, so that's true now, even if it can't be written down yet.
+            state.oneUseKeys?[index].delivery = new
+            persistOrSayWhy()
+        } else {
+            // Anything that lets it go only counts once it's on disk. If that fails, it waits for the next change, or the next launch.
+            try? save { $0.oneUseKeys?[index].delivery = new }
+        }
+    }
+
+    private static func delivery(of purchase: TrackedPurchase?) -> OneUseKey.Delivery {
+        guard let purchase else { return .notStarted }
+        switch purchase.order?.status {
+        case .failed: return .failed
+        case .succeeded:
+            // Without its block, there's no read that can be sure it's arrived.
+            guard purchase.order?.txHash != nil, let block = purchase.order?.blockNum, block >= 0 else { return .expected }
+            return .delivered(block: UInt64(block))
+        case .pending, nil: return .expected
+        }
+    }
+
+    private static func rank(_ delivery: OneUseKey.Delivery) -> Int {
+        switch delivery {
+        case .notStarted: 0
+        case .expected: 1
+        case .delivered, .failed: 2
         }
     }
 
@@ -1146,7 +1186,8 @@ public final class HotWallet {
         try await body()
     }
 
-    private func signAndSend(to: EthereumAddress, value: UInt128, data: [UInt8], from address: EthereumAddress, snapshot: ChainSnapshot, record: (String, UInt64) -> SignedRecord) async throws {
+    /// `beforeSigning` runs once everything that can stop it before it's signed has passed, so what it counts is only what may go out.
+    private func signAndSend(to: EthereumAddress, value: UInt128, data: [UInt8], from address: EthereumAddress, snapshot: ChainSnapshot, beforeSigning: () throws -> Void = {}, record: (String, UInt64) -> SignedRecord) async throws {
         let estimate: UInt64
         do {
             estimate = try await chain.estimateGas(from: address, to: to, value: value, data: data)
@@ -1168,6 +1209,7 @@ public final class HotWallet {
             value: value,
             data: data
         )
+        try beforeSigning()
         let signed = try await signer.sign(transaction, from: address)
         try checkStillAllowed(address)
         do {

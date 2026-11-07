@@ -118,13 +118,29 @@ public struct OneUseKey: Codable, Equatable, Sendable {
     public var settledThroughBlock: UInt64?
     /// How many times Spending Money has sent it ETH for a fee. Capped, so nothing can drain Spending Money a little at a time.
     public var gasSends: Int
+    /// What its purchase's order says. Nil in older records, which counts as `.expected`, so nothing's deleted on a guess.
+    public var delivery: Delivery?
 
-    public init(address: EthereumAddress, destination: EthereumAddress, createdAt: Date, settledThroughBlock: UInt64? = nil, gasSends: Int = 0) {
+    /// Whether the purchase it was made for can still bring something. Only the order can say it can't, so an empty key, or one that's
+    /// sent something, still waits for that. Anything else could arrive at an address that has no key anymore.
+    public enum Delivery: Codable, Equatable, Sendable {
+        /// Made, and its address may not have reached the provider. Nobody's been shown a page to pay on, so it waits a while, then goes.
+        case notStarted
+        /// The provider has its address, and nothing says it's done delivering.
+        case expected
+        /// Delivered in this block. Once a read reaches it, and the key's empty, there's nothing more coming.
+        case delivered(block: UInt64)
+        /// The order failed, so nothing's coming.
+        case failed
+    }
+
+    public init(address: EthereumAddress, destination: EthereumAddress, createdAt: Date, settledThroughBlock: UInt64? = nil, gasSends: Int = 0, delivery: Delivery? = .notStarted) {
         self.address = address
         self.destination = destination
         self.createdAt = createdAt
         self.settledThroughBlock = settledThroughBlock
         self.gasSends = gasSends
+        self.delivery = delivery
     }
 }
 

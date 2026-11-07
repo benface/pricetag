@@ -7,6 +7,8 @@ import SwiftUI
 struct SpendingMoneySetup: View {
     let wallet: HotWallet
     let store: PortfolioStore
+    /// For purchases through a one-use address, which keep going after Spending Money's deleted, along with anything they need.
+    var purchases: PurchaseTracker?
     var onDone: (() -> Void)?
 
     var body: some View {
@@ -25,7 +27,7 @@ struct SpendingMoneySetup: View {
             case .unavailable(let message):
                 ContentUnavailableView("Can't Open This Wallet", systemImage: "exclamationmark.triangle", description: Text(message))
             case .ready:
-                HotWalletSetup(wallet: wallet, store: store, onDone: onDone)
+                HotWalletSetup(wallet: wallet, store: store, purchases: purchases, onDone: onDone)
             }
             if let onDone {
                 HStack {
@@ -43,13 +45,30 @@ struct SpendingMoneySetup: View {
 private struct HotWalletSetup: View {
     let wallet: HotWallet
     let store: PortfolioStore
+    var purchases: PurchaseTracker?
     var onDone: (() -> Void)?
     @State private var understands = false
     @State private var showsHowItWorks = false
 
+    /// Bought through a one-use address, and not finished. Those that are finished were on the page that's gone.
+    private var stillGoing: [TrackedPurchase] {
+        guard let purchases else { return [] }
+        return purchases.purchases(of: Set(wallet.oneUseKeys.map(\.address.lowercased))).filter { !purchases.phase(of: $0).isFinished }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
+                ForEach(wallet.notices) { notice in
+                    Notice(notice.kind == .warning ? .warning : .info, notice.text)
+                }
+                if let purchases, !stillGoing.isEmpty {
+                    DetailsSection("Purchases") {
+                        ForEach(stillGoing) { purchase in
+                            PurchaseRow(purchase: purchase, phase: purchases.phase(of: purchase), main: wallet.display.main) { purchases.dismiss(purchase) }
+                        }
+                    }
+                }
                 Image(systemName: "banknote")
                     .font(.system(size: 30))
                     .foregroundStyle(.secondary)
@@ -284,8 +303,7 @@ struct SpendingMoneyPage<Overview: View>: View {
 
     /// This Mac's, including what was bought for a key that's since been replaced, or through a one-use address, which may still be arriving.
     private var shownPurchases: [TrackedPurchase] {
-        guard let address else { return [] }
-        return purchases.purchases(of: Set(([address] + wallet.state.retired + wallet.purchaseKeys).map(\.lowercased)))
+        purchases.purchases(of: Set(([address].compactMap(\.self) + wallet.state.retired + wallet.purchaseKeys).map(\.lowercased)))
     }
 
     private var bought: some View {

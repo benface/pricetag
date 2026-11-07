@@ -264,6 +264,7 @@ public enum HotWalletWording {
     // MARK: - Purchases through a one-use address
 
     public static let purchaseNeedsGas = "A purchase is waiting to move to savings, and needs a little ETH in Spending Money to pay the fee. Add some, and it moves by itself."
+    public static let purchaseNeedsGasAndSpendingMoney = "A purchase is waiting to move to savings, and needs a little ETH to pay the fee. Set up Spending Money and add some, and it moves by itself."
     public static func purchaseHeldByGas(_ symbols: [String]) -> String {
         "A purchase's \(symbols.formatted(.list(type: .and))) would cost more in fees than it's worth to move to savings right now. It moves once fees come down."
     }

@@ -146,6 +146,22 @@ struct PurchaseTrackerTests {
         #expect(tracker.phase(of: tracker.purchases(of: wallet)[0]) == .arriving)
     }
 
+    @Test func saysWhenAPurchaseStartsChangesOrIsDismissed() async throws {
+        let (tracker, _, source, _) = setup()
+        var told: [(String, OnrampOrder.Status?, Bool)] = []
+        tracker.onChange = { told.append(($0, $1?.order?.status, $1 == nil)) }
+        _ = try await tracker.begin(wallet: wallet, asset: "ETH", dollars: 25, cryptoAmount: "0.008")
+        await source.say([OnrampOrder(id: "order", status: .pending)])
+        await tracker.check()
+        await tracker.check()
+        await source.say([delivered()])
+        await tracker.check()
+        tracker.dismiss(try #require(tracker.purchases(of: wallet).first))
+        #expect(told.map(\.0) == Array(repeating: wallet, count: 4))
+        #expect(told.map(\.1) == [nil, .pending, .succeeded, nil], "only when something changed")
+        #expect(told.map(\.2) == [false, false, false, true])
+    }
+
     @Test func recordsNoCostUntilAnOrderSaysAllOfIt() {
         #expect(delivered(cost: nil).purchase == nil, "Nothing said what it cost")
         #expect(delivered(cost: nil, usd: "25810000").purchase?.cost == paid, "Its USD total is still what it cost")

@@ -180,6 +180,9 @@ public final class PurchaseTracker {
     public private(set) var purchases: [TrackedPurchase]
     /// Why orders can't be checked right now. They're tried again, and nothing's lost.
     public private(set) var problem: String?
+    /// Told when a purchase starts, when its order changes, and, with nil, when someone dismisses it. It's after the change is saved,
+    /// so whatever holds the address it went to can tell when nothing more is coming.
+    @ObservationIgnored public var onChange: (@MainActor (_ wallet: String, _ purchase: TrackedPurchase?) -> Void)?
 
     @ObservationIgnored private let store: PortfolioStore
     @ObservationIgnored private let defaults: UserDefaults
@@ -245,8 +248,10 @@ public final class PurchaseTracker {
     public func begin(wallet: String, asset: String, dollars: Int, cryptoAmount: String, typed: Money? = nil) async throws -> URL {
         let checkout = try await store.currentSource.onrampCheckout(address: wallet, asset: asset, cryptoAmount: cryptoAmount, fiat: typed)
         guard let page = checkout.page else { throw FetchError.rejected("The price service sent a page that isn't \(PurchaseWording.provider)'s.") }
-        purchases.append(TrackedPurchase(ref: checkout.ref, wallet: wallet.lowercased(), asset: asset, dollars: dollars, typed: typed, startedAt: now()))
+        let purchase = TrackedPurchase(ref: checkout.ref, wallet: wallet.lowercased(), asset: asset, dollars: dollars, typed: typed, startedAt: now())
+        purchases.append(purchase)
         save()
+        onChange?(purchase.wallet, purchase)
         start()
         return page
     }
@@ -282,6 +287,7 @@ public final class PurchaseTracker {
                 if purchases[index].order != order {
                     purchases[index].order = order
                     save()
+                    onChange?(purchases[index].wallet, purchases[index])
                 }
                 if let recorded = order.purchase { store.recordPurchase(recorded) }
                 if isResolved(purchases[index]) { justFinished.insert(purchase.ref) }
@@ -298,6 +304,7 @@ public final class PurchaseTracker {
     public func dismiss(_ purchase: TrackedPurchase) {
         purchases.removeAll { $0.ref == purchase.ref }
         save()
+        onChange?(purchase.wallet, nil)
     }
 
     /// Whether there's nothing more to learn about it. How long it's been never settles this: an order can appear after any wait, and so can a delivery's block.

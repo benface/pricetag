@@ -22,6 +22,30 @@ private let keyHistory = portfolio(address: oneUseAddress, toBlock: 2000)
 /// What's left on a key after ETH paid for its own last move: less than anything worth moving.
 private let dust: UInt128 = 1_000_000_000
 
+/// The one-use key's purchase as the app tracks it, with its order saying this much. No status is a page that's open with no order yet.
+private func tracked(_ status: OnrampOrder.Status?, block: Int? = 1000) -> TrackedPurchase {
+    TrackedPurchase(
+        ref: "ref", wallet: oneUseAddress.lowercased, asset: "USDC", dollars: 500, startedAt: Date(),
+        order: status.map { OnrampOrder(id: "order", status: $0, asset: "USDC", units: "500000000", wallet: oneUseAddress.lowercased, network: "base", txHash: $0 == .succeeded ? "0x" + String(repeating: "ef", count: 32) : nil, blockNum: $0 == .succeeded ? block : nil) }
+    )
+}
+
+@MainActor
+private extension Rig {
+    /// A key made for a purchase whose page has opened, so the provider has its address.
+    func startPurchase() async throws {
+        _ = try #require(await wallet.createOneUseKey())
+        wallet.purchaseChanged(tracked(nil), wallet: oneUseAddress.lowercased)
+    }
+
+    /// An empty key, read enough times, with its history read, to be retired if anything allows it.
+    func readEmptyUntilRetirable() async {
+        await wallet.tick()
+        await wallet.readOneUseHistory()
+        for _ in 0..<(HotWallet.readsBeforeAlarm + 1) { await wallet.tick() }
+    }
+}
+
 @MainActor
 @Suite struct OneUseKeyTests {
     @Test func aKeyForAPurchaseIsOnDiskBeforeItsAddressGoesAnywhere() async throws {
@@ -71,7 +95,7 @@ private let dust: UInt128 = 1_000_000_000
         let rig = await Rig(nextKeys: [oneUseAddress], portfolio: .success(keyHistory))
         await rig.wallet.tick()
         await rig.chain.set(snapshot(eth: 0), for: oneUseAddress)
-        _ = try #require(await rig.wallet.createOneUseKey())
+        try await rig.startPurchase()
         await rig.wallet.tick()
         #expect(rig.wallet.oneUseHolds[oneUseAddress] == .waitingForPurchase)
         #expect(await rig.signer.signed.isEmpty)
@@ -86,6 +110,12 @@ private let dust: UInt128 = 1_000_000_000
 
         await rig.chain.confirmAll()
         await rig.chain.set(snapshot(eth: dust, nonce: 1), for: oneUseAddress)
+        await rig.readEmptyUntilRetirable()
+        #expect(await rig.signer.hasKey(oneUseAddress), "until its order says it's delivered, more could come")
+        #expect(rig.wallet.oneUseHolds[oneUseAddress] == .waitingForPurchase)
+
+        rig.wallet.purchaseChanged(tracked(.succeeded), wallet: oneUseAddress.lowercased)
+        #expect(rig.stateStore.saved.oneUseKeys?.first?.delivery == .delivered(block: 1000))
         await rig.wallet.tick()
         await rig.wallet.readOneUseHistory()
         for _ in 1..<HotWallet.readsBeforeAlarm { await rig.wallet.tick() }
@@ -156,7 +186,7 @@ private let dust: UInt128 = 1_000_000_000
         #expect(await rig.signer.hasKey(oneUseAddress), "and the key stays while it holds anything")
     }
 
-    @Test func aKeyNothingArrivedAtIsKeptForAWhileThenRetired() async throws {
+    @Test func aKeyWhosePageNeverOpenedIsKeptForAWhileThenRetired() async throws {
         let clock = TestClock()
         let rig = await Rig(nextKeys: [oneUseAddress], portfolio: .success(keyHistory), now: { clock.now })
         await rig.wallet.tick()
@@ -261,6 +291,136 @@ private let dust: UInt128 = 1_000_000_000
         await after.tick()
         #expect(await signer.signed.last?.to == coldAddress)
         #expect(after.address == hotAddress)
+    }
+
+    @Test func somethingElseArrivingFirstDoesntRetireAKeyItsPurchaseIsStillComingTo() async throws {
+        let rig = await Rig(nextKeys: [oneUseAddress], portfolio: .success(keyHistory))
+        await rig.wallet.tick()
+        try await rig.startPurchase()
+
+        // A little ETH from someone else, before the USDC that was bought.
+        await rig.chain.set(snapshot(eth: oneEth / 100_000), for: oneUseAddress)
+        await rig.wallet.tick()
+        #expect(rig.wallet.state.records[oneUseAddress]?.count == 1)
+        await rig.chain.confirmAll()
+        await rig.chain.set(snapshot(eth: 0, nonce: 1), for: oneUseAddress)
+        await rig.readEmptyUntilRetirable()
+        #expect(await rig.signer.hasKey(oneUseAddress), "having sent something doesn't mean its purchase has arrived")
+        #expect(rig.wallet.oneUseKeys.map(\.address) == [oneUseAddress])
+
+        await rig.chain.set(snapshot(eth: 0, tokens: [usdc: usdcUnits(500)], nonce: 1), for: oneUseAddress)
+        await rig.wallet.tick()
+        #expect(rig.wallet.oneUseHolds[oneUseAddress] == .moving)
+        #expect(await rig.signer.signed.last?.to == oneUseAddress, "and when it arrives, it gets its fee and moves")
+    }
+
+    @Test func partOfAPurchaseArrivingDoesntRetireTheKeyBeforeTheRest() async throws {
+        let rig = await Rig(nextKeys: [oneUseAddress], portfolio: .success(keyHistory))
+        await rig.wallet.tick()
+        try await rig.startPurchase()
+        await rig.chain.set(snapshot(eth: oneEth / 100), for: oneUseAddress)
+        await rig.wallet.tick()
+        await rig.chain.confirmAll()
+        await rig.chain.set(snapshot(eth: dust, nonce: 1), for: oneUseAddress)
+        // Still pending: the provider hasn't said it's done.
+        rig.wallet.purchaseChanged(tracked(.pending), wallet: oneUseAddress.lowercased)
+        await rig.readEmptyUntilRetirable()
+        #expect(await rig.signer.hasKey(oneUseAddress))
+    }
+
+    @Test func aPurchaseStillGoingKeepsItsKeyPastTheUsualWait() async throws {
+        let clock = TestClock()
+        let rig = await Rig(nextKeys: [oneUseAddress], portfolio: .success(keyHistory), now: { clock.now })
+        await rig.wallet.tick()
+        try await rig.startPurchase()
+        await rig.chain.set(snapshot(eth: 0), for: oneUseAddress)
+        clock.advance(HotWallet.unusedOneUseKeyLifetime * 4)
+        await rig.readEmptyUntilRetirable()
+        #expect(await rig.signer.hasKey(oneUseAddress), "an order can deliver after any wait")
+        #expect(rig.wallet.oneUseHolds[oneUseAddress] == .waitingForPurchase)
+    }
+
+    @Test func aDeliveryIsntOverUntilAReadHasReachedItsBlock() async throws {
+        let rig = await Rig(nextKeys: [oneUseAddress], portfolio: .success(keyHistory))
+        await rig.wallet.tick()
+        try await rig.startPurchase()
+        await rig.chain.set(snapshot(eth: 0), for: oneUseAddress)
+        rig.wallet.purchaseChanged(tracked(.succeeded, block: 5000), wallet: oneUseAddress.lowercased)
+        await rig.readEmptyUntilRetirable()
+        #expect(await rig.signer.hasKey(oneUseAddress), "the node hasn't seen the block it was delivered in")
+    }
+
+    @Test func aFailedOrderLetsAnEmptyKeyGo() async throws {
+        let rig = await Rig(nextKeys: [oneUseAddress], portfolio: .success(keyHistory))
+        await rig.wallet.tick()
+        try await rig.startPurchase()
+        await rig.chain.set(snapshot(eth: 0), for: oneUseAddress)
+        rig.wallet.purchaseChanged(tracked(.failed), wallet: oneUseAddress.lowercased)
+        await rig.readEmptyUntilRetirable()
+        #expect(await rig.signer.hasKey(oneUseAddress) == false)
+        #expect(rig.wallet.oneUseKeys.isEmpty)
+    }
+
+    @Test func whatTheOrderSaysOnlyMovesForward() async throws {
+        let clock = TestClock()
+        let rig = await Rig(nextKeys: [oneUseAddress], now: { clock.now })
+        await rig.wallet.tick()
+        try await rig.startPurchase()
+        #expect(rig.wallet.oneUseKeys.first?.delivery == .expected)
+        // Someone saying they didn't buy it goes back to the wait for a page nobody paid on, from when the key was made.
+        rig.wallet.purchaseChanged(nil, wallet: oneUseAddress.lowercased)
+        #expect(rig.wallet.oneUseKeys.first?.delivery == .notStarted)
+        rig.wallet.purchaseChanged(tracked(.succeeded), wallet: oneUseAddress.lowercased)
+        #expect(rig.wallet.oneUseKeys.first?.delivery == .delivered(block: 1000))
+        // Dismissing a delivered one, or reading an older answer, changes nothing.
+        rig.wallet.purchaseChanged(nil, wallet: oneUseAddress.lowercased)
+        rig.wallet.purchaseChanged(tracked(.pending), wallet: oneUseAddress.lowercased)
+        #expect(rig.wallet.oneUseKeys.first?.delivery == .delivered(block: 1000))
+        #expect(rig.stateStore.saved.oneUseKeys?.first?.delivery == .delivered(block: 1000))
+    }
+
+    @Test func anOrderSayingItsDoneOnlyCountsOnceItsWrittenDown() async throws {
+        let rig = await Rig(nextKeys: [oneUseAddress])
+        await rig.wallet.tick()
+        try await rig.startPurchase()
+        rig.stateStore.failSaves(with: CocoaError(.fileWriteNoPermission))
+        rig.wallet.purchaseChanged(tracked(.failed), wallet: oneUseAddress.lowercased)
+        #expect(rig.wallet.oneUseKeys.first?.delivery == .expected)
+    }
+
+    @Test func aKeyFromBeforeOrdersWereFollowedIsKept() throws {
+        let old = #"{"address":"\#(oneUseAddress)","destination":"\#(coldAddress)","createdAt":0,"gasSends":0}"#
+        let key = try JSONDecoder().decode(OneUseKey.self, from: Data(old.utf8))
+        #expect(key.delivery == nil, "which counts as a purchase still on its way")
+    }
+
+    @Test func aFeeThatCouldntBeEstimatedDoesntCountAgainstTheKey() async throws {
+        let rig = await Rig(nextKeys: [oneUseAddress])
+        await rig.wallet.tick()
+        try await rig.startPurchase()
+        await rig.chain.set(snapshot(eth: 0, tokens: [usdc: usdcUnits(500)]), for: oneUseAddress)
+        await rig.chain.setEstimateFailure(.unreachable)
+        for _ in 0..<(HotWallet.gasSendsPerKey + 1) { await rig.wallet.tick() }
+        #expect(await rig.signer.signed.isEmpty)
+        #expect(rig.wallet.oneUseKeys.first?.gasSends == 0)
+
+        await rig.chain.setEstimateFailure(nil)
+        await rig.wallet.tick()
+        #expect(await rig.signer.signed.count == 1, "once the node's back, the fee goes")
+        #expect(rig.stateStore.saved.oneUseKeys?.first?.gasSends == 1)
+    }
+
+    @Test func withoutSpendingMoneyAPurchaseStillSaysWhatItNeeds() async throws {
+        let rig = await Rig(nextKeys: [oneUseAddress])
+        await rig.wallet.tick()
+        try await rig.startPurchase()
+        await rig.wallet.deleteWallet()
+        await rig.chain.set(snapshot(eth: 0, tokens: [usdc: usdcUnits(500)]), for: oneUseAddress)
+        await rig.wallet.tick()
+        #expect(rig.wallet.address == nil)
+        #expect(rig.wallet.oneUseHolds[oneUseAddress] == .needsGas)
+        #expect(rig.wallet.notices.map(\.text) == [HotWalletWording.purchaseNeedsGasAndSpendingMoney])
+        #expect(rig.wallet.needsAttention)
     }
 
     @Test func aOneUseAddressIsntSomewhereToSendOrSaveTo() async throws {
