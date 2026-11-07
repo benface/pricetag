@@ -341,10 +341,11 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
   /**
    * What arrived from someone else in this credit, by sender. Who sent it is what decides whether it may be income, so this doesn't
    * depend on what cost was entered or noted for it, or on whether its cost can be worked out. Each sender's credits count in
-   * full, even when something left in the same transaction.
+   * full, even when as much or more left in the same transaction, so this reads a debit's credit parts too, and what netted
+   * to nothing (`WalletView.netted`).
    */
   const receivedIn = (side: Side, leg: PricedLeg): Received[] => {
-    if (leg.kind !== "transfer" || leg.opening || leg.unsettledCredit || leg.costLabel === "paid" || BigInt(leg.delta) <= 0n) return []
+    if (leg.kind !== "transfer" || leg.opening || leg.unsettledCredit || leg.costLabel === "paid") return []
     const address = normalizeAddress(side.wallet.address)
     const key = costKey(address, leg.id)
     // Bought, or the user's own money coming off an exchange.
@@ -477,6 +478,7 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     const recorded = [...purchased].some(([key, match]) => match === purchase && legs.some((leg) => costKey(purchase.wallet, leg.id) === key && leg.purchaseSource))
     return { order: purchase.order, state: recorded ? "recorded" : legs.length === 0 ? "waiting" : "unmatched" }
   })
+  for (const side of sides) for (const leg of side.view.netted ?? []) received.push(...receivedIn(side, leg))
   return { legs: output, open, purchases, received }
 }
 

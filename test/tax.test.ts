@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
-import { ASSETS, ETH_ADDRESS, foldPositions, type LegPart, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
+import { ASSETS, ETH_ADDRESS, USDC_ADDRESS, buildLegs, derivePricedRows, foldPositions, type LegPart, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
 import type { Source } from "@pricetag/sdk/internal"
 import type { PortfolioResponse, TaxReportResponse, WalletResponse } from "../src/core/api.ts"
 import { costKey, emptyBook, parseBook, type Book } from "../src/core/book.ts"
@@ -915,6 +915,21 @@ describe("the user's answers in a report", () => {
       const netted = leg(10, E18, { kind: "transfer", parts: [part(A, "credit", 3n * E18, SELLER), part(A, "debit", 2n * E18, B)] })
       const rows = receivedOf(taxReportOf([held([netted])], US))
       assert.deepEqual(rows.map((row) => [row.Amount, row["Value when received"]]), [["3", "6000.000000"]])
+    })
+
+    it("lists what someone sent even when as much or more left in the same transaction, from the chain's rows", () => {
+      const E6 = 1_000_000n
+      const row = (block: number, side: LegRow["side"], amount: bigint, counterparty: string): LegRow => ({ block_num: block, timestamp: new Date(Date.UTC(2026, 10, 4) + block * 2000).toISOString(), tx_hash: hash(block), tx_index: 0, log_index: side === "credit" ? 0 : 1, token: USDC_ADDRESS, account: A, side, amount: (amount * E6).toString(), kind: "erc20", counterparty })
+      const references = [5, 10].map((blockNum) => ({ blockNum, ethUsd: "200000000000", usdcUsd: "100000000" }))
+      for (const sentBack of [2n, 3n, 4n]) {
+        const rows = [row(5, "credit", 10n, `0x${"f".repeat(40)}`), row(10, "credit", 3n, SELLER), row(10, "debit", sentBack, B)]
+        const { legs, netted } = buildLegs({ account: A, rows, references, priced: derivePricedRows(rows, references) })
+        const wallet = walletOf(A, legs, netted.length > 0 ? { netted } : {})
+        for (const settings of [US, { ...US, method: "average" as const }]) {
+          const rowsOf = receivedOf(taxReportOf([wallet], settings)).filter((r) => r.Transaction?.endsWith(hash(10)))
+          assert.deepEqual(rowsOf.map((r) => [r.Amount, r["Value when received"]]), [["3", "3.000000"]], `sent back ${sentBack}, ${settings.method}`)
+        }
+      }
     })
 
     it("lists what arrived even when nothing says where it goes among what's held", () => {
