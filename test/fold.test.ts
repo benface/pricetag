@@ -60,10 +60,10 @@ describe("a lot whose cost is only known for all of it", () => {
   })
 })
 
-describe("purchases at the same moment from different sources", () => {
+describe("purchases at the same moment", () => {
   const AT = "2026-10-01T00:00:00.000Z"
   const onchain = (usd: bigint, qty = ETH): FoldLeg => ({ id: "chain", delta: qty.toString(), decimals: 18, kind: "transfer", priceMicros: null, costMicros: (usd * USD).toString(), proceedsMicros: null, costLabel: "paid", blockNum: 1, timestamp: AT })
-  const bought = (id: string, usd: bigint, qty = ETH, from = "Coinbase"): FoldLeg => ({ id, delta: qty.toString(), decimals: 18, kind: "transfer", priceMicros: null, costMicros: (usd * USD).toString(), proceedsMicros: null, costLabel: "self-reported", blockNum: 5, timestamp: "2026-10-03T00:00:00.000Z", pieces: [{ qty: qty.toString(), costMicros: (usd * USD).toString(), label: "self-reported", estimatedCostMicros: "0", boughtAt: AT, boughtFrom: from }] })
+  const bought = (id: string, usd: bigint, qty = ETH, purchase = id): FoldLeg => ({ id, delta: qty.toString(), decimals: 18, kind: "transfer", priceMicros: null, costMicros: (usd * USD).toString(), proceedsMicros: null, costLabel: "self-reported", blockNum: 5, timestamp: "2026-10-03T00:00:00.000Z", pieces: [{ qty: qty.toString(), costMicros: (usd * USD).toString(), label: "self-reported", estimatedCostMicros: "0", boughtAt: AT, boughtAs: purchase }] })
   const sold = (qty: bigint, usd: bigint): FoldLeg => ({ id: "out", delta: (-qty).toString(), decimals: 18, kind: "swap", priceMicros: null, costMicros: null, proceedsMicros: (usd * USD).toString(), costLabel: "unknown" })
   const hold = (method: Method, ...legs: FoldLeg[]) => legs.reduce(applyLeg, emptyPosition(method, 18))
 
@@ -92,15 +92,19 @@ describe("purchases at the same moment from different sources", () => {
     assert.deepEqual(lotsSplitBy(near, ETH / 2n), [])
   })
 
-  it("isn't a tie within one exchange, whose fees can leave the same purchase at slightly different costs", () => {
-    const held = hold("fifo", bought("a", 2000n, (ETH * 999n) / 1000n), bought("b", 2000n, ETH))
+  it("isn't a tie between parts of one purchase, whose fees can leave them at slightly different costs", () => {
+    const held = hold("fifo", bought("a", 2000n, (ETH * 999n) / 1000n, "one"), bought("b", 2000n, ETH, "one"))
     assert.deepEqual(lotsSplitBy(held, ETH / 2n), [])
   })
 
-  it("is a tie between two exchanges", () => {
-    const held = hold("fifo", bought("a", 2000n, ETH, "Coinbase"), bought("b", 1000n, ETH, "Kraken"))
+  it("is a tie between two purchases, however they're described, or when one says nothing", () => {
+    const held = hold("fifo", bought("a", 2000n, ETH, "one"), bought("b", 1000n, ETH, "two"))
     assert.equal(lotsSplitBy(held, ETH / 2n).length, 2)
     assert.deepEqual(lotsSplitBy(held, 2n * ETH), [])
+    const { boughtAs: _, ...undescribed } = bought("c", 1000n).pieces![0]!
+    for (const legs of [[bought("a", 2000n, ETH, "one"), { ...bought("c", 1000n), pieces: [undescribed] }], [{ ...bought("c", 3000n), pieces: [{ ...undescribed, costMicros: (3000n * USD).toString() }] }, { ...bought("d", 1000n), pieces: [undescribed] }]]) {
+      assert.equal(lotsSplitBy(hold("fifo", ...legs), ETH / 2n).length, 2)
+    }
   })
 
   it("counts one with no cost, since what's taken could be that one", () => {

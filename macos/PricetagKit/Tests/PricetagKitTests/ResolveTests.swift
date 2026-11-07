@@ -364,11 +364,13 @@ actor BookSource: PortfolioSource {
     }
 
     @Test func aWithdrawalKeepsItsPurchasesAcrossASave() throws {
-        let sent = #"{"exchange":"Coinbase","asset":"ETH","units":"3","at":"2026-11-04T00:00:00.000Z","cost":{"micros":"6","currency":"USD"},"fifoCostMicros":"5","fifoLots":[{"units":"1","micros":"1","at":"2026-10-01T00:00:00.000Z"},{"units":"2","micros":"4","wholeCostOnly":true}]}"#
+        let sent = #"{"exchange":"Coinbase","asset":"ETH","units":"3","at":"2026-11-04T00:00:00.000Z","cost":{"micros":"6","currency":"USD"},"fifoCostMicros":"5","fifoLots":[{"units":"1","micros":"1","at":"2026-10-01T00:00:00.000Z","boughtUnits":"4","boughtMicros":"4"},{"units":"2","micros":"4","wholeCostOnly":true}]}"#
         let read = try JSONDecoder().decode(ExchangeWithdrawal.self, from: Data(sent.utf8))
         #expect(read.fifoLots?.map(\.units) == ["1", "2"])
         #expect(read.fifoLots?.map(\.wholeCostOnly) == [nil, true])
         #expect(read.fifoLots?.map(\.at) == ["2026-10-01T00:00:00.000Z", nil])
+        #expect(read.fifoLots?.map(\.boughtUnits) == ["4", nil])
+        #expect(read.fifoLots?.map(\.boughtMicros) == ["4", nil])
         let saved = try JSONEncoder().encode(read)
         #expect(try JSONDecoder().decode(ExchangeWithdrawal.self, from: saved) == read)
         let onward = try #require(try JSONSerialization.jsonObject(with: saved) as? [String: Any])
@@ -377,6 +379,8 @@ actor BookSource: PortfolioSource {
         #expect(lots[1]["wholeCostOnly"] as? Bool == true)
         #expect(lots[0]["at"] as? String == "2026-10-01T00:00:00.000Z")
         #expect(lots[1]["at"] == nil, "the server refuses anything but a date or nothing")
+        #expect(lots[0]["boughtUnits"] as? String == "4")
+        #expect(lots[1]["boughtUnits"] == nil, "the server refuses anything but an amount or nothing")
         #expect(withdrawal("2026-11-04T00:00:00.000Z").fifoLots == nil, "saved before it had them")
     }
 

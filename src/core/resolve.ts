@@ -120,17 +120,21 @@ function recipientsOf(leg: PricedLeg): Source[] | null {
  * What a debit took, split between everyone it went to, whether or not their wallets are read. That way a recipient's cost
  * can't depend on which wallet is open, and nothing's counted twice or lost. Oldest first gives the first transfer the oldest
  * lots. Average gives each one the same mix, because that's what it means: every unit cost the same. Oldest first can't say
- * who got what when nothing says which came first, and then only what goes to one wallet together keeps its cost.
+ * who got what when nothing says which came first, and then only what goes to one wallet together keeps its cost, which is why
+ * transfers in a row to one wallet count as one.
  */
-export function allocateTaken(taken: readonly CostPiece[], recipients: readonly Source[], method: Method): Map<string, CostPiece[]> {
-  // Only where the wallet changes, because two transfers to one wallet keep it all together.
+export function allocateTaken(taken: readonly CostPiece[], transfers: readonly Source[], method: Method): Map<string, CostPiece[]> {
+  const recipients = transfers.reduce<Source[]>((all, { address, units }) => {
+    const last = all.at(-1)
+    return last?.address === address ? [...all.slice(0, -1), { address, units: last.units + units }] : [...all, { address, units }]
+  }, [])
   const divided = new Set<CostPiece>()
   if (method === "fifo") {
     let through = 0n
-    recipients.forEach(({ address, units }, i) => {
+    for (const { units } of recipients) {
       through += units
-      if (recipients[i + 1]?.address !== address) for (const piece of lotsSplitBy({ lots: taken }, through)) divided.add(piece)
-    })
+      for (const piece of lotsSplitBy({ lots: taken }, through)) divided.add(piece)
+    }
   }
   let left = taken.map((piece) => (divided.has(piece) ? withoutItsCost(piece, BigInt(piece.qty)) : piece))
   const allocated = new Map<string, CostPiece[]>()
@@ -272,7 +276,7 @@ function piecesOfWithdrawal(side: Side, { exchange, units, cost, fifoCostMicros,
     // Converted as a running total, so the pieces add up to exactly what all of it comes to.
     const upTo = moneyIn(side, { micros: microsUpTo.toString(), currency: cost.currency }, leg)
     if (upTo === null) return null
-    pieces.push({ qty: qty.toString(), costMicros: (BigInt(upTo) - microsGiven).toString(), label: "self-reported", estimatedCostMicros: "0", ...(lot.wholeCostOnly ? { wholeCostOnly: true as const } : {}), ...(lot.at ? { boughtAt: lot.at, boughtFrom: exchange } : {}) })
+    pieces.push({ qty: qty.toString(), costMicros: (BigInt(upTo) - microsGiven).toString(), label: "self-reported", estimatedCostMicros: "0", ...(lot.wholeCostOnly ? { wholeCostOnly: true as const } : {}), ...(lot.at ? { boughtAt: lot.at, ...(lot.boughtUnits ? { boughtAs: JSON.stringify([exchange, cost.currency, lot.boughtUnits, lot.boughtMicros]) } : {}) } : {}) })
     unitsGiven += qty
     microsGiven = BigInt(upTo)
   }

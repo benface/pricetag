@@ -52,7 +52,7 @@ const isReadable = (currency: string): currency is CurrencyCode => READABLE.has(
  * Bought at one moment, which is one lot however many rows it took, because a file doesn't say which of them came first. When
  * they were at different prices, what part of it cost depends on that, so only all of it has a cost. Null: part of it has gone.
  */
-type Lot = { at: number; units: bigint; cost: bigint | null; tied: boolean }
+type Lot = { at: number; units: bigint; cost: bigint | null; tied: boolean; boughtUnits: bigint; boughtCost: bigint }
 
 /** A sale or a withdrawal waiting for the rest of its moment, since a file doesn't say which of those came first either. */
 type Disposal = { at: number; units: bigint; withdrawal: ExchangeWithdrawal | null }
@@ -65,16 +65,18 @@ type Pool = { units: bigint; cost: bigint; lots: Lot[]; oldest: number; disposal
 
 function addLot(lots: Lot[], at: number, units: bigint, cost: bigint) {
   const last = lots.at(-1)
-  if (last?.at !== at || last.cost === null) lots.push({ at, units, cost, tied: false })
+  if (last?.at !== at || last.cost === null) lots.push({ at, units, cost, tied: false, boughtUnits: units, boughtCost: cost })
   else {
     last.tied ||= last.cost * units !== cost * last.units
     last.units += units
     last.cost += cost
+    last.boughtUnits += units
+    last.boughtCost += cost
   }
 }
 
-/** Part of a lot, as taken: how much, what it cost, when it was bought, and whether a file says which came first within it. */
-type Part = { at: number; units: bigint; cost: bigint; tied: boolean }
+/** Part of a lot, as taken: how much, what it cost, when it was bought, whether a file says which came first within it, and all that was bought. */
+type Part = { at: number; units: bigint; cost: bigint; tied: boolean; boughtUnits: bigint; boughtCost: bigint }
 
 /** What these units cost lot by lot, this far along the lots. Null when that can't be said, or the budget ran out before it could. */
 function partsAlong({ lots, oldest }: Pool, from: bigint, units: bigint, budget: Budget): Part[] | null {
@@ -91,7 +93,7 @@ function partsAlong({ lots, oldest }: Pool, from: bigint, units: bigint, budget:
     }
     const taken = left < lot.units - skip ? left : lot.units - skip
     if (lot.cost === null || (lot.tied && taken < lot.units)) known = false
-    else parts.push({ at: lot.at, units: taken, cost: (lot.cost * taken) / lot.units, tied: lot.tied })
+    else parts.push({ at: lot.at, units: taken, cost: (lot.cost * taken) / lot.units, tied: lot.tied, boughtUnits: lot.boughtUnits, boughtCost: lot.boughtCost })
     skip = 0n
     left -= taken
   }
@@ -168,7 +170,7 @@ function costInAnyOrder(pool: Pool, moment: ReadonlyMap<bigint, number>, size: b
     if (parts === null || !within(costOf(parts), cost, rounding)) return null
     settled &&= sameParts(first, parts, rounding)
   }
-  const lots = settled ? first.map((part) => ({ units: part.units.toString(), micros: part.cost.toString(), at: new Date(part.at).toISOString(), ...(part.tied ? { wholeCostOnly: true as const } : {}) })) : [{ units: size.toString(), micros: cost.toString(), wholeCostOnly: true as const }]
+  const lots = settled ? first.map((part) => ({ units: part.units.toString(), micros: part.cost.toString(), at: new Date(part.at).toISOString(), boughtUnits: part.boughtUnits.toString(), boughtMicros: part.boughtCost.toString(), ...(part.tied ? { wholeCostOnly: true as const } : {}) })) : [{ units: size.toString(), micros: cost.toString(), wholeCostOnly: true as const }]
   return { cost, lots }
 }
 

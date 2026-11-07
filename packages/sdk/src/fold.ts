@@ -74,8 +74,8 @@ export type CostPiece = {
   wholeCostOnly?: true
   /** When an exchange says this was bought, which can be well before it reached a wallet, and is what oldest first goes by. */
   boughtAt?: string
-  /** Which exchange says so. */
-  boughtFrom?: string
+  /** All that was bought then, as the exchange says it. Parts that say the same are one purchase. Missing means nothing says what it's part of. */
+  boughtAs?: string
   /** It has no cost because of a lot only known as a whole, so no answer about where it came from can fix that. */
   unanswerable?: true
 }
@@ -110,8 +110,8 @@ export type Lot = {
   wholeCostOnly?: true
   /** When an exchange says this was bought, which can be well before it reached a wallet, and is what oldest first goes by. */
   boughtAt?: string
-  /** Which exchange says so. */
-  boughtFrom?: string
+  /** All that was bought then, as the exchange says it. Parts that say the same are one purchase. Missing means nothing says what it's part of. */
+  boughtAs?: string
   /** It has no cost because of a lot only known as a whole, so no answer about where it came from can fix that. */
   unanswerable?: true
 }
@@ -232,10 +232,10 @@ const unconfirmed = (...wallets: readonly (readonly string[] | undefined)[]): Pi
 }
 
 /** What says where this goes among the rest, which stays true whatever becomes of its cost. Only what's there, so a lot with none looks the way it always has. */
-export const ranking = ({ wholeCostOnly, boughtAt, boughtFrom }: Pick<CostPiece, "wholeCostOnly" | "boughtAt" | "boughtFrom">): Pick<CostPiece, "wholeCostOnly" | "boughtAt" | "boughtFrom"> => ({
+export const ranking = ({ wholeCostOnly, boughtAt, boughtAs }: Pick<CostPiece, "wholeCostOnly" | "boughtAt" | "boughtAs">): Pick<CostPiece, "wholeCostOnly" | "boughtAt" | "boughtAs"> => ({
   ...(wholeCostOnly ? { wholeCostOnly } : {}),
   ...(boughtAt ? { boughtAt } : {}),
-  ...(boughtFrom ? { boughtFrom } : {}),
+  ...(boughtAs ? { boughtAs } : {}),
 })
 
 function lotOf({ tracksPaidAt }: PositionState, piece: CostPiece, legId: string): Lot {
@@ -307,7 +307,7 @@ export const orderMatters = ({ orderUnknown }: Pick<FoldLeg, "orderUnknown">, me
 function credit(state: PositionState, leg: FoldLeg, qty: bigint): Lot[] {
   const dated = leg.blockNum === undefined ? {} : { acquiredBlock: leg.blockNum, acquiredAt: leg.timestamp as string }
   // No cost, but what says where its pieces go among the rest is still true.
-  const parts: readonly (Pick<CostPiece, "qty" | "wholeCostOnly" | "boughtAt" | "boughtFrom">)[] = leg.pieces ?? [{ qty: qty.toString() }]
+  const parts: readonly (Pick<CostPiece, "qty" | "wholeCostOnly" | "boughtAt" | "boughtAs">)[] = leg.pieces ?? [{ qty: qty.toString() }]
   if (orderMatters(leg, state.method)) return parts.reduce<Lot[]>((lots, piece) => addLot(state, lots, lotOf(state, { qty: piece.qty, costMicros: null, label: "unknown", estimatedCostMicros: "0", ...dated, ...ranking(piece) }, leg.id)), state.lots)
   const estimated = (leg.estimated || leg.costLabel === "received at market") && leg.costMicros !== null ? leg.costMicros : "0"
   // A piece with its own date got it from the wallet that first acquired it. Any other was acquired here and now.
@@ -340,10 +340,16 @@ function shrink(lot: Lot, qty: bigint): { rest: Lot | null; cost: bigint; estima
   return { rest, cost, estimated, given, ...(paidAt ? { paidAt } : {}) }
 }
 
-type Ranked = Pick<Lot, "qty" | "costMicros" | "wholeCostOnly" | "boughtAt" | "boughtFrom" | "acquiredAt">
+type Ranked = Pick<Lot, "qty" | "costMicros" | "wholeCostOnly" | "boughtAt" | "boughtAs" | "acquiredAt">
 
-/** Who says when this was acquired. The chain puts its own in order, and so does one exchange's file, which keeps what it can't as one lot. */
-const dateSource = ({ boughtAt, boughtFrom }: Ranked) => (boughtAt ? `exchange:${boughtFrom ?? ""}` : "chain")
+/**
+ * What puts this in order with others of its date. The chain does for its own. Parts of one purchase don't need it, because only
+ * fees separate them. Null means nothing does: two purchases an exchange dates the same could be from different accounts, whose
+ * files don't say which came first.
+ */
+const orderedBy = ({ boughtAt, boughtAs }: Ranked) => (boughtAt ? (boughtAs ?? null) : "chain")
+
+const isTied = <T extends Ranked>(run: readonly T[]) => run.some((lot) => orderedBy(lot) === null || orderedBy(lot) !== orderedBy(run[0] as T)) && run.some((lot) => costsDiffer(run[0] as T, lot))
 
 /** Whether either's order would change what part of them costs. Dividing a cost can round by a millionth each way, which isn't a different cost. */
 function costsDiffer(a: Ranked, b: Ranked): boolean {
@@ -353,7 +359,7 @@ function costsDiffer(a: Ranked, b: Ranked): boolean {
   return (gap < 0n ? -gap : gap) > aQty + bQty
 }
 
-/** Lots next to each other with the same date from different sources and different costs, since nothing says which came first. Any other lot is on its own. */
+/** Lots next to each other with the same date and different costs, when nothing says which came first. Any other lot is on its own. */
 function runsInOrder<T extends Ranked>(lots: readonly T[]): T[][] {
   const runs: T[][] = []
   for (const lot of lots) {
@@ -362,7 +368,7 @@ function runsInOrder<T extends Ranked>(lots: readonly T[]): T[][] {
     if (run && date !== undefined && dateOf(run[0] as T) === date) run.push(lot)
     else runs.push([lot])
   }
-  return runs.flatMap((run) => (new Set(run.map(dateSource)).size > 1 && run.some((lot) => costsDiffer(run[0] as T, lot)) ? [run] : run.map((lot) => [lot])))
+  return runs.flatMap((run) => (isTied(run) ? [run] : run.map((lot) => [lot])))
 }
 
 /**

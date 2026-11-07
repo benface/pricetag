@@ -30,6 +30,12 @@ export type ExchangeLot = {
   wholeCostOnly?: true
   /** When it was bought, as `toISOString` writes it. Only a part only known as a whole can be without one, when it could be from several moments. */
   at?: string
+  /**
+   * All that was bought at `at`, of which this is part. A second withdrawal from one purchase says the same, in this file or
+   * another export of it, and that's how the two are known to be one purchase. Missing means nothing says what it's part of.
+   */
+  boughtUnits?: string
+  boughtMicros?: string
 }
 
 /** The most lots a withdrawal keeps. More than that only has a cost as a whole, so one file can't weigh down every fold after it. */
@@ -252,7 +258,8 @@ function parseExchangeLots(value: unknown[], units: string, fifoCostMicros: stri
     if (!lot || !isMicros(lot.units) || BigInt(lot.units) === 0n || !isMicros(lot.micros)) return null
     if (lot.wholeCostOnly !== undefined && lot.wholeCostOnly !== true) return null
     if (lot.at === undefined ? !lot.wholeCostOnly : typeof lot.at !== "string" || Number.isNaN(Date.parse(lot.at))) return null
-    lots.push({ units: lot.units, micros: lot.micros, ...(lot.wholeCostOnly ? { wholeCostOnly: true as const } : {}), ...(typeof lot.at === "string" ? { at: new Date(lot.at).toISOString() } : {}) })
+    if (lot.boughtUnits === undefined ? lot.boughtMicros !== undefined : lot.at === undefined || !isMicros(lot.boughtUnits) || BigInt(lot.boughtUnits) < BigInt(lot.units) || !isMicros(lot.boughtMicros)) return null
+    lots.push({ units: lot.units, micros: lot.micros, ...(lot.wholeCostOnly ? { wholeCostOnly: true as const } : {}), ...(typeof lot.at === "string" ? { at: new Date(lot.at).toISOString() } : {}), ...(typeof lot.boughtUnits === "string" ? { boughtUnits: lot.boughtUnits, boughtMicros: lot.boughtMicros as string } : {}) })
   }
   const adds = (pick: (lot: ExchangeLot) => string, total: string) => lots.reduce((sum, lot) => sum + BigInt(pick(lot)), 0n) === BigInt(total)
   return adds((lot) => lot.units, units) && adds((lot) => lot.micros, fifoCostMicros) ? lots : null

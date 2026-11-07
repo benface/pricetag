@@ -7,7 +7,7 @@ import type { Source } from "@pricetag/sdk/internal"
 import type { PortfolioResponse, TaxReportResponse, WalletResponse } from "../src/core/api.ts"
 import { costKey, emptyBook, parseBook, type Book } from "../src/core/book.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
-import { parseCoinbaseCsv } from "../src/core/exchange-import.ts"
+import { keepingImport, parseCoinbaseCsv } from "../src/core/exchange-import.ts"
 import { foldBook } from "../src/core/resolve.ts"
 import { TAX_COUNTRIES, parseTaxYear, readOtherWallets, savedOtherWallets, taxReportOf, taxRows, type TaxYear } from "../src/core/tax.ts"
 import { createApi } from "../server/app.ts"
@@ -677,6 +677,29 @@ describe("the user's answers in a report", () => {
           assert.deepEqual([all?.Cost, all?.Gain], ["3000.000000", "2000.000000"])
           const [average] = eventsOf(taxReportOf([held([tied, arriving, sell(30, 1n, 2500)])], { ...US, method: "average" }, { book }))
           assert.deepEqual([average?.Cost, average?.Gain], ["1500.000000", "1000.000000"])
+        })
+      })
+
+      describe("between two exchange files' purchases at the same moment", () => {
+        const moment = "2026-10-01T10:00:00.000Z"
+        const later = "2026-10-05T00:00:00.000Z"
+        const legs = (out: bigint, usdOut: number) => [stamped(10, E18, oldAt), stamped(14, E18, later), sell(30, out, usdOut)]
+        const imported = keepingImport(keepingImport(emptyBook(), file(row(moment, "Buy", "1", "$1000"), row(oldAt, "Send", "1"))), file(row(moment, "Buy", "1", "$2000"), row(later, "Send", "1")))
+
+        it("has no cost or gain for part of them, the known total for all of them, and the average, also after being saved", () => {
+          for (const book of [imported, parseBook(JSON.parse(JSON.stringify(imported)))!]) {
+            assert.deepEqual(eventsOf(taxReportOf([held(legs(1n, 2500))], US, { book })).map((r) => [r.Cost, r.Gain]), [["unknown", "unknown"]])
+            const [all] = eventsOf(taxReportOf([held(legs(2n, 5000))], US, { book }))
+            assert.deepEqual([all?.Cost, all?.Gain], ["3000.000000", "2000.000000"])
+            const [average] = eventsOf(taxReportOf([held(legs(1n, 2500))], { ...US, method: "average" }, { book }))
+            assert.deepEqual([average?.Cost, average?.Gain], ["1500.000000", "1000.000000"])
+          }
+        })
+
+        it("costs the oldest part when they're two withdrawals of one purchase", () => {
+          const book: Book = { ...emptyBook(), withdrawals: file(row(moment, "Buy", "2", "$4000"), row(oldAt, "Send", "1"), row(later, "Send", "1")).withdrawals }
+          const [sale] = eventsOf(taxReportOf([held(legs(1n, 2500))], US, { book }))
+          assert.deepEqual([sale?.Cost, sale?.Gain], ["2000.000000", "500.000000"])
         })
       })
 
