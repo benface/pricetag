@@ -115,10 +115,7 @@ export function unreadAssets(positions: readonly Position[], { unreadBalances }:
 /** The assets `pnlOverTime` has to leave out. */
 export const unconfirmedAssets = (positions: readonly Position[], unread: readonly string[] = []) => new Set([...positions.filter(isUnconfirmed).map((p) => p.asset), ...unread])
 
-/**
- * Oldest first's lots, more than fit in this much memory. The check still counts them as if every step held all of them, which
- * stopped in WORK-559, so it refuses more than it needs to until it's measured again (WORK-673). Average has no such limit.
- */
+/** Oldest first's lots, more than fit in this much memory. Average has no such limit. */
 export class OldestFirstTooBigError extends Error {
   constructor() {
     super("This history is too long to work out by oldest first in this much memory. Average cost still works.")
@@ -145,8 +142,12 @@ export function limitFolds(bytes: number) {
 const BYTES_PER_LEG = 10_000
 /** What each wallet beyond the first adds to every leg, because each fold looks through all of them: 21 wallets of 1,000 legs fit, and of 1,400 didn't. */
 const BYTES_PER_LEG_PER_OTHER_WALLET = 1_000
-/** 8,000 incoming transfers fit and 9,000 didn't, which is about 12 bytes a lot. This leaves room for wallets kept in memory too. */
-const BYTES_PER_LOT = 20
+/**
+ * What a lot costs while it's open. Only the lots open at once count, since a step keeps none of them (WORK-559): 10,000 purchases
+ * all still open peaked at 156 MB, about what their legs alone cost, and a lot kept under 200 bytes more than average's one pool
+ * (WORK-673, with `test/support/fifo-server.ts`).
+ */
+const BYTES_PER_LOT = 500
 /** What a lot that arrived from another wallet costs on top, because the leg it arrived on keeps its own copy of it. */
 const BYTES_PER_INHERITED_LOT = 500
 /** 3,000 lots moved between two wallets 400 times fit by average, and 1,000 times didn't, which is 3 million of these. */
@@ -197,11 +198,12 @@ const chainOrder = (histories: readonly FoldedHistory[]) =>
 /**
  * A dry run of oldest first over wallets that can pass lots between them, cheap enough to run before any of the fold does.
  * A transfer it can't rule out counts as carrying its lots, so this can say more than the fold will hold, but not less.
- * `bytesFor` gets, for each wallet, the lots open after each leg, added up, and the lots that arrived from another wallet.
- * Neither ever goes down, so this stops as soon as they're past the limit, rather than counting a history that may not fit in memory just to count it.
+ * `bytesFor` gets, for each wallet, the most lots it had open at once, and the lots that arrived from another wallet, which each
+ * leg they arrived on keeps a copy of. Neither ever goes down, so this stops as soon as they're past the limit, rather than counting a history that may not fit in memory just to count it.
  */
 function dryRunFits(histories: readonly FoldedHistory[], bytesFor: (held: readonly number[], inherited: number) => number): boolean {
   const held = histories.map(() => 0)
+  const openNow = histories.map(() => 0)
   let inherited = 0
   const addresses = addressesOf(histories)
   const open = new Map<string, OpenLots>()
@@ -214,6 +216,7 @@ function dryRunFits(histories: readonly FoldedHistory[], bytesFor: (held: readon
     const key = `${wallet}:${leg.asset}`
     const lots = open.get(key) ?? { lots: [], first: 0 }
     open.set(key, lots)
+    const before = lots.lots.length - lots.first
     if (delta < 0n) {
       const taken = closeLots(lots, -delta)
       if (address && goesTo(leg, addresses)) carried.set(`${leg.txHash}:${address}:${leg.asset}`, taken)
@@ -237,7 +240,8 @@ function dryRunFits(histories: readonly FoldedHistory[], bytesFor: (held: readon
       }
       if (left > 0n) openLot(lots, { units: left, acquired: leg.blockNum })
     }
-    held[wallet] = (held[wallet] as number) + lots.lots.length - lots.first
+    openNow[wallet] = (openNow[wallet] as number) + lots.lots.length - lots.first - before
+    held[wallet] = Math.max(held[wallet] as number, openNow[wallet] as number)
     if (bytesFor(held, inherited) > foldBytes) return false
   }
   return true

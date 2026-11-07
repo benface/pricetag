@@ -337,8 +337,9 @@ describe("oldest first on a long history", () => {
     assert.equal(buildPortfolio(legs.slice(0, 2), "fifo", {}).method, "fifo")
   })
 
-  it("counts the lots that stay open, so the same number of legs can fit when what arrives also leaves", () => {
-    limitFolds(60_200)
+  it("counts the most lots open at once, so the same number of legs can fit when what arrives also leaves", () => {
+    // Six legs, and six lots open at the end, or never more than one.
+    limitFolds(6 * 10_000 + 3 * 500)
     const incoming = Array.from({ length: 6 }, (_, i) => leg(i))
     const inAndOut = Array.from({ length: 6 }, (_, i) => leg(i, i % 2 === 0 ? "1" : "-1"))
     assert.throws(() => buildPortfolio(incoming, "fifo", {}), OldestFirstTooBigError)
@@ -360,12 +361,22 @@ describe("oldest first on a long history", () => {
 
   it("counts every lot a leg inherited, in the order they were acquired", () => {
     const legs = 3 * 10_000
-    const lots = (1 + 6 + 5) * 20
+    // At most six open at once: its own, then the five it inherited.
+    const lots = 6 * 500
     const copies = 5 * 500
     limitFolds(legs + lots + copies)
     assert.equal(buildPortfolio(inherited(), "fifo", {}).method, "fifo")
     limitFolds(legs + lots + copies - 1)
     assert.throws(() => buildPortfolio(inherited(), "fifo", {}), OldestFirstTooBigError)
+  })
+
+  it("fits nearly as many purchases still open as a wallet can hold rows, in the heap the server's measured on", () => {
+    limitFolds(foldBytesThatFit(640 * MB))
+    const purchases = Array.from({ length: 40_000 }, (_, i) => leg(i + 1))
+    assertFoldsFit([{ legs: purchases }], "fifo")
+    assertFoldsFit([{ legs: purchases.slice(0, 15_000) }, { legs: purchases.slice(25_000) }], "fifo")
+    // What the legs alone cost is still the limit.
+    assert.throws(() => assertFoldsFit([{ legs: [...purchases, ...purchases.slice(0, 4_000)] }], "fifo"), OldestFirstTooBigError)
   })
 
   it("keeps a line for each block paid at only while working out what's inherited", () => {
