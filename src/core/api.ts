@@ -189,7 +189,7 @@ export type TaxReportResponse = {
   currency: CurrencyCode
   /** What this country calls for, so a client can tell an override. */
   defaults: { method: Method; scope: TaxScope }
-  /** The tax year listed, in UTC, named for the calendar year it starts in, or null for everything. */
+  /** The tax year listed, in the country's time zone (UK time for the UK, UTC otherwise), named for the calendar year it starts in, or null for everything. */
   year: number | null
   /** Every tax year with some history, newest first. */
   years: number[]

@@ -165,14 +165,15 @@ describe("the UK's matching rules", () => {
     const SELLER = `0x${"5".repeat(40)}`
     const part: LegPart = { logIndex: 0, token: ETH_ADDRESS, account: A, side: "credit", amount: (2n * E18).toString(), kind: "eth", counterparty: SELLER }
     const usd = (dollars: number) => (BigInt(dollars) * 1_000_000n).toString()
-    const arrival = at("2026-04-02", 2n * E18, { kind: "transfer", priceMicros: usd(2400), parts: [part], timestamp: "2026-04-02T12:00:00.000Z" })
+    // Made in order, since each leg is in a later block than the last.
     const legs = [
       at("2026-01-01", 2n * E18, { priceMicros: usd(3000), costMicros: usd(6000), costLabel: "paid" }),
       at("2026-03-01", -E18, { priceMicros: usd(2000), proceedsMicros: usd(2000) }),
       at("2026-04-01", -E18, { priceMicros: usd(2400), proceedsMicros: usd(2400) }),
-      arrival,
+      at("2026-04-02", 2n * E18, { kind: "transfer", priceMicros: usd(2400), parts: [part], timestamp: "2026-04-02T12:00:00.000Z" }),
       at("2026-05-01", -2n * E18, { priceMicros: usd(3500), proceedsMicros: usd(7000) }),
     ]
+    const arrival = legs[3] as PricedLeg
     const row = (when: string, type: string, quantity: string, total = "$0") => `${when},${type},ETH,${quantity},USD,$0,$0,${total},$0,x`
     const file = parseCoinbaseCsv(`Timestamp,Transaction Type,Asset,Quantity Transacted,Price Currency,Price at Transaction,Subtotal,Total (inclusive of fees and/or spread),Fees and/or Spread,Notes\n${[row("2026-03-10T10:00:00Z", "Buy", "1", "$2100"), row("2026-04-01T10:00:00Z", "Buy", "1", "$2500"), row(arrival.timestamp, "Send", "2")].join("\n")}\n`)
     assert.ok(file)
@@ -182,6 +183,28 @@ describe("the UK's matching rules", () => {
     // March 1 is matched to the exchange's March 10 buy, April 1 to its buy that day, and May 1 takes the January pool.
     assert.deepEqual(rows.map((r) => [pounds(r.costMicros), pounds(r.gainMicros), r.status]), [[2100, -100, "self-reported"], [2500, -100, "self-reported"], [6000, 1000, "resolved"]])
     assert.match(rows[0]?.reason ?? "", /bought in the 30 days after it/)
+  })
+
+  it("pools what an exchange file says was bought from when it was bought, not from its withdrawal, and only once", () => {
+    const SELLER = `0x${"5".repeat(40)}`
+    const part: LegPart = { logIndex: 0, token: ETH_ADDRESS, account: A, side: "credit", amount: E18.toString(), kind: "eth", counterparty: SELLER }
+    const usd = (dollars: number) => (BigInt(dollars) * 1_000_000n).toString()
+    // Made in order, since each leg is in a later block than the last.
+    const legs = [
+      at("2026-01-01", 2n * E18, { priceMicros: usd(3000), costMicros: usd(6000), costLabel: "paid" }),
+      at("2026-03-01", -E18, { priceMicros: usd(2500), proceedsMicros: usd(2500) }),
+      at("2026-04-02", E18, { kind: "transfer", priceMicros: usd(2400), parts: [part], timestamp: "2026-04-02T12:00:00.000Z" }),
+      at("2026-05-10", -2n * E18, { priceMicros: usd(2500), proceedsMicros: usd(5000) }),
+    ]
+    const arrival = legs[2] as PricedLeg
+    const row = (when: string, type: string, quantity: string, total = "$0") => `${when},${type},ETH,${quantity},USD,$0,$0,${total},$0,x`
+    const file = parseCoinbaseCsv(`Timestamp,Transaction Type,Asset,Quantity Transacted,Price Currency,Price at Transaction,Subtotal,Total (inclusive of fees and/or spread),Fees and/or Spread,Notes\n${[row("2026-02-01T10:00:00Z", "Buy", "1", "$1000"), row(arrival.timestamp, "Send", "1")].join("\n")}\n`)
+    assert.ok(file)
+    const book = { ...emptyBook(), withdrawals: file.withdrawals }
+    const wallet = walletOf(A, legs, undefined, { currency: "USD" })
+    const rows = taxRows([wallet], { method: "average", scope: "pooled", country: "GB" }, { book })
+    // The February buy is in the pool by March 1, though it's withdrawn in April: 7,000 for 3, then the other two at the same average.
+    assert.deepEqual(rows.map((r) => [pounds(r.costMicros), pounds(r.gainMicros), r.status]), [[2333.33, 166.67, "self-reported"], [4666.67, 333.33, "self-reported"]])
   })
 
   it("matches across all the wallets in a report, and each wallet on its own when asked", () => {

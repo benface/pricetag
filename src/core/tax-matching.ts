@@ -106,14 +106,14 @@ const acquiredHere = (leg: PricedLeg, label: string) => !leg.opening && (leg.kin
  * What a credit brought that was acquired on a known day, which can be matched, and the rest, which only joins the pool. Order in a
  * block doesn't matter to a day's matching, so what's matched drops it. What joins the pool keeps it, since there it can.
  */
-function splitCredit(leg: PricedLeg, timeZone: string): { acquired: { day: number; leg: PricedLeg }[]; pooled: PricedLeg | null } {
+function splitCredit(leg: PricedLeg, timeZone: string): { acquired: { day: number; at: string; leg: PricedLeg }[]; pooled: PricedLeg | null } {
   const { orderUnknown: _, ...plain } = leg
-  if (!leg.pieces) return acquiredHere(leg, leg.costLabel) ? { acquired: [{ day: dayNumber(leg.timestamp, timeZone), leg: plain }], pooled: null } : { acquired: [], pooled: leg }
-  const acquired: { day: number; leg: PricedLeg }[] = []
+  if (!leg.pieces) return acquiredHere(leg, leg.costLabel) ? { acquired: [{ day: dayNumber(leg.timestamp, timeZone), at: leg.timestamp, leg: plain }], pooled: null } : { acquired: [], pooled: leg }
+  const acquired: { day: number; at: string; leg: PricedLeg }[] = []
   const pooled: CostPiece[] = []
   for (const piece of leg.pieces) {
     const at = piece.boughtAt || (piece.acquiredAt && !piece.undated ? piece.acquiredAt : null) || (!piece.undated && acquiredHere(leg, piece.label) ? leg.timestamp : null)
-    if (at) acquired.push({ day: dayNumber(at, timeZone), leg: { ...plain, delta: piece.qty, pieces: [piece] } })
+    if (at) acquired.push({ day: dayNumber(at, timeZone), at, leg: { ...plain, delta: piece.qty, pieces: [piece] } })
     else pooled.push(piece)
   }
   const pooledQty = pooled.reduce((sum, piece) => sum + BigInt(piece.qty), 0n)
@@ -135,7 +135,8 @@ export function shares(parts: readonly bigint[], total: bigint): bigint[] {
   return out
 }
 
-type Acquisition = { day: number; arrival: number; leg: PricedLeg; qty: bigint }
+/** `joins` is the leg it joins the pool before: the first one after it was acquired, so what an exchange bought counts from its purchase, not its withdrawal. */
+type Acquisition = { day: number; joins: number; leg: PricedLeg; qty: bigint }
 type Disposal = { index: number; day: number; qty: bigint }
 
 /**
@@ -148,11 +149,18 @@ function matchAsset(legs: readonly PricedLeg[], readThroughDay: number, timeZone
   const acquisitions: Acquisition[] = []
   const pooledCredits = new Map<number, PricedLeg>()
   const disposals: Disposal[] = []
+  const times = legs.map((leg) => Date.parse(leg.timestamp))
+  // The first leg after `at`, but never after the credit that brought it, which is where something acquired here joins.
+  const joinsBefore = (at: string, arrival: number) => {
+    const ms = Date.parse(at)
+    const next = times.findIndex((time) => time > ms)
+    return next === -1 || next > arrival ? arrival : next
+  }
   legs.forEach((leg, index) => {
     const delta = BigInt(leg.delta)
     if (delta > 0n) {
       const { acquired, pooled } = splitCredit(leg, timeZone)
-      for (const part of acquired) acquisitions.push({ ...part, arrival: index, qty: BigInt(part.leg.delta) })
+      for (const { at, ...part } of acquired) acquisitions.push({ ...part, joins: joinsBefore(at, index), qty: BigInt(part.leg.delta) })
       if (pooled) pooledCredits.set(index, pooled)
     } else if (delta < 0n && leg.kind !== "transfer") disposals.push({ index, day: dayNumber(leg.timestamp, timeZone), qty: -delta })
   })
@@ -187,7 +195,7 @@ function matchAsset(legs: readonly PricedLeg[], readThroughDay: number, timeZone
     }
   }
 
-  // Each acquisition splits into what joins the pool when it arrives, and what's held for its day's matches, which all of
+  // Each acquisition splits into what joins the pool when it's acquired, and what's held for its day's matches, which all of
   // that day's acquisitions share, as one acquisition.
   const toPool = new Map<number, CostPiece[]>()
   const forMatches = new Map<number, PositionState>()
@@ -197,7 +205,7 @@ function matchAsset(legs: readonly PricedLeg[], readThroughDay: number, timeZone
     ofDay.forEach((acquisition, i) => {
       const alone = applyLegTaking(empty(), acquisition.leg).state
       const pooled = takeOut(alone, leftovers[i] as bigint)
-      toPool.set(acquisition.arrival, (toPool.get(acquisition.arrival) ?? []).concat(pooled.pieces))
+      toPool.set(acquisition.joins, (toPool.get(acquisition.joins) ?? []).concat(pooled.pieces))
       reserved = putIn(reserved, takeOut(pooled.state, held(pooled.state)).pieces)
     })
     forMatches.set(day, reserved)
@@ -231,10 +239,11 @@ function matchAsset(legs: readonly PricedLeg[], readThroughDay: number, timeZone
   const effects: MatchedEffect[] = []
   legs.forEach((leg, index) => {
     const delta = BigInt(leg.delta)
+    // What was acquired before this leg joins first, whatever this leg is, and is only ever added once.
+    pool = putIn(pool, toPool.get(index) ?? [])
     if (delta > 0n) {
       const pooled = pooledCredits.get(index)
       if (pooled) pool = applyLegTaking(pool, pooled).state
-      pool = putIn(pool, toPool.get(index) ?? [])
       return
     }
     if (delta === 0n) return
