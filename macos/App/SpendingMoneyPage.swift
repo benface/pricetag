@@ -3,30 +3,6 @@ import KeyVault
 import PricetagKit
 import SwiftUI
 
-/// This Mac's spending money on its own: the page around a wallet's numbers, or what to say when there's no wallet to show.
-struct HotWalletWindow: View {
-    let wallet: HotWallet
-    let store: PortfolioStore
-    let siteBridge: SiteBridge
-    let navigation: Navigation
-    let purchases: PurchaseTracker
-    /// What a test scene has typed for the network.
-    var rpc = ""
-    var rpcError: String?
-
-    var body: some View {
-        if wallet.availability == .ready, wallet.address != nil {
-            ScrollView {
-                HotWalletDetails(wallet: wallet, store: store, siteBridge: siteBridge, navigation: navigation, purchases: purchases, showsHoldings: true, overview: { EmptyView() }, rpc: rpc, rpcError: rpcError)
-                    .padding(20)
-            }
-        } else {
-            SpendingMoneySetup(wallet: wallet, store: store)
-                .frame(minWidth: 320, minHeight: 320)
-        }
-    }
-}
-
 /// There's no Spending Money to show. It can't be selected in the list, so this is a sheet.
 struct SpendingMoneySetup: View {
     let wallet: HotWallet
@@ -123,7 +99,7 @@ private struct HotWalletSetup: View {
 }
 
 /// What only spending money has, around the numbers any wallet has. `overview` goes in the middle, so its actions are in view above them.
-struct HotWalletDetails<Overview: View>: View {
+struct SpendingMoneyPage<Overview: View>: View {
     let wallet: HotWallet
     let store: PortfolioStore
     let siteBridge: SiteBridge
@@ -132,9 +108,12 @@ struct HotWalletDetails<Overview: View>: View {
     /// Once the overview has holdings, these would only say the same thing again.
     let showsHoldings: Bool
     @ViewBuilder let overview: Overview
-    /// What's typed for the network, and what's wrong with it. A test scene starts them off.
-    @State var rpc = ""
-    @State var rpcError: String?
+    /// What's typed for the network, and what's wrong with it.
+    @State private var rpc = ""
+    @State private var rpcError: String?
+    #if DEBUG
+    @Environment(\.sceneNetworkAddress) private var sceneNetworkAddress
+    #endif
     @State private var isApplyingRPC = false
     @State private var isAddingCold = false
     @State private var isToppingUp = false
@@ -204,6 +183,13 @@ struct HotWalletDetails<Overview: View>: View {
         }
         .sheet(isPresented: $isSweeping) { SweepSheet(wallet: wallet) }
         .onAppear {
+            #if DEBUG
+            if let sceneNetworkAddress {
+                rpc = sceneNetworkAddress.typed
+                rpcError = sceneNetworkAddress.problem
+                return
+            }
+            #endif
             // What didn't save stays, next to what's wrong with it.
             if rpcError == nil { rpc = wallet.settings.rpcURL.absoluteString }
         }
@@ -877,3 +863,10 @@ private struct CapSlider: View {
         }
     }
 }
+
+#if DEBUG
+extension EnvironmentValues {
+    /// What a test scene has typed for the network, and what's wrong with it.
+    @Entry var sceneNetworkAddress: (typed: String, problem: String)?
+}
+#endif

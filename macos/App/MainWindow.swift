@@ -30,6 +30,10 @@ struct MainWindow: View {
     let purchases: PurchaseTracker
     /// What someone new is still to see. Nothing, for anything that doesn't say otherwise.
     var firstRun: FirstRun = .finished
+    #if DEBUG
+    /// For a test scene that renders a whole page, which is taller than a window can be, and has no window's sidebar or toolbar.
+    var showsOnlyPage = false
+    #endif
     @State private var columns = NavigationSplitViewVisibility.all
     @State private var width: CGFloat = 1120
     @State private var exporting = false
@@ -56,6 +60,20 @@ struct MainWindow: View {
     private var hasNumbers: Bool { portfolio.map { $0.progress.started && !$0.isEmpty } ?? false }
 
     var body: some View {
+        #if DEBUG
+        if showsOnlyPage {
+            pageWithDeviceNotice
+                .environment(\.updatingNote, store.updatingNote)
+                .environment(\.staleNote, store.staleNote)
+        } else {
+            window
+        }
+        #else
+        window
+        #endif
+    }
+
+    private var window: some View {
         NavigationSplitView(columnVisibility: $columns) {
             sidebar
         } detail: {
@@ -447,7 +465,7 @@ struct MainWindow: View {
     private var spendingMoneyOverview: some View {
         GeometryReader { window in
             overviewPage(pageWidth: window.size.width) {
-                HotWalletDetails(wallet: hotWallet, store: store, siteBridge: siteBridge, navigation: navigation, purchases: purchases, showsHoldings: !hasHoldingsInOverview) {
+                SpendingMoneyPage(wallet: hotWallet, store: store, siteBridge: siteBridge, navigation: navigation, purchases: purchases, showsHoldings: !hasHoldingsInOverview) {
                     walletPage(isInsidePage: true) { overview($0, pageHeight: window.size.height) }
                         .frame(minHeight: hasHoldingsInOverview ? nil : 260)
                 }
