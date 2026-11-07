@@ -43,7 +43,7 @@
 
 import { assertFoldFits, foldPositions, formatDuration, isAddress, keepsLots, markUnknownOrder, msBetweenBlocks, normalizeAddress, orderMatters, shortHash, timestampOfBlock, unreadAssets, viewWallet, worth, type CostPiece, type CurrencyCode, type KnownTaken, type LegEffect, type Method, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type TaxReportResponse, type WalletResponse } from "./api.ts"
-import { emptyBook, linkedWallets, type Book } from "./book.ts"
+import { emptyBook, isDemoWallet, linkedWallets, type Book } from "./book.ts"
 import { csvCell, microsCell, unitsCell } from "./csv.ts"
 import { rateSource } from "./explain.ts"
 import { resolveLegs, withheldIn, type Received } from "./resolve.ts"
@@ -665,21 +665,26 @@ export function taxRows(wallets: readonly WalletResponse[], { method, scope, cou
   return rowsFrom(sourcesOf(wallets, method, context, rules), method, scope, rules)
 }
 
-const walletWords = (text: string) => text.split(/[\s,]+/).filter(Boolean)
-
 /**
- * The wallets someone typed in, and the first that can't be one. The demo wallet can't be combined with anything, so
- * what's saved from another wallet is ignored there: it mustn't block a report whose field for fixing it isn't shown.
+ * The addresses in what the report used to let people type in as their other wallets, once each. Those are linked as theirs
+ * now, so this is only for carrying over what was saved. Anything pasted there by mistake is dropped.
  */
-export function readOtherWallets(text: string, address: string): { others: string[]; bad: string | null } {
-  if (address === "demo") return { others: [], bad: null }
-  const others = walletWords(text)
-  return { others: others.map((other) => other.toLowerCase()), bad: others.find((other) => !isAddress(other)) ?? null }
+export function typedOtherWallets(text: string): string[] {
+  return [...new Set(text.split(/[\s,]+/).filter(isAddress).map((other) => other.toLowerCase()))]
 }
 
-/** What's worth keeping of that text: only its addresses, so anything pasted there by mistake isn't saved. */
-export function savedOtherWallets(text: string): string {
-  return [...new Set(walletWords(text).filter(isAddress).map((other) => other.toLowerCase()))].join("\n")
+/**
+ * The wallets a report on `address` covers, the way the server picks them: it, the ones sent `also`, and, when it's the user's,
+ * every one the answers say is theirs. The report lists these from the book, so one that makes the report fail, like one too
+ * many or one that can't be read, can still be taken out. The demo's report stays its own.
+ */
+export function walletsInReport(book: Book, address: string, also: readonly string[]): string[] {
+  const focus = address.toLowerCase()
+  if (focus === "demo" || isDemoWallet(focus)) return [focus]
+  const others = also.map((other) => other.toLowerCase()).filter((other) => other !== focus)
+  const answered = linkedWallets(book).filter((wallet) => !isDemoWallet(wallet))
+  const own = others.length > 0 || answered.includes(focus)
+  return [...new Set([focus, ...others, ...(own ? answered : [])])]
 }
 
 /** "Canada, the UK and the US". */

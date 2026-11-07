@@ -113,84 +113,49 @@ import Testing
         let first = model(defaults: defaults)
         first.setCountry(.CA)
         first.setMethod(.fifo)
-        first.setOtherWalletsText("0x\(String(repeating: "a", count: 40))")
         let second = model(defaults: defaults)
         #expect(second.country == .CA)
         #expect(second.method == .fifo)
         #expect(second.scope == .pooled)
-        #expect(second.otherWallets.count == 1)
     }
 
-    @Test func addsAndRemovesWalletsOneAtATime() {
+    @Test func linksWhatWasTypedInOnce() {
+        let defaults = freshDefaults()
+        let a = "0x\(String(repeating: "A", count: 40))"
+        let b = "0x\(String(repeating: "b", count: 40))"
+        defaults.set("\(a)\n 0xnope, \(b)\n\(a.lowercased())", forKey: "taxOtherWallets")
+        #expect(model(defaults: defaults).takeTypedWallets() == [a.lowercased(), b], "Each address once, and a typo goes")
+        #expect(model(defaults: defaults).takeTypedWallets().isEmpty, "Once they're linked, they're not kept here")
+        #expect(defaults.string(forKey: "taxOtherWallets") == nil)
+    }
+
+    @Test func coversTheUsersWalletsTogether() {
         let a = "0x\(String(repeating: "a", count: 40))"
         let b = "0x\(String(repeating: "b", count: 40))"
-        let model = model()
-        model.addOtherWallet(a.uppercased().replacingOccurrences(of: "0X", with: "0x"))
-        model.addOtherWallet(b)
-        model.addOtherWallet(a)
-        #expect(model.otherWallets == [a, b])
-        model.removeOtherWallet(a)
-        #expect(model.otherWallets == [b])
-    }
-
-    @Test func aTypoCanBeRemovedOnItsOwn() {
-        let a = "0x\(String(repeating: "a", count: 40))"
-        let model = model()
-        model.setOtherWalletsText("0xnope\n\(a)")
-        model.removeOtherWallet("0xnope")
-        #expect(model.otherWallets == [a])
-        #expect(model.badWallet(for: a) == nil)
+        let c = "0x\(String(repeating: "c", count: 40))"
+        let hot = "0x\(String(repeating: "d", count: 40))"
+        let book = Book().answering(b, .mine, focus: a).answering(WalletAddress.demo, .mine, focus: nil)
+        #expect(TaxReportModel.wallets(address: a, linked: [], book: book) == [a, b], "Linked by an answer, with nothing typed in")
+        #expect(TaxReportModel.wallets(address: hot, linked: [a], book: book) == [hot, a, b], "This Mac's own wallet brings the answers' with it")
+        #expect(TaxReportModel.wallets(address: c, linked: [], book: book) == [c], "A wallet nobody's said is theirs is only itself")
+        #expect(TaxReportModel.wallets(address: WalletAddress.demo, linked: [a], book: book) == [WalletAddress.demo])
     }
 
     @Test func offersOnlyWhatWouldChangeTheReport() {
-        let showing = "0x\(String(repeating: "a", count: 40))"
-        let linked = "0x\(String(repeating: "b", count: 40))"
-        let added = "0x\(String(repeating: "c", count: 40))"
+        let covered = ["0x\(String(repeating: "a", count: 40))", "0x\(String(repeating: "b", count: 40))"]
         let other = "0x\(String(repeating: "d", count: 40))"
-        let model = model()
-        model.addOtherWallet(added)
-        let offered = [showing, linked, added, other].filter { model.offers(WalletEntry(address: $0, name: nil, kind: .watching), showing: showing, linked: [linked]) }
+        let offered = (covered + [other]).filter { TaxReportModel.offers(WalletEntry(address: $0, name: nil, kind: .watching), covered: covered) }
         #expect(offered == [other])
-    }
-
-    @Test func aBadWalletAsksTheServerNothing() {
-        let model = model()
-        model.setOtherWalletsText("0xnope")
-        let real = "0x\(String(repeating: "a", count: 40))"
-        #expect(model.badWallet(for: real) == "0xnope")
-        #expect(model.request(address: real, currency: .USD, serverURL: server) == nil)
-    }
-
-    @Test func aSavedTypoDoesntBlockTheDemoWallet() {
-        let defaults = freshDefaults()
-        model(defaults: defaults).setOtherWalletsText("0xnope")
-        // Reopened on the demo wallet, where the field for fixing it isn't shown.
-        let reopened = model(defaults: defaults)
-        #expect(reopened.otherWalletsText == "0xnope")
-        #expect(reopened.badWallet(for: WalletAddress.demo) == nil)
-        #expect(reopened.request(address: WalletAddress.demo, currency: .USD, serverURL: server)?.otherWallets == [])
-    }
-
-    @Test func readsSeveralWalletsHoweverTheyreSeparated() {
-        let a = "0x\(String(repeating: "A", count: 40))"
-        let b = "0x\(String(repeating: "b", count: 40))"
-        let model = model()
-        model.setOtherWalletsText("\(a)\n \(b), ")
-        #expect(model.otherWallets == [a.lowercased(), b])
-        let request = model.request(address: b, currency: .USD, serverURL: server)
-        #expect(request?.body.also == [a.lowercased(), b])
-        // The demo wallet can't be combined, so what's remembered doesn't get in its way.
-        #expect(model.request(address: WalletAddress.demo, currency: .USD, serverURL: server)?.otherWallets == [])
     }
 
     @Test func theAnswersAndTheWalletsItKnowsGoWithTheRequest() {
         let a = "0x\(String(repeating: "a", count: 40))"
         let b = "0x\(String(repeating: "b", count: 40))"
+        let c = "0x\(String(repeating: "c", count: 40))"
         let model = model()
-        model.setOtherWalletsText(a)
         let book = Book(senders: [b: .someoneElse])
-        let request = model.request(address: "0x\(String(repeating: "c", count: 40))", currency: .USD, serverURL: server, book: book, linked: [a, b])
-        #expect(request?.body.also == [a, b], "A wallet that's both typed and known only counts once")
+        let request = model.request(address: c, currency: .USD, serverURL: server, book: book, linked: [a, b, a, c])
+        #expect(request?.body.also == [a, b], "Each once, and not the wallet it's on")
         #expect(request?.body.book == book)
         #expect(model.request(address: WalletAddress.demo, currency: .USD, serverURL: server, book: book, linked: [a])?.body.also == [], "The demo wallet can't be combined")
     }

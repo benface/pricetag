@@ -1,9 +1,9 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react"
-import { formatSignedMoney, shortHash, type CurrencyCode, type Method } from "@pricetag/sdk/core"
+import { formatSignedMoney, isAddress, shortHash, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import type { TaxReportResponse } from "../core/api.ts"
 import { failureOf, jsonPost, readResponse, type ReadFailure } from "../core/read-failure.ts"
-import type { Book } from "../core/book.ts"
-import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, isTaxMethod, readOtherWallets, savedOtherWallets, type TaxCountryCode, type TaxScope, type TaxYear } from "../core/tax.ts"
+import { isDemoWallet, type Book } from "../core/book.ts"
+import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, isTaxMethod, typedOtherWallets, walletsInReport, type TaxCountryCode, type TaxScope, type TaxYear } from "../core/tax.ts"
 import { METHOD_LABELS, METHOD_NAME, answerQuestionsLabel, est, panelProblem } from "../core/wording.ts"
 import { ProblemNotice } from "./ProblemNotice.tsx"
 import { downloadCsv } from "./download.ts"
@@ -12,6 +12,7 @@ import { useModal } from "./useModal.ts"
 const COUNTRY_KEY = "pricetag.taxCountry"
 const METHOD_KEY = "pricetag.taxMethod"
 const SCOPE_KEY = "pricetag.taxScope"
+/** Where the report kept wallets typed into it, before it used the linked ones. What's still there is linked once, then removed. */
 const OTHERS_KEY = "pricetag.taxOtherWallets"
 
 /** Remembered in this browser. Until it's chosen, the main currency is the best guess. */
@@ -32,8 +33,6 @@ function remember(key: string, value: string | null) {
   if (value === null) localStorage.removeItem(key)
   else localStorage.setItem(key, value)
 }
-
-const readOthers = () => localStorage.getItem(OTHERS_KEY) ?? ""
 
 /** A post, because answers don't belong in a URL, where they'd end up in logs. */
 async function fetchReport(address: string, request: object, signal: AbortSignal): Promise<TaxReportResponse> {
@@ -59,9 +58,9 @@ function unknownSentence({ unknownCount: count, soldCount, feeCount, sentCount }
   return `${n(count)} of these ${n(total)} ${count === 1 ? "has" : "have"} an unknown gain, in whole or in part. What's unknown is left out of the total.`
 }
 
-export function TaxPanel({ address, alongside, currency, book, year, onYear, overviewMethod, questionsIn, onResolve, onClose }: {
+export function TaxPanel({ address, alongside, currency, book, year, onYear, overviewMethod, questionsIn, onResolve, onLink, onUnlink, fromDevice, onClose }: {
   address: string
-  /** Wallets the report always covers with this one, on top of any listed here. */
+  /** Wallets the report always covers with this one, on top of the ones the answers say are the user's. */
   alongside: readonly string[]
   currency: CurrencyCode
   book: Book
@@ -73,17 +72,24 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
   questionsIn: ReadonlyMap<string, number>
   /** Opens a wallet's questions, which can be one added here rather than the one showing. */
   onResolve: (wallet: string) => void
+  /** Says these wallets are the user's, and so is `focus`, the way answering "Mine" does. The report follows the answers. `onSaved` only hears a save that worked. */
+  onLink: (wallets: readonly string[], focus: string, onSaved?: () => void) => void
+  /** Says a wallet isn't the user's after all, so it leaves every report on theirs. */
+  onUnlink: (wallet: string) => void
+  /** Accounts a hardware device proved are the user's. Those stay theirs whatever the answers say, so they can't be taken out here. */
+  fromDevice: readonly string[]
   onClose: () => void
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
-  const othersError = useId()
+  const addError = useId()
   const close = useRef<HTMLButtonElement>(null)
   const [country, setCountry] = useState(() => readCountry(currency))
   // Nothing chosen means whatever the country calls for. Choosing another country goes back to that.
   const [chosenMethod, setChosenMethod] = useState<string | null>(readMethod)
   const [chosenScope, setChosenScope] = useState<TaxScope | null>(readScope)
   const [years, setYears] = useState<{ year: number; label: string }[]>([])
-  const [othersText, setOthersText] = useState(readOthers)
+  const [adding, setAdding] = useState("")
+  const [badAdd, setBadAdd] = useState<string | null>(null)
   const [report, setReport] = useState<TaxReportResponse | null>(null)
   const [attempt, setAttempt] = useState(0)
   const [error, setError] = useState<ReadFailure | null>(null)
@@ -93,17 +99,30 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
   // One the country doesn't allow, like one remembered from another, goes back to what it calls for.
   const method = isTaxMethod(country, chosenMethod) ? chosenMethod : rules.method
   const scope = chosenScope ?? rules.scope
-  const { others, bad: badOther } = useMemo(() => readOtherWallets(othersText, address), [othersText, address])
-  const isDemo = address === "demo"
+  const isDemo = address === "demo" || isDemoWallet(address)
 
   useModal(dialog, close)
 
+  // Typed in here before the report used linked wallets. A report then covered those with whichever wallet it was on, as one
+  // person's, so they're linked with that one, and it covers what it did. The demo's report never took them, so they wait for a
+  // real wallet. What's typed stays until the link's saved, so a save that fails is tried again next time.
+  const carriedOver = useRef(false)
   useEffect(() => {
-    if (badOther) return
+    if (isDemo || carriedOver.current) return
+    const text = localStorage.getItem(OTHERS_KEY)
+    if (text === null) return
+    carriedOver.current = true
+    const typed = typedOtherWallets(text)
+    const forget = () => localStorage.removeItem(OTHERS_KEY)
+    if (typed.length > 0) onLink(typed, address, forget)
+    else forget()
+  }, [address, isDemo, onLink])
+
+  useEffect(() => {
     const controller = new AbortController()
     setLoading(true)
     setError(null)
-    fetchReport(address, { country, method, scope, year, currency, also: [...new Set([...others, ...alongside])].filter((other) => other !== address.toLowerCase()), book }, controller.signal)
+    fetchReport(address, { country, method, scope, year, currency, also: alongside.filter((other) => other !== address.toLowerCase()), book }, controller.signal)
       .then((next) => {
         setYears(next.years.map((option, i) => ({ year: option, label: next.yearLabels[i] ?? String(option) })))
         setReport(next)
@@ -117,7 +136,7 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
         setLoading(false)
       })
     return () => controller.abort()
-  }, [address, alongside, country, method, scope, year, currency, others, badOther, book, attempt])
+  }, [address, alongside, country, method, scope, year, currency, book, attempt])
 
   const chooseMethod = (next: Method | null) => {
     remember(METHOD_KEY, next)
@@ -137,7 +156,21 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
   const shownYear = year === "latest" && years[0] !== undefined ? years[0].year : year
   const note = methodNote(method, overviewMethod, country)
   const defaultTag = (isDefault: boolean) => (isDefault ? " (default)" : "")
-  const ready = report !== null && !loading && badOther === null
+  const ready = report !== null && !loading
+  // From the book rather than the report, so a wallet that makes the report fail can still be taken out.
+  const covered = useMemo(() => walletsInReport(book, address, alongside), [book, address, alongside])
+
+  const addWallet = () => {
+    const next = adding.trim()
+    if (next === "") return
+    if (!isAddress(next)) return setBadAdd(next)
+    setBadAdd(null)
+    setAdding("")
+    // Adding one here says the wallet the report's on is the user's too, or it wouldn't go with it.
+    if (!covered.includes(next.toLowerCase())) onLink([next.toLowerCase()], address)
+  }
+  // Only what an answer put here can be taken out here. The wallet the report's on is what it's about.
+  const removable = (wallet: string) => wallet !== address.toLowerCase() && book.senders[wallet]?.kind === "mine" && !fromDevice.includes(wallet)
 
   return (
     <dialog
@@ -218,24 +251,51 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
         </label>
         {note ? <p className="small muted">{note}</p> : null}
         {isDemo ? null : (
-          <label className="field">
-            <span className="small muted">Your other wallets, one per line</span>
-            <textarea
-              rows={3}
-              spellCheck={false}
-              autoComplete="off"
-              placeholder="0x…"
-              value={othersText}
-              aria-invalid={badOther !== null}
-              aria-describedby={badOther ? othersError : undefined}
-              onChange={(e) => {
-                remember(OTHERS_KEY, savedOtherWallets(e.target.value) || null)
-                setOthersText(e.target.value)
+          <div className="field">
+            <span className="small muted">{covered.length > 1 ? `Your ${covered.length} wallets${report ? " in this report" : ""}` : "Your other wallets"}</span>
+            {covered.length > 1 ? (
+              <ul className="tax-wallets small">
+                {covered.map((wallet) => (
+                  <li key={wallet}>
+                    <span>{shortHash(wallet)}{wallet === address.toLowerCase() ? " · this one" : ""}</span>
+                    {removable(wallet) ? (
+                      <button type="button" className="link" aria-label={`Remove ${shortHash(wallet)}, it isn't yours`} onClick={() => onUnlink(wallet)}>
+                        Not mine
+                      </button>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            <form
+              className="tax-add"
+              onSubmit={(e) => {
+                e.preventDefault()
+                addWallet()
               }}
-            />
-          </label>
+            >
+              <input
+                type="text"
+                spellCheck={false}
+                autoComplete="off"
+                placeholder="0x…"
+                aria-label="Add a wallet of yours"
+                value={adding}
+                aria-invalid={badAdd !== null}
+                aria-describedby={badAdd ? addError : undefined}
+                onChange={(e) => {
+                  setAdding(e.target.value)
+                  setBadAdd(null)
+                }}
+              />
+              <button type="submit" disabled={adding.trim() === ""}>
+                Add
+              </button>
+            </form>
+            <span className="small muted">Adding a wallet says it's yours everywhere, so what moves between your wallets isn't counted as a sale.</span>
+          </div>
         )}
-        {badOther ? <p id={othersError} className="notice warn" role="alert">⚠ {badOther} isn't a Base address.</p> : null}
+        {badAdd ? <p id={addError} className="notice warn" role="alert">⚠ {badAdd} isn't a Base address.</p> : null}
         {error ? (
           <ProblemNotice
             problem={panelProblem(error, location.origin)}
@@ -247,7 +307,7 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
           />
         ) : null}
 
-        {report && !badOther ? (
+        {report ? (
           <>
             <h3 className="tax-year">{report.yearLabel === null ? "In all years" : `In ${report.yearLabel}`}</h3>
             <dl className="tax-counts">
@@ -298,9 +358,9 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
           </>
         ) : null}
 
-        <p className="visually-hidden" role="status">{loading && !badOther ? "Working it out…" : ready ? "The report is ready." : ""}</p>
+        <p className="visually-hidden" role="status">{loading ? "Working it out…" : ready ? "The report is ready." : ""}</p>
         <button type="button" className="primary" disabled={!ready} onClick={() => report && downloadCsv(report.csv, report.filename)}>
-          {loading && !badOther ? "Working it out…" : "Download CSV"}
+          {loading ? "Working it out…" : "Download CSV"}
         </button>
         {report?.form ? (
           <button type="button" disabled={!ready} onClick={() => report.form && downloadCsv(report.form.csv, report.form.filename)}>
@@ -308,7 +368,7 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
           </button>
         ) : null}
 
-        {report && !badOther ? (
+        {report ? (
           <details className="small tax-notes">
             <summary>What this report covers and leaves out</summary>
             {report.notes.map((note) => (
