@@ -75,6 +75,18 @@ struct WalletListTests {
         #expect(list.entry(for: c)?.detail == "Replaced Key")
     }
 
+    @Test func addingToATaxReportLinksBothAsOneStep() {
+        let (store, _) = makeStore()
+        store.setWallet(b)
+        store.addToYours([a, c], focus: b)
+        #expect(store.book.linkedWallets == [a, b, c].sorted(), "the report's own wallet is the user's too")
+        #expect(store.undoNames.last == "Add to Yours")
+        store.undo()
+        #expect(store.book.linkedWallets.isEmpty, "one step takes it all back")
+        store.addToYours([], focus: b)
+        #expect(store.undoNames.isEmpty, "nothing to add changes nothing")
+    }
+
     @Test func aWalletMovesToYoursWithoutASignatureAndBack() throws {
         let (store, _) = makeStore()
         store.setWallet(a)

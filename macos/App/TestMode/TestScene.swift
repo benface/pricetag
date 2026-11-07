@@ -48,7 +48,7 @@ struct SceneSpec {
     enum Route { case send, topUp, buy, receive, addSavings, export, find, topUpCancelled, holdings, addWallet, details, answer, removeFromSavings }
     enum Browsers { case chromeOnly, safariAndChrome, safariOnly }
     enum SavedWallets { case three, longName, many }
-    enum Answers { case none, recipientIsSomeoneElse, everyKind, emptyWalletIsMine, treasuryIsMine, unreadable }
+    enum Answers { case none, recipientIsSomeoneElse, everyKind, emptyWalletIsMine, treasuryIsMine, treasuryAndRecentAreMine, unreadable }
     enum Purchases { case none, all, inCAD, lastThree }
 
     var screen: Screen
@@ -74,7 +74,6 @@ struct SceneSpec {
     /// Once the window has its size, as when someone clicks. Before that it's too small for the details to fit beside the section.
     var opensDetails: ExplainTarget?
     var savedWallets = SavedWallets.three
-    var hasOtherTaxWallets = false
     var answers = Answers.none
     /// The real app hears about this from the wallet, which these scenes never start.
     var hearsOfLinkedWallets = false
@@ -608,8 +607,8 @@ enum TestScene: String, CaseIterable {
         case .mainTaxReportSmall: SceneSpec(screen: .main(MainWindow.minimumSize), section: .taxReport)
         case .taxReport: SceneSpec(screen: .taxReport, chrome: .none)
         case .taxReportAddedWallet: SceneSpec(screen: .taxReport, chrome: .none, shownWallet: Self.namedWallet)
-        case .taxReportOtherWallets: SceneSpec(screen: .taxReportWithWallets, chrome: .none, shownWallet: Self.namedWallet, listsWallets: true, hasOtherTaxWallets: true)
-        case .taxReportLeftOver: SceneSpec(screen: .taxReportWithWallets, chrome: .none, shownWallet: Self.namedWallet, listsWallets: true, hasOtherTaxWallets: true)
+        case .taxReportOtherWallets: SceneSpec(screen: .taxReportWithWallets, chrome: .none, shownWallet: Self.namedWallet, listsWallets: true, answers: .treasuryAndRecentAreMine)
+        case .taxReportLeftOver: SceneSpec(screen: .taxReportWithWallets, chrome: .none, shownWallet: Self.namedWallet, listsWallets: true, answers: .treasuryAndRecentAreMine)
         case .mainNoWalletSmall: SceneSpec(screen: .main(MainWindow.minimumSize), hasWallet: false)
         case .mainNoWalletHasSpendingMoney: SceneSpec(screen: .main(), hasWallet: false, hotWallet: .funded)
         case .mainNoWalletNotProvisioned: SceneSpec(screen: .main(), hasWallet: false, hotWallet: .notProvisioned)
@@ -962,7 +961,6 @@ enum TestScene: String, CaseIterable {
             }
             registered["savedWallets"] = try? JSONEncoder().encode(wallets)
         }
-        if spec.hasOtherTaxWallets { registered["taxOtherWallets"] = "\(Self.recentWallet)\n0x0000000000000000000000000000000000c0ffee\n0xnope" }
         switch spec.answers {
         case .none: break
         case .recipientIsSomeoneElse: registered["answers"] = try? JSONEncoder().encode(Book().answering(Self.recipient, .someoneElse, focus: nil))
@@ -972,6 +970,8 @@ enum TestScene: String, CaseIterable {
         case .emptyWalletIsMine: registered["answers"] = try? JSONEncoder().encode(Book().answering(Self.emptyWallet, .mine, focus: nil))
         // Treasury is the user's too, and it's the wallet All Yours is still reading.
         case .treasuryIsMine: registered["answers"] = try? JSONEncoder().encode(Book().answering(Self.namedWallet, .mine, focus: nil))
+        // The tax report covers both together, without anyone typing them in.
+        case .treasuryAndRecentAreMine: registered["answers"] = try? JSONEncoder().encode(Book().answering(Self.recentWallet, .mine, focus: Self.namedWallet).answering("0x0000000000000000000000000000000000c0ffee", .mine, focus: nil))
         // Answers from a version that knows a currency this one doesn't.
         case .unreadable: registered["answers"] = Data(#"{"senders":{},"costs":{"a:b":{"micros":"1","currency":"NEW"}},"withdrawals":[]}"#.utf8)
         }

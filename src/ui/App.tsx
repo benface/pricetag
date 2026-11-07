@@ -16,7 +16,7 @@ import { TaxPanel } from "./TaxPanel.tsx"
 import { useAllYours, useWallet } from "./useWallet.ts"
 import { LazyPanel } from "./LoadBoundary.tsx"
 import { ProblemNotice } from "./ProblemNotice.tsx"
-import { currenciesIn, walletsBehind, walletsToRead, yourWallets } from "../core/book.ts"
+import { answerSender, currenciesIn, walletsBehind, walletsToRead, yourWallets } from "../core/book.ts"
 import { readCheckedAccounts } from "../core/device-accounts.ts"
 import { parseDeviceLink, type DeviceLink } from "../core/device-link.ts"
 import { exportCsv } from "../core/export.ts"
@@ -136,6 +136,10 @@ export function App() {
     setResolving({ asset: null })
   }, [pendingResolve, wallet])
 
+  const linkFromTax = useCallback(
+    (wallets: readonly string[], focus: string | null) => change((latest) => wallets.reduce((next, wallet) => answerSender(next, focus, wallet, { kind: "mine" }), latest)),
+    [change],
+  )
   const resolveFromTax = (next: string) => {
     if (!address) return
     if (next === wallet?.address.toLowerCase()) {
@@ -426,6 +430,7 @@ export function App() {
           overviewMethod={method}
           questionsIn={questionsIn}
           onResolve={resolveFromTax}
+          onLink={linkFromTax}
           onClose={() => setTaxOpen(false)}
         /> : null}
     </div>

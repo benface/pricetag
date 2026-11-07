@@ -39,12 +39,13 @@ public struct TaxReportView: View {
         model.request(address: reportAddress, currency: store.currency, serverURL: store.serverURL, book: store.book, linked: reportLinked)
     }
 
-    private var badWallet: String? {
-        model.badWallet(for: store.address)
+    /// Every wallet the report covers, the one it's on first. The user's own wallets all go in together, so this is where to add one.
+    private var covered: [String] {
+        reportAddress.map { TaxReportModel.wallets(address: $0, linked: reportLinked, book: store.book) } ?? []
     }
 
     private var report: TaxReport? {
-        if badWallet == nil, case .ready(let report) = model.state { return report }
+        if case .ready(let report) = model.state { return report }
         return nil
     }
 
@@ -77,6 +78,11 @@ public struct TaxReportView: View {
         }
         .task(id: request) {
             if let request { await model.load(request) }
+        }
+        .onAppear {
+            // Typed in here before the report used the user's own wallets. Saying so then said they're theirs, but nothing about the wallet showing.
+            let typed = model.takeTypedWallets()
+            if !typed.isEmpty { store.addToYours(typed, focus: nil, action: "Link Wallets from Tax Report") }
         }
         .fileExporter(
             isPresented: Binding(get: { document != nil }, set: { if !$0 { document = nil } }),
@@ -116,25 +122,31 @@ public struct TaxReportView: View {
         }
         if store.address != WalletAddress.demo {
             Section {
-                ForEach(model.otherWallets, id: \.self) { otherWalletRow($0) }
+                ForEach(covered.dropFirst(), id: \.self) { walletRow($0) }
                 AddressField(
                     "Add a wallet",
                     prompt: wallets.isEmpty ? "Paste an address" : "Paste an address, or find a wallet",
                     text: $addingWallet,
-                    wallets: wallets.filter { model.offers($0, showing: reportAddress, linked: reportLinked) },
+                    wallets: wallets.filter { TaxReportModel.offers($0, covered: covered) },
                     read: readAddress,
                     takesSeveral: true,
-                    onAddress: model.addOtherWallet
+                    // Only the user's own wallets go in a report together, so adding one says it's theirs, and the one the report's on too.
+                    onAddress: { store.addToYours([$0], focus: reportAddress) }
                 )
                 // A form's own style has no box, so its prompt would read as a label.
                 .textFieldStyle(.roundedBorder)
             } header: {
                 Text("Your other wallets")
+            } footer: {
+                Text("Adding a wallet says it's yours everywhere, so what moves between your wallets isn't counted as a sale.")
+                    .font(.callout)
+                    .secondaryText()
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
 
-    private func otherWalletRow(_ address: String) -> some View {
+    private func walletRow(_ address: String) -> some View {
         let wallet = wallets.first { $0.address == address }
         return HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 1) {
@@ -149,10 +161,6 @@ public struct TaxReportView: View {
                 }
             }
             Spacer(minLength: 0)
-            Button("Remove", systemImage: "minus.circle") { model.removeOtherWallet(address) }
-                .labelStyle(.iconOnly)
-                .buttonStyle(.borderless)
-                .help("Remove")
         }
     }
 
@@ -173,9 +181,9 @@ public struct TaxReportView: View {
     @ViewBuilder
     private var results: some View {
         switch model.state {
-        case .failed(let message) where badWallet == nil:
+        case .failed(let message):
             Section { WarningText(message).font(.callout) }
-        case .loading where badWallet == nil:
+        case .loading:
             Section {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)

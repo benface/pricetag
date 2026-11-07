@@ -227,6 +227,14 @@ public final class PortfolioStore {
         setBook(book.answering(address, .mine, focus: nil), action: "Move to Yours")
     }
 
+    /// The same for several at once, as one step in Edit's history, and with `focus` the user's too, the way answering "My wallet" about a
+    /// sender says the wallet showing is. It's what adding a wallet to a tax report says, since only the user's own wallets go in one.
+    public func addToYours(_ addresses: [String], focus: String?, action: String = "Add to Yours") {
+        let next = addresses.reduce(book) { $0.answering($1, .mine, focus: focus) }
+        guard next != book else { return }
+        setBook(next, action: action)
+    }
+
     /// It's not the user's after all, so costs stop following its money. It stays listed under Watching, so a slip is easy to put right.
     public func moveToWatching(_ address: String) {
         var answers = book

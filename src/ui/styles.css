@@ -231,8 +231,11 @@ button { font: inherit; cursor: pointer; color: inherit; }
 .tax { display: flex; flex-direction: column; gap: 12px; }
 .tax .notice { margin: 0; }
 .field { display: flex; flex-direction: column; gap: 4px; }
-.field select, .field textarea { font: inherit; font-size: 13px; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--control-border); background: var(--surface-1); color: inherit; }
-.field textarea { font-family: ui-monospace, Menlo, monospace; resize: vertical; }
+.field select, .field textarea, .tax-add input { font: inherit; font-size: 13px; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--control-border); background: var(--surface-1); color: inherit; }
+.field textarea, .tax-add input { font-family: ui-monospace, Menlo, monospace; resize: vertical; }
+.tax-wallets { margin: 0; padding: 0; list-style: none; font-family: ui-monospace, Menlo, monospace; }
+.tax-add { display: flex; gap: 8px; }
+.tax-add input { flex: 1; min-width: 0; }
 .tax-counts { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 0; }
 .tax-counts dd { margin: 0; font-size: 17px; font-weight: 600; }
 .other-tokens-spam { margin-top: 12px; }
