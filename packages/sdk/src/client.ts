@@ -274,6 +274,35 @@ export function pricetagClient(query: Query, config: ClientConfig) {
      * A wallet's portfolio now, then again after each new block, for as long as it's read. Each update is the whole wallet,
      * so a reorg replaces what it changed instead of adding to it. Amp's stream says when there's a block, and polling takes
      * over when it can't. A read that fails goes to the logger, and the next block tries again.
+     *
+     * Where it comes from: Amp's stream says when `priced_legs`, the last table to finish a block, has finished one, and
+     * when blocks were replaced. It sends no rows. The wallet is then read the same way `getPortfolio` reads it, since
+     * balances, L1 fees and current prices aren't in any one stream.
+     *
+     * When the stream fails: it polls every 2 s and tries the stream again every 30 s. A stream with no new block for 60 s
+     * counts as failed, even if it's still connected. Each poll also checks that the chain still has the last block it was
+     * told about. If it doesn't, however deep the reorg, `reorgFrom` is the block after the newest one it was told about
+     * that the chain still has, or the oldest one it remembers, up to 1,000 blocks back. So a reorg can be reported from a
+     * little before its first block, and one that left a shorter chain is reported once the chain gets back to that
+     * height. One the stream reported before it failed is still replaced in full, as below. When the stream comes back, it
+     * resumes from the last block it finished, not the newest one polling found, so Amp reports a reorg that replaced that
+     * block in the meantime, however deep. A reorg after that block wouldn't be reported, so everything polling said after
+     * it counts as replaced once the stream catches up, however many tries that takes, and is read again.
+     *
+     * After a reorg: being told about one doesn't mean the dataset has rewritten those blocks yet, and until it has, a
+     * read gets the old ones back. So every read goes back to the reorg's first block until the tables are a minute past
+     * the old chain's tip, if they're keeping up, and `unsettledFrom` says that block until then. That goes for a read
+     * with a `to` too, if the reorg reached it. The update that has the new blocks can come after the one with
+     * `reorgFrom`, with `reorgFrom` null.
+     *
+     * Failed reads: they go to `logger`, and the next block tries again, so the iterable doesn't end because Amp had a bad
+     * moment. It ends when you leave the loop or abort `signal`.
+     *
+     * Fast blocks: Base makes 5 blocks a second from its 200 ms upgrade on, and each update is a whole read, so updates
+     * come at most every 2 s, for the newest block.
+     *
+     * Slow code: a loop that takes longer than that doesn't fall behind. It gets the newest block next, with any reorg it
+     * missed.
      */
     async *watchWallet(address: string, { signal, method, currency, from }: WatchOptions = {}): AsyncGenerator<WalletUpdate, void, void> {
       if (!isAddress(address)) throw new Error(`${address} isn't a Base address`)

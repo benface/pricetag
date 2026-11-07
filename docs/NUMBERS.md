@@ -1,0 +1,413 @@
+# How the numbers work
+
+Where prices, rates and costs come from, the rules they follow, and what the apps can't work out.
+For running the dataset or the shared server, see [OPERATIONS.md](OPERATIONS.md).
+Edge cases live in the code's comments, next to what they explain.
+
+## Where the data comes from
+
+The server is the only thing that talks to Amp, so the token never reaches the browser or the Mac app. It can read from either:
+
+- **The Pricetag dataset**, when `PRICETAG_DATASET` and `PRICETAG_START_BLOCK` are set.
+  This is the design: the dataset carries the price, and reads it from Chainlink's logs, as [below](#where-prices-come-from).
+- **The raw Base dataset**, otherwise.
+  It reads the wallet's transactions and logs, and the oracle with `eth_call`, then derives the same rows at query time.
+  A wallet's first read takes about 15 s for an hour of blocks (longer for a busy wallet), and it only looks back an hour, or `PRICETAG_HISTORY_BLOCKS` if that's set.
+
+Both go through the same path after that, and they gave identical legs on the wallet they were compared on.
+
+## Where prices come from
+
+The dataset reads Chainlink's prices from the `AnswerUpdated` logs its contracts emit, not from `eth_call`.
+So it makes no RPC calls, replaying the logs gives the same table, and Verify can check the log behind a price.
+
+| Table | What it does |
+| --- | --- |
+| `price_updates` | Every update from the aggregators in `PRICE_FEEDS` (`packages/sdk/src/tokens.ts`). It starts one window before the dataset, 45,000 blocks at the current start, so USDC/USD, which only updates about daily, has a price at the first block. |
+| `carried` | For each block, every update that could still be the latest. It's a join of `blocks` to `price_updates`, from the update's block until its window ends, which is how a table carries a value forward. Its `b._block_num` filter has to stay, or each batch can rescan all of Base. |
+| `reference_prices` | The latest update per feed, one row per block: `eth_answer` and `usdc_answer` (1e8 USD), and `eth_tx` and `usdc_tx`, the transactions they came from. |
+
+`priced_legs` joins `reference_prices` on the block, and carries the same answers and transactions.
+
+- **An update only counts for so long.** ETH/USD's lasts 2,600 s (longest gap seen in a day: 1,236 s), and USDC/USD's 25 hours (longest gap in 76 rounds: 86,490 s).
+  They're in time because feeds update on a clock, and Base's blocks went from 2 s to 200 ms on 2026-11-05.
+  `blockBefore` turns a window into blocks for reads and start filters.
+  After that, that price is `unknown`, never stale.
+  Exchanges lose their price too, because `pt_price` needs both feeds.
+  If both feeds lapsed together, a block would have no row at all, and the app would show as behind until a fix.
+- **When Chainlink changes a feed's aggregator, a new dataset version is needed.** Proxies emit no log when that happens, so no table can notice: the old address just goes quiet.
+  The server asks each proxy for its `aggregator()` when it starts, and warns if it isn't listed.
+  To fix it, add the address to `PRICE_FEEDS` and deploy a new version.
+- **ETH/USD leads what its proxy returns.** A log comes 15 or 16 blocks before the proxy shows the new round (once in a while, just 1).
+  The price is the newer published value, so it isn't delayed to match.
+  Compared block by block with `eth_call`, that's the only difference.
+
+The raw mode and balances still use `eth_call`: there's no dataset table to read them from, or they aren't prices at all.
+Exchange rates to other currencies come from logs too when the server has a rates dataset (see [Main currency](#main-currency)), and from `eth_call` without one.
+Verify doesn't cover them either way yet.
+
+**The other 8 tokens' feeds** (`TOKEN_FEEDS`, like AERO/USD) have their own small dataset, `dataset/feeds.json`, set with `PRICETAG_FEEDS_DATASET`.
+Its one table, `feed_updates`, holds every `AnswerUpdated` from their aggregators, about 330 rows a day, and starts 26 hours before the Pricetag dataset, so a price at its first block had its update inside it.
+It isn't in `price_updates` because that's what `carried` copies forward to every block, and nothing joins on these: they'd add about 164 rows per block, 70.8M a day on 200 ms blocks, to the 4.6M `carried` writes today.
+
+- **A chart's older points** come from the table: an asset's latest update at or before the block, which is what its contract answers there.
+  That was the same in 240 of 240 comparisons with `eth_call` (8 feeds at 30 blocks, including each side of real updates).
+  It isn't faster, about 0.7 s a read against 0.6 s. What it saves is RPC calls.
+- **What's held now** still reads each contract with `eth_call`, because the table's newest row is the only sign of how far it's reached, and an update could still be on its way.
+  An old answer would quietly be wrong, so a block past that row goes to the contract, and so does everything if the table fails.
+- **Each current price has a proof and a Verify,** whichever way it was read, from "Proof of this price" under the number.
+  ETH's and USDC's come from `reference_prices`.
+  The others take the latest update in `feed_updates` at the price's block, and it has to work out to the price shown.
+  If it doesn't and the table hasn't reached that block, it says to try again.
+  If it has, the check fails. wstETH's price is in ETH, so it has two updates to check.
+  Without `PRICETAG_FEEDS_DATASET`, those 8 prices say plainly that no log backs them.
+
+To change it, add the aggregator to `TOKEN_FEED_AGGREGATORS` in `packages/sdk/src/tokens.ts`, then build, register and deploy a new tag with `node dataset/build.ts --feeds <the Pricetag dataset's start block>`.
+The server warns when it starts if a proxy reads from an aggregator it doesn't list.
+Replacing `benface/pricetag` doesn't touch this dataset.
+
+## Main currency
+
+Both apps show every value in the chosen currency, and remember the choice: the Mac app in Settings, and the web app in its header.
+The dataset's base stays USD.
+`packages/sdk/src/currency.ts` is the one place that converts, and both apps go through it.
+
+- **Each amount converts at the rate when it happened.** A cost or sale uses the rate at its transaction's block, and a current value uses the current rate.
+  Conversion runs before the fold, so a gain in CAD is proceeds in CAD minus cost in CAD, and it includes what the exchange rate did in between.
+- **The currencies are USD, CAD, EUR, GBP, CHF, AUD, NZD, SGD, MXN, BRL, TRY and ZAR:** every one Chainlink has a feed for on Base, with 8 decimals, that's kept to its heartbeat.
+  Base has no feed for JPY, SEK, NOK, DKK, PLN, CZK or HUF.
+  A dollar that isn't the main currency always says which: US$, CA$, A$, NZ$, S$ or MX$.
+- **Rates come from Chainlink's feeds on Base**, from the `AnswerUpdated` logs their contracts emit, in the rates dataset (`dataset/rates.json`, set with `PRICETAG_RATES_DATASET`).
+  A rate at a block is its feed's latest update at or before it, which is what the contract answers there, so it needs no RPC.
+  The table only has a row per update, about 200 a day for all of them, and starts 3 days before the Pricetag dataset, so a rate at its first block was set within the table.
+  Its newest row is how far it's reached.
+  From that block on, an update could still be on its way, so those rates are read from the contract with `eth_call` instead: usually the head and a few recent blocks, and everything after it if the table stops, which is slower but never an old rate.
+  Without a rates dataset, as on a local Amp, which has no logs from before its start, rates are read from each feed's contract with `eth_call`.
+  Clicking through a number names the source, the rate, and the amount in USD.
+- **Spending Money uses the current rate too.** It reads `GET /api/rate?currency=CAD`, so it doesn't wait on any wallet's history, every 5 minutes.
+  A failed read is tried again after 30 seconds and keeps the last rate for an hour at most.
+  After that, with no current rate at all, or on a server with no data source, whose demo rates aren't for real balances, its amounts go back to USD and say `US$`.
+  The web app's top-up form reads the same way while it's open.
+  A display rate is all it is: the cap, sweeps and what's signed work in USD.
+- **What stays in USD says so.** The ETH price in the rule comparison is one, because the comparison is about a USD feed.
+  A published cost note is another, because the note itself is in USD.
+  So is what you paid if Coinbase charged you in USD.
+- **A cost you enter for what a wallet already held is the one exception to "the rate when it happened".** When it was paid isn't known, so in another currency it converts at the rate on the block the history starts from, and shows as an estimate that says why.
+  In the currency it was entered in, it stays exact.
+- **A missing rate is never filled in.** That amount is unavailable, whatever depends on it says so, and no other day's rate stands in.
+  A feed that hasn't updated in 3 days counts as missing, since forex markets close for only about 2.
+- **A purchase keeps what was really paid,** in any of these currencies.
+  Read in another currency, it converts at the rate of the block it arrived in, from the feed for what was paid, and its source says what was paid.
+  Coinbase's own USD total only stands in when that feed has no answer.
+  A purchase in a currency with no feed, like SEK, stays unknown and is asked about: Coinbase's USD total for it hasn't been checked against a real order.
+
+To add a currency, add its Chainlink feed and aggregator to `CURRENCIES` in `packages/sdk/src/currency.ts` and a case to `macos/PricetagKit/Sources/PricetagKit/Currency.swift`, then build, register and deploy a new version of the rates dataset with `node dataset/build.ts --rates <the Pricetag dataset's start block>`.
+A new currency's feed needs its address checked against Chainlink's own list and its `description()`, `decimals()` and `aggregator()` onchain.
+When Chainlink moves a feed to a new aggregator, the server warns when it starts, as it does for prices, and that rate stops moving until a new version lists it.
+Within 3 days it's unknown.
+
+Verify doesn't cover rates yet. Each update in the rates dataset has its transaction and log, so it would be the same check as Chainlink's update for a price (`feedBehind` in `server/proof.ts`).
+
+## Rules the numbers follow
+
+- Price and cost are separate.
+  A price is a shared fact labeled `oracle`, `swap` or `market`.
+  A cost is this wallet's, labeled `paid`, `inherited`, `self-reported`, `received at market` or `unknown`.
+  A swap's cost and proceeds are what actually changed hands, valued on the side with an oracle, preferring USDC.
+  They aren't the oracle price of what was bought or sold.
+- `unknown` is never $0.
+  A position with an unknown cost shows "PnL unavailable", totals say what they leave out, and a total with nothing known shows as unavailable.
+- Coverage only moves up to the block every table has processed, so a lagging dataset can't skip blocks, and the UI says when it's behind.
+- ETH and WETH are one position, so wrapping is never a sale.
+- A swap is one token out and one in, with nothing else moving. Anything else keeps its cost and proceeds unknown.
+- A swap whose implied price is outside a token's plausible range, or far from its oracle, is rejected. It has no value on either side.
+
+## Reconciling against the chain
+
+Each position's legs are compared with its onchain balance at the last block they cover, to the smallest unit. ETH is compared with ETH plus WETH.
+
+- **Reconciled** gets a check mark.
+  It means the balance is right.
+  ETH that arrived with no transaction is counted from the balance, so that part can't fail, and the check says how much of it there is.
+  If the wallet sent a transaction in that block with no fee on record, the arrival isn't counted, so the missing fee shows as a difference rather than vanishing into it.
+  A fee on record with the wrong amount would still be absorbed: nothing compares recorded fees with receipts.
+- **Doesn't match** shows the computed balance, the actual balance and the difference.
+  Its amount and value come from the chain, because those are facts, and its PnL shows as unavailable.
+  Without traces, this is what catches rebasing tokens and internal ETH transfers, and ETH that arrived this way then gets found and counted (see Known gaps).
+- **Not checked** means a read failed or an L1 fee isn't in yet.
+  It clears on its own.
+  Its PnL shows as unavailable until then, so PnL only ever shows for a position that matches.
+  Otherwise a failed read would bring back a number already known to be wrong.
+  Its amount comes from the chain if that read worked, and otherwise from the last read plus what's moved since.
+
+Whether something is held is a separate question from whether it can be checked.
+A failed read never makes a holding disappear, and an asset with no balance read and no other evidence is listed as missing from the totals and the chart.
+It's never counted as zero.
+
+What a wallet held before the first block read is read from the chain too (`eth_call` at the block before), and becomes an opening leg with an unknown cost.
+So amounts are full balances, and an old wallet can still reconcile, but its PnL stays unavailable until that cost is known.
+
+Each transaction's L1 data fee comes from its RPC receipt, because Amp's data doesn't have it.
+It's added to the gas leg in the server for both data sources, so the dataset's own `legs` table stays L2 only.
+A fee is read when it's first seen, and again once its block is past the part of the chain re-read for reorgs, because a reorg can change it without moving the transaction.
+There's no tolerance anywhere: a wrong fee shows up as a mismatch.
+
+## Resolving what we can't work out
+
+The dataset carries a price. What something cost is personal, so each client works it out, in this order:
+
+1. **Paid:** the wallet paid for it in the same transaction.
+2. **Inherited:** it came from one of the user's linked wallets, so it carries over what that wallet paid and when, through any chain of wallets.
+   What's unresolved upstream stays unresolved here, and so is what left a wallet whose history of that asset can't be confirmed: its legs don't add up to its balance, or there's no balance read to compare them with yet.
+   The apps and the tax report both say which wallet, wherever what it sent actually arrived.
+   If a read fails later, the last one that worked still vouches for what left up to its block, so a failed read can't turn a cost unknown and back.
+   Once a balance doesn't match, the apps ask what it cost, since that may never clear up by itself.
+   An unread balance isn't asked about, because it can still be read.
+   What's entered covers all of what arrived, so it stands until every sender's history can be confirmed, and then what's inherited takes over.
+3. **Self-reported:** a cost entered in the app, an exchange history's, or an onchain note.
+   A note only counts from the wallet's own zero-value transaction to itself.
+4. **Received at market:** the price when it arrived, once it's known to be someone else's or came from a bridge. It's always shown as an estimate.
+5. **Unknown:** anything else. An unanswered sender stays here, even when it looks like a stranger, because it could be the user's own wallet.
+
+Wallets are only folded together when they were read the same way, by the same pricing rule and in the same currency.
+A wallet read another way counts as not read yet, so what came from it stays unresolved rather than becoming a gain nobody made.
+A comparison marks whatever rests on an estimate the same way the main screen does.
+
+A transaction with a WETH unwrap the chain hasn't confirmed yet stays unknown, and nothing asks about it: what it says arrived is only a claim, so no answer can rest on it.
+Once it settles, it's treated like anything else.
+
+A token's price goes oracle, swap, then `market`: the median of its last few trades at or before that block, from `priced_legs`.
+It needs 3 transactions of at least $100, $1,000 in all, within 30 minutes, each one plausible at its own block.
+Only rows of about $100 or more are read, so small trades can't fill the read and hide real ones, and they don't count toward a transaction's price.
+`priced_legs` doesn't say how deep a pool is, so that's the stand-in for liquidity.
+An older dataset without the `unlisted_moves` table still has wrong rows that later versions removed, so it's never read for this.
+The chart marks what's held at each transaction by its feed, then by the same price, and leaves a token out of any point it has neither for.
+Those reads come after the ones that price the wallet and share their limit, so a busy wallet's chart fills in over a few refreshes, newest first.
+
+What's held now is valued at its Chainlink feed first, then at `market`.
+The dataset only has ETH and USDC's feeds, so the SDK reads the rest (`TOKEN_FEEDS`) directly, for what a wallet holds.
+They only set current prices and the chart's marks, read at each point's 5-minute bucket, not what a past transaction was worth.
+An answer that's too old or outside the token's bounds is no price, and no price from a feed doesn't make it "no market".
+A feed that gives no answer for a chart point is asked again over about half an hour, and the market prices that point in the meantime.
+
+**Other tokens** are any token off the allowlist that moved through a wallet since the dataset's start and that the chain says it still holds, with its balance, name, symbol and decimals.
+They have no price, so they're in no total, and they're in a list of their own, not in `positions`: the fold, the cap and sweeps never see them, and the hot wallet never sends them.
+A token that was already there and hasn't moved since can't be found, because there's no row to find it by.
+Their contracts are read with `eth_call`, and they can say anything, so names are cleaned up, always shown with the address, and never used to identify a token.
+A contract that won't answer says so, and one using up all the gas can't take others down with it.
+
+- **Possible spam** is tucked away, one click from the rest, and never called worthless.
+  The rule, in `tuckedReason`: it copies a token we know, its name points to a website, its contract doesn't answer properly, or nothing this wallet sent moved it.
+- **Read time.** A wallet read never waits for these, so a token says "Reading…" until the next read after its answer arrives.
+  Each read starts at most 2 queries of up to 25 tokens, one at a time, and none while another wallet read is waiting.
+  A query that hangs gives up after 8 s and pauses them for a minute.
+  A wallet lists at most 300, what it moved itself and what's newest first, and says how many it left out.
+  What a contract says about itself is kept until the server restarts, and a balance is read again when the token moves, or after 5 minutes.
+
+**Answers stay on the device.** The Mac app and the browser keep them, and send them with each request (`POST /api/portfolio/<address>`, with `/explain`, `/preview`, `/export`, `/compare` and `/last`, which folds what was last read without waiting on a new read, and the pricing rule when one is chosen).
+The server folds with them and keeps nothing.
+Costs are kept in the currency they were entered in, and converted at the rate when they arrived.
+Without that rate, they stay unknown.
+
+A transfer's cost goes to the wallets it actually went to, whichever wallet is open: oldest lots first for the first transfer, or the same mix for each by average cost.
+An entered exchange cost covers only what had arrived when it was answered, so anything later is asked about in turn.
+One withdrawal in an exchange history explains one arrival, and when more than one fits, none of them is resolved from it.
+An imported withdrawal keeps its cost both ways, and the wallet's method picks one.
+Oldest first has no answer for part of what was bought in one second at different prices, or for a withdrawal whose cost depends on which of that second's sales and withdrawals went first, since a file doesn't say.
+It also has no answer once a file's crowded seconds would take too long to work through.
+It has none either for a withdrawal imported before it was worked out, until the file's imported again.
+Those stay unknown.
+Native ETH bought in a swap can be an unwrap the account never received, so those `priced_legs` rows never set a market price.
+
+Answer Questions asks once per address, most useful first, and each question says why it's asked.
+Each answer shows what it would do before it's picked, Undo is always there, and skipping leaves it flagged.
+On the Mac, Settings > Answers lists every answer with what it was about and when, and any one can be changed or removed later.
+Costs only carry onto a wallet that's yours, so being paid by one of your wallets isn't enough: it asks, and My wallet says this one's yours too, while Someone else leaves your wallet as yours and values what arrived at the price then.
+An address known to be an exchange's or a contract's is nobody's wallet, so its card doesn't offer My wallet, though a My wallet answer given before keeps working until it's changed.
+A token with no price anywhere isn't asked about: it's listed apart and can't affect PnL.
+Totals say how much is unresolved and estimated right next to the number, and exports mark every row `exact`, `estimated`, `unknown` or `no market`.
+
+## Proving a price
+
+Click a price, or Proof, on any row of an explanation.
+It shows where that price came from, the logs behind it, and each dataset's manifest hash (the "fingerprint"), which identifies the recipe.
+**Verify** then recomputes that block's commitments in the server from what Amp returns, using [Amp's documented method](https://github.com/edgeandnode/amp/blob/main/docs/feat/verification.md):
+
+- **Block fingerprint:** the header's fields hash to the block's hash.
+- **Transactions:** every transaction rebuilds the header's `transactions_root`, and each one hashes to its stored `tx_hash`.
+- **Results and logs:** every receipt and log rebuilds the header's `receipts_root`.
+- **Base's node:** `BASE_RPC_URL` reports the same hash at that block's number. A different hash fails the check, and no answer says it's not checked.
+- **Who sent it:** the row's transaction's signature recovers to its stored `from`. A deposit isn't signed, and its hash covers its sender.
+- **This activity:** the row's transaction is in that data, and its Transfer logs or ETH value match its amounts.
+  A network fee's L2 part is worked out again from its gas, the block's base fee, and only the fee fields its transaction type hashes.
+  For a swap price, that includes the other side of the exchange.
+  Unwrapped ETH is checked against its `Withdrawal` logs as recorded, whatever the balance then says arrived.
+- **Chainlink's update:** the block with the update behind the price, which can be a different one, passes the same three checks, and the same comparison with Base's node.
+  Its log has to be an `AnswerUpdated` from that feed's aggregator, in the transaction `reference_prices` names, with the answer `price_updates` stored.
+  That answer then has to work out to the row's price, directly or, for a swap price, through what was paid.
+  Reading the raw dataset, there's no update to check, so this check doesn't appear.
+
+It's done here and not with `ampctl verify` because that can't check Base: every Base block starts with an OP Stack deposit (type `0x7e`), which it doesn't support.
+It fails v0.0.42 and nightly `47b6fa2` alike, and the source still rejected the type on November 6.
+Amp doesn't store what a deposit's hash also covers (`sourceHash`, `mint`, `isSystemTx`), so those three come from `BASE_RPC_URL`.
+A wrong answer fails the check, because the result has to hash to the block's commitment.
+Every log and transaction it counts has to be in what's hashed, at the number it's stored with, or the check fails.
+If the RPC doesn't answer, Transactions says it's not checked.
+The fingerprints come from Amp's admin API at `AMP_ADMIN_URL`, with the server's token.
+
+What a pass doesn't show, which the interface also says:
+
+- That the header is on Base's real chain.
+  A consistent fake block would only pass if the node agreed too, but that's one node's word, and a local Amp reads its blocks through that same `BASE_RPC_URL`, so there it isn't a second source at all.
+- That the derived SQL ran correctly. Only the raw dataset's rows are checked, plus the row's amounts against them.
+- That Chainlink's number is right. It only shows that Chainlink published it.
+- That the update was still the latest at the row's block. That comes from `carried` and `reference_prices`, so it's the derived SQL again.
+- An `oracle` price, or the oracle side of a `swap` price, when reading the raw dataset or a local Amp before its first real update, because `eth_call` results aren't in a block's commitments.
+  The same goes for exchange rates and L1 fees, which aren't in the commitments either, so an L1 fee's amount is never compared.
+- How much ETH reached a wallet from unwrapping.
+  A `Withdrawal` log only records what was unwrapped, and a contract can keep a cut or send the ETH elsewhere, so the logs are checked as recorded, and what arrived is listed apart: worked out from the wallet's balance across the block when `settleUnwraps` could, and otherwise not confirmed.
+  A swap price uses that amount, so it rests on the balance too.
+- That the other transactions' `from` is right. Only the row's own transaction has its signature recovered, since that's the one it takes its account from.
+
+`server/verify.ts` is the pure part, tested on real rows and on tampered ones.
+Keccak comes from `@noble/hashes`, since whether Node has it depends on its build.
+`server/block.ts` reads a block and `server/proof.ts` puts it into words.
+It's valid for blocks since Canyon (January 2024), because older deposits' receipts are encoded differently.
+
+## Pricing any token
+
+`PRICETAG_TOKENS_DATASET` turns this on, and it's off until that's set.
+`dataset/tokens.json` is its own dataset, so adding it replaces nothing, like the feeds and exchange rates.
+It reads `pricetag`'s tables and adds `token_trades`: every trade of any token against ETH, WETH or USDC, as the pool saw it.
+Amounts stay in a token's smallest unit, so there's no list and no decimals, and a token can't change what it's worth by lying about them.
+The USD comes from the ETH or USDC side.
+
+`tokenMarketPrice` in `packages/sdk/src/token-market.ts` decides when those trades are a market.
+Over the last 24 hours, it needs at least 10 senders buying and 10 selling, $2,000 on each side, no sender above half of it all, and both sides trading in 6 separate hours.
+The price is the middle of the last hour's trades, from at least 3 senders, with the highest and lowest within 25% of each other.
+Trades under $10 don't count.
+Otherwise there's no price, for a stated reason, and it's never $0.
+
+What each one is for:
+
+| Attack | What stops it |
+|---|---|
+| Two wallets paying each other any rate | Only a contract that emits a swap event can be a row's pool |
+| One bot washing its own pool | Counting senders, and the limit on any one sender's share |
+| Many wallets faking volume with dust | Trades under $10 don't count, and $2,000 on each side |
+| A token that can be bought but not sold | Sellers count separately from buyers |
+| A token made an hour ago | 6 separate hours of trading on both sides |
+| A pool so thin that each trade moves the price | The 25% limit on the last hour's trades, which stands in for depth |
+| One odd trade | The middle of the trades, ignoring the highest and lowest tenth |
+
+**None of this can make faking impossible.** Wallets are free to make, and fees in a pool you own come back to you, so someone determined could pass these for a few dollars of gas a day.
+That's why **a price only ever says a swap happened.** When one token off the list left and one on the list arrived, or the other way around, with nothing else moving, and the market says they were worth within 25% of each other, what arrived costs what the listed side was worth at its own feed.
+It's labeled as an estimate.
+A fake market can't raise that number, because it doesn't come from the market.
+It can only stop a question being asked about a real payment.
+
+A price rests on its whole 24 hours, and only what `token_trades` has processed counts as read.
+So a token whose dataset is behind, or still replaying a reorg, has no price until it's caught up, and the swap keeps asking until then.
+Its trades are grouped by the same 5-minute buckets prices are worked out at, and a price only uses the groups inside its own blocks, so it doesn't depend on which wallet was read first or how far that read went.
+
+It doesn't give these tokens a position or a value, so they're still listed with no price and left out of totals.
+Nothing here changes what's swept, the cap, what's signed or what's sent: a sweep never acts on a realized gain that rests on an estimate, and only ever moves allowlisted tokens.
+
+## Tax report
+
+Both apps export the same CSV, because the server writes it (`POST /api/tax-report/<address>` with the country and the user's answers, and `src/core/tax.ts` does the work; a `GET` with `?country=CA|US` is the same report with no answers).
+This isn't tax advice, and the report says so first.
+
+- **One row per thing that may be taxable:** a sale, a network fee (paying one in ETH counts as selling that ETH) or something sent.
+  Each has its date, asset, amount, proceeds, cost, gain, method, price source and transaction link, in the main currency.
+  The gains come from what the fold did, so a position with nothing unresolved adds up to the Realized the apps show.
+  With something unresolved, the apps leave out the whole position and this keeps each row it knows, so the report's total can differ, and it says so.
+- **Gaps say so.** A cost, proceeds or gain that can't be worked out says `unknown`, its row is `UNKNOWN GAIN` with a reason, and it isn't in the gain total.
+  It's never 0.
+  A sale that's part known and part unknown becomes two rows.
+  A cost from an estimate is `ESTIMATED`, and one the user entered or imported is `SELF-REPORTED`, even at $0, however far it's moved between wallets since.
+- **It uses the same answers as the screen.** Costs go through the same resolver as the questions the apps ask: what's inherited from a linked wallet, entered, imported, noted onchain or received at market.
+- **A market price for what the user said came from someone else reads differently by country.** In Canada it's generally the real cost of what you're paid or given ([ITA s. 69(1)(c)](https://laws-lois.justice.gc.ca/eng/acts/I-3.3/section-69.html), [s. 52(1)](https://laws-lois.justice.gc.ca/eng/acts/I-3.3/section-52.html)), so the row is `OK` and says where its cost came from.
+  In the US it's the cost of pay (Q59) but not of a gift (Q76, [IRS digital asset FAQs](https://www.irs.gov/individuals/international-taxpayers/frequently-asked-questions-on-digital-asset-transactions)), and we can't tell which it was, so the row stays `ESTIMATED`.
+  What arrives from a bridge or a mint could be the user's own money from elsewhere, which keeps what they first paid, so that's `ESTIMATED` in both.
+- **Notes are rows too**, right under the header, so the file still parses and the warnings are the first thing anyone sees.
+- **The country picks the defaults, and both can be overridden**, with a warning when that may not be accepted:
+
+| Country | Method | Wallets | Official sources |
+| --- | --- | --- | --- |
+| Canada | Average | All together | [Income Tax Act s. 47](https://laws-lois.justice.gc.ca/eng/acts/I-3.3/section-47.html), [CRA guide T4037](https://www.canada.ca/en/revenue-agency/services/forms-publications/publications/t4037/capital-gains.html), [CRA crypto guide](https://www.canada.ca/en/revenue-agency/programs/about-canada-revenue-agency-cra/compliance/cryptocurrency-guide/income-crypto-transactions.html) |
+| United States | Oldest first | Each on its own | [Treas. Reg. 1.1012-1(j)](https://www.ecfr.gov/current/title-26/section-1.1012-1), [Rev. Proc. 2024-28](https://www.irs.gov/pub/irs-drop/rp-24-28.pdf), [IRS digital asset FAQs](https://www.irs.gov/individuals/international-taxpayers/frequently-asked-questions-on-digital-asset-transactions) |
+
+Canada's "all together" is our reading: s. 47 averages what a taxpayer owns and says nothing about where it's held, but CRA's crypto guide doesn't address wallets directly.
+
+Wallets are the address on screen, any others typed into the report, and the ones the user's answers or the app say are theirs.
+A transfer between them, netting to zero, isn't a sale.
+All together, its cost stays in the pool.
+Each on its own, its cost carries over to the wallet it arrived in.
+On a wallet nobody's said is theirs, the wallets in the answers aren't listed, and it takes no costs from them.
+Only the demo's wallets supply costs without being listed, because they start at different blocks.
+
+All together needs one consistent history, because a cost worked out from part of it would look known and be wrong.
+So the report stops at the last block every wallet has reached and says what that leaves out.
+If their histories start at different blocks, which can only happen reading the raw dataset, every cost and gain says `unknown`.
+The demo wallet can't be combined with anything.
+
+The report doesn't check Canada's superficial loss rule, split US short-term from long-term gains, or list what was received, and it says so.
+Anything before the first block read has an unknown cost until the user answers for it, so most rows on an older wallet start out with an unknown gain.
+
+Only Canada's and the US's rules are here.
+In a main currency neither reports in, like EUR, the report is in that currency with whichever country is chosen, and its first warning says those rules and that layout may not apply where the user reports.
+
+To add a country, add it to `TAX_COUNTRIES` in `src/core/tax.ts` and a case to `macos/PricetagKit/Sources/PricetagKit/TaxReport.swift`.
+
+## Known gaps
+
+- Sending only covers ETH and the tokens the app tracks, so nothing else in a wallet can be moved from here.
+- A device's accounts are listed 5 at a time, and only what's been listed gets linked, so an account in use further down stays out until you list it.
+  The device is the only way to find them, because the app never sees a recovery phrase.
+- The hardware wallet flows haven't run against a real device yet. See [the checklist](../HARDWARE-WALLETS.md#checklist-for-a-real-device).
+- Exchange names are only as good as the list in `src/core/senders.ts`.
+  Each comes from a Basescan name tag or a confirmed withdrawal.
+  A withdrawal from an address not on the list won't say where it came from, and that includes some from Coinbase and any from another exchange.
+  An imported history still matches them.
+- A cost entered in CAD can't be shown in USD for a wallet read in USD, because that read has no rates.
+  It shows as unresolved there, and never as the wrong number.
+- Only the allowlist in `packages/sdk/src/tokens.ts` gets a position and a price.
+  A transaction that also moves another token isn't valued as a swap, because its payment can't be split: what arrived has an unknown cost, and what left has unknown proceeds.
+  The exception, with `PRICETAG_TOKENS_DATASET` set, is one token for one listed token whose market agrees (see [Pricing any token](#pricing-any-token)).
+  Internal ETH isn't seen without traces, so it can't trigger this.
+- Market prices need the Pricetag dataset, so reading the raw dataset, a past transfer of a token with no oracle reads has no price.
+- The dataset nets per token, then only prices an account's single pair.
+  A split route that nets to one token out and one in gets a price.
+  A token that mostly cancels out (under half of what moved is left) is what a router or pool kept, so it gets no price.
+  Paying with ETH and WETH together makes two pairs, so the other token has no price, though the app still knows what was paid.
+  A pair gets no price either when something off the allowlist moved with it, unless that token netted to zero.
+- There are no traces: a WETH `Withdrawal` is only a claim that ETH reached the transaction's sender, because a contract can send it elsewhere or keep a cut.
+  The server settles each claim against the wallet's ETH balance before and after its block (`settleUnwraps`).
+  When that can't say how much arrived, the swap's cost and proceeds stay unknown, even if its other token's balance matches.
+- Internal ETH transfers aren't seen directly: a batched payout, a smart wallet's ETH from a swap, a swap through a pool that pays out ETH directly, and a bridge deposit's minted ETH (type 126), because `transactions` has no `mint` column.
+  When ETH is `incomplete`, the server searches the wallet's ETH balance for each block where it moved by more than its transactions explain, in about 40 reads for one such block in a few days of history, through Amp's `eth_call` (`unseenEthSearchBlocks`).
+  A wallet whose ETH matches costs no extra reads.
+- ETH that rose in such a block becomes its own credit, for exactly that rise, priced at its block with an unknown cost (`creditUnseenEth`).
+  Calldata only decides who gets asked: the transaction that names the wallet and this exact amount, or the only one that names the wallet or was sent by it, and it's the contract that transaction called.
+  With neither, the apps ask what it cost instead, and there's no transaction to link to.
+  A credit isn't added to a block with a claim that stands or a fee that isn't known.
+- A balance can't say where in its block ETH arrived, and a named transaction is only the likeliest, so it never places it.
+  If anything else moved ETH in that block, even a network fee, what each one cost can depend on which came first.
+  So they keep their amounts and prices, but their costs stay unknown and nothing asks about them, including what they carry to a linked wallet.
+  When something left, that goes for all the ETH still held too, even what the wallet held before, because how much of each is left depends on the same order.
+  Its cost stays unknown until it's gone.
+  When ETH only arrived, the average comes out the same either way, so only oldest first is affected.
+  A pooled tax report asks this across the wallets in it.
+  So ETH a wallet's own transaction claims, which always pays a fee, stays unavailable, as it was before it was found, and its balance now matches.
+- A note gives one cost for an asset in a transaction.
+  If ETH found this way is named as coming from a transaction that also shows ETH arriving, a note can't say which it covers, so it applies to neither and none is offered.
+  Each can still be answered on its own.
+- A balance can't say why ETH arrived.
+  So anything in that block that could have brought it in, like a token leaving or an exchange that could have had change back, gets no value, and ETH's check names the transactions that took a token.
+  It isn't valued from that ETH, because a stranger's payment in the same block looks the same.
+  That also means a real trade landing beside such a payment shows as unknown.
+- ETH that leaves unseen, as from a smart wallet, isn't resolved, only flagged, and neither are rebasing tokens.
+  A flagged position's PnL stays unavailable until they are.
+  ETH arriving and leaving unseen by the same amount in one stretch of blocks isn't found at all, since the balance adds up.
+  Neither is it found in a block where the two cancel out.

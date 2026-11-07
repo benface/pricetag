@@ -10,7 +10,7 @@ Start the dataset, then print any Base wallet's positions and PnL:
 
 ```sh
 pnpm install
-PRICETAG_HISTORY_BLOCKS=300 pnpm amp:start   # a local Amp at chain head, in about 2 minutes. See the main README.
+PRICETAG_HISTORY_BLOCKS=300 pnpm amp:start   # a local Amp at chain head, in about 2 minutes. See docs/OPERATIONS.md.
 pnpm example 0xb4cb800910b228ed3d0834cf79d697127bbb00e5
 pnpm amp:stop                                # stops it and deletes its data
 ```
@@ -139,12 +139,12 @@ Run it with `pnpm example <address> CAD`.
 
 ### Comparing with holding ETH
 
-`holdComparison` takes the same money in and out, at the same moments, and only asks what would have happened in between. It's in the currency the wallet is folded in.
+`holdComparison` takes the same money in and out, at the same moments, and only asks what would have happened in between.
+It's in the currency the wallet is folded in.
+`status` is `complete` when the two cover the same money, which is the only time there's a `differenceMicros`, `partial` when they don't, and `unavailable`, with why in `unavailable`, when holding can't be worked out.
+Unknown amounts are never counted as $0.
+How it follows money through exchanges and what leaves is in the header of [`src/hold.ts`](src/hold.ts).
 
-- **Put in** is whatever arrived from outside the wallet, at what it cost, or at its price when it arrived if that's all that's known. A transfer from a linked wallet brings its cost and dates with it. An exchange inside the wallet isn't put in, and neither is its fee.
-- **Each amount buys ETH** at the oracle's price at its moment. **What left the wallet leaves the ETH too**, at its value when it left, but only as far as it came from an amount in that ETH, which is followed through exchanges by the same method. An exchange of several tokens at once doesn't say how much of what it got came from which, so if some of it later leaves, the comparison is `unavailable`. If holding would have run out first, `ranOut` says so.
-- **`walletMicros`** is `totals.pnlMicros` plus `gainThatLeftMicros`, because total PnL counts what left at the cost it carried, and this counts it at its value on both sides. Otherwise a wallet that only held ETH and sent some would lose to itself. A position total PnL leaves out adds nothing to it. It stays the same whatever holding can say, and `walletLeavesOut` says when something left with no price, so its gain is missing.
-- **`status`** is `complete` when the two cover the same money, which is the only time there's a `differenceMicros`. It's `partial` when an amount put in has no known value (`unknownAmounts`), or the wallet's total leaves something out (`walletLeavesOut`). An opening balance is always an unknown amount, because it has no moment to convert at. It's `unavailable`, with `holdMicros: null` and why in `unavailable`, when there's no current ETH price, nothing put in has a known value, or something left with no known value or no known share of what was put in. Unknown amounts are never counted as $0.
 ### Watching a wallet
 
 ```ts
@@ -157,12 +157,13 @@ for await (const { blocks, totals, pnlStatus, reorgFrom, via } of pricetag.watch
 
 Each update is everything `getPortfolio` returns, for the whole wallet, so replace the last one with it. That's what makes a reorg safe: an update after one has what the reorg changed, and nothing it took away. `reorgFrom` says from which block. It can also be set when nothing was replaced, right after the stream comes back, because what polling read is read again. So use it to re-read, not to tell someone a reorg happened. `via` says what reported the block, `stream` or `polling`, and is null on the first update.
 
-- **Where it comes from:** Amp's stream says when `priced_legs`, the last table to finish a block, has finished one, and when blocks were replaced. It sends no rows. The wallet is then read the same way `getPortfolio` reads it, since balances, L1 fees and current prices aren't in any one stream.
-- **When the stream fails:** it polls every 2 s and tries the stream again every 30 s. A stream with no new block for 60 s counts as failed, even if it's still connected. Each poll also checks that the chain still has the last block it was told about. If it doesn't, however deep the reorg, `reorgFrom` is the block after the newest one it was told about that the chain still has, or the oldest one it remembers, up to 1,000 blocks back. So a reorg can be reported from a little before its first block, and one that left a shorter chain is reported once the chain gets back to that height. One the stream reported before it failed is still replaced in full, as below. When the stream comes back, it resumes from the last block it finished, not the newest one polling found, so Amp reports a reorg that replaced that block in the meantime, however deep. A reorg after that block wouldn't be reported, so everything polling said after it counts as replaced once the stream catches up, however many tries that takes, and is read again.
-- **After a reorg:** being told about one doesn't mean the dataset has rewritten those blocks yet, and until it has, a read gets the old ones back. So every read goes back to the reorg's first block until the tables are a minute past the old chain's tip, if they're keeping up, and `unsettledFrom` says that block until then. That goes for a read with a `to` too, if the reorg reached it. The update that has the new blocks can come after the one with `reorgFrom`, with `reorgFrom` null.
-- **Failed reads:** they go to `logger`, and the next block tries again, so the iterable doesn't end because Amp had a bad moment. It ends when you leave the loop or abort `signal`.
-- **Fast blocks:** Base makes 5 blocks a second from its 200 ms upgrade on, and each update is a whole read, so updates come at most every 2 s, for the newest block.
-- **Slow code:** a loop that takes longer than that doesn't fall behind. It gets the newest block next, with any reorg it missed.
+- **Where it comes from:** Amp's stream says when `priced_legs` has finished a block, and when blocks were replaced. The wallet is then read the same way `getPortfolio` reads it.
+- **When the stream fails,** it polls every 2 s and tries the stream again every 30 s, and reorgs found while polling are still reported.
+- **After a reorg,** `unsettledFrom` says from which block reads are still going back, until the tables have rewritten those blocks.
+- **Failed reads** go to `logger`, and the next block tries again. It ends when you leave the loop or abort `signal`.
+- **Updates come at most every 2 s,** for the newest block, so a slow loop never falls behind.
+
+How it handles each of these exactly is in `watchWallet`'s TSDoc, in [`src/client.ts`](src/client.ts).
 
 Each watch holds one streaming request open, apart from the one-at-a-time queries.
 
@@ -176,7 +177,7 @@ Each watch holds one streaming request open, apart from the one-at-a-time querie
 
 ## What the tables mean
 
-The dataset reference is `benface/pricetag@0.0.1` on a local Amp, which is what `pnpm amp:start` deploys and what the examples here use, and `benface/pricetag@0.1.0` on staging. Either way, it reads `edgeandnode/base_mainnet@0.0.2`.
+The dataset reference is `benface/pricetag@0.0.1` on a local Amp, which is what `pnpm amp:start` deploys and what the examples here use, and `benface/pricetag@0.3.0` on staging. Either way, it reads `edgeandnode/base_mainnet@0.0.2`.
 
 | Table | One row is | Columns worth knowing |
 | --- | --- | --- |
@@ -269,4 +270,4 @@ SQL stops at cost, because a cost depends on every earlier leg. To get cost and 
 - A token's current price comes from its oracle read or feed, and its position shows a cost but no value without one. The app can also use recent trades (`market`), and the SDK doesn't read those yet.
 - `getLegs` with `buildPortfolio` is only what moved in the range, so its numbers won't match `getPortfolio`'s. Read them as what those legs add up to, not as the wallet's PnL.
 
-The app's other limits are in the [main README](../../README.md#known-gaps).
+The app's other limits are in [the known gaps](../../docs/NUMBERS.md#known-gaps).

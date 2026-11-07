@@ -2639,7 +2639,7 @@ describe("a cost as typed", () => {
   })
 })
 
-describe("what a card offers (WORK-649)", () => {
+describe("what a card offers", () => {
   const MERKL = "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae"
   const question = (sender: string, answers: Book = emptyBook()) => foldBook(wallet(A, send(10, "0x1", sender, A, 100n * E6), { mode: "raw" }), [], "average", answers).questions.find((q) => q.sender === sender)!
   const offered = (sender: string, answers?: Book) => answersOffered(question(sender, answers), answers ?? emptyBook())

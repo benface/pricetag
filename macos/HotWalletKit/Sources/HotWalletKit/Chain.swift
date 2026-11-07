@@ -95,7 +95,7 @@ public enum ChainError: Error, Equatable {
 }
 
 /// Holds calls back so they don't go over a node's limit. The public node allows 25 a second per IP, and counts each call in a batch.
-/// One read of the wallet is about 20, so with a site's reads on top of that, some of them used to get refused.
+/// One read of the wallet is about 20, so with a site's reads on top of that, the node would refuse some of them without this.
 actor NodePacer {
     /// At most 23 in any one second, which leaves a little for anything else on this network, like the server.
     static let publicNode = NodePacer(callsPerSecond: 15, burst: 8)
