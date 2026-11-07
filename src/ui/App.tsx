@@ -1,68 +1,14 @@
-import { lazy, useCallback, useEffect, useId, useMemo, useState, type FormEvent, type ReactNode } from "react"
-import { CURRENCIES, MAIN_CURRENCY_CODES, TOKENS, formatAmount, formatMoney, formatPrice, formatReturn, formatSignedMoney, formatTime, isAddress, isMainCurrency, msBetweenBlocks, normalizeAddress, returnBps, shortHash, sumTotals, type CurrencyCode, type HoldComparison, type Method, type OtherToken, type Position } from "@pricetag/sdk/core"
+import { lazy, useCallback, useEffect, useId, useMemo, useState, type FormEvent } from "react"
+import { CURRENCIES, MAIN_CURRENCY_CODES, TOKENS, formatTime, isAddress, isMainCurrency, msBetweenBlocks, normalizeAddress, shortHash, sumTotals, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type WalletResponse } from "../core/api.ts"
-import { ALL_YOURS, combinedPortfolioOf, explainAcross, exportCombined, feedBadge, type CombinedPortfolioResponse, type CombinedPosition, type PositionPart } from "../core/combined.ts"
+import { ALL_YOURS, combinedPortfolioOf, explainAcross, exportCombined } from "../core/combined.ts"
 import { ExplainPanel } from "./ExplainPanel.tsx"
-import { firstSort, formatHoldingsSort, parseHoldingsSort, sortHoldings, type HoldingsColumn, type HoldingsSort } from "../core/holdings.ts"
-import { allBalancesMatch, attentionOf, attentionTarget, balanceFlag, isValuePartial, pastCostsNote, valueGaps, type Attention } from "../core/attention.ts"
-import { explainTarget, type ExplainTarget, type Metric, type TotalMetric } from "../core/explain.ts"
-import {
-  ABOUT_THIS_DATA,
-  ALL_YOURS_TITLE,
-  AVERAGE_PAID,
-  DEMO_NOTICE,
-  ETH_NOTE,
-  HOLD_PAST,
-  HOLD_TITLE,
-  METHOD_HELP,
-  METHOD_LABELS,
-  METHOD_NAME,
-  NETWORK_FEES,
-  NOT_AN_ADDRESS,
-  NOT_STARTED,
-  NO_PRICE,
-  OTHER_TOKENS_NOTE,
-  OTHER_TOKENS_TITLE,
-  POSSIBLE_SPAM_RULE,
-  POSSIBLE_SPAM_TITLE,
-  PNL_HELP,
-  READING,
-  READING_ALL,
-  REALIZED_HELP,
-  RETURN_HELP,
-  SHOW_MISSING,
-  UNAVAILABLE,
-  UNKNOWN,
-  UNREALIZED_HELP,
-  allYoursFailedSentence,
-  allYoursOutdatedSentence,
-  allYoursReadingSentence,
-  allYoursUpdatingSentence,
-  answerQuestionsLabel,
-  behindSentence,
-  coverageSentence,
-  exportLeavesOutSentence,
-  feedDetail,
-  holdCaveatSentence,
-  feedProblem,
-  holdSummarySentence,
-  inWallets,
-  linkedFailedSentence,
-  NOT_SAVED,
-  noMarketSentence,
-  otherTokenAmount,
-  otherTokenName,
-  otherTokensLeftOutSentence,
-  pnlHelp,
-  staleSentence,
-  unknownCostIn,
-  valueGapsSentence,
-  walletCount,
-  est,
-} from "../core/wording.ts"
+import { attentionOf, attentionTarget, pastCostsNote } from "../core/attention.ts"
+import { explainTarget, type ExplainTarget, type TotalMetric } from "../core/explain.ts"
+import { ALL_YOURS_TITLE, DEMO_NOTICE, NOT_AN_ADDRESS, NOT_STARTED, PNL_HELP, READING, READING_ALL, allYoursFailedSentence, allYoursOutdatedSentence, allYoursReadingSentence, allYoursUpdatingSentence, behindSentence, coverageSentence, exportLeavesOutSentence, feedProblem, linkedFailedSentence, NOT_SAVED, noMarketSentence, staleSentence, walletCount, UNREADABLE_NOT_COPIED, UNREADABLE_SAVED } from "../core/wording.ts"
 import { PnlChart } from "./PnlChart.tsx"
 import { ResolvePanel } from "./ResolvePanel.tsx"
-import { useBook, useOtherWallets } from "./useBook.ts"
+import { useBook, useOtherWallets, useUnreadableSaved } from "./useBook.ts"
 import { RulesPanel } from "./RulesPanel.tsx"
 import { useRules } from "./useRules.ts"
 import type { TaxYear } from "../core/tax.ts"
@@ -70,15 +16,18 @@ import { TaxPanel } from "./TaxPanel.tsx"
 import { useAllYours, useWallet } from "./useWallet.ts"
 import { LazyPanel } from "./LoadBoundary.tsx"
 import { ProblemNotice } from "./ProblemNotice.tsx"
-import type { Problem } from "../core/wording.ts"
 import { currenciesIn, walletsBehind, walletsToRead, yourWallets } from "../core/book.ts"
 import { readCheckedAccounts } from "../core/device-accounts.ts"
 import { parseDeviceLink, type DeviceLink } from "../core/device-link.ts"
 import { exportCsv } from "../core/export.ts"
 import { bookContext } from "../core/portfolio.ts"
-import { foldBook, type Question } from "../core/resolve.ts"
+import { foldBook } from "../core/resolve.ts"
 import { PurchaseList } from "./PurchaseList.tsx"
 import { usePurchases } from "./usePurchases.ts"
+import { downloadCsv } from "./download.ts"
+import { Holdings, OtherTokens, holdingOf, type Holding } from "./Holdings.tsx"
+import { LiveBadge } from "./LiveBadge.tsx"
+import { AttentionBox, HoldLine, PastCostsLine, Summary } from "./Summary.tsx"
 
 // Only loads when someone asks for it, so looking at a wallet never pulls in any device code.
 const DevicePanel = lazy(() => import("./DevicePanel.tsx").then((m) => ({ default: m.DevicePanel })))
@@ -92,283 +41,11 @@ function readAddress(): string | null {
 const NONE: readonly string[] = []
 
 const CURRENCY_KEY = "pricetag.currency"
-const HOLDINGS_SORT_KEY = "pricetag.holdingsSort"
 
 /** Remembered in this browser, since there are no accounts. USD until it's changed. */
 function readCurrency(): CurrencyCode {
   const value = localStorage.getItem(CURRENCY_KEY)
   return isMainCurrency(value) ? value : "USD"
-}
-
-function Num({ onClick, label, children, tone }: { onClick: () => void; label: string; children: ReactNode; tone?: "gain" | "loss" | "quiet" | null }) {
-  // In the text rather than an `aria-label`, which would take the place of the number.
-  return (
-    <button type="button" className={`num-button ${tone ?? ""}`} onClick={onClick}>
-      <span className="visually-hidden">{label}: </span>
-      {children}
-    </button>
-  )
-}
-
-// What's unknown says so in gray, and the warning under the headline says it once.
-const toneOf = (micros: string | null) => (micros === null ? "quiet" : BigInt(micros) > 0n ? "gain" : BigInt(micros) < 0n ? "loss" : null)
-
-/** A row of the holdings table, of one wallet or, with `wallets`, several. */
-type Holding = Pick<Position, "asset" | "decimals" | "price" | "values" | "reconciliation" | "noMarket" | "estimates"> & { state: Pick<Position["state"], "shortfallQty">; wallets?: PositionPart[] }
-
-const holdingOf = (position: CombinedPosition): Holding => ({ ...position, state: { shortfallQty: position.shortfallQty } })
-
-/** The wallets a holding's parts qualify for. */
-const partsWhere = ({ wallets }: Holding, has: (part: PositionPart) => boolean) => (wallets ?? []).filter(has).map(({ wallet }) => wallet)
-
-
-function OtherTokenRows({ tokens }: { tokens: readonly OtherToken[] }) {
-  return (
-    <div className="table-scroll">
-      <table className="table">
-        <thead>
-          <tr>
-            <th>Token</th>
-            <th className="num">Amount</th>
-            <th className="num">Price</th>
-          </tr>
-        </thead>
-        <tbody>
-          {tokens.map((token) => (
-            <tr key={token.token}>
-              <td>
-                <strong>{otherTokenName(token)}</strong>
-                {token.symbol && token.name ? <span className="muted small"> {token.symbol}</span> : null}
-                <span className="muted small holding-wallets mono" title={token.token}>{shortHash(token.token)}</span>
-                {token.tucked ? <span className="muted small holding-wallets">{token.tucked}</span> : null}
-                {token.note ? <span className="muted small holding-wallets">{token.note}</span> : null}
-              </td>
-              <td className="num">{otherTokenAmount(token)}</td>
-              <td className="num muted">{NO_PRICE}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
-}
-
-/** Holdings with no price. They stay out of the table above, because nothing about them adds up to anything. */
-function OtherTokens({ tokens, leftOut }: { tokens: readonly OtherToken[]; leftOut: number }) {
-  if (tokens.length === 0 && leftOut === 0) return null
-  const shown = tokens.filter((token) => token.tucked === null)
-  const tucked = tokens.filter((token) => token.tucked !== null)
-  const more = otherTokensLeftOutSentence(leftOut)
-  return (
-    <section className="card">
-      <h2>{OTHER_TOKENS_TITLE}</h2>
-      <p className="muted small">{OTHER_TOKENS_NOTE}</p>
-      {shown.length > 0 ? <OtherTokenRows tokens={shown} /> : null}
-      {tucked.length > 0 ? (
-        <details className="other-tokens-spam">
-          <summary>{POSSIBLE_SPAM_TITLE} ({tucked.length})</summary>
-          <p className="muted small">{POSSIBLE_SPAM_RULE}</p>
-          <OtherTokenRows tokens={tucked} />
-        </details>
-      ) : null}
-      {more ? <p className="muted small">{more}</p> : null}
-    </section>
-  )
-}
-
-/** A header that sorts by its column. Clicking it again turns the order around. */
-function SortHeader({ column, sort, onSort, numeric = true, title, children }: { column: HoldingsColumn; sort: HoldingsSort; onSort: (column: HoldingsColumn) => void; numeric?: boolean; title?: string; children: ReactNode }) {
-  const active = sort.column === column
-  return (
-    <th className={numeric ? "num" : ""} title={title} aria-sort={active ? (sort.descending ? "descending" : "ascending") : "none"}>
-      <button type="button" className="sort-button" onClick={() => onSort(column)}>
-        {children}
-        <span className="sort-mark" aria-hidden="true">
-          {active ? (sort.descending ? " ↓" : " ↑") : ""}
-        </span>
-      </button>
-    </th>
-  )
-}
-
-/** Unknown whenever its cost is, never 0%. With a known cost of nothing, there's no share to show. */
-function ReturnCell({ position, onClick }: { position: Holding; onClick: () => void }) {
-  const { asset, values, estimates } = position
-  const bps = returnBps(values)
-  const text = bps !== null ? est(formatReturn(bps), estimates.unrealized) : values.costMicros === null ? UNKNOWN : values.valueMicros === null ? NO_PRICE : "—"
-  return (
-    <Num label={`${asset} return`} onClick={onClick} tone={bps === null ? "quiet" : BigInt(bps) > 0n ? "gain" : BigInt(bps) < 0n ? "loss" : null}>
-      {text}
-    </Num>
-  )
-}
-
-/** What this covers, for whoever wants to know, one click away from the numbers. */
-function AboutData({ lines }: { lines: string[] }) {
-  const id = useId()
-  return (
-    <>
-      <button type="button" className="about-button" popoverTarget={id} aria-label={ABOUT_THIS_DATA} title={ABOUT_THIS_DATA}>
-        ⓘ
-      </button>
-      <div id={id} popover="auto" className="about-text small">
-        {lines.map((line) => (
-          <p key={line}>{line}</p>
-        ))}
-      </div>
-    </>
-  )
-}
-
-function Holdings({ positions, unread, about, currency, questions, method, onMethod, explain, onResolve }: { positions: Holding[]; unread: readonly string[]; about: string[]; currency: CurrencyCode; questions: readonly Question[]; method: Method; onMethod: (method: Method) => void; explain: (target: ExplainTarget) => void; onResolve: (asset: string) => void }) {
-  const open = ({ asset }: Holding, metric: Metric) => () => explain({ kind: "asset", asset, metric })
-  const money = (micros: string) => formatMoney(micros, currency)
-  const signed = (micros: string) => formatSignedMoney(micros, currency)
-  const [sort, setSort] = useState<HoldingsSort>(() => parseHoldingsSort(localStorage.getItem(HOLDINGS_SORT_KEY)))
-  const changeSort = (column: HoldingsColumn) => {
-    const next = sort.column === column ? { column, descending: !sort.descending } : firstSort(column)
-    localStorage.setItem(HOLDINGS_SORT_KEY, formatHoldingsSort(next))
-    setSort(next)
-  }
-  const matches = allBalancesMatch(positions, unread)
-  const questionsAbout = (asset: string) => questions.filter((q) => q.arrivals.some((a) => a.asset === asset))
-  return (
-    <section className="card">
-      <div className="holdings-head">
-        <h2>Holdings</h2>
-        {matches ? <span className="matches small" title={matches}>✓ <span className="muted">{matches}</span></span> : null}
-        <span className="spacer" />
-        <label className="cost-method small" title={METHOD_HELP}>
-          <span className="muted">Cost:</span>
-          <select aria-label={METHOD_NAME} value={method} onChange={(e) => onMethod(e.target.value as Method)}>
-            {(["average", "fifo"] as const).map((m) => (
-              <option key={m} value={m}>
-                {METHOD_LABELS[m]}
-              </option>
-            ))}
-          </select>
-        </label>
-        {about.length > 0 ? <AboutData lines={about} /> : null}
-      </div>
-      <div className="table-scroll">
-        <table className="table">
-          <thead>
-            <tr>
-              <SortHeader column="asset" sort={sort} onSort={changeSort} numeric={false}>
-                Asset
-              </SortHeader>
-              <SortHeader column="amount" sort={sort} onSort={changeSort}>
-                Amount
-              </SortHeader>
-              <SortHeader column="price" sort={sort} onSort={changeSort}>
-                Price
-              </SortHeader>
-              <SortHeader column="average" sort={sort} onSort={changeSort}>
-                {AVERAGE_PAID}
-              </SortHeader>
-              <SortHeader column="value" sort={sort} onSort={changeSort}>
-                Value
-              </SortHeader>
-              <SortHeader column="realized" sort={sort} onSort={changeSort} title={REALIZED_HELP}>
-                Realized
-              </SortHeader>
-              <SortHeader column="unrealized" sort={sort} onSort={changeSort} title={UNREALIZED_HELP}>
-                Unrealized
-              </SortHeader>
-              <SortHeader column="return" sort={sort} onSort={changeSort} title={RETURN_HELP}>
-                Return
-              </SortHeader>
-            </tr>
-          </thead>
-          <tbody>
-            {sortHoldings(positions, sort).map((position) => {
-              const { asset, decimals, values } = position
-              const held = BigInt(values.qty) > 0n
-              const unknown = BigInt(values.unknownCostQty) > 0n
-              const flag = balanceFlag(position, { combined: position.wallets !== undefined })
-              const askable = held && unknown ? questionsAbout(asset).length : 0
-              const heldIn = partsWhere(position, ({ qty }) => BigInt(qty) > 0n)
-              const unknownIn = partsWhere(position, ({ unknownCostQty }) => BigInt(unknownCostQty) > 0n)
-              const mismatchedIn = partsWhere(position, ({ reconciliation }) => reconciliation === "incomplete")
-              const askedIn = position.wallets ? [...new Set(questionsAbout(asset).map(({ wallet }) => wallet))] : []
-              return (
-                <tr key={asset} className={held ? "" : "closed"}>
-                  <td>
-                    <strong>{asset}</strong>
-                    {asset === "ETH" ? <span className="muted small"> {ETH_NOTE}</span> : null}
-                    {/* Once per row, however many of its numbers it affects. */}
-                    {flag ? (
-                      <button type="button" className="row-flag" title={mismatchedIn.length > 0 ? `${inWallets(mismatchedIn)}. ${flag.help}` : flag.help} aria-label={`${asset}: ${flag.label}`} onClick={open(position, flag.metric)}>
-                        ⚠
-                      </button>
-                    ) : null}
-                    {heldIn.length > 0 ? <span className="muted small holding-wallets" title={position.wallets?.map(({ wallet, qty }) => `${shortHash(wallet)}: ${formatAmount(qty, decimals)} ${asset}`).join("\n")}>{inWallets(heldIn)}</span> : null}
-                    {unknownIn.length > 0 ? <span className="muted small holding-wallets">{unknownCostIn(unknownIn)}</span> : null}
-                  </td>
-                  <td className="num">
-                    <Num label={`${asset} amount`} onClick={open(position, "amount")}>
-                      {formatAmount(values.qty, decimals)}
-                    </Num>
-                  </td>
-                  <td className="num">
-                    {position.price ? (
-                      <Num label={`${asset} price`} onClick={open(position, "price")}>
-                        {est(formatPrice(position.price.micros, currency), position.estimates.value)}
-                      </Num>
-                    ) : (
-                      <span className="muted">{NO_PRICE}</span>
-                    )}
-                  </td>
-                  <td className="num">
-                    {held ? (
-                      <Num label={`${asset} ${AVERAGE_PAID.toLowerCase()}`} onClick={open(position, "average")} tone={unknown ? "quiet" : null}>
-                        {values.averageCostMicros ? est(formatPrice(values.averageCostMicros, currency), position.estimates.cost) : UNKNOWN}
-                      </Num>
-                    ) : (
-                      <span className="muted">—</span>
-                    )}
-                  </td>
-                  <td className="num">
-                    {held ? (
-                      <Num label={`${asset} value`} onClick={open(position, "value")} tone={values.valueMicros === null ? "quiet" : null}>
-                        {values.valueMicros ? est(money(values.valueMicros), position.estimates.value) : NO_PRICE}
-                      </Num>
-                    ) : (
-                      <span className="muted">—</span>
-                    )}
-                  </td>
-                  <td className="num" title={REALIZED_HELP}>
-                    <Num label={`${asset} realized PnL`} onClick={open(position, "realized")} tone={toneOf(values.realizedMicros)}>
-                      {values.realizedMicros === null ? UNKNOWN : est(signed(values.realizedMicros), position.estimates.realized)}
-                    </Num>
-                  </td>
-                  <td className="num" title={UNREALIZED_HELP}>
-                    {held ? (
-                      <>
-                        {askable > 0 ? (
-                          <button type="button" className="row-action" title={`${answerQuestionsLabel(askable)} about ${asset}, so what you paid is known${askedIn.length > 0 ? `. ${inWallets(askedIn)}` : ""}`} aria-label={`${answerQuestionsLabel(askable)} about ${asset}${askedIn.length > 0 ? `, ${inWallets(askedIn).toLowerCase()}` : ""}`} onClick={() => onResolve(asset)}>
-                            ?
-                          </button>
-                        ) : null}
-                        <Num label={`${asset} unrealized PnL`} onClick={open(position, "unrealized")} tone={toneOf(values.unrealizedMicros)}>
-                          {values.unrealizedMicros === null ? UNKNOWN : est(signed(values.unrealizedMicros), position.estimates.unrealized)}
-                        </Num>
-                      </>
-                    ) : (
-                      <span className="muted">—</span>
-                    )}
-                  </td>
-                  <td className="num" title={RETURN_HELP}>
-                    {held ? <ReturnCell position={position} onClick={open(position, "return")} /> : <span className="muted">—</span>}
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  )
 }
 
 export function App() {
@@ -385,6 +62,7 @@ export function App() {
   const [chosenCurrency, setChosenCurrency] = useState<CurrencyCode>(readCurrency)
   const { rules, chosen: chosenRule, choose: chooseRule } = useRules()
   const { book, change, undo, canUndo, notSaved, linkAccounts, addPurchase } = useBook()
+  const unreadableSaved = useUnreadableSaved()
   const { purchases, problem: purchasesProblem, begin: beginPurchase, dismiss: dismissPurchase } = usePurchases(addPurchase)
   const [buying, setBuying] = useState(false)
   const paidIn = currenciesIn(book).join(",")
@@ -487,13 +165,14 @@ export function App() {
   // Whatever's on screen says what it's in, which for a moment after a change isn't what was just chosen.
   const currency = combined?.currency ?? view?.currency ?? chosenCurrency
   const positions: Holding[] = useMemo(() => combined?.positions.map(holdingOf) ?? fold?.positions ?? [], [combined, fold])
+  const shown = combined ?? fold
   const unread = combined?.unreadAssets ?? fold?.unread ?? []
-  const totals = combined?.totals ?? fold?.totals ?? sumTotals([])
-  const points = combined?.points ?? fold?.points ?? []
-  const questions = combined?.questions ?? fold?.questions ?? []
-  const pnlStatus = combined?.pnlStatus ?? fold?.pnlStatus ?? null
-  const holdComparison = combined?.holdComparison ?? fold?.holdComparison ?? null
-  const withheld = combined?.withheld ?? fold?.withheld ?? []
+  const totals = shown?.totals ?? sumTotals([])
+  const points = shown?.points ?? []
+  const questions = shown?.questions ?? []
+  const pnlStatus = shown?.pnlStatus ?? null
+  const holdComparison = shown?.holdComparison ?? null
+  const withheld = shown?.withheld ?? []
   const missingRateTxs = combined ? (combined.exchange?.missingRateTxs ?? []) : (view?.missingRateTxs ?? [])
   const noCurrentRate = combined ? combined.exchange !== null && combined.exchange.latestRateMicros === null : currency !== "USD" && view !== null && !view.latestRate
   /** How many questions each wallet on screen has. A wallet that isn't read yet isn't here, since that isn't known. */
@@ -513,13 +192,7 @@ export function App() {
   const about = showing ? [...(started ? [coverageSentence(showing.coverage, TOKENS.length - 1, showing.openingUnread.length > 0, { combined: isAll })] : []), ...(noMarket ? [noMarket] : [])] : []
   // With no table to sit beside, what it covers stays on the page.
   const aboutNotices = about.map((line) => <p className="notice" key={line}>{line}</p>)
-  const download = () => {
-    const link = document.createElement("a")
-    link.href = URL.createObjectURL(new Blob([together ? exportCombined(together.read, method, book) : exportCsv(fold?.positions ?? [], currency)], { type: "text/csv" }))
-    link.download = `patina-${together ? "all-yours" : wallet?.address}.csv`
-    link.click()
-    URL.revokeObjectURL(link.href)
-  }
+  const download = () => downloadCsv(together ? exportCombined(together.read, method, book) : exportCsv(fold?.positions ?? [], currency), `patina-${together ? "all-yours" : wallet?.address}.csv`)
   // Worked out from what's on screen, so it can't go on showing numbers that have since changed, or that are in another currency.
   const explanation = useMemo(() => {
     if (!target) return null
@@ -618,9 +291,19 @@ export function App() {
       <p className="visually-hidden" role="status">{readingStatus}</p>
       <p className="visually-hidden" role="alert">{statusAlert}</p>
       {notSaved ? <p className="notice warn" role="alert">⚠ {NOT_SAVED}</p> : null}
+      {unreadableSaved.copyFailed ? (
+        <p className="notice warn" role="alert">⚠ {UNREADABLE_NOT_COPIED}</p>
+      ) : unreadableSaved.unreadable ? (
+        <p className="notice warn" role="alert">
+          ⚠ {UNREADABLE_SAVED}{" "}
+          <button type="button" onClick={unreadableSaved.dismiss}>
+            OK
+          </button>
+        </p>
+      ) : null}
       {rules.length > 1 ? <RulesPanel rules={rules} chosen={chosenRule} choose={chooseRule} current={rule} address={isAll ? null : single} method={method} currency={currency} book={book} /> : null}
 
-      <PurchaseList purchases={purchases} problem={purchasesProblem} matches={combined?.purchases ?? fold?.purchases ?? []} currency={chosenCurrency} showing={wallet?.address ?? null} onView={go} onDismiss={dismissPurchase} />
+      <PurchaseList purchases={purchases} problem={purchasesProblem} matches={shown?.purchases ?? []} currency={chosenCurrency} showing={wallet?.address ?? null} onView={go} onDismiss={dismissPurchase} />
 
       {!single && !isAll ? (
         <section className="empty">
@@ -670,29 +353,7 @@ export function App() {
             </>
           ) : (
             <>
-              <section className="summary">
-                <div className="lead">
-                  <div title={isValuePartial(totals) ? valueGapsSentence(valueGaps(positions, unread)) : undefined}>
-                    <span className="muted small">Value · {currency}</span>
-                    <Num label={`Value${isValuePartial(totals) ? ", partial" : ""}`} onClick={() => openTotal("value")} tone={totals.valueMicros === null ? "quiet" : null}>
-                      <span className="big">{totals.valueMicros === null ? UNAVAILABLE : est(formatMoney(totals.valueMicros, currency), totals.estimated.value)}</span>
-                    </Num>
-                  </div>
-                  <div>
-                    <span className="muted small" title={PNL_HELP}>
-                      Total PnL
-                    </span>
-                    <Num label={`Total PnL${pnlStatus === "partial" ? ", partial" : ""}`} onClick={() => openTotal("pnl")} tone={toneOf(totals.pnlMicros)}>
-                      <span className="second">{totals.pnlMicros === null ? UNAVAILABLE : est(formatSignedMoney(totals.pnlMicros, currency), BigInt(totals.estimatedMicros) > 0n)}</span>
-                    </Num>
-                  </div>
-                </div>
-                <dl className="stats">
-                  <Stat label="Realized" help={REALIZED_HELP} partial={totals.coverage.realized.missing > 0} onClick={() => openTotal("realized")} value={totals.realizedMicros && est(formatSignedMoney(totals.realizedMicros, currency), totals.estimated.realized)} />
-                  <Stat label="Unrealized" help={UNREALIZED_HELP} partial={totals.coverage.unrealized.missing > 0} onClick={() => openTotal("unrealized")} value={totals.unrealizedMicros && est(formatSignedMoney(totals.unrealizedMicros, currency), totals.estimated.unrealized)} />
-                  <Stat label={NETWORK_FEES} partial={totals.unpricedGas} onClick={() => openTotal("gas")} value={totals.gasMicros && formatMoney(totals.gasMicros, currency)} />
-                </dl>
-              </section>
+              <Summary totals={totals} positions={positions} unread={unread} pnlStatus={pnlStatus} currency={currency} openTotal={openTotal} />
               {/* Its room stays when there's nothing to say, so it can come and go without moving the chart. */}
               <div className="attention-slot">{attentionBox}</div>
               <PnlChart points={points} currency={currency} onSelect={(point) => setTarget({ kind: "tx", txHash: point.txHash as string })} />
@@ -767,117 +428,6 @@ export function App() {
           onResolve={resolveFromTax}
           onClose={() => setTaxOpen(false)}
         /> : null}
-    </div>
-  )
-}
-
-/** What the numbers above leave out, once, in a sentence, with what to do about it. The full list is a hover or a click away. */
-function AttentionBox({ attention, questionCount, onResolve, onShow }: { attention: Attention; questionCount: number; onResolve: () => void; onShow: () => void }) {
-  return (
-    <section className="attention" title={attention.fullList ?? undefined}>
-      <span className="attention-mark" role="img" aria-label="Warning">⚠</span>
-      <div className="attention-text">
-        <p title={pnlHelp(attention.title)}>{attention.title}</p>
-        {attention.details.map((line) => (
-          <p key={line} className="muted small" title={pnlHelp(line)}>
-            {line}
-          </p>
-        ))}
-      </div>
-      {questionCount > 0 ? (
-        <button type="button" className="quiet-button" onClick={onResolve}>
-          {answerQuestionsLabel(questionCount)}
-        </button>
-      ) : (
-        <button type="button" className="quiet-button" onClick={onShow}>
-          {SHOW_MISSING}
-        </button>
-      )}
-    </section>
-  )
-}
-
-/** Questions that remain when the numbers above leave nothing out. Nothing's wrong, so there's no warning, but they can still be answered. */
-function PastCostsLine({ note, questionCount, onResolve }: { note: string; questionCount: number; onResolve: () => void }) {
-  return (
-    <section className="attention">
-      <p className="attention-text muted">{note}</p>
-      <button type="button" className="quiet-button" onClick={onResolve}>
-        {answerQuestionsLabel(questionCount)}
-      </button>
-    </section>
-  )
-}
-
-/** This wallet next to simply holding ETH, in a line. Calm on purpose: no colors for ahead or behind, and it asks nothing of anyone. Clicking it shows the numbers and how they're worked out. */
-function HoldLine({ comparison, combined, currency, onOpen }: { comparison: HoldComparison; combined: boolean; currency: CurrencyCode; onOpen: () => void }) {
-  // The fine print, a hover or a click away.
-  const fine = [holdCaveatSentence(comparison, currency, { combined }), comparison.status === "unavailable" ? null : HOLD_PAST].filter((part) => part !== null).join(" ")
-  return (
-    <button type="button" className="hold-line" title={fine} aria-label={`${HOLD_TITLE}. ${holdSummarySentence(comparison, currency)} Shows how this is worked out`} onClick={onOpen}>
-      <span>{HOLD_TITLE}</span>
-      <span className="muted">{holdSummarySentence(comparison, currency)}</span>
-      <span className="muted" aria-hidden="true">›</span>
-    </button>
-  )
-}
-
-/** One of the sums beside the headline. What it leaves out is said once, under the headline. */
-function Stat({ label, help, partial, onClick, value }: { label: string; help?: string; partial: boolean; onClick: () => void; value: string | null }) {
-  return (
-    <div>
-      <dt className="muted small" title={help}>
-        {label}
-      </dt>
-      <dd>
-        <Num label={`${label}${value !== null && partial ? ", partial" : ""}`} onClick={onClick} tone={value === null ? "quiet" : null}>
-          {value ?? UNAVAILABLE}
-        </Num>
-      </dd>
-    </div>
-  )
-}
-
-/** Whether something's gone on this long, so a blip doesn't say more than it has to. */
-function useHasLasted(isOn: boolean, ms: number) {
-  const [lasted, setLasted] = useState(false)
-  useEffect(() => {
-    setLasted(false)
-    if (!isOn) return
-    const timer = setTimeout(() => setLasted(true), ms)
-    return () => clearTimeout(timer)
-  }, [isOn, ms])
-  return lasted
-}
-
-const LONG_PROBLEM_MS = 60_000
-
-/** Whether the numbers are current, with what's wrong a click away. It sits in the corner, over the page, so nothing there moves when it changes, however long it gets. */
-function LiveBadge({ wallet, problem, lastUpdate, all, lines, failedWallets, retry }: { wallet: Pick<WalletResponse, "mode" | "coverage" | "latest">; problem: Problem | null; lastUpdate: string | null; all: CombinedPortfolioResponse | null; lines: readonly string[]; failedWallets: number; retry: () => void }) {
-  const isLong = useHasLasted(problem !== null, LONG_PROBLEM_MS)
-  const detail = feedDetail(wallet.mode, wallet.coverage.toBlock)
-  // Numbers missing a wallet aren't live, whatever else is going on.
-  const failedLabel = failedWallets > 0 ? `Couldn't read ${walletCount(failedWallets)}` : null
-  const says = feedBadge(wallet, problem !== null, all)
-  const [kind, label] = says === "Demo data" ? ["", says] : problem ? ["warn", ["Not updating", isLong && lastUpdate ? `last update ${lastUpdate}` : null, failedLabel?.toLowerCase()].filter(Boolean).join(" · ")] : failedLabel ? ["warn", failedLabel] : says === "Not updating" ? ["warn", says] : says === "Updating" ? ["updating", says] : says === "Catching up" ? ["", says] : ["live", says]
-  return (
-    <div className="status-corner">
-      {!problem && lines.length === 0 ? (
-        <span className={`badge ${kind}`} title={wallet.mode === "demo" ? undefined : detail}>{label}</span>
-      ) : (
-        <details className="status">
-          <summary className={`badge ${kind}`} title={detail}>{label}</summary>
-          <div className="status-details">
-            {problem ? <ProblemNotice problem={problem} className="" /> : null}
-            {lines.map((line) => <p key={line}>{line}</p>)}
-            {problem || failedWallets > 0 || (all?.linkedOutdated.length ?? 0) > 0 ? (
-              <button type="button" className="link" onClick={retry}>
-                Try again
-              </button>
-            ) : null}
-          </div>
-        </details>
-      )}
     </div>
   )
 }

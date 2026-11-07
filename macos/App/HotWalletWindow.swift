@@ -111,7 +111,7 @@ private struct HotWalletSetup: View {
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
                     .disabled(!understands || wallet.isWorking)
-                if let problem = wallet.sweepProblem {
+                if let problem = wallet.lastActionProblem {
                     WarningText(problem).font(.callout)
                 }
             }
@@ -162,7 +162,7 @@ struct HotWalletDetails<Overview: View>: View {
             if let alarm = wallet.alarm { alarmBanner(alarm) }
             ForEach(wallet.notices) { notice in
                 Notice(notice.kind == .warning ? .warning : .info, notice.text, actionTitle: notice.asksForSavings ? HotWalletWording.addSavingsButton : nil) { isAddingCold = true }
-                    .id(notice.text == wallet.sweepProblem ? MoneyNotice.sweepProblemRow : notice.id)
+                    .id(notice.text == wallet.lastActionProblem ? MoneyNotice.sweepProblemRow : notice.id)
             }
             card
             if !shownPurchases.isEmpty { bought }
@@ -627,7 +627,7 @@ struct HotWalletDetails<Overview: View>: View {
         guard let wanted else { return }
         navigation.shownRow = nil
         // A row from a key that's been replaced isn't here anymore, so it opens what the money's on now.
-        let shown = Set(wallet.records.map { MoneyNotice.recordRow($0.hash) } + shownPurchases.map { MoneyNotice.purchaseRow($0.ref) } + (wallet.sweepProblem == nil ? [] : [MoneyNotice.sweepProblemRow]))
+        let shown = Set(wallet.records.map { MoneyNotice.recordRow($0.hash) } + shownPurchases.map { MoneyNotice.purchaseRow($0.ref) } + (wallet.lastActionProblem == nil ? [] : [MoneyNotice.sweepProblemRow]))
         let row = shown.contains(wanted) ? wanted : MoneyNotice.balanceRow
         withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo(row, anchor: .center) }
         litRow = row

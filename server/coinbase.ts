@@ -5,9 +5,9 @@ import { createPrivateKey, randomBytes, sign, type KeyObject } from "node:crypto
 import { TOKENS, isCurrencyCode, normalizeAddress } from "@pricetag/sdk/core"
 import { DEFAULT_RPC_URL } from "@pricetag/sdk/internal"
 import type { OnrampOrder } from "../src/core/api.ts"
+import { recordOf } from "../src/core/record.ts"
 import { OnrampError, unitsOf, type Onramp } from "./onramp.ts"
-
-type Env = Record<string, string | undefined>
+import type { Env } from "./shared.ts"
 
 const API_HOST = "api.developer.coinbase.com"
 const PAGE = "https://pay.coinbase.com/buy/select-asset"
@@ -39,7 +39,7 @@ export function requestToken(keyId: string, secret: string, method: string, path
   return `${header}.${claims}.${signer.sign(Buffer.from(`${header}.${claims}`)).toString("base64url")}`
 }
 
-const recordOf = (value: unknown): Record<string, unknown> => (typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {})
+const fieldsOf = (value: unknown) => recordOf(value) ?? {}
 
 const STATUSES: Record<string, OnrampOrder["status"]> = {
   ONRAMP_TRANSACTION_STATUS_CREATED: "pending",
@@ -61,17 +61,17 @@ const isPurchase = (row: Record<string, unknown>) => row.type === "ONRAMP_TRANSA
 
 /** An order as Coinbase's API sends it, in what this app can use. What's missing or unreadable is null, and never filled in. */
 export function orderOf(raw: unknown): OnrampOrder | null {
-  const row = recordOf(raw)
+  const row = fieldsOf(raw)
   if (typeof row.transaction_id !== "string" || typeof row.status !== "string") return null
   const asset = typeof row.purchase_currency === "string" ? row.purchase_currency : null
   const token = TOKENS.find((t) => t.symbol === asset)
-  const total = recordOf(row.payment_total)
+  const total = fieldsOf(row.payment_total)
   const currency = typeof total.currency === "string" && isCurrencyCode(total.currency) ? total.currency : null
   const bought = isPurchase(row)
   const paid = bought && currency ? unitsOf(total.value, 6) : null
   // Paid in a currency with no feed, which leaves only Coinbase's own USD figure. Nothing has shown that figure is exact, so the cost stays unknown.
   const paidIn = bought && !currency && typeof total.currency === "string" && /^[A-Z]{3}$/.test(total.currency) ? total.currency : null
-  const usd = recordOf(row.payment_total_usd)
+  const usd = fieldsOf(row.payment_total_usd)
   const usdMicros = bought && !paidIn && (usd.currency === "USD" || usd.currency === undefined) ? unitsOf(usd.value, 6) : null
   const txHash = typeof row.tx_hash === "string" && /^0x[0-9a-fA-F]{64}$/.test(row.tx_hash) ? row.tx_hash.toLowerCase() : null
   const wallet = typeof row.wallet_address === "string" && /^0x[0-9a-fA-F]{40}$/.test(row.wallet_address) ? normalizeAddress(row.wallet_address) : null
@@ -82,7 +82,7 @@ export function orderOf(raw: unknown): OnrampOrder | null {
     status,
     failure: status === "failed" ? (FAILURES[row.failure_reason as string] ?? "payment") : null,
     asset,
-    units: token ? unitsOf(recordOf(row.purchase_amount).value, token.decimals) : null,
+    units: token ? unitsOf(fieldsOf(row.purchase_amount).value, token.decimals) : null,
     wallet,
     network: typeof row.purchase_network === "string" ? row.purchase_network : null,
     txHash,
@@ -93,11 +93,10 @@ export function orderOf(raw: unknown): OnrampOrder | null {
   }
 }
 
-/** Null when there's no key, which clients say plainly. `BASE_RPC_URL` finds the block a delivery landed in. */
 /** What Coinbase said when it refused, as it said it, which is how a trial's limit would show up. Nothing that isn't its own sentence. */
 function refusalIn(body: string): string | null {
   try {
-    const { message, errorMessage, error } = recordOf(JSON.parse(body))
+    const { message, errorMessage, error } = fieldsOf(JSON.parse(body))
     const said = [message, errorMessage, error].find((text) => typeof text === "string" && text.trim() !== "") as string | undefined
     return said?.trim().slice(0, 300) ?? null
   } catch {
@@ -105,6 +104,7 @@ function refusalIn(body: string): string | null {
   }
 }
 
+/** Null when there's no key, which clients say plainly. `BASE_RPC_URL` finds the block a delivery landed in. */
 export function createCoinbase(env: Env, send: typeof fetch = fetch): Onramp | null {
   const keyId = env.COINBASE_ONRAMP_KEY_ID
   const secret = env.COINBASE_ONRAMP_KEY_SECRET
@@ -150,8 +150,8 @@ export function createCoinbase(env: Env, send: typeof fetch = fetch): Onramp | n
   async function blockOf(txHash: string): Promise<number | null> {
     try {
       const response = await send(rpcUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_getTransactionReceipt", params: [txHash] }), signal: AbortSignal.timeout(TIMEOUT_MS) })
-      const { result } = recordOf(await response.json())
-      const hex = recordOf(result).blockNumber
+      const { result } = fieldsOf(await response.json())
+      const hex = fieldsOf(result).blockNumber
       return typeof hex === "string" && /^0x[0-9a-f]+$/i.test(hex) ? Number(hex) : null
     } catch (error) {
       // Only what kind of error it is. A message can quote the URL, and a dedicated RPC's has a key in it.
@@ -163,7 +163,7 @@ export function createCoinbase(env: Env, send: typeof fetch = fetch): Onramp | n
   return {
     async checkout({ address, asset, cryptoAmount, fiat, clientIp }) {
       // Only the token that was chosen, because that's the one the app checked it can move. The amount is only a preset, and the page can change it.
-      const answer = recordOf(await call("POST", "/onramp/v1/token", "", { addresses: [{ address, blockchains: [NETWORK] }], assets: [asset], ...(clientIp ? { clientIp } : {}) }))
+      const answer = fieldsOf(await call("POST", "/onramp/v1/token", "", { addresses: [{ address, blockchains: [NETWORK] }], assets: [asset], ...(clientIp ? { clientIp } : {}) }))
       if (typeof answer.token !== "string" || answer.token === "") throw new OnrampError("Coinbase sent something this server can't read.")
       // One to a purchase, so an order can't be mistaken for another. It has to stay under 50 characters. The prefix is what asks for Coinbase's mocked mode.
       const ref = `${mocked ? "sandbox-" : ""}${randomBytes(16).toString("hex")}`
@@ -173,9 +173,9 @@ export function createCoinbase(env: Env, send: typeof fetch = fetch): Onramp | n
       return { url: `${PAGE}?${params}`, ref }
     },
     async orders(ref) {
-      const answer = recordOf(await call("GET", `/onramp/v1/buy/user/${encodeURIComponent(ref)}/transactions`, "?page_size=10"))
+      const answer = fieldsOf(await call("GET", `/onramp/v1/buy/user/${encodeURIComponent(ref)}/transactions`, "?page_size=10"))
       const rows = Array.isArray(answer.transactions) ? answer.transactions : []
-      for (const row of rows.map(recordOf)) {
+      for (const row of rows.map(fieldsOf)) {
         // What the first real orders say is the check on `isPurchase`, and neither of these is private.
         if (row.status === "ONRAMP_TRANSACTION_STATUS_SUCCESS" && !isPurchase(row)) console.error(`A Coinbase order isn't counted as a purchase: type ${String(row.type)}, paid with ${String(row.payment_method)}`)
       }

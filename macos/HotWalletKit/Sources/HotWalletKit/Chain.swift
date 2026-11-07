@@ -134,8 +134,8 @@ public protocol ChainClient: Sendable {
     func l1Fee(ofPayload payload: [UInt8]) async throws -> UInt128
 }
 
-/// A JSON-RPC node, and every read of one tick in a single batch. It can lie about what it tells us, but all it can get out of
-/// that is wasted gas: what's signed only ever goes to the user's own wallets, on this chain.
+/// A JSON-RPC node, and every read of one tick in a single batch. It can lie about what it tells us, which can waste gas or make a
+/// preview wrong, but it never chooses what's signed: a sweep only goes to the user's own wallets, and anything else is what the user approved, on this chain.
 public struct RPCChainClient: ChainClient {
     private let url: URL
     private let session: URLSession
@@ -163,7 +163,6 @@ public struct RPCChainClient: ChainClient {
         // Everything at this one block, so a balance can't be from before a transaction whose receipt is from after it.
         var calls: [(String, [Any])] = [
             ("eth_chainId", []),
-            ("eth_blockNumber", []),
             ("eth_getTransactionCount", [address.lowercased, number]),
             ("eth_getBalance", [address.lowercased, number]),
             ("eth_maxPriorityFeePerGas", []),
@@ -177,14 +176,14 @@ public struct RPCChainClient: ChainClient {
         // A balance or fee that can't be read fails the whole read, so a failure can't look like an empty wallet.
         let chainID = try Self.count(answers[0].get())
         let blockTime = try Self.quantity(timestamp)
-        var balances: [Token: UInt128] = [Base.eth: try Self.amount(answers[3].get())]
+        var balances: [Token: UInt128] = [Base.eth: try Self.amount(answers[2].get())]
         for (index, token) in tokens.enumerated() {
-            balances[token] = try Self.amount(answers[8 + index].get())
+            balances[token] = try Self.amount(answers[7 + index].get())
         }
-        let priority = try Self.quantity(answers[4].get(), upTo: Self.highestReadableFeePerGas)
+        let priority = try Self.quantity(answers[3].get(), upTo: Self.highestReadableFeePerGas)
         let base = try Self.quantity(baseFee, upTo: Self.highestReadableFeePerGas)
-        let fees = FeeQuote(maxFeePerGas: 2 * base + priority, maxPriorityFeePerGas: priority, l1FeeWei: try Self.amount(answers[7].get()))
-        let ethUsdMicros = Oracle.price(try? answers[5].get() as? String, feed: .eth, blockTime: blockTime)
+        let fees = FeeQuote(maxFeePerGas: 2 * base + priority, maxPriorityFeePerGas: priority, l1FeeWei: try Self.amount(answers[6].get()))
+        let ethUsdMicros = Oracle.price(try? answers[4].get() as? String, feed: .eth, blockTime: blockTime)
 
         // Only what's held, because the public node limits calls and most wallets hold few of these. Still at the same block.
         let held = Oracle.others.filter { asset, _ in tokens.contains { $0.asset == asset && balances[$0, default: 0] > 0 } }.sorted { $0.key < $1.key }
@@ -199,10 +198,10 @@ public struct RPCChainClient: ChainClient {
         return ChainSnapshot(
             chainID: chainID,
             blockNumber: try Self.count(number),
-            nonce: try Self.count(answers[2].get()),
+            nonce: try Self.count(answers[1].get()),
             balances: balances,
             ethUsdMicros: ethUsdMicros,
-            usdcUsdMicros: Oracle.price(try? answers[6].get() as? String, feed: .usdc, blockTime: blockTime),
+            usdcUsdMicros: Oracle.price(try? answers[5].get() as? String, feed: .usdc, blockTime: blockTime),
             otherUsdMicros: otherUsdMicros,
             fees: fees
         )
@@ -380,7 +379,7 @@ enum Oracle {
         static let shortHeartbeat: UInt128 = 3600
         static let dailyHeartbeat: UInt128 = 26 * 3600
 
-        /// The same bounds as `sanity` in `src/core/tokens.ts`.
+        /// The same bounds as `sanity` in `packages/sdk/src/tokens.ts`.
         enum Plausible: Equatable, Sendable {
             /// In micros.
             case usd(ClosedRange<UInt128>)
@@ -427,9 +426,7 @@ enum Oracle {
     static func price(_ result: String?, feed: Feed, blockTime: UInt128, ethUsdMicros: UInt128? = nil) -> UInt128? {
         guard let result, let bytes = Hex.decode(result), bytes.count == 160 else { return nil }
         let word: (Int) -> UInt128? = { index in
-            let slice = bytes[(index * 32)..<((index + 1) * 32)]
-            guard slice.prefix(16).allSatisfy({ $0 == 0 }) else { return nil }
-            return slice.suffix(16).reduce(UInt128(0)) { $0 << 8 | UInt128($1) }
+            bytes[(index * 32)..<((index + 1) * 32)].uint128
         }
         guard let answer = word(1), let updatedAt = word(3), updatedAt <= blockTime, blockTime - updatedAt <= feed.maxAgeSeconds else { return nil }
         guard let unit = feed.answersInEth ? ethUsdMicros : Money.dollar else { return nil }
@@ -444,6 +441,14 @@ enum Oracle {
             return (lowest...highest).contains(micros) ? micros : nil
         }
     }
+}
+
+extension Collection<UInt8> {
+    /// The number in a 32-byte ABI word's low 16 bytes, whatever's above them.
+    var low128: UInt128 { suffix(16).reduce(UInt128(0)) { $0 << 8 | UInt128($1) } }
+
+    /// The number in a 32-byte ABI word, or nil if it doesn't fit.
+    var uint128: UInt128? { prefix(16).allSatisfy { $0 == 0 } ? low128 : nil }
 }
 
 public enum Calldata {

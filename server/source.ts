@@ -1,11 +1,12 @@
-// Where a wallet's rows come from when the Pricetag dataset isn't deployed: the raw Base dataset, read through the same
-// shapes as the dataset's `datasetSource`, so everything after this file doesn't care which one it was.
+// Where a wallet's rows come from: the Pricetag dataset through `resolvingSource`, or, when it isn't deployed, the raw Base
+// dataset through `rawSource`. Both have the same shape, so everything after this file doesn't care which one it was.
 //
 // Every query is bounded by block, because staging is shared.
 
-import { ERC20_ADDRESSES, ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, MIN_TOKEN_TRADE_USD, MIN_TRADE_USD_MICROS, TOKENS, TOKEN_FEEDS, TOKEN_FEED_WINDOW_SECONDS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, marketTrades, parseNote, type TokenActivity, type CostNote, type FeedRound, type MarketTrade, type PricedRow } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, ETH_USD_FEED, LAST_2S_BLOCK, MIN_TOKEN_TRADE_USD, MIN_TRADE_USD_MICROS, TOKENS, TOKEN_FEEDS, TOKEN_FEED_WINDOW_SECONDS, USDC_USD_FEED, WETH_ADDRESS, blockBefore, marketTrades, parseNote, type TokenActivity, type CostNote, type FeedRound, type PricedRow } from "@pricetag/sdk/core"
 import { WalletTooBigError, MARKET_BUCKET_BLOCKS, asIso, asNumber, blockFilters, datasetReader, datasetSource, decimalString, decodeRoundAnswer, describeError, hexOf, isNotStarted, prefixed, readBalancesAt, readTokenFactsAt, readEthBalancesAt, readFeedRoundsAt, readHead, readPayoutTxsAt, settledThrough, type Followed, type PriceUpdate, type Query, type ReadL1Fees, type Row, type Source, type StreamedTable, type WindowRows } from "@pricetag/sdk/internal"
 import { DEPOSIT_TOPIC, TRANSFER_BATCH_TOPIC, TRANSFER_SINGLE_TOPIC, TRANSFER_TOPIC, WITHDRAWAL_TOPIC, legRowsFromRaw, type RawLog, type RawTx } from "./raw.ts"
+import { isMissingTable, walletTurns } from "./shared.ts"
 
 /** One `AnswerUpdated` of a token's feed, in the feeds dataset. */
 export type FeedUpdate = PriceUpdate & { asset: string; updatedAt: number }
@@ -222,12 +223,10 @@ export function rawSource(query: Query, config: { baseDataset: string; network: 
   }
 }
 
-const isMissingTable = (error: unknown) => /table .*not found|not found.*table|does not exist|unknown table/i.test(describeError(error))
-
 /** Plenty for the guards in market.ts once small trades are left out, even though a busy pool repeats each trade per account. */
 const MARKET_ROWS = 300
 
-/** As many as `createWallets` keeps, so a wallet it still holds is here too. */
+/** How many wallets' rows are kept here, the oldest going first. One that's gone is only read again. */
 const MAX_SHARED_WALLETS = 20
 
 /** A reorg from the block it replaced, and the newest block the old chain is known to have reached. */
@@ -254,7 +253,7 @@ type SharedWallet = Pick<WindowRows, "rows" | "gasUnknown"> & { from: number; to
 export function sharedReads(query: Query, config: { baseDataset: string; dataset: string; network: string; followed?: Followed<StreamedTable> | undefined; maxWalletRows?: number | undefined }) {
   const reader = datasetReader(query, { ...config, counterparties: true })
   const wallets = new Map<string, SharedWallet>()
-  const turns = new Map<string, Promise<void>>()
+  const inTurn = walletTurns()
   const reorgs: Reorg[] = []
   const max = config.maxWalletRows ?? Infinity
   /** These outlast what `createWallets` keeps, so they need a limit of their own. The newest always stays. */
@@ -265,13 +264,6 @@ export function sharedReads(query: Query, config: { baseDataset: string; dataset
       wallets.delete(address)
       rows -= wallet.rows.length
     }
-  }
-
-  // One at a time per wallet, so a read that starts while another is running can use what that one found.
-  function inTurn<T>(address: string, read: () => Promise<T>): Promise<T> {
-    const turn = (turns.get(address) ?? Promise.resolve()).then(read)
-    turns.set(address, turn.then(() => {}, () => {}))
-    return turn
   }
 
   return {

@@ -1,6 +1,7 @@
 // Every movement as a spreadsheet row, marked so an estimate or an unknown can't pass for an exact number.
 
 import type { CurrencyCode, LegEffect, Position } from "@pricetag/sdk/core"
+import { csvCell, microsCell, unitsCell } from "./csv.ts"
 import { COST_WORDS, actionLabel, priceSourceLabel } from "./wording.ts"
 
 const HEADER = ["time", "block", "transaction", "asset", "amount", "kind", "currency", "price", "price_source", "cost", "cost_source", "proceeds", "status"]
@@ -16,21 +17,7 @@ function statusOf({ leg, before, after }: LegEffect, noMarket: boolean): string 
   return grew("estimatedRealizedMicros") || grew("transferredOutEstimatedMicros") ? "estimated" : "exact"
 }
 
-const money = (micros: string | null) => {
-  if (micros === null) return ""
-  const value = BigInt(micros)
-  const size = value < 0n ? -value : value
-  return `${value < 0n ? "-" : ""}${size / 1_000_000n}.${(size % 1_000_000n).toString().padStart(6, "0")}`
-}
-
-function amount(units: string, decimals: number): string {
-  const value = BigInt(units)
-  const size = (value < 0n ? -value : value).toString().padStart(decimals + 1, "0")
-  const fraction = size.slice(size.length - decimals).replace(/0+$/, "")
-  return `${value < 0n ? "-" : ""}${size.slice(0, size.length - decimals)}${fraction ? `.${fraction}` : ""}`
-}
-
-const quote = (cell: string) => (/[",\n]/.test(cell) ? `"${cell.replaceAll('"', '""')}"` : cell)
+const money = (micros: string | null) => (micros === null ? "" : microsCell(micros))
 
 /** `walletOf` adds a column saying which wallet each row is in, for an export of several wallets at once. */
 export function exportCsv(positions: readonly Position[], currency: CurrencyCode, walletOf?: (leg: LegEffect["leg"]) => string): string {
@@ -45,7 +32,7 @@ export function exportCsv(positions: readonly Position[], currency: CurrencyCode
         String(leg.blockNum),
         leg.txHash,
         leg.asset,
-        amount(leg.delta, leg.decimals),
+        unitsCell(leg.delta, leg.decimals),
         leg.opening ? "starting balance" : actionLabel(leg.kind, incoming).toLowerCase(),
         currency,
         money(leg.priceMicros),
@@ -57,5 +44,5 @@ export function exportCsv(positions: readonly Position[], currency: CurrencyCode
         ...(walletOf ? [walletOf(leg)] : []),
       ]
     })
-  return [walletOf ? [...HEADER, "wallet"] : HEADER, ...rows].map((row) => row.map(quote).join(",")).join("\n") + "\n"
+  return [walletOf ? [...HEADER, "wallet"] : HEADER, ...rows].map((row) => row.map(csvCell).join(",")).join("\n") + "\n"
 }

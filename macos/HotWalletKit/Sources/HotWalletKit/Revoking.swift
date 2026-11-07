@@ -9,12 +9,10 @@ public struct Revocation: Equatable, Hashable, Sendable, Identifiable {
         case token
         /// Permit2's `lockdown`, which sets its own allowance to nothing.
         case permit2
-        /// `setApprovalForAll(operator, false)` on the collection.
-        case collection
     }
 
     public let kind: Kind
-    /// The token, or for a collection, its contract.
+    /// The token.
     public let token: EthereumAddress
     public let spender: EthereumAddress
     /// What it's about, for the review and the record: a tracked token's symbol, or a short address.
@@ -32,25 +30,25 @@ public struct Revocation: Equatable, Hashable, Sendable, Identifiable {
 
     public var id: String { "\(kind):\(token.lowercased):\(spender.lowercased)" }
 
-    /// Only a token on the allowlist, or Permit2, is ever called. Any other contract could do anything, and a collection is one of them.
+    /// Only a token on the allowlist, or Permit2, is ever called. Any other contract could do anything.
     public var isAllowed: Bool {
         switch kind {
         case .token: Base.tokens.contains { $0.contract == token }
         case .permit2: true
-        case .collection: false
         }
     }
 }
 
 extension Revocation {
     /// From what the server found, which can be anything a contract emitted. Nil when it isn't something this can revoke, which
-    /// includes anything that would call a contract off the allowlist.
+    /// includes anything that would call a contract off the allowlist, and so every collection.
     public init?(_ approval: TokenApproval) {
         guard let token = EthereumAddress(approval.token), let spender = EthereumAddress(approval.spender), token != .zero, spender != .zero else { return nil }
-        let kind: Kind = switch approval.kind {
-        case .token: .token
-        case .permit2: .permit2
-        case .collection: .collection
+        let kind: Kind
+        switch approval.kind {
+        case .token: kind = .token
+        case .permit2: kind = .permit2
+        case .collection: return nil
         }
         self.init(kind: kind, token: token, spender: spender, label: approval.symbol ?? Format.shortHash(token.checksummed), spenderName: approval.spenderName)
         guard isAllowed else { return nil }
@@ -68,14 +66,14 @@ public enum RevocationPlanner {
     /// The most at once, so one Touch ID can't send an endless list, and the fee stays small.
     public static let maximum = 20
 
-    /// One transaction for each token or collection, and one for everything Permit2 holds, since it takes them all together.
+    /// One transaction for each token, and one for everything Permit2 holds, since it takes them all together.
     public static func transactions(for revocations: [Revocation]) -> [RevocationTransaction] {
         var seen = Set<String>()
         let unique = revocations.filter { seen.insert($0.id).inserted }
         var transactions = unique.filter { $0.kind != .permit2 }.map { revocation in
             RevocationTransaction(
                 to: revocation.token,
-                data: revocation.kind == .token ? Calldata.approve(revocation.spender, amount: 0) : Calldata.setApprovalForAll(revocation.spender, approved: false),
+                data: Calldata.approve(revocation.spender, amount: 0),
                 revocations: [revocation]
             )
         }
@@ -103,10 +101,6 @@ public struct RevocationQuote: Equatable, Sendable {
 extension Calldata {
     static func approve(_ spender: EthereumAddress, amount: UInt128) -> [UInt8] {
         selector("approve(address,uint256)") + word(spender) + word(amount)
-    }
-
-    static func setApprovalForAll(_ operator: EthereumAddress, approved: Bool) -> [UInt8] {
-        selector("setApprovalForAll(address,bool)") + word(`operator`) + word(approved ? 1 : 0)
     }
 
     /// Permit2's `lockdown((address token, address spender)[])`.

@@ -100,7 +100,7 @@ public final class BridgeServer {
         switch kind {
         case "site":
             guard let origin = message["origin"]?.string, let method = message["method"]?.string else { return }
-            // On record before the next frame is read, which could be the one cancelling it.
+            // On record as soon as this runs. The reader thread doesn't wait for that and reads the next frame straight away, so a cancel only comes after this because its task started later.
             let answer = bridge.begin(SiteRequest(connection: id, id: requestID, origin: origin, method: method, parameters: message["params"]))
             Task {
                 connection.send(Self.reply(id: requestID, await answer.value))

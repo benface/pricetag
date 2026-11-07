@@ -202,7 +202,6 @@ button { font: inherit; cursor: pointer; color: inherit; }
 .cost-form input { flex: 0 0 140px; text-align: right; }
 .cost-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .cost-actions button, .file-button, .resolve-foot button, .finish button { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-1); font-size: 13px; cursor: pointer; }
-.warn-text { color: var(--warn-ink); }
 .finish { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 24px 0; text-align: center; }
 .seal { width: 72px; height: 72px; border-radius: 50%; display: grid; place-items: center; font-size: 36px; background: var(--grid); }
 .seal.done { background: var(--gain); color: var(--surface-1); animation: seal 0.45s cubic-bezier(0.2, 1.4, 0.4, 1); }

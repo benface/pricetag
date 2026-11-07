@@ -208,7 +208,8 @@ public final class PurchaseTracker {
         self.now = now
         self.pollDelay = pollDelay
         self.matchOf = matchOf ?? { order in store.portfolio?.purchases?.first { $0.order == order }?.state }
-        purchases = defaults.data(forKey: Self.key).flatMap { try? JSONDecoder().decode([TrackedPurchase].self, from: $0) } ?? []
+        purchases = SetAside.decoded([TrackedPurchase].self, key: Self.key, in: defaults) ?? []
+        store.refreshUnreadableSaved()
     }
 
     /// What to say when a purchase couldn't start.

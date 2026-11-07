@@ -2,7 +2,8 @@
 // each request, and the server doesn't store them. Writing one onchain would publicly tie the wallets together.
 
 import { isAddress, isCurrencyCode, normalizeAddress, type CurrencyCode } from "@pricetag/sdk/core"
-import type { KeptIn, Shelf } from "./shelf.ts"
+import { recordOf } from "./record.ts"
+import { changeKept, hasNoCopy, readKept, type KeptIn, type Shelf } from "./shelf.ts"
 
 export const DEMO_ADDRESS = "0x00000000000000000000000000000000000de300"
 /** The demo's other wallet. Nothing links them until someone answers that it's theirs. */
@@ -135,7 +136,7 @@ export function recordPurchase(book: Book, purchase: Purchase): Book {
 }
 
 /** Sorted first, because a book that's been saved and read back has the same things in a different order. */
-const canonical = (value: unknown) => JSON.stringify(value, (_, inner) => (plainRecord(inner) ? Object.fromEntries(Object.entries(inner).sort(([a], [b]) => (a < b ? -1 : 1))) : inner))
+const canonical = (value: unknown) => JSON.stringify(value, (_, inner) => (recordOf(inner) ? Object.fromEntries(Object.entries(inner).sort(([a], [b]) => (a < b ? -1 : 1))) : inner))
 export const same = (a: unknown, b: unknown) => canonical(a) === canonical(b)
 
 function moveEntries<T>(latest: Readonly<Record<string, T>>, from: Readonly<Record<string, T>>, to: Readonly<Record<string, T>>, keepNewer: boolean): Record<string, T> {
@@ -211,23 +212,22 @@ export const walletsToRead = (book: Book, shown: string | null, sender: string |
  */
 export const yourWallets = (book: Book, deviceAccounts: readonly string[] = []) => [...new Set([...linkedWallets(book), ...deviceAccounts.map(normalizeAddress)])].filter((wallet) => wallet !== DEMO_ADDRESS && wallet !== DEMO_SAVINGS_ADDRESS)
 
-const plainRecord = (value: unknown): Record<string, unknown> | null => (typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null)
 
 const isMicros = (value: unknown): value is string => typeof value === "string" && /^\d{1,30}$/.test(value)
 
 function parseMoney(value: unknown): Money | null {
-  const money = plainRecord(value)
+  const money = recordOf(value)
   return money && isMicros(money.micros) && typeof money.currency === "string" && isCurrencyCode(money.currency) ? { micros: money.micros, currency: money.currency } : null
 }
 
 function parseReceipt(value: unknown): Receipt | null {
-  const receipt = plainRecord(value)
+  const receipt = recordOf(value)
   if (!receipt || typeof receipt.wallet !== "string" || !isAddress(receipt.wallet) || typeof receipt.legId !== "string" || typeof receipt.asset !== "string" || !isMicros(receipt.units)) return null
   return { wallet: normalizeAddress(receipt.wallet), legId: receipt.legId, asset: receipt.asset, units: receipt.units }
 }
 
 function parseExchangeCost(value: unknown): ExchangeCost | null {
-  const cost = plainRecord(value)
+  const cost = recordOf(value)
   const money = parseMoney(value)
   if (!cost || !money || typeof cost.asset !== "string" || !Array.isArray(cost.receipts)) return null
   const receipts = cost.receipts.map(parseReceipt)
@@ -235,7 +235,7 @@ function parseExchangeCost(value: unknown): ExchangeCost | null {
 }
 
 function parseAnswer(value: unknown): SenderAnswer | null {
-  const answer = plainRecord(value)
+  const answer = recordOf(value)
   if (answer?.kind === "mine" || answer?.kind === "someone-else") return { kind: answer.kind }
   if (answer?.kind !== "my-exchange") return null
   if (answer.costs === undefined) return { kind: "my-exchange" }
@@ -254,7 +254,7 @@ function parseExchangeLots(value: unknown[], units: string, fifoCostMicros: stri
   if (fifoCostMicros === null || value.length === 0 || value.length > MAX_EXCHANGE_LOTS) return null
   const lots: ExchangeLot[] = []
   for (const item of value) {
-    const lot = plainRecord(item)
+    const lot = recordOf(item)
     if (!lot || !isMicros(lot.units) || BigInt(lot.units) === 0n || !isMicros(lot.micros)) return null
     if (lot.wholeCostOnly !== undefined && lot.wholeCostOnly !== true) return null
     if (lot.at === undefined ? !lot.wholeCostOnly : typeof lot.at !== "string" || Number.isNaN(Date.parse(lot.at))) return null
@@ -265,7 +265,7 @@ function parseExchangeLots(value: unknown[], units: string, fifoCostMicros: stri
 }
 
 function parseWithdrawal(value: unknown): ExchangeWithdrawal | null {
-  const row = plainRecord(value)
+  const row = recordOf(value)
   if (!row || typeof row.exchange !== "string" || typeof row.asset !== "string" || !isMicros(row.units)) return null
   const cost = parseMoney(row.cost)
   if (!cost) return null
@@ -284,7 +284,7 @@ function parseWithdrawal(value: unknown): ExchangeWithdrawal | null {
 }
 
 function parsePurchase(value: unknown): Purchase | null {
-  const row = plainRecord(value)
+  const row = recordOf(value)
   if (!row || row.provider !== "coinbase" || typeof row.order !== "string" || typeof row.wallet !== "string" || !isAddress(row.wallet) || typeof row.asset !== "string" || !isMicros(row.units) || typeof row.txHash !== "string") return null
   const cost = parseMoney(row.cost)
   // The Mac app's encoder leaves out what it doesn't have.
@@ -298,22 +298,28 @@ const BOOK_KEY = "patina.book"
 
 export const isBookKey = (key: string | null) => key === null || key === BOOK_KEY
 
-function bookFrom(text: string | null): Book {
+function bookIn(text: string): Book | null {
   try {
-    return parseBook(JSON.parse(text ?? "null")) ?? emptyBook()
+    return parseBook(JSON.parse(text))
   } catch {
-    return emptyBook()
+    return null
   }
 }
+
+const bookFrom = (text: string | null): Book => (text === null ? null : bookIn(text)) ?? emptyBook()
+
+const readable = (text: string) => bookIn(text) !== null
 
 /** The copy a page can show right away, until `readStoredBook` says what's true. */
 export const storedBook = (storage: KeptIn): Book => bookFrom(storage.getItem(BOOK_KEY))
 
-export const readStoredBook = async (shelf: Shelf): Promise<Book> => bookFrom(await shelf.read(BOOK_KEY))
+export const readStoredBook = async (shelf: Shelf): Promise<Book> => bookFrom(await readKept(shelf, BOOK_KEY, readable))
 
-/** A change to what's stored, whatever this tab last heard about it. When it changes nothing, nothing's written and no other tab hears about it. */
+export const storedBookHasNoCopy = (shelf: Shelf) => hasNoCopy(shelf, BOOK_KEY, readable)
+
+/** A change to what's stored, whatever this tab last heard about it. When it changes nothing, nothing's written and no other tab hears about it. Answers this version can't read are copied somewhere safe first. */
 export async function changeStoredBook(shelf: Shelf, change: (latest: Book) => Book): Promise<Book> {
-  const text = await shelf.change(BOOK_KEY, (text) => {
+  const text = await changeKept(shelf, BOOK_KEY, readable, (text) => {
     const latest = bookFrom(text)
     const next = change(latest)
     return same(next, latest) ? text : JSON.stringify(next)
@@ -323,10 +329,10 @@ export async function changeStoredBook(shelf: Shelf, change: (latest: Book) => B
 
 /** A book from a request, or null when it isn't one. Clients can send anything here. */
 export function parseBook(value: unknown): Book | null {
-  const book = plainRecord(value)
+  const book = recordOf(value)
   if (!book) return null
-  const senders = plainRecord(book.senders ?? {})
-  const costs = plainRecord(book.costs ?? {})
+  const senders = recordOf(book.senders ?? {})
+  const costs = recordOf(book.costs ?? {})
   const withdrawals = book.withdrawals ?? []
   if (!senders || !costs || !Array.isArray(withdrawals)) return null
   const parsed = emptyBook()
@@ -353,7 +359,7 @@ export function parseBook(value: unknown): Book | null {
     parsed.purchases = [...(parsed.purchases ?? []), purchase]
   }
   if (book.deviceLinks !== undefined) {
-    const deviceLinks = plainRecord(book.deviceLinks)
+    const deviceLinks = recordOf(book.deviceLinks)
     if (!deviceLinks) return null
     parsed.deviceLinks = {}
     for (const [address, links] of Object.entries(deviceLinks)) {

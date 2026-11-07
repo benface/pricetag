@@ -1,5 +1,6 @@
 import Foundation
 import KeyVault
+import PricetagKit
 import Testing
 @testable import HotWalletKit
 
@@ -18,14 +19,6 @@ private func hex(_ bytes: [UInt8]) -> String { Hex.encode(bytes) }
         let transaction = transactions[0]
         #expect(transaction.to == usdcAddress)
         #expect(hex(transaction.data) == "095ea7b3" + String(repeating: "0", count: 24) + "000000000000000000000000000000000000beef" + String(repeating: "0", count: 64))
-    }
-
-    @Test func aCollectionIsTurnedOff() throws {
-        let transactions = RevocationPlanner.transactions(for: [Revocation(kind: .collection, token: collection, spender: spender, label: "0x0000…c011")])
-        try #require(transactions.count == 1)
-        let transaction = transactions[0]
-        #expect(transaction.to == collection)
-        #expect(hex(transaction.data) == "a22cb465" + String(repeating: "0", count: 24) + "000000000000000000000000000000000000beef" + String(repeating: "0", count: 64))
     }
 
     @Test func everythingPermit2HoldsGoesInOneLockdown() {
@@ -50,7 +43,16 @@ private func hex(_ bytes: [UInt8]) -> String { Hex.encode(bytes) }
         #expect(Revocation(kind: .token, token: usdcAddress, spender: spender, label: "USDC").isAllowed)
         #expect(Revocation(kind: .permit2, token: stranger, spender: spender, label: "0x0000…f00d").isAllowed, "only Permit2 is called, with the token as data")
         #expect(!Revocation(kind: .token, token: stranger, spender: spender, label: "0x0000…f00d").isAllowed)
-        #expect(!Revocation(kind: .collection, token: collection, spender: spender, label: "0x0000…c011").isAllowed)
+    }
+
+    /// The server finds these, and the Security page shows them, but calling a contract off the allowlist isn't something this does.
+    @Test func aCollectionCantBeRevoked() throws {
+        func approval(kind: String, token: EthereumAddress) throws -> TokenApproval {
+            let json = #"{"id":"a","kind":"\#(kind)","token":"\#(token.lowercased)","spender":"\#(spender.lowercased)","unlimited":true,"found":"history"}"#
+            return try JSONDecoder().decode(TokenApproval.self, from: Data(json.utf8))
+        }
+        #expect(Revocation(try approval(kind: "collection", token: collection)) == nil)
+        #expect(Revocation(try approval(kind: "token", token: usdcAddress)) != nil)
     }
 
     @Test func permit2IsUniswapsAddress() {

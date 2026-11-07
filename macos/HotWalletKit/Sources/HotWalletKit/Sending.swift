@@ -340,7 +340,7 @@ public final class SendModel {
         }
         failure = nil
         guard await wallet.send(SendRequest(token: token, amount: amount, to: recipient), in: prompt) else {
-            failure = wallet.sweepProblem.map(HotWalletWording.sendFailure)
+            failure = wallet.lastActionProblem.map(HotWalletWording.sendFailure)
             return false
         }
         sentHashes = wallet.lastSubmitted

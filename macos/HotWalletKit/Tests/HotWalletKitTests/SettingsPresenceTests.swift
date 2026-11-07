@@ -29,7 +29,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         let rig = await Rig(presence: false)
         #expect(try await !rig.wallet.addColdWallet(address: attacker.lowercased, name: "Keystone"))
         #expect(!rig.wallet.settings.coldWallets.contains { $0.address == attacker })
-        #expect(rig.wallet.sweepProblem == HotWalletWording.touchIDDidNotConfirm)
+        #expect(rig.wallet.lastActionProblem == HotWalletWording.touchIDDidNotConfirm)
     }
 
     @Test func aBadAddressDoesntAsk() async throws {
@@ -99,10 +99,10 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         let rig = await Rig(presence: false)
         let before = rig.wallet.settings.capInDollars
         await rig.wallet.setCap(dollars: before)
-        #expect(rig.wallet.sweepProblem == nil)
+        #expect(rig.wallet.lastActionProblem == nil)
         await rig.wallet.setCap(dollars: before + 10)
         #expect(rig.wallet.settings.capInDollars == before + 10)
-        #expect(rig.wallet.sweepProblem == nil)
+        #expect(rig.wallet.lastActionProblem == nil)
     }
 
     @Test func changingTheNodeAsksAndNamesIt() async throws {
@@ -134,7 +134,7 @@ private func recipient(_ transaction: UnsignedTransaction) -> EthereumAddress? {
         let rig = await Rig(userPresence: presence)
         await rig.wallet.setCap(dollars: 1)
         #expect(rig.wallet.settings.capInDollars != 1)
-        #expect(rig.wallet.sweepProblem == nil)
+        #expect(rig.wallet.lastActionProblem == nil)
     }
 
     @Test func aPassersByCantRedirectASweep() async throws {

@@ -27,6 +27,11 @@ struct PopoverView: View {
         VStack(alignment: .leading, spacing: 0) {
             if hotWallet.alarm != nil { alarmBanner }
             header
+            if store.hasUnreadableSaved {
+                Notice(.warning, Wording.unreadableSaved, actionTitle: "OK", action: store.dismissUnreadableSaved)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
+            }
             if let portfolio, !holdings.isEmpty {
                 Divider()
                 holdingsList(portfolio)

@@ -113,7 +113,7 @@ private final class Heard {
         let heard = Heard(rig.wallet)
         await rig.chain.setSendFailure(.rejected("insufficient funds"))
         await rig.wallet.sweepEverything()
-        #expect(rig.wallet.sweepProblem != nil)
+        #expect(rig.wallet.lastActionProblem != nil)
         #expect(heard.news.isEmpty)
     }
 }

@@ -57,7 +57,7 @@ struct MainWindow: View {
         NavigationSplitView(columnVisibility: $columns) {
             sidebar
         } detail: {
-            page
+            pageWithDeviceNotice
                 .environment(\.updatingNote, store.updatingNote)
                 .environment(\.staleNote, store.staleNote)
                 .frame(minWidth: 320, minHeight: 320)
@@ -327,6 +327,20 @@ struct MainWindow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16)
             .padding(.vertical, 6)
+        }
+    }
+
+    /// About this Mac rather than the wallet showing, so it's above every section, with or without numbers to show.
+    private var pageWithDeviceNotice: some View {
+        VStack(spacing: 0) {
+            if store.hasUnreadableSaved {
+                Notice(.warning, Wording.unreadableSaved, actionTitle: "OK", action: store.dismissUnreadableSaved)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                Divider()
+            }
+            // Some pages are only as tall as what they say, which would leave the notice halfway down.
+            page.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 

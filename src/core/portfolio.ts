@@ -9,7 +9,7 @@ import { foldBook, missingWallets, type BookFold, type Question } from "./resolv
 import { differenceOf, whySentence, type PricingRule, type RuleComparison, type RuleRow, type RuleTransaction } from "./rules.ts"
 import { ETH_NOTE, UNPRICED_FEES, estimatedSentence, excludedSentence, feesUnknownSentence, networkFeeUnknownSentence, withheldSentence } from "./wording.ts"
 
-/** Matches the web panel: a busy wallet has thousands of legs, and the newest are the ones anyone reads. */
+/** A busy wallet has thousands of legs, and the newest are the ones anyone reads. */
 export const MAX_LEGS = 200
 
 const ASSET_METRICS: readonly string[] = ["amount", "average", "price", "value", "return", "realized", "unrealized", "onchain"] satisfies Metric[]
