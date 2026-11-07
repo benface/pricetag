@@ -62,10 +62,10 @@ extension HotWallet {
     }
 
     /// Whether nothing more can arrive for the purchase it was made for. Only its order can say so, except for one nobody was ever
-    /// given a page for, or that someone said they didn't make: that waits this long, in case they paid anyway.
+    /// given a page for, or a page with no order that someone said they didn't pay on: that waits this long, in case they paid anyway.
     func purchaseIsOver(_ key: OneUseKey, snapshot: ChainSnapshot) -> Bool {
         switch key.delivery ?? .expected {
-        case .expected: false
+        case .expected, .ordered: false
         case .notStarted: now().timeIntervalSince(key.createdAt) >= Self.unusedOneUseKeyLifetime
         // A read from before the delivery's block would show it empty only because it hasn't got there.
         case .delivered(let block): snapshot.blockNumber >= block

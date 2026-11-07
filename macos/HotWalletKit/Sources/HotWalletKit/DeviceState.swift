@@ -126,8 +126,11 @@ public struct OneUseKey: Codable, Equatable, Sendable {
     public enum Delivery: Codable, Equatable, Sendable {
         /// Made, and its address may not have reached the provider. Nobody's been shown a page to pay on, so it waits a while, then goes.
         case notStarted
-        /// The provider has its address, and nothing says it's done delivering.
+        /// The provider has its address, and there's no order yet. Someone saying they didn't buy it takes this back to `notStarted`.
         case expected
+        /// There's an order, and it hasn't said it's done. Only the order can let this go: hiding its row doesn't, since a delivery's
+        /// block can be unknown when it's hidden.
+        case ordered
         /// Delivered in this block. Once a read reaches it, and the key's empty, there's nothing more coming.
         case delivered(block: UInt64)
         /// The order failed, so nothing's coming.

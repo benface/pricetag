@@ -158,8 +158,26 @@ struct PurchaseTrackerTests {
         await tracker.check()
         tracker.dismiss(try #require(tracker.purchases(of: wallet).first))
         #expect(told.map(\.0) == Array(repeating: wallet, count: 4))
-        #expect(told.map(\.1) == [nil, .pending, .succeeded, nil], "only when something changed")
-        #expect(told.map(\.2) == [false, false, false, true])
+        #expect(told.map(\.1) == [nil, .pending, .succeeded, .succeeded], "only when something changed")
+        #expect(told.map(\.2) == [false, false, false, false], "hiding a row with an order doesn't say nothing was bought")
+    }
+
+    @Test func onlyAPageWithNoOrderIsDismissedAsNotBought() async throws {
+        let (tracker, _, source, _) = setup()
+        var told: [TrackedPurchase?] = []
+        tracker.onChange = { told.append($1) }
+        _ = try await tracker.begin(wallet: wallet, asset: "ETH", dollars: 25, cryptoAmount: "0.008")
+        let stale = try #require(tracker.purchases(of: wallet).first)
+        await source.say([OnrampOrder(id: "order", status: .pending)])
+        await tracker.check()
+        // A row from before its order turned up still sends the order.
+        tracker.dismiss(stale)
+        #expect(told.last??.order?.status == .pending)
+
+        _ = try await tracker.begin(wallet: wallet, asset: "ETH", dollars: 25, cryptoAmount: "0.008")
+        tracker.dismiss(try #require(tracker.purchases(of: wallet).first))
+        #expect(told.count == 5)
+        #expect(told.last! == nil, "I Didn't Buy It, from a page with no order")
     }
 
     @Test func recordsNoCostUntilAnOrderSaysAllOfIt() {
@@ -361,7 +379,6 @@ struct PurchaseTrackerTests {
         let (_, store, source, defaults) = setup()
         let settled = (0..<8).map { TrackedPurchase(ref: "done\($0)", wallet: wallet, asset: "ETH", dollars: 25, startedAt: .now, order: delivered(id: "done\($0)")) }
         defaults.set(try JSONEncoder().encode([old()] + settled), forKey: "purchases")
-        await source.say([])
         let tracker = PurchaseTracker(store: store, defaults: defaults, matchOf: { _ in nil })
         await tracker.check()
         #expect(tracker.purchases.contains { $0.ref == "ref" })

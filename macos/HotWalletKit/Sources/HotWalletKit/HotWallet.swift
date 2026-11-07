@@ -690,14 +690,15 @@ public final class HotWallet {
     }
 
     /// What the app knows about the purchase a one-use key was made for, each time that changes, and for every purchase at launch.
-    /// Nil is someone saying they didn't buy it. Only moves forward, except that saying so takes an order nobody's placed back to waiting
-    /// a while: a key is only deleted once its order says nothing more is coming, or nobody could have paid for a long time.
+    /// Nil is someone saying they didn't buy it, which `PurchaseTracker` only sends for a page with no order. Only moves forward, except
+    /// that nil takes a page with no order back to waiting a while. Once there's an order, nil changes nothing, so a key is only deleted
+    /// once its order says nothing more is coming, or nobody could have paid for a long time.
     public func purchaseChanged(_ purchase: TrackedPurchase?, wallet: String) {
         guard let index = state.oneUseKeys?.firstIndex(where: { $0.address.lowercased == wallet.lowercased() }), let key = state.oneUseKeys?[index] else { return }
         let new = Self.delivery(of: purchase)
         let old = key.delivery ?? .expected
         guard new != old, Self.rank(new) > Self.rank(old) || (new == .notStarted && old == .expected) else { return }
-        if new == .expected {
+        if new == .expected || new == .ordered {
             // Keeping it is always safe, so that's true now, even if it can't be written down yet.
             state.oneUseKeys?[index].delivery = new
             persistOrSayWhy()
@@ -713,9 +714,10 @@ public final class HotWallet {
         case .failed: return .failed
         case .succeeded:
             // Without its block, there's no read that can be sure it's arrived.
-            guard purchase.order?.txHash != nil, let block = purchase.order?.blockNum, block >= 0 else { return .expected }
+            guard purchase.order?.txHash != nil, let block = purchase.order?.blockNum, block >= 0 else { return .ordered }
             return .delivered(block: UInt64(block))
-        case .pending, nil: return .expected
+        case .pending: return .ordered
+        case nil: return .expected
         }
     }
 
@@ -723,7 +725,8 @@ public final class HotWallet {
         switch delivery {
         case .notStarted: 0
         case .expected: 1
-        case .delivered, .failed: 2
+        case .ordered: 2
+        case .delivered, .failed: 3
         }
     }
 

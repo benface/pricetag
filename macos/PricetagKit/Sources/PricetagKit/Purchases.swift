@@ -180,8 +180,9 @@ public final class PurchaseTracker {
     public private(set) var purchases: [TrackedPurchase]
     /// Why orders can't be checked right now. They're tried again, and nothing's lost.
     public private(set) var problem: String?
-    /// Told when a purchase starts, when its order changes, and, with nil, when someone dismisses it. It's after the change is saved,
-    /// so whatever holds the address it went to can tell when nothing more is coming.
+    /// Told when a purchase starts, when its order changes, and when someone dismisses it. Nil only means someone said they didn't buy
+    /// it, from a page with no order. Hiding a row with an order sends that order again, since its delivery may still be coming, or its
+    /// block unknown. It's after the change is saved, so whatever holds the address it went to can tell when nothing more is coming.
     @ObservationIgnored public var onChange: (@MainActor (_ wallet: String, _ purchase: TrackedPurchase?) -> Void)?
 
     @ObservationIgnored private let store: PortfolioStore
@@ -300,11 +301,13 @@ public final class PurchaseTracker {
         problem = failure
     }
 
-    /// Someone who's left the page without paying says so. It's kept going if an order has already started.
+    /// Someone who's left the page without paying says so, or hides a finished row. Only the first says nothing was bought.
     public func dismiss(_ purchase: TrackedPurchase) {
+        // What's tracked now, not the row's copy, which may be from before its order turned up.
+        let current = purchases.first { $0.ref == purchase.ref } ?? purchase
         purchases.removeAll { $0.ref == purchase.ref }
         save()
-        onChange?(purchase.wallet, nil)
+        onChange?(current.wallet, current.order == nil ? nil : current)
     }
 
     /// Whether there's nothing more to learn about it. How long it's been never settles this: an order can appear after any wait, and so can a delivery's block.

@@ -370,6 +370,11 @@ private extension Rig {
         // Someone saying they didn't buy it goes back to the wait for a page nobody paid on, from when the key was made.
         rig.wallet.purchaseChanged(nil, wallet: oneUseAddress.lowercased)
         #expect(rig.wallet.oneUseKeys.first?.delivery == .notStarted)
+        rig.wallet.purchaseChanged(tracked(.pending), wallet: oneUseAddress.lowercased)
+        #expect(rig.wallet.oneUseKeys.first?.delivery == .ordered)
+        // Once there's an order, nil can't undo it, whatever sends it.
+        rig.wallet.purchaseChanged(nil, wallet: oneUseAddress.lowercased)
+        #expect(rig.wallet.oneUseKeys.first?.delivery == .ordered)
         rig.wallet.purchaseChanged(tracked(.succeeded), wallet: oneUseAddress.lowercased)
         #expect(rig.wallet.oneUseKeys.first?.delivery == .delivered(block: 1000))
         // Dismissing a delivered one, or reading an older answer, changes nothing.
@@ -377,6 +382,66 @@ private extension Rig {
         rig.wallet.purchaseChanged(tracked(.pending), wallet: oneUseAddress.lowercased)
         #expect(rig.wallet.oneUseKeys.first?.delivery == .delivered(block: 1000))
         #expect(rig.stateStore.saved.oneUseKeys?.first?.delivery == .delivered(block: 1000))
+    }
+
+    /// The provider says it succeeded, with a hash and no block yet. Without a cost the row offers Dismiss; with one, it does once it's
+    /// been two hours. Either way, hiding it mustn't let the key go before a read reaches its block, even after a restart.
+    @Test(arguments: [false, true])
+    func hidingADeliveryWhoseBlockIsUnknownKeepsItsKey(costKnown: Bool) async throws {
+        let clock = TestClock()
+        let chain = FakeChain(snapshot())
+        let signer = FakeSigner(keys: [hotAddress], next: [oneUseAddress])
+        let store = MemoryStateStore()
+        var state = DeviceWalletState()
+        state.active = hotAddress
+        try store.save(state)
+        let settings = MemorySettingsStore()
+        var values = WalletSettings()
+        values.add(ColdWallet(address: coldAddress, name: "Ledger", confirmedOnDeviceAt: Date()))
+        settings.save(values)
+        let make = { HotWallet(signer: signer, settingsStore: settings, stateStore: store, presence: FakePresence(allows: true), portfolioSource: { ScriptedPortfolios(.success(keyHistory)) }, makeChain: { _ in chain }, now: { clock.now }) }
+        let wallet = make()
+        await wallet.tick()
+        _ = try #require(await wallet.createOneUseKey())
+        await chain.set(snapshot(eth: 0), for: oneUseAddress)
+
+        let purchase = TrackedPurchase(
+            ref: "ref", wallet: oneUseAddress.lowercased, asset: "USDC", dollars: 500, startedAt: clock.now,
+            order: OnrampOrder(id: "order", status: .succeeded, asset: "USDC", units: "500000000", wallet: oneUseAddress.lowercased, network: "base",
+                               txHash: "0x" + String(repeating: "ab", count: 32), blockNum: nil, cost: costKnown ? Money(micros: "500000000", currency: .USD) : nil)
+        )
+        let suite = "one-use-dismiss-\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(try JSONEncoder().encode([purchase]), forKey: "purchases")
+        let portfolios = ScriptedPortfolios(.success(keyHistory))
+        let tracker = PurchaseTracker(store: PortfolioStore(defaults: defaults, makeSource: { _ in portfolios }), defaults: defaults, now: { clock.now }, matchOf: { _ in .waiting })
+        // As MacApp wires it: every tracked purchase at launch, then each change.
+        for row in tracker.purchases { wallet.purchaseChanged(row, wallet: row.wallet) }
+        tracker.onChange = { wallet.purchaseChanged($1, wallet: $0) }
+        clock.advance(3 * 60 * 60)
+        let phase = tracker.phase(of: purchase)
+        #expect(phase == (costKnown ? .costUnknown : .costNotSaid))
+        #expect(phase.isFinished && !phase.isUpToThem, "so its row offers Dismiss")
+        #expect(wallet.oneUseKeys.first?.delivery == .ordered)
+
+        tracker.dismiss(purchase)
+        #expect(wallet.oneUseKeys.first?.delivery == .ordered, "hiding a row doesn't say nothing was bought")
+        #expect(store.saved.oneUseKeys?.first?.delivery == .ordered)
+        clock.advance(HotWallet.unusedOneUseKeyLifetime + 1)
+        await wallet.tick()
+        await wallet.readOneUseHistory()
+        for _ in 0..<(HotWallet.readsBeforeAlarm + 1) { await wallet.tick() }
+        #expect(await signer.hasKey(oneUseAddress), "empty reads may come before its delivery")
+
+        // After a restart nothing's tracked, and the key still waits.
+        let after = make()
+        #expect(after.oneUseKeys.first?.delivery == .ordered)
+        await after.tick()
+        await after.readOneUseHistory()
+        for _ in 0..<(HotWallet.readsBeforeAlarm + 1) { await after.tick() }
+        #expect(await signer.hasKey(oneUseAddress))
+        #expect(after.oneUseHolds[oneUseAddress] == .waitingForPurchase)
     }
 
     @Test func anOrderSayingItsDoneOnlyCountsOnceItsWrittenDown() async throws {
