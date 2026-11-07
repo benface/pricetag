@@ -25,7 +25,11 @@ export function parseExplainTarget(params: URLSearchParams): ExplainTarget | nul
   return TOTAL_METRICS.includes(metric) ? { kind: "total", metric: metric as TotalMetric } : null
 }
 
-export function positionOf({ asset, decimals, price, values, state, effects, reconciliation, noMarket, estimates }: Position, questions: readonly Question[]): PortfolioPosition {
+/** Whether answering could fix some of what's held. A cost lost to something nobody can answer, like an order, doesn't count. */
+export const isResolvable = ({ asset, state }: Pick<Position, "asset" | "state">, questions: readonly Question[]): boolean => state.lots.some((lot) => lot.costMicros === null && !lot.unanswerable) && questions.some((q) => q.arrivals.some((a) => a.asset === asset))
+
+export function positionOf(position: Position, questions: readonly Question[]): PortfolioPosition {
+  const { asset, decimals, price, values, state, effects, reconciliation, noMarket, estimates } = position
   const held = BigInt(values.qty) > 0n
   const { realizedMicros: realized, unrealizedMicros: unrealized } = values
   const pnl = (() => {
@@ -34,7 +38,7 @@ export function positionOf({ asset, decimals, price, values, state, effects, rec
     if (!held) return realized
     return unrealized === null ? null : (BigInt(realized) + BigInt(unrealized)).toString()
   })()
-  return { asset, decimals, note: asset === "ETH" ? ETH_NOTE : null, price, values, pnlMicros: pnl, returnBps: returnBps(values), shortfallQty: state.shortfallQty, legCount: effects.length, reconciliation, noMarket, estimates, resolvable: state.lots.some((lot) => lot.costMicros === null && !lot.unanswerable) && questions.some((q) => q.arrivals.some((a) => a.asset === asset)) }
+  return { asset, decimals, note: asset === "ETH" ? ETH_NOTE : null, price, values, pnlMicros: pnl, returnBps: returnBps(values), shortfallQty: state.shortfallQty, legCount: effects.length, reconciliation, noMarket, estimates, resolvable: isResolvable(position, questions) }
 }
 
 function exchangeOf(view: WalletView): PortfolioExchange | null {

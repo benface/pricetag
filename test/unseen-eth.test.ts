@@ -1,7 +1,8 @@
 import assert from "node:assert/strict"
-import { describe, it } from "node:test"
+import { after, before, describe, it } from "node:test"
 import { ASSETS, ETH_ADDRESS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, creditUnseenEth, foldPositions, openingLegs, payerOf, unseenEthSearchBlocks, worth, type EthPayer, type LegRow, type PayoutTx, type PricedLeg, type Reference } from "@pricetag/sdk/core"
 import { createWallets, readPayoutTxsAt, type Query, type ReadL1Fees, type Source } from "@pricetag/sdk/internal"
+import { combinedPortfolioOf } from "../src/core/combined.ts"
 import { portfolioOf } from "../src/core/portfolio.ts"
 import { costKey, emptyBook } from "../src/core/book.ts"
 import { allBalancesMatch } from "../src/core/attention.ts"
@@ -11,6 +12,7 @@ import { foldBook } from "../src/core/resolve.ts"
 import { knownSender } from "../src/core/senders.ts"
 import { taxReportOf, taxRows } from "../src/core/tax.ts"
 import type { WalletResponse } from "../src/core/api.ts"
+import { holdingsRenderer, type HoldingsRenderer } from "./support/render-holdings.ts"
 import { E18 } from "./support/units.ts"
 
 // The real wallet and payout behind WORK-424: a contract paid it 0.00206183 ETH, and the transaction doesn't name it as `to`.
@@ -859,6 +861,49 @@ describe("what's spent after ETH arrived and left in one block", () => {
       assert.deepEqual([facts("0xd0").unknownCost, facts("0xd0").answerableCost], [["ETH"], []])
     })
   }
+
+  describe("in the holdings table", () => {
+    let table: HoldingsRenderer
+    before(async () => {
+      table = await holdingsRenderer()
+    })
+    after(() => table.close())
+
+    const OFFER = /about ETH, so what you paid is known/
+    const asOneWallet = (wallet: WalletResponse, method: "average" | "fifo") => {
+      const { positions, questions } = foldBook(wallet, [], method, emptyBook())
+      return table.render({ positions: positions.map((position) => table.walletHoldingOf(position, questions)), questions, method })
+    }
+    const asAllYours = (read: WalletResponse[], method: "average" | "fifo") => {
+      const { positions, questions } = combinedPortfolioOf(read, method, emptyBook())
+      return table.render({ positions: positions.map(table.holdingOf), questions, method })
+    }
+    const friend = (legs: PricedLeg[] = []): WalletResponse => ({ ...blockOf({ account: FRIEND, rows: [], before: 0n, after: 0n }), legs })
+    const receipt = (at: number) => moved(ME, at, "0xa2", "credit", E18, STRANGER)
+
+    for (const method of ["fifo", "average"] as const) {
+      it(`offers nothing that can't fix the cost, for one wallet, by ${method}`, () => {
+        const page = asOneWallet(held(spent(600, E18 / 10n)), method)
+        assert.match(page, /ETH/)
+        assert.doesNotMatch(page, OFFER)
+      })
+
+      it(`offers it again once an answerable receipt arrives, for one wallet, by ${method}`, () => {
+        assert.match(asOneWallet(held([...spent(550, E18 / 10n), ...receipt(600)]), method), OFFER)
+      })
+
+      it(`offers nothing that can't fix the cost, across wallets, by ${method}`, () => {
+        const page = asAllYours([held(spent(600, E18 / 10n)), friend()], method)
+        assert.match(page, /ETH/)
+        assert.doesNotMatch(page, OFFER)
+      })
+
+      it(`offers it across wallets once an answerable receipt arrives in any of them, by ${method}`, () => {
+        assert.match(asAllYours([held([...spent(550, E18 / 10n), ...receipt(600)]), friend()], method), OFFER)
+        assert.match(asAllYours([held(spent(550, E18 / 10n)), friend(moved(FRIEND, 600, "0xe0", "credit", E18, STRANGER))], method), OFFER)
+      })
+    }
+  })
 })
 
 describe("a cost note about a transaction", () => {
