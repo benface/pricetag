@@ -29,7 +29,7 @@ import { createApprovals, demoApprovals, type Approvals } from "./approvals.ts"
 import { createContractCheck } from "./contract.ts"
 import { recordOf } from "../src/core/record.ts"
 import { pathOf, type Env } from "./shared.ts"
-import { TAX_COUNTRIES, isTaxCountryCode, isTaxMethod, parseTaxYear, taxReportOf, type TaxScope } from "../src/core/tax.ts"
+import { TAX_COUNTRIES, isTaxCountryCode, isTaxMethod, parseTaxYear, taxReportOf, walletsInReport, type TaxScope } from "../src/core/tax.ts"
 
 const DEMO_UNVERIFIABLE = "This is the demo wallet, so there's no real block to check."
 
@@ -746,8 +746,8 @@ export function createApi(env: Env, created: Created | null = createSource(env),
 
     const answered = linkedWallets(book).filter((wallet) => isDemo(wallet) === isDemo(focus))
     // The demo's wallets start at different blocks, so their costs couldn't be worked out together, and its report stays its own.
-    const own = !isDemo(focus) && (others.length > 0 || answered.includes(focus))
-    const listed = new Set([focus, ...others, ...(own ? answered : [])])
+    // The panel lists the same wallets from the book, so it can show them when this refuses the report.
+    const listed = new Set(isDemo(focus) ? [focus] : walletsInReport(book, focus, others))
     // Anyone else's wallet takes nothing from the user's, so only the demo needs them.
     const costsFrom = isDemo(focus) ? answered.filter((wallet) => !listed.has(wallet) && wallet !== (focus === "demo" ? DEMO_ADDRESS : focus)) : []
     if (others.length > MAX_OTHER_WALLETS || listed.size - 1 + costsFrom.length > MAX_OTHER_WALLETS) return sendJson(res, 400, { error: `A report can add up to ${MAX_OTHER_WALLETS} other wallets.` })

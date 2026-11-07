@@ -1,10 +1,10 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react"
-import { formatSignedMoney, shortHash, type CurrencyCode, type Method } from "@pricetag/sdk/core"
+import { formatSignedMoney, isAddress, shortHash, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import type { TaxReportResponse } from "../core/api.ts"
 import { failureOf, jsonPost, readResponse, type ReadFailure } from "../core/read-failure.ts"
-import { forgetUnitChoices, recordUnitChoices, type Book } from "../core/book.ts"
+import { forgetUnitChoices, isDemoWallet, recordUnitChoices, type Book } from "../core/book.ts"
 import { UNIT_CHOICE_COLUMNS, parseUnitChoicesCsv } from "../core/unit-choices.ts"
-import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, isTaxMethod, readOtherWallets, savedOtherWallets, type TaxCountryCode, type TaxScope, type TaxYear } from "../core/tax.ts"
+import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, isTaxMethod, typedOtherWallets, walletsInReport, type TaxCountryCode, type TaxScope, type TaxYear } from "../core/tax.ts"
 import { METHOD_LABELS, METHOD_NAME, answerQuestionsLabel, est, panelProblem } from "../core/wording.ts"
 import { ProblemNotice } from "./ProblemNotice.tsx"
 import { downloadCsv } from "./download.ts"
@@ -13,13 +13,14 @@ import { useModal } from "./useModal.ts"
 const COUNTRY_KEY = "pricetag.taxCountry"
 const METHOD_KEY = "pricetag.taxMethod"
 const SCOPE_KEY = "pricetag.taxScope"
+/** Where the report kept wallets typed into it, before it used the linked ones. What's still there is linked once, then removed. */
 const OTHERS_KEY = "pricetag.taxOtherWallets"
 
 /** Remembered in this browser. Until it's chosen, the main currency is the best guess. */
 function readCountry(currency: CurrencyCode): TaxCountryCode {
   const value = localStorage.getItem(COUNTRY_KEY)
   if (isTaxCountryCode(value)) return value
-  return currency === "CAD" ? "CA" : "US"
+  return TAX_COUNTRY_CODES.find((code) => TAX_COUNTRIES[code].currency === currency) ?? "US"
 }
 
 const readMethod = (): string | null => localStorage.getItem(METHOD_KEY)
@@ -34,19 +35,19 @@ function remember(key: string, value: string | null) {
   else localStorage.setItem(key, value)
 }
 
-const readOthers = () => localStorage.getItem(OTHERS_KEY) ?? ""
-
 /** A post, because answers don't belong in a URL, where they'd end up in logs. */
 async function fetchReport(address: string, request: object, signal: AbortSignal): Promise<TaxReportResponse> {
   return readResponse<TaxReportResponse>(await fetch(`/api/tax-report/${address}`, jsonPost(request, signal)))
 }
 
-const RULES: Record<TaxCountryCode, string> = { CA: "Canada's rules", US: "US rules" }
+const RULES: Record<TaxCountryCode, string> = { CA: "Canada's rules", GB: "UK rules", US: "US rules" }
 
-/** Overview's numbers and this report's can differ only through the method, so it says so and why. */
+/** Overview's numbers and this report's can differ through the method, or the UK's matching, so it says so and why. */
 function methodNote(method: Method, overview: Method, country: TaxCountryCode): string | null {
-  if (method === overview) return null
-  if (method === TAX_COUNTRIES[country].method) return `Overview uses ${METHOD_LABELS[overview]}, but ${RULES[country]} call for ${METHOD_LABELS[method]}, so this report uses that. Its gains can differ from Overview's.`
+  const matching = method === "average" && TAX_COUNTRIES[country].matchesAcquisitions
+  const matchingNote = `${RULES[country]} match each sale to what was bought the same day or in the 30 days after before averaging the rest, so its gains can differ from Overview's.`
+  if (method === overview) return matching ? matchingNote : null
+  if (method === TAX_COUNTRIES[country].method) return `Overview uses ${METHOD_LABELS[overview]}, but ${RULES[country]} call for ${METHOD_LABELS[method]}, so this report uses that. ${matching ? matchingNote : "Its gains can differ from Overview's."}`
   return `Overview uses ${METHOD_LABELS[overview]}, and you chose ${METHOD_LABELS[method]} here, so its gains can differ from Overview's.`
 }
 
@@ -66,9 +67,9 @@ function importedSentence(count: number, skipped: readonly number[]): string {
   return `${read} ${skipped.length === 1 ? "Line" : "Lines"} ${lines} couldn't be read, so ${skipped.length === 1 ? "its sale or send was" : "their sales and sends were"} left out whole.`
 }
 
-export function TaxPanel({ address, alongside, currency, book, onRecords, year, onYear, overviewMethod, questionsIn, onResolve, onClose }: {
+export function TaxPanel({ address, alongside, currency, book, onRecords, year, onYear, overviewMethod, questionsIn, onResolve, onLink, onUnlink, fromDevice, onClose }: {
   address: string
-  /** Wallets the report always covers with this one, on top of any listed here. */
+  /** Wallets the report always covers with this one, on top of the ones the answers say are the user's. */
   alongside: readonly string[]
   currency: CurrencyCode
   book: Book
@@ -82,17 +83,24 @@ export function TaxPanel({ address, alongside, currency, book, onRecords, year, 
   questionsIn: ReadonlyMap<string, number>
   /** Opens a wallet's questions, which can be one added here rather than the one showing. */
   onResolve: (wallet: string) => void
+  /** Says these wallets are the user's, and so is `focus`, the way answering "Mine" does. The report follows the answers. `onSaved` only hears a save that worked. */
+  onLink: (wallets: readonly string[], focus: string, onSaved?: () => void) => void
+  /** Says a wallet isn't the user's after all, so it leaves every report on theirs. */
+  onUnlink: (wallet: string) => void
+  /** Accounts a hardware device proved are the user's. Those stay theirs whatever the answers say, so they can't be taken out here. */
+  fromDevice: readonly string[]
   onClose: () => void
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
-  const othersError = useId()
+  const addError = useId()
   const close = useRef<HTMLButtonElement>(null)
   const [country, setCountry] = useState(() => readCountry(currency))
   // Nothing chosen means whatever the country calls for. Choosing another country goes back to that.
   const [chosenMethod, setChosenMethod] = useState<string | null>(readMethod)
   const [chosenScope, setChosenScope] = useState<TaxScope | null>(readScope)
-  const [years, setYears] = useState<number[]>([])
-  const [othersText, setOthersText] = useState(readOthers)
+  const [years, setYears] = useState<{ year: number; label: string }[]>([])
+  const [adding, setAdding] = useState("")
+  const [badAdd, setBadAdd] = useState<string | null>(null)
   const [report, setReport] = useState<TaxReportResponse | null>(null)
   const [attempt, setAttempt] = useState(0)
   const [error, setError] = useState<ReadFailure | null>(null)
@@ -103,10 +111,7 @@ export function TaxPanel({ address, alongside, currency, book, onRecords, year, 
   // One the country doesn't allow, like one remembered from another, goes back to what it calls for.
   const method = isTaxMethod(country, chosenMethod) ? chosenMethod : rules.method
   const scope = chosenScope ?? rules.scope
-  const { others, bad: badOther } = useMemo(() => readOtherWallets(othersText, address), [othersText, address])
-  const isDemo = address === "demo"
-  const reportWallets = useMemo(() => [...new Set([address.toLowerCase(), ...others, ...alongside.map((wallet) => wallet.toLowerCase())])], [address, others, alongside])
-  const namedCount = (book.unitChoices ?? []).filter((choice) => reportWallets.includes(choice.wallet)).length
+  const isDemo = address === "demo" || isDemoWallet(address)
   const importNamed = async (file: File | undefined) => {
     if (!file) return
     const imported = parseUnitChoicesCsv(await file.text())
@@ -117,14 +122,28 @@ export function TaxPanel({ address, alongside, currency, book, onRecords, year, 
 
   useModal(dialog, close)
 
+  // Typed in here before the report used linked wallets. A report then covered those with whichever wallet it was on, as one
+  // person's, so they're linked with that one, and it covers what it did. The demo's report never took them, so they wait for a
+  // real wallet. What's typed stays until the link's saved, so a save that fails is tried again next time.
+  const carriedOver = useRef(false)
   useEffect(() => {
-    if (badOther) return
+    if (isDemo || carriedOver.current) return
+    const text = localStorage.getItem(OTHERS_KEY)
+    if (text === null) return
+    carriedOver.current = true
+    const typed = typedOtherWallets(text)
+    const forget = () => localStorage.removeItem(OTHERS_KEY)
+    if (typed.length > 0) onLink(typed, address, forget)
+    else forget()
+  }, [address, isDemo, onLink])
+
+  useEffect(() => {
     const controller = new AbortController()
     setLoading(true)
     setError(null)
-    fetchReport(address, { country, method, scope, year, currency, also: [...new Set([...others, ...alongside])].filter((other) => other !== address.toLowerCase()), book }, controller.signal)
+    fetchReport(address, { country, method, scope, year, currency, also: alongside.filter((other) => other !== address.toLowerCase()), book }, controller.signal)
       .then((next) => {
-        setYears(next.years)
+        setYears(next.years.map((option, i) => ({ year: option, label: next.yearLabels[i] ?? String(option) })))
         setReport(next)
         setLoading(false)
       })
@@ -136,7 +155,7 @@ export function TaxPanel({ address, alongside, currency, book, onRecords, year, 
         setLoading(false)
       })
     return () => controller.abort()
-  }, [address, alongside, country, method, scope, year, currency, others, badOther, book, attempt])
+  }, [address, alongside, country, method, scope, year, currency, book, attempt])
 
   const chooseMethod = (next: Method | null) => {
     remember(METHOD_KEY, next)
@@ -153,10 +172,25 @@ export function TaxPanel({ address, alongside, currency, book, onRecords, year, 
     chooseScope(null)
   }
   // The newest year shows as itself once a report has said which that is.
-  const shownYear = year === "latest" && years[0] !== undefined ? years[0] : year
+  const shownYear = year === "latest" && years[0] !== undefined ? years[0].year : year
   const note = methodNote(method, overviewMethod, country)
   const defaultTag = (isDefault: boolean) => (isDefault ? " (default)" : "")
-  const ready = report !== null && !loading && badOther === null
+  const ready = report !== null && !loading
+  // From the book rather than the report, so a wallet that makes the report fail can still be taken out.
+  const covered = useMemo(() => walletsInReport(book, address, alongside), [book, address, alongside])
+  const namedCount = (book.unitChoices ?? []).filter((choice) => covered.includes(choice.wallet)).length
+
+  const addWallet = () => {
+    const next = adding.trim()
+    if (next === "") return
+    if (!isAddress(next)) return setBadAdd(next)
+    setBadAdd(null)
+    setAdding("")
+    // Adding one here says the wallet the report's on is the user's too, or it wouldn't go with it.
+    if (!covered.includes(next.toLowerCase())) onLink([next.toLowerCase()], address)
+  }
+  // Only what an answer put here can be taken out here. The wallet the report's on is what it's about.
+  const removable = (wallet: string) => wallet !== address.toLowerCase() && book.senders[wallet]?.kind === "mine" && !fromDevice.includes(wallet)
 
   return (
     <dialog
@@ -188,9 +222,9 @@ export function TaxPanel({ address, alongside, currency, book, onRecords, year, 
             }}>
             {years.length === 0 && year === "latest" ? <option value="latest">Newest</option> : null}
             {/* Until the report says which years there are, the one chosen is still one of them. */}
-            {(typeof year === "number" && !years.includes(year) ? [year, ...years] : years).map((option) => (
-              <option key={option} value={option}>
-                {option}
+            {(typeof year === "number" && !years.some((option) => option.year === year) ? [{ year, label: String(year) }, ...years] : years).map((option) => (
+              <option key={option.year} value={option.year}>
+                {option.label}
               </option>
             ))}
             <option value="all">All years</option>
@@ -237,22 +271,49 @@ export function TaxPanel({ address, alongside, currency, book, onRecords, year, 
         </label>
         {note ? <p className="small muted">{note}</p> : null}
         {isDemo ? null : (
-          <label className="field">
-            <span className="small muted">Your other wallets, one per line</span>
-            <textarea
-              rows={3}
-              spellCheck={false}
-              autoComplete="off"
-              placeholder="0x…"
-              value={othersText}
-              aria-invalid={badOther !== null}
-              aria-describedby={badOther ? othersError : undefined}
-              onChange={(e) => {
-                remember(OTHERS_KEY, savedOtherWallets(e.target.value) || null)
-                setOthersText(e.target.value)
+          <div className="field">
+            <span className="small muted">{covered.length > 1 ? `Your ${covered.length} wallets${report ? " in this report" : ""}` : "Your other wallets"}</span>
+            {covered.length > 1 ? (
+              <ul className="tax-wallets small">
+                {covered.map((wallet) => (
+                  <li key={wallet}>
+                    <span>{shortHash(wallet)}{wallet === address.toLowerCase() ? " · this one" : ""}</span>
+                    {removable(wallet) ? (
+                      <button type="button" className="link" aria-label={`Remove ${shortHash(wallet)}, it isn't yours`} onClick={() => onUnlink(wallet)}>
+                        Not mine
+                      </button>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            <form
+              className="tax-add"
+              onSubmit={(e) => {
+                e.preventDefault()
+                addWallet()
               }}
-            />
-          </label>
+            >
+              <input
+                type="text"
+                spellCheck={false}
+                autoComplete="off"
+                placeholder="0x…"
+                aria-label="Add a wallet of yours"
+                value={adding}
+                aria-invalid={badAdd !== null}
+                aria-describedby={badAdd ? addError : undefined}
+                onChange={(e) => {
+                  setAdding(e.target.value)
+                  setBadAdd(null)
+                }}
+              />
+              <button type="submit" disabled={adding.trim() === ""}>
+                Add
+              </button>
+            </form>
+            <span className="small muted">Adding a wallet says it's yours everywhere, so what moves between your wallets isn't counted as a sale.</span>
+          </div>
         )}
         {country === "US" && !isDemo ? (
           <div className="field">
@@ -269,7 +330,7 @@ export function TaxPanel({ address, alongside, currency, book, onRecords, year, 
                 <>
                   <span className="small">Named for {namedCount.toLocaleString("en-US")} {namedCount === 1 ? "sale or send" : "sales or sends"}</span>
                   <button type="button" className="link" onClick={() => {
-                      onRecords((latest) => forgetUnitChoices(latest, reportWallets))
+                      onRecords((latest) => forgetUnitChoices(latest, covered))
                       setNamedMessage(null)
                     }}>
                     Remove
@@ -280,7 +341,7 @@ export function TaxPanel({ address, alongside, currency, book, onRecords, year, 
             {namedMessage ? <p className="small" role="status">{namedMessage}</p> : null}
           </div>
         ) : null}
-        {badOther ? <p id={othersError} className="notice warn" role="alert">⚠ {badOther} isn't a Base address.</p> : null}
+        {badAdd ? <p id={addError} className="notice warn" role="alert">⚠ {badAdd} isn't a Base address.</p> : null}
         {error ? (
           <ProblemNotice
             problem={panelProblem(error, location.origin)}
@@ -292,9 +353,9 @@ export function TaxPanel({ address, alongside, currency, book, onRecords, year, 
           />
         ) : null}
 
-        {report && !badOther ? (
+        {report ? (
           <>
-            <h3 className="tax-year">{report.year === null ? "In all years" : `In ${report.year}`}</h3>
+            <h3 className="tax-year">{report.yearLabel === null ? "In all years" : `In ${report.yearLabel}`}</h3>
             <dl className="tax-counts">
               <div>
                 <dt className="small muted">Sales</dt>
@@ -343,9 +404,9 @@ export function TaxPanel({ address, alongside, currency, book, onRecords, year, 
           </>
         ) : null}
 
-        <p className="visually-hidden" role="status">{loading && !badOther ? "Working it out…" : ready ? "The report is ready." : ""}</p>
+        <p className="visually-hidden" role="status">{loading ? "Working it out…" : ready ? "The report is ready." : ""}</p>
         <button type="button" className="primary" disabled={!ready} onClick={() => report && downloadCsv(report.csv, report.filename)}>
-          {loading && !badOther ? "Working it out…" : "Download CSV"}
+          {loading ? "Working it out…" : "Download CSV"}
         </button>
         {report?.form ? (
           <button type="button" disabled={!ready} onClick={() => report.form && downloadCsv(report.form.csv, report.form.filename)}>
@@ -353,7 +414,7 @@ export function TaxPanel({ address, alongside, currency, book, onRecords, year, 
           </button>
         ) : null}
 
-        {report && !badOther ? (
+        {report ? (
           <details className="small tax-notes">
             <summary>What this report covers and leaves out</summary>
             {report.notes.map((note) => (

@@ -6,7 +6,7 @@ import { explainPortfolio, portfolioOf } from "../src/core/portfolio.ts"
 import { createWallets, type Source } from "@pricetag/sdk/internal"
 import { ASSETS, CURRENCIES, ETH_ADDRESS, USDC_ADDRESS, buildPricedLegs, openingLegs, shortHash, type LegRow, type Method, type Reference, encodeNote, parseNote } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../src/core/api.ts"
-import { MAX_EXCHANGE_LOTS, answerSender, applyChange, costKey, emptyBook, enterExchangeCosts, linkDeviceAccounts, linkMessage, linkedWallets, parseBook, proofOwner, undoAnswer, type Book, type BookChange, type ExchangeLot, type Money, type Receipt, type SenderAnswer } from "../src/core/book.ts"
+import { MAX_EXCHANGE_LOTS, answerSender, applyChange, costKey, emptyBook, enterExchangeCosts, linkDeviceAccounts, linkMessage, linkedWallets, parseBook, proofOwner, undoAnswer, unlinkWallet, type Book, type BookChange, type ExchangeLot, type Money, type Receipt, type SenderAnswer } from "../src/core/book.ts"
 import { importStart, keepingImport, matchWithdrawals, mergeWithdrawals, parseCoinbaseCsv, startsAfterImported } from "../src/core/exchange-import.ts"
 import { summarizeEffect } from "../src/core/explain.ts"
 import { exportCsv } from "../src/core/export.ts"
@@ -2665,5 +2665,29 @@ describe("what a card offers", () => {
 
   it("offers all three when there's no sender", () => {
     assert.deepEqual(answersOffered({ sender: null, known: null }, emptyBook()), ["mine", "my-exchange", "someone-else"])
+  })
+})
+
+describe("saying a wallet isn't the user's after all", () => {
+  const MINE = "0x" + "a".repeat(40)
+  const OTHER = "0x" + "b".repeat(40)
+
+  it("takes back only that it's theirs, and leaves every other answer", () => {
+    const book = answerSender(answerSender(emptyBook(), MINE, OTHER, { kind: "mine" }), null, COINBASE, { kind: "my-exchange" })
+    const after = unlinkWallet(book, OTHER.toUpperCase().replace("0X", "0x"))
+    assert.deepEqual(linkedWallets(after), [MINE])
+    assert.deepEqual(after.senders[COINBASE], { kind: "my-exchange" })
+  })
+
+  it("changes nothing about a wallet nobody said was theirs", () => {
+    const book = answerSender(emptyBook(), null, OTHER, { kind: "someone-else" })
+    assert.equal(unlinkWallet(book, OTHER), book)
+    assert.equal(unlinkWallet(book, MINE), book)
+  })
+
+  it("can be undone like an answer", () => {
+    const before = answerSender(emptyBook(), MINE, OTHER, { kind: "mine" })
+    const after = unlinkWallet(before, OTHER)
+    assert.deepEqual(linkedWallets(undoAnswer(after, before, after)).sort(), [MINE, OTHER])
   })
 })

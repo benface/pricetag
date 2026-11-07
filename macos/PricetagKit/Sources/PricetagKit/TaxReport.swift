@@ -5,20 +5,21 @@ import Foundation
 import Observation
 
 public enum TaxCountry: String, Codable, Sendable, CaseIterable, Identifiable {
-    case CA, US
+    case CA, GB, US
 
     public var id: Self { self }
 
     public var name: String {
         switch self {
         case .CA: "Canada"
+        case .GB: "United Kingdom"
         case .US: "United States"
         }
     }
 
     public var defaultMethod: CostMethod {
         switch self {
-        case .CA: .average
+        case .CA, .GB: .average
         case .US: .fifo
         }
     }
@@ -26,14 +27,14 @@ public enum TaxCountry: String, Codable, Sendable, CaseIterable, Identifiable {
     /// What the report offers here, default first: only what this country's rules can allow. See `TAX_COUNTRIES` in `src/core/tax.ts`.
     public var methods: [CostMethod] {
         switch self {
-        case .CA: [.average, .fifo]
+        case .CA, .GB: [.average, .fifo]
         case .US: [.fifo, .lifo, .hifo, .average]
         }
     }
 
     public var defaultScope: TaxScope {
         switch self {
-        case .CA: .pooled
+        case .CA, .GB: .pooled
         case .US: .perWallet
         }
     }
@@ -42,13 +43,21 @@ public enum TaxCountry: String, Codable, Sendable, CaseIterable, Identifiable {
     public var rules: String {
         switch self {
         case .CA: "Canada's rules"
+        case .GB: "UK rules"
         case .US: "US rules"
         }
     }
 
+    /// With Average, each sale is first matched to what was bought the same day and in the 30 days after: see `src/core/tax-matching.ts`.
+    public var matchesAcquisitions: Bool { self == .GB }
+
     /// Until one is chosen, the main currency is the best guess.
     static func guess(from currency: CurrencyCode) -> TaxCountry {
-        currency == .CAD ? .CA : .US
+        switch currency {
+        case .CAD: .CA
+        case .GBP: .GB
+        default: .US
+        }
     }
 }
 
@@ -123,8 +132,12 @@ public struct TaxReport: Codable, Sendable, Equatable {
     public let defaults: Defaults
     /// nil when it lists every year.
     public let year: Int?
-    /// Newest first.
+    /// Newest first, each named for the calendar year it starts in.
     public let years: [Int]
+    /// What each of `years` is called where it's filed, like 2025, or 2025 to 2026 in the UK.
+    public let yearLabels: [String]
+    /// What `year` is called. nil when it lists every year.
+    public let yearLabel: String?
     /// Why the year's history isn't all here, when it isn't.
     public let partialYear: String?
     public let rowCount: Int
@@ -167,8 +180,8 @@ public struct TaxReportRequest: Hashable, Sendable {
     public let scope: TaxScope
     public let year: TaxYear
     public let currency: CurrencyCode
-    public let otherWallets: [String]
-    /// The wallets this app already knows are the user's, like its hot and cold ones.
+    /// The wallets this app already knows are the user's, like its hot and cold ones, or All Yours' other wallets. The server adds
+    /// the ones the answers say are theirs.
     public let linked: [String]
     public let serverURL: URL
     public let book: Book
@@ -176,7 +189,7 @@ public struct TaxReportRequest: Hashable, Sendable {
     /// What goes with the request. A post, because answers don't belong in a URL, where they'd end up in logs.
     var body: Body {
         var seen = Set<String>()
-        return Body(country: country, method: method, scope: scope, year: year, currency: currency, also: (otherWallets + linked).filter { seen.insert($0).inserted }, book: book)
+        return Body(country: country, method: method, scope: scope, year: year, currency: currency, also: linked.filter { $0 != address && seen.insert($0).inserted }, book: book)
     }
 
     struct Body: Encodable, Equatable {
@@ -204,11 +217,12 @@ public final class TaxReportModel {
     /// nil follows what the country calls for. Choosing another country goes back to that.
     private var chosenMethod: CostMethod?
     private var chosenScope: TaxScope?
-    public private(set) var otherWalletsText: String
     /// Not remembered: opening the report again starts on the newest year.
     public private(set) var year: TaxYear = .latest
     /// Every year with some history, newest first, from the last report.
     public private(set) var years: [Int] = []
+    /// What each of `years` is called, from the same report.
+    private var yearLabels: [Int: String] = [:]
     public private(set) var state: State = .loading
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -218,7 +232,6 @@ public final class TaxReportModel {
         self.defaults = defaults
         self.fetch = fetch
         country = defaults.string(forKey: Keys.country).flatMap(TaxCountry.init(rawValue:)) ?? .guess(from: currency)
-        otherWalletsText = defaults.string(forKey: Keys.otherWallets) ?? ""
         // An override only makes sense for the country it was made on, and that's the one remembered.
         chosenMethod = defaults.string(forKey: Keys.method).flatMap(CostMethod.init(rawValue:))
         chosenScope = defaults.string(forKey: Keys.scope).flatMap(TaxScope.init(rawValue:))
@@ -227,16 +240,6 @@ public final class TaxReportModel {
     /// One the country doesn't allow goes back to what it calls for.
     public var method: CostMethod { chosenMethod.flatMap { country.methods.contains($0) ? $0 : nil } ?? country.defaultMethod }
     public var scope: TaxScope { chosenScope ?? country.defaultScope }
-
-    public var otherWallets: [String] {
-        otherWalletsText.split(whereSeparator: { $0.isWhitespace || $0 == "," }).map { $0.lowercased() }
-    }
-
-    /// The first thing typed that can't be a wallet. Nothing's asked of the server until it's fixed. The demo wallet can't
-    /// be combined with anything, so what's saved from another wallet is ignored there: its field for fixing it isn't shown.
-    public func badWallet(for address: String?) -> String? {
-        address == WalletAddress.demo ? nil : otherWallets.first { !WalletAddress.isValid($0) }
-    }
 
     public func setCountry(_ next: TaxCountry) {
         guard next != country else { return }
@@ -268,36 +271,53 @@ public final class TaxReportModel {
         return year
     }
 
+    /// What a year is called where it's filed, which only a report says.
+    public func label(of year: Int) -> String {
+        yearLabels[year] ?? String(year)
+    }
+
     public func setYear(_ next: TaxYear) {
         // Picking the year already showing changes nothing, so it doesn't ask again.
         guard next != shownYear else { return }
         year = next
     }
 
-    public func setOtherWalletsText(_ next: String) {
-        otherWalletsText = next
-        defaults.set(next, forKey: Keys.otherWallets)
+    /// What the report used to let people type in as their other wallets. A report then covered them with whichever wallet it was on, as one
+    /// person's, so they're linked with the one it's on now, and it covers what it did. The demo's report never took them, so they wait for a
+    /// real wallet, and so does a report that isn't on one yet. One step in Edit's history.
+    public func carryOverTypedWallets(to address: String?, store: PortfolioStore) {
+        guard let address, !WalletAddress.isDemo(address) else { return }
+        let typed = takeTypedWallets()
+        if !typed.isEmpty { store.addToYours(typed, focus: address, action: "Link Wallets from Tax Report") }
     }
 
-    public func addOtherWallet(_ address: String) {
-        let address = address.lowercased()
-        if !otherWallets.contains(address) { setOtherWalletsText((otherWallets + [address]).joined(separator: "\n")) }
+    /// What was typed, and it's gone from here. Anything that isn't an address was a typo, and goes too.
+    func takeTypedWallets() -> [String] {
+        guard let text = defaults.string(forKey: Keys.otherWallets) else { return [] }
+        defaults.removeObject(forKey: Keys.otherWallets)
+        var seen = Set<String>()
+        return text.split(whereSeparator: { $0.isWhitespace || $0 == "," }).map { $0.lowercased() }.filter { WalletAddress.isValid($0) && seen.insert($0).inserted }
     }
 
-    public func removeOtherWallet(_ address: String) {
-        setOtherWalletsText(otherWallets.filter { $0 != address }.joined(separator: "\n"))
+    /// The wallets a report on `address` covers, the way the server picks them: with any of the user's own, every wallet the answers say is
+    /// theirs. A wallet nobody's said is theirs is only itself, and so is the demo, whose report stays its own.
+    public static func wallets(address: String, linked: [String], book: Book) -> [String] {
+        guard !WalletAddress.isDemo(address) else { return [address] }
+        let answered = book.linkedWallets.filter { !WalletAddress.isDemo($0) }
+        guard !linked.isEmpty || answered.contains(address) else { return [address] }
+        var seen = Set<String>()
+        return ([address] + linked + answered).filter { seen.insert($0).inserted }
     }
 
-    /// Whether adding this one would change anything. The wallet showing and the ones linked to it are already in the report.
-    public func offers(_ wallet: WalletEntry, showing: String?, linked: [String]) -> Bool {
-        wallet.address != showing && !linked.contains(wallet.address) && !otherWallets.contains(wallet.address)
+    /// Whether adding this one would change anything. The ones the report already covers are in it.
+    public static func offers(_ wallet: WalletEntry, covered: [String]) -> Bool {
+        !covered.contains(wallet.address)
     }
 
-    /// nil with no wallet, or while what's typed can't be sent.
+    /// nil with no wallet.
     public func request(address: String?, currency: CurrencyCode, serverURL: URL, book: Book = Book(), linked: [String] = []) -> TaxReportRequest? {
-        guard let address, badWallet(for: address) == nil else { return nil }
-        let isDemo = address == WalletAddress.demo
-        return TaxReportRequest(address: address, country: country, method: method, scope: scope, year: year, currency: currency, otherWallets: isDemo ? [] : otherWallets, linked: isDemo ? [] : linked, serverURL: serverURL, book: book)
+        guard let address else { return nil }
+        return TaxReportRequest(address: address, country: country, method: method, scope: scope, year: year, currency: currency, linked: address == WalletAddress.demo ? [] : linked, serverURL: serverURL, book: book)
     }
 
     /// What's on screen goes as soon as the choices change, because it's about the old ones.
@@ -307,6 +327,7 @@ public final class TaxReportModel {
             let report = try await fetch(request)
             guard !Task.isCancelled else { return }
             years = report.years
+            yearLabels = Dictionary(zip(report.years, report.yearLabels), uniquingKeysWith: { first, _ in first })
             state = .ready(report)
         } catch {
             guard !Task.isCancelled, !(error is CancellationError) else { return }
@@ -318,6 +339,7 @@ public final class TaxReportModel {
         static let country = "taxCountry"
         static let method = "taxMethod"
         static let scope = "taxScope"
+        /// Only read to carry what's there over: see `takeTypedWallets`.
         static let otherWallets = "taxOtherWallets"
     }
 }

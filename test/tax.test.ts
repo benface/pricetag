@@ -5,11 +5,11 @@ import { after, before, describe, it } from "node:test"
 import { ASSETS, ETH_ADDRESS, USDC_ADDRESS, buildLegs, derivePricedRows, foldPositions, type LegPart, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
 import { createRates, type RoundReader, type Source } from "@pricetag/sdk/internal"
 import type { PortfolioResponse, TaxReportResponse, WalletResponse } from "../src/core/api.ts"
-import { costKey, emptyBook, parseBook, type Book } from "../src/core/book.ts"
+import { answerSender, costKey, emptyBook, parseBook, type Book } from "../src/core/book.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import { keepingImport, parseCoinbaseCsv } from "../src/core/exchange-import.ts"
 import { foldBook } from "../src/core/resolve.ts"
-import { TAX_COUNTRIES, parseTaxYear, readOtherWallets, savedOtherWallets, taxReportOf, taxRows, type TaxYear } from "../src/core/tax.ts"
+import { TAX_COUNTRIES, parseTaxYear, taxReportOf, taxRows, typedOtherWallets, walletsInReport, type TaxYear } from "../src/core/tax.ts"
 import { createApi } from "../server/app.ts"
 import { assertMatchesFixture } from "./support/fixtures.ts"
 import { E18 } from "./support/units.ts"
@@ -323,29 +323,44 @@ describe("taxRows", () => {
   })
 })
 
-describe("readOtherWallets", () => {
-  it("reads several however they're separated, and finds the first typo", () => {
+describe("typedOtherWallets", () => {
+  it("keeps only the addresses, once each, however they're separated", () => {
     const upper = `0x${"A".repeat(40)}`
-    assert.deepEqual(readOtherWallets(`${upper}\n ${B}, `, A), { others: [A, B], bad: null })
-    assert.equal(readOtherWallets(`${B}\n0xnope`, A).bad, "0xnope")
-  })
-
-  it("ignores what's saved on the demo wallet, where the field for fixing it isn't shown", () => {
-    assert.deepEqual(readOtherWallets(`0xnope\n${B}`, "demo"), { others: [], bad: null })
-  })
-})
-
-describe("savedOtherWallets", () => {
-  it("keeps only the addresses, once each", () => {
-    const upper = `0x${"A".repeat(40)}`
-    assert.equal(savedOtherWallets(`${upper}\n ${B}, ${A}`), `${A}\n${B}`)
+    assert.deepEqual(typedOtherWallets(`${upper}\n ${B}, ${A}`), [A, B])
   })
 
   it("keeps nothing of what isn't an address", () => {
-    assert.equal(savedOtherWallets("some words pasted by mistake"), "")
-    assert.equal(savedOtherWallets(`0x${"a".repeat(64)}`), "")
-    assert.equal(savedOtherWallets(`words ${B} 0x${B.slice(2, 10)}`), B)
-    assert.equal(savedOtherWallets(""), "")
+    assert.deepEqual(typedOtherWallets("some words pasted by mistake"), [])
+    assert.deepEqual(typedOtherWallets(`0x${"a".repeat(64)}`), [])
+    assert.deepEqual(typedOtherWallets(`words ${B} 0x${B.slice(2, 10)}`), [B])
+    assert.deepEqual(typedOtherWallets(""), [])
+  })
+})
+
+describe("walletsInReport", () => {
+  const C = `0x${"c".repeat(40)}`
+  const mine = answerSender(emptyBook(), A, B, { kind: "mine" })
+
+  it("lists a wallet of the user's with every other one the answers say is theirs", () => {
+    assert.deepEqual(walletsInReport(mine, A, []), [A, B])
+    assert.deepEqual(walletsInReport(mine, B.toUpperCase().replace("0X", "0x"), []), [B, A])
+  })
+
+  it("lists anyone else's wallet alone, unless others are sent with it", () => {
+    assert.deepEqual(walletsInReport(mine, C, []), [C])
+    assert.deepEqual(walletsInReport(mine, C, [C, A]), [C, A, B])
+  })
+
+  it("keeps the demo's report its own", () => {
+    const withDemo = answerSender(mine, A, DEMO_SAVINGS_ADDRESS, { kind: "mine" })
+    assert.deepEqual(walletsInReport(withDemo, A, []), [A, B])
+    assert.deepEqual(walletsInReport(withDemo, "demo", []), ["demo"])
+  })
+
+  it("lists past the limit, which is what lets one too many be taken out", () => {
+    let many = emptyBook()
+    for (let i = 0; i < 25; i++) many = answerSender(many, A, `0x9${i.toString(16).padStart(39, "0")}`, { kind: "mine" })
+    assert.equal(walletsInReport(many, A, []).length, 26)
   })
 })
 
@@ -406,11 +421,11 @@ describe("taxReportOf", () => {
     assert.ok(report.warnings.some((warning) => /Canada reports in CAD/.test(warning)))
   })
 
-  it("says first that its rules may not apply in a currency neither country reports in, and doesn't suggest switching to one", () => {
-    for (const country of ["CA", "US"] as const) {
+  it("says first that its rules may not apply in a currency no country here reports in, and doesn't suggest switching to one", () => {
+    for (const country of ["CA", "GB", "US"] as const) {
       const report = taxReportOf([{ ...wallet, currency: "EUR", rates: demoRates("EUR") }], { country, method: TAX_COUNTRIES[country].method, scope: TAX_COUNTRIES[country].scope })
       assert.equal(report.currency, "EUR")
-      assert.match(report.warnings[0] ?? "", /only knows Canada and the US, and neither reports in EUR\. If you report in EUR, these rules and this layout may not apply/)
+      assert.match(report.warnings[0] ?? "", /only knows the rules of Canada, the UK and the US, and none of them reports in EUR\. If you report in EUR, these rules and this layout may not apply/)
       assert.ok(!report.warnings.some((warning) => /Change your main currency/.test(warning)))
     }
   })
@@ -1310,6 +1325,9 @@ describe("POST /api/tax-report on real wallets", () => {
       assert.deepEqual(report.wallets, [B, A], country)
       assert.deepEqual([sale(report)?.Cost, sale(report)?.Gain, sale(report)?.Status], ["1500.000000", "100.000000", "OK"], country)
       assert.ok(report.notes.some((note) => /wallets you've said are yours/.test(note)), country)
+      // Nobody typed A in: being linked is enough for the move to B to be a move between the user's wallets, not a sale.
+      assert.ok(!eventsOf(report).some((event) => event.Type === "Sent"), country)
+      assert.equal(report.sentCount, 0, country)
     }
   })
 
@@ -1318,6 +1336,17 @@ describe("POST /api/tax-report on real wallets", () => {
     const portfolio = (await (await fetch(`${base}/api/portfolio/${B}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ method: "fifo", book: mine }) })).json()) as PortfolioResponse
     assert.equal(portfolio.positions.find((p) => p.asset === "ETH")?.values.realizedMicros, usd(100))
     assert.equal(sale(report)?.Gain, "100.000000")
+  })
+
+  it("covers what it did when a wallet once typed in is linked with the one the report's on", async () => {
+    // How the clients carry over what used to be typed in: a report on B with A typed in covered both, as one person's.
+    const typed = await post(B, { country: "US", also: [A] })
+    const carried = await post(B, { country: "US", book: answerSender(emptyBook(), B, A, { kind: "mine" }) })
+    assert.deepEqual(carried.wallets, typed.wallets)
+    assert.deepEqual([sale(carried)?.Cost, sale(carried)?.Gain], [sale(typed)?.Cost, sale(typed)?.Gain])
+    assert.deepEqual([sale(carried)?.Cost, sale(carried)?.Gain], ["1500.000000", "100.000000"])
+    // Linked without the wallet showing, the report on B wouldn't count A, which is why the clients don't.
+    assert.deepEqual((await post(B, { country: "US", book: answerSender(emptyBook(), null, A, { kind: "mine" }) })).wallets, [B])
   })
 
   it("adds them when wallets are typed too, since that says this one is the user's", async () => {

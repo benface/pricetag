@@ -663,8 +663,9 @@ const untied = <T extends Ranked>(run: T[]): T[][] => (isTied(run) ? [run] : run
  */
 export function lotsSplitBy<T extends Ranked>(state: { lots: readonly T[] }, qty: bigint, method: Method = "fifo", unplaced?: Set<T>): T[] {
   if (qty <= 0n) return []
-  if (reorders(method)) return floatingSplit(state.lots, qty, method, unplaced)
   const lots = windowOf(state)
+  // Read through the state's window, not its `lots`: a later purchase can add to the array an earlier state shares.
+  if (reorders(method)) return floatingSplit(arrayOf(lots), qty, method, unplaced)
   const facts = factsOf(lots.array)
   // Only a lot known as a whole with no date makes what's ahead of it split, from wherever it is. Without one, nothing past what's
   // taken can, so oldest first needn't look through every purchase it still holds.
@@ -763,10 +764,11 @@ export function splitIsAnswerable(lots: readonly (Ranked & { unanswerable?: true
 
 /** Whether an answer could fix any of the unknown cost in what this much takes. An average takes from all of what's unknown. */
 export function takesAnswerableCost(state: Pick<PositionState, "lots" | "method">, qty: bigint, split?: ReadonlySet<Lot>): boolean {
-  const ordered = reorders(state.method) ? inTakeOrder(state.lots, state.method) : null
+  const lots = windowOf(state)
+  const ordered = reorders(state.method) ? inTakeOrder(arrayOf(lots), state.method) : null
   const splitBy = split ?? new Set(ordered ? lotsSplitBy({ lots: ordered }, qty, state.method) : lotsSplitBy(state, qty))
   let through = 0n
-  for (const lot of ordered ?? lotsIn(windowOf(state))) {
+  for (const lot of ordered ?? lotsIn(lots)) {
     // Every method but average takes nothing past what adds up to this much.
     if (keepsLots(state.method) && through >= qty) return false
     through += BigInt(lot.qty)

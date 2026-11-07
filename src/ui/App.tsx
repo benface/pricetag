@@ -16,7 +16,7 @@ import { TaxPanel } from "./TaxPanel.tsx"
 import { useAllYours, useWallet } from "./useWallet.ts"
 import { LazyPanel } from "./LoadBoundary.tsx"
 import { ProblemNotice } from "./ProblemNotice.tsx"
-import { currenciesIn, walletsBehind, walletsToRead, yourWallets } from "../core/book.ts"
+import { answerSender, currenciesIn, unlinkWallet, walletsBehind, walletsToRead, yourWallets } from "../core/book.ts"
 import { readCheckedAccounts } from "../core/device-accounts.ts"
 import { parseDeviceLink, type DeviceLink } from "../core/device-link.ts"
 import { exportCsv } from "../core/export.ts"
@@ -71,7 +71,8 @@ export function App() {
     return link ? { link } : null
   })
   // Read again whenever the device panel closes, since that's where accounts get checked.
-  const yours = useMemo(() => yourWallets(book, readCheckedAccounts().map((account) => account.address)), [book, device])
+  const checkedAccounts = useMemo(() => readCheckedAccounts().map((account) => normalizeAddress(account.address)), [device])
+  const yours = useMemo(() => yourWallets(book, checkedAccounts), [book, checkedAccounts])
   // Taking back an answer can leave one wallet, or none, and then there's nothing to add up. It comes back with the next one.
   const isAll = address === ALL_YOURS && yours.length >= 2
   const single = address === ALL_YOURS ? (isAll ? null : (yours[0] ?? null)) : address
@@ -136,6 +137,11 @@ export function App() {
     setResolving({ asset: null })
   }, [pendingResolve, wallet])
 
+  const linkFromTax = useCallback(
+    (wallets: readonly string[], focus: string, onSaved?: () => void) => change((latest) => wallets.reduce((next, wallet) => answerSender(next, focus, wallet, { kind: "mine" }), latest), onSaved),
+    [change],
+  )
+  const unlinkFromTax = useCallback((wallet: string) => change((latest) => unlinkWallet(latest, wallet)), [change])
   const resolveFromTax = (next: string) => {
     if (!address) return
     if (next === wallet?.address.toLowerCase()) {
@@ -427,6 +433,9 @@ export function App() {
           overviewMethod={method}
           questionsIn={questionsIn}
           onResolve={resolveFromTax}
+          onLink={linkFromTax}
+          onUnlink={unlinkFromTax}
+          fromDevice={checkedAccounts}
           onClose={() => setTaxOpen(false)}
         /> : null}
     </div>
