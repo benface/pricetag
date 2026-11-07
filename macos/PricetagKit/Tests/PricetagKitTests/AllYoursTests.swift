@@ -126,6 +126,24 @@ private func answer(_ states: KeyValuePairs<String, CombinedWallet.State>, block
     return try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
 }
 
+/// Answers every read with nothing still on its way, and remembers which wallets it was asked about.
+private actor UpToDateServer: PortfolioSource {
+    private(set) var asked: [[String]] = []
+
+    func portfolio(_ read: ReadContext, timeout: Duration) async throws -> Portfolio {
+        asked.append(read.linked)
+        return try answer([a: .read, b: .read], block: 10, at: Date())
+    }
+
+    func explanation(of target: ExplainTarget, _ read: ReadContext, shown: [String]?) async throws -> Explanation {
+        throw FetchError.unreachable
+    }
+
+    func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof {
+        throw FetchError.unreachable
+    }
+}
+
 @MainActor
 struct AllYoursTests {
     private func date(_ seconds: TimeInterval) -> Date { Date(timeIntervalSince1970: seconds) }
@@ -417,5 +435,47 @@ struct AllYoursTests {
         await #expect(throws: FetchError.unreachable) { try await store.proof(leg: "0x2:ETH", address: b) }
         await #expect(throws: CancellationError.self) { try await store.proof(leg: "0x2:ETH", address: d) }
         #expect(await source.proofs == [b])
+    }
+
+    /// A failure rather than a test that never ends.
+    private func until(_ condition: () async -> Bool) async throws {
+        let deadline = Date.now.addingTimeInterval(10)
+        while await !condition(), Date.now < deadline { try await Task.sleep(for: .milliseconds(2)) }
+        #expect(await condition())
+    }
+
+    /// What's showing is whatever was chosen since launch, not what the app opened on.
+    @Test func takingAWalletOffTheListChangesAllYoursChosenAfterLaunch() async throws {
+        let defaults = UserDefaults(suiteName: "all-yours-\(UUID().uuidString)")!
+        defaults.set(d, forKey: "wallet")
+        let server = UpToDateServer()
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in server })
+        defer { store.stop() }
+        store.setLinkedWallets([a, b, c])
+        store.setWallet(WalletAddress.allYours)
+        try await until { await server.asked.last == [a, b, c] && store.feed == .live }
+
+        let removal = store.changeWallet(c, name: "Remove from List") { store.removeWallet(c, showing: nil) }
+        #expect(store.feed == .reading, "the total on screen still has it")
+        try await until { await server.asked.last == [a, b] && store.feed == .live }
+
+        store.restore(removal)
+        #expect(store.feed == .reading, "the total on screen still leaves it out")
+        try await until { await server.asked.last == [a, b, c] && store.feed == .live }
+    }
+
+    /// Opened on All Yours, then moved on: the one wallet showing has nothing to do with the list.
+    @Test func takingAWalletOffTheListLeavesAnotherWalletLive() async throws {
+        let defaults = UserDefaults(suiteName: "all-yours-\(UUID().uuidString)")!
+        defaults.set(WalletAddress.allYours, forKey: "wallet")
+        let server = UpToDateServer()
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in server })
+        defer { store.stop() }
+        store.setLinkedWallets([a, b, c])
+        store.setWallet(d)
+        try await until { store.feed == .live }
+
+        store.removeWallet(c, showing: nil)
+        #expect(store.feed == .live)
     }
 }

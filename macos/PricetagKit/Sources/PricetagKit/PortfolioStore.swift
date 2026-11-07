@@ -161,7 +161,7 @@ public final class PortfolioStore {
         answerHistory.onChange = { [weak self] in self?.answersChanged() }
         walletList.onHiddenChange = { [weak self] in
             // All Yours is every wallet that's listed, so it's something else now.
-            guard let self, WalletAddress.isAllYours(address), feedLoop.isRunning else { return }
+            guard let self, WalletAddress.isAllYours(self.address), feedLoop.isRunning else { return }
             answersChanged()
         }
         feedLoop.showLastKnown()
