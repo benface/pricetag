@@ -1,10 +1,11 @@
 packages:
   - packages/*
+# Dependencies are an attack surface here: nothing runs at install time, and a new package with a script fails the install until it's listed.
+# None of these needs its script: each has prebuilt binaries or a fallback.
 allowBuilds:
-  '@parcel/watcher': set this to true or false
-  core-js-pure: set this to true or false
-  msgpackr-extract: set this to true or false
-  secp256k1: set this to true or false
-# Dependencies are an attack surface here: nothing runs at install time unless listed.
-onlyBuiltDependencies: []
-strictDepBuilds: false
+  '@parcel/watcher': false
+  core-js-pure: false
+  msgpackr-extract: false
+  secp256k1: false
+# Exact versions, never a range, so the lockfile isn't the only thing pinning them.
+saveExact: true

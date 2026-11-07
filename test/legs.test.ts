@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { ETH_ADDRESS, TOKENS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, derivePricedRows, foldPositions, isSanePrice, pnlOverTime, referenceMarks, ptPrice, sumTotals, tokenByAddress, usdView, type LegRow, type Reference } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, TOKENS, USDC_ADDRESS, WETH_ADDRESS, buildPricedLegs, derivePricedRows, foldPositions, isSanePrice, pnlOverTime, referenceMarks, sumTotals, tokenByAddress, usdView, type LegRow, type Reference } from "@pricetag/sdk/core"
 import { DEMO_WALLET } from "../src/core/fixtures.ts"
 import { E18, E6 } from "./support/units.ts"
 
@@ -315,6 +315,7 @@ describe("pricing a wallet's rows", () => {
       assert.equal(aero(legs).costMicros, null)
       assert.equal(aero(legs).priceMicros, null)
       assert.match(aero(legs).priceNote!, /a token we can't price yet/)
+      assert.equal(aero(legs).alsoMovedUnlisted, true)
     })
 
     it("a row from a dataset deployed before unlisted_moves can't price it either", () => {

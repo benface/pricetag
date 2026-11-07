@@ -21,12 +21,13 @@
 // elsewhere, and CRA's crypto guide doesn't count moving between your own wallets as a disposition, so that keeps what they
 // first paid, which we can't see. Those stay estimates in every country, and the report says why.
 
-import { assertFoldFits, foldPositions, formatDuration, isAddress, markUnknownOrder, msBetweenBlocks, normalizeAddress, orderMatters, shortHash, timestampOfBlock, unreadAssets, viewWallet, worth, type CurrencyCode, type KnownTaken, type LegEffect, type Method, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
+import { assertFoldFits, foldPositions, formatDuration, isAddress, markUnknownOrder, msBetweenBlocks, normalizeAddress, orderMatters, shortHash, timestampOfBlock, unreadAssets, viewWallet, worth, type CostPiece, type CurrencyCode, type KnownTaken, type LegEffect, type Method, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type TaxReportResponse, type WalletResponse } from "./api.ts"
 import { emptyBook, linkedWallets, type Book } from "./book.ts"
 import { csvCell, microsCell, unitsCell } from "./csv.ts"
 import { rateSource } from "./explain.ts"
 import { resolveLegs, withheldIn } from "./resolve.ts"
+import { taxFormOf } from "./tax-forms.ts"
 import { METHOD_LABELS, withheldSentence } from "./wording.ts"
 
 export type TaxCountryCode = "CA" | "US"
@@ -69,7 +70,7 @@ export const TAX_COUNTRIES: Record<TaxCountryCode, TaxCountry> = {
     marketRowNote: "Part of its cost is what it was worth when it arrived, which is generally the cost of what you're paid or given in Canada.",
     marketWarning: "In Canada, that's generally the cost of what you're paid or given.",
     notes: [
-      "A loss can be denied if you buy the same asset back within 30 days before or after selling it (a superficial loss). This report doesn't check for that.",
+      "A loss can be denied if the same asset is acquired within 30 days before or after selling it, and still held 30 days after (a superficial loss). This report flags those it finds in these wallets, but can't see a spouse's or a company you control, which count too, or when something that arrived from elsewhere was bought unless an exchange file says. It doesn't change any amount.",
       "Every gain here is shown in full, as if it's capital. Canada generally taxes half of a capital gain, and frequent trading can count as business income instead.",
     ],
   },
@@ -85,7 +86,11 @@ export const TAX_COUNTRIES: Record<TaxCountryCode, TaxCountry> = {
     marketIsCost: false,
     marketRowNote: "If it was pay, that price is its cost. If it was a gift, its cost is generally the giver's.",
     marketWarning: "In the US, that's the cost of what you're paid, but a gift generally keeps the giver's cost.",
-    notes: ["This report doesn't split short-term from long-term gains, or give the date each sold unit was acquired, which Form 8949 asks for.", "Choosing specific units to sell isn't available yet."],
+    notes: [
+      "The Form 8949 file gives the date each sold unit was acquired, and splits short-term from long-term gains, which only works with Oldest first.",
+      "Choosing specific units to sell isn't available yet.",
+      "The wash sale rule in section 1091 of the tax code covers stock and securities, and this report doesn't check for it. Ask an accountant whether it applies to crypto in your year.",
+    ],
   },
 }
 
@@ -131,7 +136,20 @@ export type TaxRow = {
   givenCost: boolean
   wallet: string
   txHash: string
+  /**
+   * What a known cost was paid for, piece by piece, with when each piece was acquired. null when it can't be split that way:
+   * an average mixes every purchase together, and a row with no known cost has nothing to split.
+   */
+  acquired: Acquired[] | null
+  /** A loss that a country's rules may not let you deduct. Missing means none was found. */
+  lossRule?: LossRule
 }
+
+/** Part of what a sale took, with its cost and when it was acquired, or null when nothing says. */
+export type Acquired = { qty: string; costMicros: string; at: string | null }
+
+/** superficial: bought again within 30 days and still held after them. maybe: bought again, but the 30 days after aren't all read yet. */
+export type LossRule = "superficial" | "maybe-superficial"
 
 const UNKNOWN_COST = "What this cost isn't known. It was in the wallet before the first block read, or arrived from another address."
 const INCOMPLETE_HISTORY = "More of this left than was seen arriving, so part of its history is missing."
@@ -143,10 +161,25 @@ const ESTIMATED_COST = "Part of its cost is an estimate, from a market price or 
 const ESTIMATED_PROCEEDS = "What it sold for is an estimate, from a market price."
 const ESTIMATED_BOTH = "What it sold for and part of its cost are estimates, from market prices or exchange rates."
 const REPORTED_COST = "Part of its cost is what you entered or imported, which the chain can't confirm."
-const purchasedCost = (source: string) => `Some or all of its cost: ${source}, fees included.`
+const purchasedCost = (sources: readonly string[]) => `Some or all of its cost: ${sources.length === 1 ? sources[0] : "several exchange purchases"}, fees included.`
 const MISMATCH = "This asset's history doesn't match its onchain balance, so its cost can't be trusted."
 const UNCHECKED = "This asset hasn't been checked against its onchain balance yet, so its cost isn't shown."
 const DIFFERENT_STARTS = "These wallets' histories start at different blocks, so their costs can't be worked out together."
+
+/**
+ * The pieces of known cost a debit took, oldest first, with each one's date: an exchange's purchase date when there is one,
+ * since that's when it was bought, and otherwise when it reached a wallet, which an inherited piece keeps from the wallet
+ * that sent it. When it reached a wallet is only its date if it was acquired then. An opening balance, or something that
+ * arrived with a cost someone entered and no purchase date, has none, which the fold marks as `undated`. Only oldest first
+ * keeps pieces apart, and only when they add up to the cost the row shows.
+ */
+function acquiredOf({ before, taken }: LegEffect, knownCost: bigint, knownQty: bigint): Acquired[] | null {
+  if (before.method !== "fifo" || knownQty <= 0n || taken === null) return null
+  const known = taken.filter((piece) => piece.costMicros !== null)
+  const sum = (field: "qty" | "costMicros") => known.reduce((total, piece) => total + BigInt(piece[field] as string), 0n)
+  if (sum("costMicros") !== knownCost || sum("qty") !== knownQty) return null
+  return known.map((piece) => ({ qty: piece.qty, costMicros: piece.costMicros as string, at: piece.undated ? null : piece.boughtAt || piece.acquiredAt || null }))
+}
 
 /** The rows a debit becomes: a sale with both a known and an unknown cost splits, so the known part still adds up. */
 function rowsOf(effect: LegEffect, wallet: string, unconfirmed: string | null, country: TaxCountry | null): TaxRow[] {
@@ -160,8 +193,9 @@ function rowsOf(effect: LegEffect, wallet: string, unconfirmed: string | null, c
   const orderless = orderMatters(leg, before.method)
   const knownCost = orderless ? 0n : BigInt(known.costMicros)
   const unknownQty = orderless ? qty : qty - BigInt(known.qty)
-  const row = (fields: Pick<TaxRow, "amount" | "proceedsMicros" | "costMicros" | "gainMicros" | "status" | "reason"> & { givenCost?: boolean }): TaxRow => ({
+  const row = (fields: Pick<TaxRow, "amount" | "proceedsMicros" | "costMicros" | "gainMicros" | "status" | "reason"> & { givenCost?: boolean; acquired?: Acquired[] | null }): TaxRow => ({
     givenCost: false,
+    acquired: null,
     blockNum: leg.blockNum,
     txIndex: leg.txIndex,
     timestamp: leg.timestamp,
@@ -176,13 +210,14 @@ function rowsOf(effect: LegEffect, wallet: string, unconfirmed: string | null, c
   const amount = qty.toString()
   // Only a cost that's all there can be shown, and only on an asset the chain has confirmed.
   const wholeCost = unknownQty === 0n && unconfirmed === null ? knownCost.toString() : null
+  const acquired = unconfirmed === null && !orderless ? acquiredOf(effect, knownCost, qty - unknownQty) : null
 
   if (leg.kind === "transfer") return [row({ amount, proceedsMicros: null, costMicros: wholeCost, gainMicros: null, status: "unresolved", reason: SENT })]
 
   const proceeds = leg.kind === "gas" ? (leg.priceMicros === null ? null : worth(qty, BigInt(leg.priceMicros), leg.decimals)) : leg.proceedsMicros === null ? null : BigInt(leg.proceedsMicros)
   if (proceeds === null) {
     const noRate = leg.conversion?.rateMicros === null
-    return [row({ amount, proceedsMicros: null, costMicros: wholeCost, gainMicros: null, status: "unresolved", reason: noRate ? NO_RATE : leg.kind === "gas" ? NO_GAS_PRICE : UNKNOWN_PROCEEDS })]
+    return [row({ amount, proceedsMicros: null, costMicros: wholeCost, gainMicros: null, status: "unresolved", reason: noRate ? NO_RATE : leg.kind === "gas" ? NO_GAS_PRICE : UNKNOWN_PROCEEDS, acquired: wholeCost === null ? null : acquired })]
   }
   if (unconfirmed !== null) return [row({ amount, proceedsMicros: proceeds.toString(), costMicros: null, gainMicros: null, status: "unresolved", reason: unconfirmed })]
 
@@ -197,9 +232,9 @@ function rowsOf(effect: LegEffect, wallet: string, unconfirmed: string | null, c
     // By units rather than dollars, because $0 is a cost someone can enter.
     const reported = BigInt(known.reportedQty) > 0n
     const estimate = costIsEstimated && proceedsAreEstimated ? ESTIMATED_BOTH : costIsEstimated ? ESTIMATED_COST : proceedsAreEstimated ? ESTIMATED_PROCEEDS : null
-    const purchased = BigInt(known.purchasedQty) > 0n && known.purchaseSource ? purchasedCost(known.purchaseSource) : null
+    const purchased = BigInt(known.purchasedQty) > 0n && known.purchaseSources.length > 0 ? purchasedCost(known.purchaseSources) : null
     const reason = [estimate, given > 0n ? (country?.marketRowNote ?? null) : null, reported ? REPORTED_COST : null, purchased].filter((note) => note !== null).join(" ")
-    rows.push(row({ amount: resolvedQty.toString(), proceedsMicros: resolvedProceeds.toString(), costMicros: knownCost.toString(), gainMicros: gain.toString(), status: estimate ? "estimated" : reported ? "self-reported" : "resolved", reason: reason || null, givenCost: given > 0n }))
+    rows.push(row({ amount: resolvedQty.toString(), proceedsMicros: resolvedProceeds.toString(), costMicros: knownCost.toString(), gainMicros: gain.toString(), status: estimate ? "estimated" : reported ? "self-reported" : "resolved", reason: reason || null, givenCost: given > 0n, acquired }))
   }
   if (unknownQty > 0n) {
     const short = BigInt(after.shortfallQty) > BigInt(before.shortfallQty)
@@ -300,6 +335,55 @@ function poolLegs(sources: readonly Source[], moves: ReadonlySet<string>): { leg
   // One wallet can't see what another's unseen ETH does to their shared order.
   const legs = markUnknownOrder(sorted)
   return { legs, walletOf: new Map(legs.map((leg, i) => [leg, walletOf.get(sorted[i] as PricedLeg) as string])) }
+}
+
+const DAY_MS = 86_400_000
+
+/** A UTC date, `days` from this time's, as YYYY-MM-DD, which sorts as text. */
+const dayOf = (timestamp: string, days = 0) => new Date(Date.parse(timestamp.slice(0, 10)) + days * DAY_MS).toISOString().slice(0, 10)
+
+/**
+ * When what a credit brought was acquired, as far as anything says: when it was bought here, paid for on its way in or received,
+ * the dates an exchange gives for what it withdrew, or when another of the user's wallets acquired it. Something that arrived from elsewhere with no such date, through a bridge too, says nothing, and an
+ * opening balance was already held, so neither is evidence of acquiring more.
+ */
+function acquisitionDates(leg: PricedLeg): string[] {
+  const here = !leg.opening && (leg.kind === "swap" || leg.costLabel === "paid" || leg.costLabel === "received at market")
+  if (!leg.pieces) return here ? [leg.timestamp] : []
+  // A piece from another of the user's wallets keeps when it was first acquired there, if anything says.
+  const dateOf = (piece: CostPiece) => piece.boughtAt || (piece.acquiredAt && !piece.undated ? piece.acquiredAt : null) || (!leg.opening && !piece.undated && (leg.kind === "swap" || piece.label === "paid" || piece.label === "received at market") ? leg.timestamp : null)
+  return leg.pieces.map(dateOf).filter((at) => at !== null)
+}
+
+const SUPERFICIAL = "More of it was acquired within 30 days of this loss, and some was still held 30 days after, so this may be a superficial loss, which can't be deducted. It's usually added to the cost of what was acquired instead."
+const MAYBE_SUPERFICIAL = "More of it was acquired within 30 days of this loss, and the 30 days after haven't all been read yet, so this may turn out to be a superficial loss."
+
+/**
+ * Canada's superficial loss rule, from CRA's guide T4037: a loss can't be deducted when identical property is acquired in the
+ * 30 calendar days before or after the sale, and is still held 30 calendar days after it. This only sees the wallets in the
+ * report, not a spouse's or a company's, which the rule also counts. It flags rows and changes no amount.
+ */
+export function flagSuperficialLosses(rows: TaxRow[], sources: readonly Pick<Source, "wallet" | "view">[], book: Book = emptyBook()): void {
+  const moves = movesBetween(sources)
+  const legs = sources.flatMap(({ view }) => view.legs)
+  // What an exchange file says was bought there and later withdrawn. Buying it there is acquiring it, whenever it's withdrawn, and
+  // whichever method the report uses, which decides whether the wallet's legs carry those dates.
+  const exchangeBuys = book.withdrawals.flatMap(({ asset, fifoLots }) => (fifoLots ?? []).flatMap(({ at }) => (at ? [{ asset, at }] : [])))
+  // The last moment every wallet has been read through, since a balance after that could still change.
+  const readThrough = sources.map(({ wallet }) => timestampOfBlock(wallet.coverage.toBlock, wallet.latest)).reduce((a, b) => (a < b ? a : b))
+  for (const row of rows) {
+    if (row.gainMicros === null || BigInt(row.gainMicros) >= 0n || row.type === "Sent") continue
+    const [from, to] = [dayOf(row.timestamp, -30), dayOf(row.timestamp, 30)]
+    const within = (at: string) => dayOf(at) >= from && dayOf(at) <= to
+    const acquiredAgain =
+      legs.some((leg) => leg.asset === row.asset && BigInt(leg.delta) > 0n && leg.txHash !== row.txHash && !isMove(leg, moves) && acquisitionDates(leg).some(within)) || exchangeBuys.some((buy) => buy.asset === row.asset && within(buy.at))
+    if (!acquiredAgain) continue
+    // Held at the end of the 30th day, across every wallet here. Moves between them add up to nothing.
+    const end = `${to}T23:59:59.999Z`
+    if (readThrough < end) row.lossRule = "maybe-superficial"
+    else if (legs.filter((leg) => leg.asset === row.asset && (leg.opening || leg.timestamp <= end)).reduce((sum, leg) => sum + BigInt(leg.delta), 0n) > 0n) row.lossRule = "superficial"
+    if (row.lossRule) row.reason = [row.reason, row.lossRule === "superficial" ? SUPERFICIAL : MAYBE_SUPERFICIAL].filter(Boolean).join(" ")
+  }
 }
 
 export type TaxSettings = { country: TaxCountryCode; method: Method; scope: TaxScope }
@@ -474,6 +558,7 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
   const years = yearsOf(wallets)
   const year = settings.year === "latest" ? (years[0] ?? null) : settings.year === "all" || settings.year === undefined ? null : settings.year
   const allRows = rowsFrom(sources, method, scope, country)
+  if (code === "CA") flagSuperficialLosses(allRows, sources, context.book)
   const rows = year === null ? allRows : allRows.filter((row) => yearOf(row.timestamp) === year)
   const partialYear = year === null ? null : partialYearNote(year, historyStart(wallets))
   const count = (status: TaxRowStatus) => rows.filter((row) => row.status === status).length
@@ -481,6 +566,7 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
   const estimated = count("estimated")
   const selfReported = count("self-reported")
   const given = rows.filter((row) => row.givenCost).length
+  const superficial = rows.filter((row) => row.lossRule !== undefined).length
   const counted = rows.filter((row) => row.gainMicros !== null)
   const events = [...eventsOf(rows).values()]
   // Where to fix what's unknown: the wallets whose sales say so, and any wallet holding an asset with an unknown gain
@@ -496,6 +582,7 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
   if (estimated > 0) warnings.push(`${plural(estimated, "row")} of ${rows.length.toLocaleString("en-US")} ${estimated === 1 ? "rests" : "rest"} on an estimate.`)
   if (selfReported > 0) warnings.push(`${plural(selfReported, "row")} of ${rows.length.toLocaleString("en-US")} ${selfReported === 1 ? "uses" : "use"} a cost you entered or imported, which the chain can't confirm, so keep your records for it.`)
   if (given > 0) warnings.push(`${plural(given, "row")} of ${rows.length.toLocaleString("en-US")} ${given === 1 ? "uses" : "use"} a market price from when something you said came from someone else arrived. ${country.marketWarning}`)
+  if (superficial > 0) warnings.push(`${plural(superficial, "loss", "losses")} may be superficial, because more of the same asset was acquired within 30 days. A superficial loss can't be deducted, so check ${superficial === 1 ? "it" : "them"} before filing.`)
   for (const { wallet, asset } of withheldIn(sources.flatMap(({ view }) => view.legs))) warnings.push(withheldSentence(wallet, asset))
   for (const source of sources) warnings.push(...walletWarnings(source, named))
   if (method !== country.method) warnings.push(country.methodWarning)
@@ -517,6 +604,7 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
     ...COMMON_NOTES,
     ...country.notes,
   ]
+  const filename = `tax-report-${first.address.slice(0, 8)}-${year === null ? "" : `${year}-`}${code}-${method === "fifo" ? "oldest-first" : "average"}-${currency}.csv`
   const summary = `Prepared for ${country.inSentence}${year === null ? "" : `, ${year}`}: ${METHOD_LABELS[method].toLowerCase()}, ${SCOPE_LABELS[scope].toLowerCase()}, in ${currency}.`
 
   return {
@@ -543,7 +631,8 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
     warnings,
     notes,
     preview: rows.slice(0, PREVIEW_ROWS).map(({ timestamp, type, asset, amount, decimals, gainMicros, status }) => ({ timestamp, type, asset, amount, decimals, gainMicros, status })),
-    filename: `tax-report-${first.address.slice(0, 8)}-${year === null ? "" : `${year}-`}${code}-${method === "fifo" ? "oldest-first" : "average"}-${currency}.csv`,
+    filename,
     csv: taxCsv(rows, [TAX_DISCLAIMER, summary, ...warnings, ...notes], { method, scope, currency }),
+    form: taxFormOf(code, rows, [TAX_DISCLAIMER, summary, ...warnings], filename),
   }
 }

@@ -1,6 +1,6 @@
 # Build on Pricetag
 
-Pricetag is an Amp dataset that puts a USD price on token transfers on Base. This package reads it from TypeScript and derives a wallet's cost and PnL, the same way the app in this repo does, because the app runs on it. If you don't use TypeScript, [plain SQL](#plain-sql) gets you the same legs and prices.
+Pricetag is an Amp dataset that puts a USD price on token transfers on Base. This package reads it from TypeScript and derives a wallet's cost and PnL by the same rules as the app in this repo, which runs on it. The app reads a few things this package doesn't yet, so it can know a price or cost the SDK leaves unknown: see [Limits](#limits). If you don't use TypeScript, [plain SQL](#plain-sql) gets you the same legs and prices.
 
 The package is local for now. It isn't on npm, so use it from inside this repo.
 
@@ -52,10 +52,10 @@ Amounts are in a token's smallest unit, and money is in micros (millionths of a 
 | Call | What it returns |
 | --- | --- |
 | `createPricetag(config)` | A client. See [the config](#the-config). |
-| `getPortfolio(address, { method?, currency?, from?, to? })` | A wallet's holdings, cost and PnL, matching the app. `method` is `"average"`, the default, or `"fifo"`. `currency` is `"USD"`, the default, or anything in `MAIN_CURRENCY_CODES`. See [other currencies](#other-currencies). With a `to`, it's the wallet as of that block, at that block's prices. See [what it returns](#what-getportfolio-returns). |
+| `getPortfolio(address, { method?, currency?, from?, to? })` | A wallet's holdings, cost and PnL, by the app's rules (see [Limits](#limits) for what only the app reads). `method` is `"average"`, the default, or `"fifo"`. `currency` is `"USD"`, the default, or anything in `MAIN_CURRENCY_CODES`. See [other currencies](#other-currencies). With a `to`, it's the wallet as of that block, at that block's prices. See [what it returns](#what-getportfolio-returns). |
 | `getPortfolio(...).otherTokens` | Tokens off the allowlist this wallet holds, with `balance`, `name`, `symbol`, `decimals` and `state`, and no price. `tucked` says why one's likely spam, and `otherTokensLeftOut` how many past the limit weren't read. They fill in over the next reads, because a read doesn't wait for them, and a read with a `to` has none. Names are whatever the contract claims. `missing` counts them. |
 | `watchWallet(address, { method?, currency?, from?, signal? })` | The same portfolio now, then again after each new block, as an async iterable. See [watching a wallet](#watching-a-wallet). |
-| `getLegs(address, { from?, to? })` | `{ legs, blocks, references, gasUnknownTxs, l1Fees, l1FeeUnknownTxs }`: what moved in the range, priced and labeled, in the order the fold reads them. It doesn't include opening balances. With an `rpcUrl`, these are the same legs as the app's and `getPortfolio`'s, L1 fees included. Without one, gas leaves out L1 fees, and a swap paid out in unwrapped ETH stays unknown. |
+| `getLegs(address, { from?, to? })` | `{ legs, blocks, references, gasUnknownTxs, l1Fees, l1FeeUnknownTxs }`: what moved in the range, priced and labeled, in the order the fold reads them. It doesn't include opening balances. With an `rpcUrl`, these are the same legs as `getPortfolio`'s, L1 fees included. Without one, gas leaves out L1 fees, and a swap paid out in unwrapped ETH stays unknown. |
 | `getPrices(token, { from?, to? })` | `{ token, prices, blocks }`: a token's prices, by symbol or address. It throws on a token off the allowlist, which has no prices to give. |
 | `getLatestPrices()` | The current prices to value positions at, for every token on the allowlist, in one query: ETH and USDC from a recent oracle read, and the rest from their Chainlink feeds. A token whose answer is too old, implausible or failed isn't in it, and a feed read that fails goes to `logger`. |
 | `buildPortfolio(legs, method, prices?)` | `{ method, positions, totals }` from `getLegs`' legs. It's pure, so it needs no Amp. Nothing in it is checked against the chain, so prefer `getPortfolio`. |
@@ -66,7 +66,7 @@ Amounts are in a token's smallest unit, and money is in micros (millionths of a 
 | `shortHash` | A transaction hash or address, shortened. |
 | `describeError(error)` | The most useful message in an error from Amp's client. The SDK's own errors already have it as their `message`, with Amp's error as their `cause`. |
 | `WalletTooBigError` | What reads throw for a wallet with more history than fits in memory, about 10 KB a row of heap, or `maxWalletRows` if you set it. You never get part of a history. Read a smaller block range, or give Node a bigger heap. |
-| `OldestFirstTooBigError` | What `getPortfolio` throws with `method: "fifo"` on a history too long for that in this heap, which can be shorter, because it holds every lot still open. For now, the check also refuses some histories that would fit. `average` still works. |
+| `OldestFirstTooBigError` | What `getPortfolio` throws with `method: "fifo"` on a history too long for that in this heap, which can be shorter than `WalletTooBigError`'s limit, because it also holds the most lots open at once, and a copy of every lot that arrived from a linked wallet. `average` still works. |
 | `TOKENS`, `ASSETS`, `isAddress` | The allowlist, its positions, and whether a string is a Base address. |
 
 Everything callers see is camelCase. The one exception is in `@pricetag/sdk/core`: `LegRow` and `PricedRow` are rows of the dataset's tables, so they keep its column names.
@@ -74,8 +74,10 @@ Everything callers see is camelCase. The one exception is in `@pricetag/sdk/core
 There are three entry points:
 
 - `@pricetag/sdk` is the list above, for Node.
-- `@pricetag/sdk/core` is for browser code. It has the fold, the pricing, the allowlist and the formatters, without the Amp client.
+- `@pricetag/sdk/core` is for browser code. It has the fold, the pricing, the conversion between currencies, the allowlist, approvals and the formatters, without the Amp client.
 - `@pricetag/sdk/internal` is for this repo's server and tests. It can change at any time, so don't build on it.
+
+The split is the browser boundary: nothing `core` reaches may import the Amp client or Node, and a test checks that it doesn't.
 
 ### The config
 
@@ -106,8 +108,8 @@ Fees are read at a little under 40% of `rpcRateLimit`, so about 9 a second by de
 | `started` | False until the dataset has processed the first block. Until then, every total is `null` and `pnlStatus` is `unavailable`. No rows doesn't mean nothing happened. |
 | `currency`, `latestRate`, `missingRateTxs` | What the money is in, what one USD buys now, and the transactions with an amount that couldn't be converted. See [other currencies](#other-currencies). |
 | `blocks` | `{ fromBlock, toBlock }`, what was actually read. `toBlock` can stop short of the head while a table catches up. |
-| `positions` | One per asset, with `values`, `price`, `state`, `reconciliation` and the legs behind it in `effects`. |
-| `totals` | Sums of only what's known, each `null` when nothing is, with what's left out in `excluded`. |
+| `positions` | One per asset, with `values`, `price`, `state`, `reconciliation` and the legs behind it in `effects`. `noMarket` is true for a token with no price at any block, often spam, which is listed apart and left out of every total. |
+| `totals` | Sums of only what's known, each `null` when nothing is, with what's left out in `excluded`, and the assets with no market in `noMarket`. |
 | `pnlStatus` | `complete`, `partial` or `unavailable`. |
 | `missing` | What the numbers leave out, in words. It's empty when nothing is. Show it next to any total. |
 | `legs` | Every leg in fold order, starting with what the wallet already held as opening legs (`opening: true`, with an unknown cost). |
@@ -129,7 +131,7 @@ const { totals, latestRate, missingRateTxs } = await pricetag.getPortfolio(addre
 console.log(formatSignedMoney(totals.pnlMicros, "CAD"))
 ```
 
-Rates come from Chainlink's feeds on Base, the same ones the app reads, and the numbers match the app's in that currency.
+`currency` is `USD` or one of the 11 others in `MAIN_CURRENCY_CODES`: CAD, EUR, GBP, CHF, AUD, NZD, SGD, MXN, BRL, TRY and ZAR. Rates come from Chainlink's feeds on Base, the same ones the app reads, and convert the same way.
 
 - **Each amount converts at the rate when it happened,** and what's held at the current rate. So a gain in CAD is proceeds in CAD minus cost in CAD, and includes what the exchange rate did in between. `pnlMicros`, `points`, `holdComparison` and each position's numbers are all in `currency`.
 - **Each leg keeps its USD.** `legs` are converted too, and a converted leg has its USD amounts and the rate it used in `conversion`. A position's `price.usdMicros` is what its price was before converting.
@@ -267,7 +269,8 @@ SQL stops at cost, because a cost depends on every earlier leg. To get cost and 
 - A swap paid out in unwrapped ETH is only confirmed by `getPortfolio`, and `getLegs` with an `rpcUrl`; elsewhere it stays unknown, as their TSDoc says. If you query `priced_legs` directly, don't take a `bought_token` of ETH on trust: an `unwrap` only says a contract unwrapped WETH, not that the sender got it.
 - ETH that reaches a wallet inside someone else's transaction, like a batched payout, has no row in `legs`. The same two find it from the balance and add an `unseen_eth` leg with an unknown cost (see `LegKind` and `creditUnseenEth` in [`src/legs.ts`](src/legs.ts)). ETH that leaves this way stays `incomplete`.
 - Only tokens on the allowlist in [`src/tokens.ts`](src/tokens.ts) get a position or a price.
-- A token's current price comes from its oracle read or feed, and its position shows a cost but no value without one. The app can also use recent trades (`market`), and the SDK doesn't read those yet.
+- A token's current price comes from its oracle read or feed, and its position shows a cost but no value without one.
+- The app reads three things the SDK doesn't yet, so the same wallet can show a price or cost in the app that's unknown here: prices from recent trades (`market`), costs written in notes, and the other side of a transfer, which lets a cost carry over from another wallet.
 - `getLegs` with `buildPortfolio` is only what moved in the range, so its numbers won't match `getPortfolio`'s. Read them as what those legs add up to, not as the wallet's PnL.
 
 The app's other limits are in [the known gaps](../../docs/NUMBERS.md#known-gaps).

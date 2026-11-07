@@ -1,5 +1,5 @@
-// How the fold said, before WORK-559, which lots a debit splits and whether answering could fix what it took: by going through
-// every lot. The fold now stops early when it can, so its steps are checked against this.
+// The plain way to say which lots a debit splits and whether answering could fix what it took: by going through
+// every lot. The fold stops early when it can, so its steps are checked against this.
 
 import { orderMatters, type FoldLeg, type Lot, type PositionState } from "@pricetag/sdk/core"
 

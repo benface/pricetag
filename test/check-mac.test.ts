@@ -131,15 +131,15 @@ describe("check:mac", { skip: process.platform !== "darwin" }, () => {
 
   const queueTestRuns = () => (existsSync(join(root, "pnpm-calls")) ? readFileSync(join(root, "pnpm-calls"), "utf8").trim().split("\n") : [])
 
-  test("a full run does the queue's own tests, and a run that skips or only tests doesn't", () => {
+  test("a full run does the queue's own tests and install.sh's, and a run that skips or only tests doesn't", () => {
     check()
-    assert.deepEqual(queueTestRuns(), ["pnpm --silent check:swift-queue"])
+    assert.deepEqual(queueTestRuns(), ["pnpm --silent check:swift-queue", "pnpm --silent check:mac-install"])
     check()
-    assert.equal(queueTestRuns().length, 1)
-    check(["--quick"])
-    assert.equal(queueTestRuns().length, 1)
-    check(["--force"])
     assert.equal(queueTestRuns().length, 2)
+    check(["--quick"])
+    assert.equal(queueTestRuns().length, 2)
+    check(["--force"])
+    assert.equal(queueTestRuns().length, 4)
   })
 
   test("the queue's own tests failing builds nothing, and forgets an earlier pass", () => {

@@ -5,7 +5,7 @@
 // Writes dataset/cautious-eth.json with --fork: the fork, with one pricing rule changed. FORK_OF names what it forks, which has
 // to be registered where AMP_ADMIN_URL points.
 //
-//   FORK_OF=benface/pricetag@0.1.0 AMP_ADMIN_URL=... node dataset/build.ts --fork [start block]
+//   FORK_OF=benface/pricetag@0.3.0 AMP_ADMIN_URL=... node dataset/build.ts --fork [start block]
 //
 // Writes dataset/rates.json with --rates: exchange rates, as their own small dataset, so adding a currency doesn't replace the one
 // the app's prices come from. The start block is the Pricetag dataset's, and it reaches back from there.
@@ -21,8 +21,8 @@
 //
 //   FORK_OF=benface/pricetag@0.3.0 AMP_ADMIN_URL=... node dataset/build.ts --tokens [start block]
 //
-// It needs an Amp with edgeandnode/base_mainnet@0.0.2 registered, and only reads from it. What a table can look like
-// comes from WORK-319: every table needs its own top-level `block_num()` filter, at most one join, explicit columns,
+// It needs an Amp with edgeandnode/base_mainnet@0.0.2 registered, and only reads from it. What a table can look like:
+// every table needs its own top-level `block_num()` filter, at most one join, explicit columns,
 // and UDFs that never return null or throw, because one bad row stops the whole dataset.
 
 import { readFileSync, writeFileSync } from "node:fs"
@@ -553,7 +553,7 @@ function tokenFunctions() {
 
 /**
  * Bloom filters on `account`, so a wallet's read skips files it isn't in: 3 of 60 row groups left instead of 17 of 53, and a
- * cold read about twice as fast (WORK-493). An `ndv` is about how many accounts a file holds. Amp marks this as experimental.
+ * cold read about twice as fast. An `ndv` is about how many accounts a file holds. Amp marks this as experimental.
  */
 const ACCOUNT_BLOOM: Record<string, number> = { legs: 200_000, unlisted_legs: 200_000, priced_legs: 20_000 }
 /** A wallet asks about a few tokens, and a file holds thousands of them. */
@@ -591,7 +591,7 @@ async function build() {
   const args = process.argv.slice(2)
   if (args[0] === "--fork") {
     const forkOf = process.env.FORK_OF
-    if (!forkOf) throw new Error("Set FORK_OF to the dataset this forks, like benface/pricetag@0.1.0")
+    if (!forkOf) throw new Error("Set FORK_OF to the dataset this forks, like benface/pricetag@0.3.0")
     const start = Number(args[1] ?? startOf(CAUTIOUS_MANIFEST))
     const { pt_price } = functions()
     const pt_cautious = { inputTypes: ["Utf8"], outputType: "Utf8", source: { source: ptCautiousSource(), filename: "pt_cautious.js" } }

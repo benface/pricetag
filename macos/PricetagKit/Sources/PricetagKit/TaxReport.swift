@@ -100,6 +100,13 @@ public struct TaxReport: Codable, Sendable, Equatable {
         public let scope: TaxScope
     }
 
+    /// The same rows in the shape of the country's own form, like Form 8949 or Schedule 3.
+    public struct Form: Codable, Sendable, Equatable {
+        public let name: String
+        public let filename: String
+        public let csv: String
+    }
+
     public let wallets: [String]
     public let country: TaxCountry
     public let method: CostMethod
@@ -131,6 +138,7 @@ public struct TaxReport: Codable, Sendable, Equatable {
     public let preview: [TaxPreviewRow]
     public let filename: String
     public let csv: String
+    public let form: Form?
 
     /// The total, marked when any row in it rests on an estimate. nil when it's unknown.
     public var gainText: String? {

@@ -339,7 +339,7 @@ describe("the UDFs match the app", () => {
     })
   }
 
-  it("WORK-319's hand-checked swap still comes to $2,420.50", () => {
+  it("a hand-checked swap still comes to $2,420.50", () => {
     assert.deepEqual(ptPrice(...cases[0]!), { token: "WETH", usd_micros: "2420502736", source: "swap" })
   })
 

@@ -1,5 +1,5 @@
 #!/bin/sh
-# `pnpm check:mac`: the queue's own tests, then the Swift tests, the app's debug and Release builds, and the shared packages' builds for iOS, as one turn in the Swift queue.
+# `pnpm check:mac`: the queue's own tests and install.sh's, then the Swift tests, the app's debug and Release builds, and the shared packages' builds for iOS, as one turn in the Swift queue.
 # It runs nothing if this exact code already passed on this Mac with these tools, unless it's given --force.
 # `pnpm check:mac:quick` (--quick) is only the tests, always run, for while you're working. It never counts as a pass. See TESTING.md.
 # A pass is only remembered once the queue has verified that the whole turn is over, and any run that fails forgets one for its code.
@@ -88,6 +88,12 @@ if [ -z "${SWIFT_QUEUE_TURN:-}" ]; then
   # Before its turn, because they use a queue of their own and compile nothing, so nobody has to wait behind them.
   (cd "$repo" && pnpm --silent check:swift-queue) || {
     say "The queue's own tests didn't pass, so nothing was built. See above, or run pnpm check:swift-queue."
+    forget
+    exit 1
+  }
+  # The same goes for install.sh's, which stub the build.
+  (cd "$repo" && pnpm --silent check:mac-install) || {
+    say "install.sh's tests didn't pass, so nothing was built. See above, or run pnpm check:mac-install."
     forget
     exit 1
   }

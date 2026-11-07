@@ -86,6 +86,15 @@ Without that, the app says it can't hold a key, and everything else works.
 It reads balances from `https://mainnet.base.org` directly, set at the bottom of Spending Money's page, so sweeps don't depend on the server.
 Debug builds have their own wallet.
 
+## Keeping it running
+
+`pnpm mac` stops the server when you press Ctrl-C, and a restart stops both.
+`pnpm mac:install` builds the same app, puts it in `~/Applications`, and has launchd run this folder's server at every login, and again if it stops.
+Then **Settings > General > Open at login** brings the app back too.
+Run it from the repo's own folder, not a worktree, and again after pulling, since the server runs the code in the folder.
+Its log is `~/Library/Logs/Patina/server.log`, and `pnpm mac:install --uninstall` stops it for good.
+`pnpm mac` still works alongside it: it quits the installed copy and reads the same server.
+
 ## Using it on websites
 
 `extension/` is a Chromium extension that lets websites use this Mac's spending money, like any browser wallet.

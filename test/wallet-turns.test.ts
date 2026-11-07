@@ -82,3 +82,18 @@ describe("a wallet's turns", () => {
     assert.equal(await a, "mine")
   })
 })
+
+describe("wallets nobody's reading", () => {
+  it("leave nothing behind, however many were read", async () => {
+    const inTurn = walletTurns()
+    const mine = open<number>()
+    const other = open<number>()
+    const reads = [inTurn(ME, mine.read), inTurn(ME, async () => 2), inTurn(OTHER, other.read).catch(() => {})]
+    assert.equal(inTurn.waiting(), 2, "one for each wallet, however many reads it has")
+    mine.finish(1)
+    other.fail(new Error("failed"))
+    await Promise.all(reads)
+    await nextTask()
+    assert.equal(inTurn.waiting(), 0, "after a read that worked and one that failed")
+  })
+})

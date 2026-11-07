@@ -44,6 +44,8 @@ export type FoldLeg = {
   orderUnknown?: "always" | "fifo"
   blockNum?: number
   timestamp?: string
+  /** What the wallet already held before the first block read. It isn't a transaction, so its moment isn't when any of it was acquired. */
+  opening?: boolean
 }
 
 /** Part of a cost, how many units it paid for, and the block it was paid at. */
@@ -68,6 +70,12 @@ export type CostPiece = {
   unconfirmedBy?: string[]
   acquiredBlock?: number
   acquiredAt?: string
+  /**
+   * `acquiredAt` is only when it reached a wallet, and nothing says when it was acquired: an opening balance, or something that
+   * arrived from elsewhere. It still goes by that moment among the rest. It stays whatever becomes of its cost, since a cost
+   * answer says nothing about when it was acquired.
+   */
+  undated?: true
   /** What an average mixed together, paid at different moments. Missing means all of it at `acquiredBlock`. */
   paidAt?: PaidAt[]
   /** Its cost is only known for all of it, so part of it has no known cost, and neither does the rest. */
@@ -101,6 +109,8 @@ export type Lot = {
   /** When these units were first acquired, which an inherited lot keeps from the wallet that sent it. */
   acquiredBlock?: number
   acquiredAt?: string
+  /** `acquiredAt` is only when it reached a wallet, and nothing says when it was acquired, whether or not its cost is known. */
+  undated?: true
   /** When a position tracks it: what this lot mixes together. Missing means all of it at `acquiredBlock`. */
   paidAt?: PaidAt[]
   /**
@@ -158,10 +168,10 @@ export const tallyOf = ({ lots: _, ...tally }: PositionState): PositionTally => 
 
 /**
  * What a debit took that had a known cost, and where that cost came from, whatever each lot is labeled. Decimal strings, like the
- * rest of a state. `purchaseSource` is the last exchange named among the known lots held before, the way the tax report has always
- * named it, and only when part of what was taken came from an exchange.
+ * rest of a state. `purchaseSources` names who says what was paid for the lots it took with a known cost, each once, in the order
+ * it took them. An average's pool keeps the first it was told.
  */
-export type KnownTaken = { qty: string; costMicros: string; estimatedMicros: string; givenMicros: string; reportedQty: string; purchasedQty: string; purchaseSource: string | null }
+export type KnownTaken = { qty: string; costMicros: string; estimatedMicros: string; givenMicros: string; reportedQty: string; purchasedQty: string; purchaseSources: string[] }
 
 export function emptyPosition(method: Method, decimals: number, tracksPaidAt = false): PositionState {
   return {
@@ -188,7 +198,7 @@ export function worth(qty: bigint, unitMicros: bigint, decimals: number): bigint
   return (qty * unitMicros) / 10n ** BigInt(decimals)
 }
 
-/** Only what's there, so a lot with neither looks the way it always has. */
+/** Only what's there, so a lot with neither carries neither field, and stays as small as a plain lot. */
 const costSource = (reported: boolean | undefined, given: bigint): Pick<CostPiece, "reported" | "givenCostMicros"> => ({
   ...(reported ? { reported: true } : {}),
   ...(given > 0n ? { givenCostMicros: given.toString() } : {}),
@@ -237,13 +247,13 @@ function mergedPaidAt(a: Lot, b: Lot): PaidAt[] | null {
   return [...byBlock].map(([blockNum, { cost, qty }]) => ({ costMicros: cost.toString(), qty: qty.toString(), blockNum }))
 }
 
-/** Only what's there, so a lot with none looks the way it always has. */
+/** Only what's there, so a lot with none carries no field. */
 const unconfirmed = (...wallets: readonly (readonly string[] | undefined)[]): Pick<CostPiece, "unconfirmedBy"> => {
   const all = [...new Set(wallets.flatMap((list) => list ?? []))]
   return all.length > 0 ? { unconfirmedBy: all } : {}
 }
 
-/** What says where this goes among the rest, which stays true whatever becomes of its cost. Only what's there, so a lot with none looks the way it always has. */
+/** What says where this goes among the rest, which stays true whatever becomes of its cost. Only what's there, so a lot with none carries no field. */
 export const ranking = ({ wholeCostOnly, boughtAt, boughtIn }: Pick<CostPiece, "wholeCostOnly" | "boughtAt" | "boughtIn">): Pick<CostPiece, "wholeCostOnly" | "boughtAt" | "boughtIn"> => ({
   ...(wholeCostOnly ? { wholeCostOnly } : {}),
   ...(boughtAt ? { boughtAt } : {}),
@@ -263,6 +273,7 @@ function lotOf({ tracksPaidAt }: PositionState, piece: CostPiece, legId: string)
     ...(known && piece.purchaseSource ? { purchaseSource: piece.purchaseSource, ...(piece.purchasePartly ? { purchasePartly: true as const } : {}) } : {}),
     ...unconfirmed(known ? [] : piece.unconfirmedBy),
     ...(piece.acquiredBlock === undefined ? {} : { acquiredBlock: piece.acquiredBlock, acquiredAt: piece.acquiredAt as string }),
+    ...(piece.undated ? { undated: true as const } : {}),
     // Otherwise every leg's state would keep a copy of it, and the leg already has it for whoever needs it.
     ...(tracksPaidAt && known && piece.paidAt ? { paidAt: piece.paidAt } : {}),
     ...ranking(piece),
@@ -272,12 +283,12 @@ function lotOf({ tracksPaidAt }: PositionState, piece: CostPiece, legId: string)
 
 const estimatedOf = (lot: Lot) => BigInt(lot.estimatedCostMicros ?? "0")
 
-/** What a position's lots add up to. Only a known cost's estimate counts, the way `valuePosition` has always counted it. */
+/** What a position's lots add up to. Only a known cost's estimate counts, as in `valuePosition`. */
 type LotSums = { qty: bigint; unknownCostQty: bigint; cost: bigint; estimatedCost: bigint }
 
 /**
- * Each lots array's sums, carried from one step to the next, so oldest first doesn't add up every lot it holds at every step
- * (WORK-559). Whatever adds to a lots array in place records its new sums too, so a sum can't go stale, and state stays plain JSON.
+ * Each lots array's sums, carried from one step to the next, so oldest first doesn't add up every lot it holds at every step.
+ * Whatever adds to a lots array in place records its new sums too, so a sum can't go stale, and state stays plain JSON.
  */
 const lotSums = new WeakMap<readonly Lot[], LotSums>()
 
@@ -402,6 +413,7 @@ function addLot({ method, tracksPaidAt }: PositionState, lots: Lot[], lot: Lot):
     ...(pool.purchaseSource || lot.purchaseSource ? { purchaseSource: (pool.purchaseSource ?? lot.purchaseSource) as string, ...(pool.purchaseSource !== lot.purchaseSource || pool.purchasePartly || lot.purchasePartly ? { purchasePartly: true as const } : {}) } : {}),
     ...unconfirmed(pool.unconfirmedBy, lot.unconfirmedBy),
     ...(acquired.acquiredBlock === undefined ? {} : { acquiredBlock: acquired.acquiredBlock, acquiredAt: acquired.acquiredAt as string }),
+    ...(acquired.undated ? { undated: true as const } : {}),
     ...(paidAt ? { paidAt } : {}),
     ...(pool.unanswerable && lot.unanswerable ? { unanswerable: true as const } : {}),
   }
@@ -425,10 +437,16 @@ function arrivals(state: PositionState, leg: FoldLeg, qty: bigint): Lot[] {
   const dated = leg.blockNum === undefined ? {} : { acquiredBlock: leg.blockNum, acquiredAt: leg.timestamp as string }
   // No cost, but what says where its pieces go among the rest is still true.
   const parts: readonly (Pick<CostPiece, "qty" | "wholeCostOnly" | "boughtAt" | "boughtIn">)[] = leg.pieces ?? [{ qty: qty.toString() }]
-  if (orderMatters(leg, state.method)) return parts.map((piece) => lotOf(state, { qty: piece.qty, costMicros: null, label: "unknown", estimatedCostMicros: "0", unanswerable: true, ...dated, ...ranking(piece) }, leg.id))
+  // A piece with its own date got it from the wallet that first acquired it. Any other reached a wallet here and now, which is
+  // when it was acquired if it was bought here, paid for on its way in, or received as itself. Anything else arrived from
+  // somewhere that knows when it was acquired, or was already held, so its moment here says when it arrived, not more. That's
+  // so whatever its cost, which says nothing about when it was acquired.
+  const undated = (label: CostLabel, boughtAt: string | undefined) => !boughtAt && (leg.opening || !(leg.kind === "swap" || label === "paid" || label === "received at market"))
+  const arrivedOnly = (label: CostLabel, boughtAt: string | undefined) => (leg.blockNum !== undefined && undated(label, boughtAt) ? { undated: true as const } : {})
+  if (orderMatters(leg, state.method)) return parts.map((piece) => lotOf(state, { qty: piece.qty, costMicros: null, label: "unknown", estimatedCostMicros: "0", unanswerable: true, ...dated, ...arrivedOnly(leg.costLabel, piece.boughtAt), ...ranking(piece) }, leg.id))
   const estimated = (leg.estimated || leg.costLabel === "received at market") && leg.costMicros !== null ? leg.costMicros : "0"
-  // A piece with its own date got it from the wallet that first acquired it. Any other was acquired here and now.
-  const pieces = leg.pieces?.map((piece) => ({ ...dated, ...piece })) ?? [{ qty: qty.toString(), costMicros: leg.costMicros, label: leg.costLabel, estimatedCostMicros: estimated, ...(leg.purchaseSource ? { purchaseSource: leg.purchaseSource } : {}), ...dated }]
+  const own = (piece: CostPiece): CostPiece => ({ ...dated, ...piece, ...(piece.acquiredBlock === undefined ? arrivedOnly(piece.label, piece.boughtAt) : {}) })
+  const pieces = leg.pieces?.map(own) ?? [own({ qty: qty.toString(), costMicros: leg.costMicros, label: leg.costLabel, estimatedCostMicros: estimated, ...(leg.purchaseSource ? { purchaseSource: leg.purchaseSource } : {}) })]
   return pieces.map((piece) => lotOf(state, piece, leg.id))
 }
 
@@ -442,6 +460,8 @@ type Taken = {
   givenCost: bigint
   reportedQty: bigint
   purchasedQty: bigint
+  /** Who says what was paid for what it took with a known cost, each once, in the order it took them. */
+  purchaseSources: string[]
   unknownQty: bigint
   shortfall: bigint
   /** What lost its cost by being taken from, which `lotsSplitBy` says. */
@@ -562,7 +582,7 @@ export function costCanBeAnswered(leg: Pick<FoldLeg, "delta" | "pieces" | "order
 }
 
 /** This lot with no cost anyone can rely on, which is where it stays among the rest. No answer brings that back. */
-const withoutCost = ({ qty, legId, unconfirmedBy, acquiredBlock, acquiredAt, ...rest }: Lot): Lot => ({ qty, costMicros: null, label: "unknown", legId, ...unconfirmed(unconfirmedBy), ...(acquiredBlock === undefined ? {} : { acquiredBlock, acquiredAt: acquiredAt as string }), ...ranking(rest), unanswerable: true })
+const withoutCost = ({ qty, legId, unconfirmedBy, acquiredBlock, acquiredAt, undated, ...rest }: Lot): Lot => ({ qty, costMicros: null, label: "unknown", legId, ...unconfirmed(unconfirmedBy), ...(acquiredBlock === undefined ? {} : { acquiredBlock, acquiredAt: acquiredAt as string }), ...(undated ? { undated } : {}), ...ranking(rest), unanswerable: true })
 
 /** FIFO takes the oldest lots first. Average takes from the known and unknown pools in proportion. */
 function take(state: PositionState, qty: bigint): Taken {
@@ -570,7 +590,7 @@ function take(state: PositionState, qty: bigint): Taken {
   const held = before.qty
   const taking = qty < held ? qty : held
   const split = new Set(lotsSplitBy(state, taking))
-  const result: Taken = { lots: [], pieces: [], knownQty: 0n, knownCost: 0n, estimatedCost: 0n, givenCost: 0n, reportedQty: 0n, purchasedQty: 0n, unknownQty: 0n, shortfall: qty - taking, split }
+  const result: Taken = { lots: [], pieces: [], knownQty: 0n, knownCost: 0n, estimatedCost: 0n, givenCost: 0n, reportedQty: 0n, purchasedQty: 0n, purchaseSources: [], unknownQty: 0n, shortfall: qty - taking, split }
   // What's left adds up to what was held, less what lost its cost and what was taken.
   const sums = { ...before }
 
@@ -606,7 +626,10 @@ function take(state: PositionState, qty: bigint): Taken {
       result.estimatedCost += estimated
       result.givenCost += given
       if (lot.reported) result.reportedQty += n
-      if (lot.purchaseSource) result.purchasedQty += n
+      if (lot.purchaseSource) {
+        result.purchasedQty += n
+        if (!result.purchaseSources.includes(lot.purchaseSource)) result.purchaseSources.push(lot.purchaseSource)
+      }
     }
     result.pieces.push({
       qty: n.toString(),
@@ -617,6 +640,7 @@ function take(state: PositionState, qty: bigint): Taken {
       ...(lot.costMicros !== null && lot.purchaseSource ? { purchaseSource: lot.purchaseSource, ...(lot.purchasePartly ? { purchasePartly: true as const } : {}) } : {}),
       ...unconfirmed(lot.unconfirmedBy),
       ...(lot.acquiredBlock === undefined ? {} : { acquiredBlock: lot.acquiredBlock, acquiredAt: lot.acquiredAt as string }),
+      ...(lot.undated ? { undated: true as const } : {}),
       ...(paidAt ? { paidAt } : {}),
       ...ranking(lot),
       ...(lot.unanswerable ? { unanswerable: true as const } : {}),
@@ -633,13 +657,14 @@ function take(state: PositionState, qty: bigint): Taken {
 function withoutCosts(taken: Taken): Taken {
   return {
     ...taken,
-    pieces: taken.pieces.map(({ qty, unconfirmedBy, acquiredBlock, acquiredAt, ...rest }) => ({ qty, costMicros: null, label: "unknown", estimatedCostMicros: "0", ...unconfirmed(unconfirmedBy), ...(acquiredBlock === undefined ? {} : { acquiredBlock, acquiredAt: acquiredAt as string }), ...ranking(rest), unanswerable: true })),
+    pieces: taken.pieces.map(({ qty, unconfirmedBy, acquiredBlock, acquiredAt, undated, ...rest }) => ({ qty, costMicros: null, label: "unknown", estimatedCostMicros: "0", ...unconfirmed(unconfirmedBy), ...(acquiredBlock === undefined ? {} : { acquiredBlock, acquiredAt: acquiredAt as string }), ...(undated ? { undated } : {}), ...ranking(rest), unanswerable: true })),
     knownQty: 0n,
     knownCost: 0n,
     estimatedCost: 0n,
     givenCost: 0n,
     reportedQty: 0n,
     purchasedQty: 0n,
+    purchaseSources: [],
     unknownQty: taken.unknownQty + taken.knownQty,
   }
 }
@@ -700,7 +725,7 @@ export function applyLegTaking(given: PositionState, leg: FoldLeg): LegApplied {
   const qty = -delta
   const orderless = orderMatters(leg, state.method)
   const taken = orderless ? withoutCosts(take(state, qty)) : take(state, qty)
-  const applied = (next: PositionState): LegApplied => ({ state: made(next), taken: taken.pieces, known: knownTaken(state, taken), split: taken.split })
+  const applied = (next: PositionState): LegApplied => ({ state: made(next), taken: taken.pieces, known: knownTaken(taken), split: taken.split })
   const next: PositionState = {
     ...state,
     lots: orderless ? lotsWithoutCosts(state, taken.lots) : taken.lots,
@@ -741,14 +766,7 @@ export function applyLegTaking(given: PositionState, leg: FoldLeg): LegApplied {
   return applied(next)
 }
 
-function knownTaken(state: PositionState, taken: Taken): KnownTaken {
-  let purchaseSource: string | null = null
-  if (taken.purchasedQty > 0n) {
-    for (let i = state.lots.length - 1; i >= 0 && purchaseSource === null; i--) {
-      const lot = state.lots[i] as Lot
-      if (lot.costMicros !== null && lot.purchaseSource && !taken.split.has(lot)) purchaseSource = lot.purchaseSource
-    }
-  }
+function knownTaken(taken: Taken): KnownTaken {
   return {
     qty: taken.knownQty.toString(),
     costMicros: taken.knownCost.toString(),
@@ -756,7 +774,7 @@ function knownTaken(state: PositionState, taken: Taken): KnownTaken {
     givenMicros: taken.givenCost.toString(),
     reportedQty: taken.reportedQty.toString(),
     purchasedQty: taken.purchasedQty.toString(),
-    purchaseSource,
+    purchaseSources: taken.purchaseSources,
   }
 }
 
