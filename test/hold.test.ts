@@ -268,7 +268,7 @@ describe("comparing a wallet with holding ETH", () => {
       it("can't say how much of an exchange was in the ETH when it also gave up a token nothing here can see", () => {
         const txHash = "0xfeed2"
         const txIndex = nextTx++
-        const legs = [deposit("USDC", 1000, 1000, 100), leg("USDC", -1000n * E6, 150, { kind: "swap", txHash, txIndex, priceNote: PRICE_NOTES.unlisted }), leg("AERO", 2000n * E18, 150, { kind: "swap", txHash, txIndex, priceNote: PRICE_NOTES.unlisted }), leg("AERO", -2000n * E18, 200, { priceMicros: usd(1), priceSource: "oracle" })]
+        const legs = [deposit("USDC", 1000, 1000, 100), leg("USDC", -1000n * E6, 150, { kind: "swap", txHash, txIndex, priceNote: PRICE_NOTES.unlisted, alsoMovedUnlisted: true }), leg("AERO", 2000n * E18, 150, { kind: "swap", txHash, txIndex, priceNote: PRICE_NOTES.unlisted, alsoMovedUnlisted: true }), leg("AERO", -2000n * E18, 200, { priceMicros: usd(1), priceSource: "oracle" })]
         assert.equal(compare(legs, prices(4000, { AERO: 1 })).unavailable, "left with no known share")
       })
     })

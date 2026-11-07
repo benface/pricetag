@@ -17,6 +17,15 @@
 //   and in the 30 days after, which `tax-matching.ts` does. That guidance also sets the tax year, 6 April to 5 April, and says
 //   to report in pounds sterling.
 //
+// Which other methods each country allows, from the same sources:
+// - Canada, none: s. 47(1) averages identical properties whatever order they're sold in, so only Oldest first is offered on top,
+//   with a warning, for someone comparing.
+// - US, newest first and highest cost first: 1.1012-1(j)(2) lets you identify which units you sell from your own wallet ((j)(3)
+//   is for units a broker holds), if your books and records name them no later than the date and time of the sale, by any
+//   identifier such as purchase date or price. A rule like these, recorded before selling, names them that way. That they count as a standing rule is our reading,
+//   and an accountant should confirm it. Choosing units after the fact, which a report would be doing, doesn't count. IRS digital
+//   asset FAQs Q82 says the same goes for units you transfer, so the rule has to cover sending and spending too, not only selling.
+//
 // What something received from someone else costs, which decides whether its market price is a cost or an estimate:
 // - Canada, the market price is the cost: Income Tax Act s. 69(1)(c) deems a gift acquired at fair market value, and
 //   s. 52(1) adds what was included in income to the cost of what was received.
@@ -27,13 +36,18 @@
 // That only goes for what the user said came from someone else. A bridge or a mint could be their own money arriving from
 // elsewhere, and CRA's crypto guide doesn't count moving between your own wallets as a disposition, so that keeps what they
 // first paid, which we can't see. Those stay estimates in every country, and the report says why.
+//
+// What was received that may be income, listed apart from the sales: Canada's Income Tax Act s. 52(1) and IRS digital asset
+// FAQs Q59 both value what you're paid at its fair market value when you receive it, and neither treats a gift as the
+// receiver's income. We can't tell pay from a gift, or from the user's own money, so these are only ever "possibly income".
 
-import { assertFoldFits, foldPositions, formatDuration, isAddress, markUnknownOrder, msBetweenBlocks, normalizeAddress, orderMatters, shortHash, timestampOfBlock, unreadAssets, viewWallet, worth, type CostPiece, type CurrencyCode, type KnownTaken, type LegEffect, type Method, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
+import { assertFoldFits, foldPositions, formatDuration, isAddress, keepsLots, markUnknownOrder, msBetweenBlocks, normalizeAddress, orderMatters, shortHash, timestampOfBlock, unreadAssets, viewWallet, worth, type CostPiece, type CurrencyCode, type KnownTaken, type LegEffect, type Method, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type TaxReportResponse, type WalletResponse } from "./api.ts"
 import { emptyBook, linkedWallets, type Book } from "./book.ts"
 import { csvCell, microsCell, unitsCell } from "./csv.ts"
 import { rateSource } from "./explain.ts"
-import { resolveLegs, withheldIn } from "./resolve.ts"
+import { resolveLegs, withheldIn, type Received } from "./resolve.ts"
+import { knownSender } from "./senders.ts"
 import { taxFormOf } from "./tax-forms.ts"
 import { UK_TIME_ZONE, dayNumber, localDate, matchUk, startOfDate } from "./tax-matching.ts"
 import { METHOD_LABELS, withheldSentence } from "./wording.ts"
@@ -48,10 +62,12 @@ export type TaxCountry = {
   /** Its name in a sentence. */
   inSentence: string
   method: Method
+  /** What the report offers here, default first. Anything else isn't allowed here, so it isn't offered, and the server refuses it. */
+  methods: readonly Method[]
   scope: TaxScope
   currency: CurrencyCode
   /** Said when the method is overridden, because the file may then not be what this country's rules call for. */
-  methodWarning: string
+  methodWarnings: Partial<Record<Method, string>>
   scopeWarning: string
   /** Whether a market price from when something arrived from someone else is its real cost here, rather than an estimate of it. */
   marketIsCost: boolean
@@ -78,9 +94,10 @@ export const TAX_COUNTRIES: Record<TaxCountryCode, TaxCountry> = {
     name: "Canada",
     inSentence: "Canada",
     method: "average",
+    methods: ["average", "fifo"],
     scope: "pooled",
     currency: "CAD",
-    methodWarning: "Canada's rules average the cost of identical property, so Oldest first may not be accepted.",
+    methodWarnings: { fifo: "Canada's rules average the cost of identical property, so Oldest first may not be accepted." },
     scopeWarning: "Canada's rules average what you own wherever it's held, so calculating each wallet on its own may not be accepted.",
     marketIsCost: true,
     marketRowNote: "Part of its cost is what it was worth when it arrived, which is generally the cost of what you're paid or given in Canada.",
@@ -99,9 +116,10 @@ export const TAX_COUNTRIES: Record<TaxCountryCode, TaxCountry> = {
     name: "United Kingdom",
     inSentence: "the UK",
     method: "average",
+    methods: ["average", "fifo"],
     scope: "pooled",
     currency: "GBP",
-    methodWarning: "UK rules match each sale to what was bought the same day or in the 30 days after, and average the cost of the rest, so Oldest first may not be accepted.",
+    methodWarnings: { fifo: "UK rules match each sale to what was bought the same day or in the 30 days after, and average the cost of the rest, so Oldest first may not be accepted." },
     scopeWarning: "UK rules average the cost of each kind of token you own, wherever it's held, so calculating each wallet on its own may not be accepted.",
     marketIsCost: false,
     marketRowNote: "If it was pay you paid Income Tax on, that price is generally its cost. A gift's cost depends on who gave it.",
@@ -124,16 +142,21 @@ export const TAX_COUNTRIES: Record<TaxCountryCode, TaxCountry> = {
     name: "United States",
     inSentence: "the US",
     method: "fifo",
+    methods: ["fifo", "lifo", "hifo", "average"],
     scope: "per-wallet",
     currency: "USD",
-    methodWarning: "US rules use oldest first in each wallet unless you identify specific units, so Average may not be accepted.",
+    methodWarnings: {
+      average: "US rules use oldest first in each wallet unless you identify specific units, so Average may not be accepted.",
+      lifo: "US rules only allow Newest first if your own records said you'd use it before each time you sold, spent or sent any. If they didn't, Oldest first is what applies.",
+      hifo: "US rules only allow Highest cost first if your own records said you'd use it before each time you sold, spent or sent any. If they didn't, Oldest first is what applies.",
+    },
     scopeWarning: "US rules have tracked cost wallet by wallet since January 1, 2025, so calculating all wallets together may not be accepted.",
     marketIsCost: false,
     marketRowNote: "If it was pay, that price is its cost. If it was a gift, its cost is generally the giver's.",
     marketWarning: "In the US, that's the cost of what you're paid, but a gift generally keeps the giver's cost.",
     notes: [
-      "The Form 8949 file gives the date each sold unit was acquired, and splits short-term from long-term gains, which only works with Oldest first.",
-      "Choosing specific units to sell isn't available yet.",
+      "The Form 8949 file gives the date each sold unit was acquired, and splits short-term from long-term gains, which works with every method but Average.",
+      "Choosing specific units for each sale isn't available yet.",
       "The wash sale rule in section 1091 of the tax code covers stock and securities, and this report doesn't check for it. Ask an accountant whether it applies to crypto in your year.",
     ],
     yearStart: "01-01",
@@ -149,6 +172,14 @@ export function isTaxCountryCode(value: string | null | undefined): value is Tax
   return TAX_COUNTRY_CODES.includes(value as TaxCountryCode)
 }
 
+/** Whether the report offers this method for this country, which is only what its rules can allow. */
+export function isTaxMethod(country: TaxCountryCode, value: string | null | undefined): value is Method {
+  return TAX_COUNTRIES[country].methods.includes(value as Method)
+}
+
+/** How a method reads in a file name. */
+const METHOD_SLUGS: Record<Method, string> = { average: "average", fifo: "oldest-first", lifo: "newest-first", hifo: "highest-cost-first" }
+
 export const SCOPE_LABELS: Record<TaxScope, string> = { pooled: "All wallets together", "per-wallet": "Each wallet on its own" }
 
 export const TAX_DISCLAIMER = "Not tax advice. Rules differ by country and change over time, so check this with an accountant before relying on it."
@@ -156,7 +187,7 @@ export const TAX_DISCLAIMER = "Not tax advice. Rules differ by country and chang
 const COMMON_NOTES = [
   "Network fees are their own rows, because paying one in ETH counts as selling that ETH. They aren't added to what you bought or taken off what you sold, which an accountant may want to adjust.",
   "The gain total adds up every row it knows. Realized in the app leaves out a whole asset when any of its sales is unknown, so the two can differ.",
-  "What you received isn't listed. Some of it, like pay or rewards, may be income when it arrives.",
+  "What arrived from other addresses is listed after the sales, as Received, with what it was worth when it arrived. Pay and rewards are generally income at that value, but gifts generally aren't, and neither is your own money moved from somewhere else, so check each one. Moves between the wallets in this report, what you bought, what came off your exchange accounts, and what came through a bridge or was newly created aren't listed.",
   "What arrives from a bridge or is newly created counts at its market price when it arrived, as an estimate. If it was your own, moved from elsewhere, its cost is what you first paid.",
 ]
 
@@ -197,6 +228,26 @@ export type TaxRow = {
 /** Part of what a sale took, with its cost and when it was acquired, or null when nothing says. */
 export type Acquired = { qty: string; costMicros: string; at: string | null }
 
+/** Something that arrived from another address, which may be income, like pay or rewards, or may not, like a gift. */
+export type ReceivedRow = {
+  blockNum: number
+  txIndex: number
+  timestamp: string
+  asset: string
+  /** In the token's smallest unit. */
+  amount: string
+  decimals: number
+  /** What it was worth when it arrived. null is unknown, which is never 0. */
+  valueMicros: string | null
+  priceSource: PriceSource | null
+  from: string
+  /** given: the user said it came from someone else. unanswered: nobody has said who sent it. */
+  why: Received["why"]
+  reason: string
+  wallet: string
+  txHash: string
+}
+
 /** superficial: bought again within 30 days and still held after them. maybe: bought again, but the 30 days after aren't all read yet. */
 export type LossRule = "superficial" | "maybe-superficial"
 
@@ -219,11 +270,11 @@ const DIFFERENT_STARTS = "These wallets' histories start at different blocks, so
  * The pieces of known cost a debit took, oldest first, with each one's date: an exchange's purchase date when there is one,
  * since that's when it was bought, and otherwise when it reached a wallet, which an inherited piece keeps from the wallet
  * that sent it. When it reached a wallet is only its date if it was acquired then. An opening balance, or something that
- * arrived with a cost someone entered and no purchase date, has none, which the fold marks as `undated`. Only oldest first
- * keeps pieces apart, and only when they add up to the cost the row shows.
+ * arrived with a cost someone entered and no purchase date, has none, which the fold marks as `undated`. Every method but
+ * average keeps pieces apart, and only when they add up to the cost the row shows they're its pieces.
  */
 function acquiredOf({ before, taken }: LegEffect, knownCost: bigint, knownQty: bigint): Acquired[] | null {
-  if (before.method !== "fifo" || knownQty <= 0n || taken === null) return null
+  if (!keepsLots(before.method) || knownQty <= 0n || taken === null) return null
   const known = taken.filter((piece) => piece.costMicros !== null)
   const sum = (field: "qty" | "costMicros") => known.reduce((total, piece) => total + BigInt(piece[field] as string), 0n)
   if (sum("costMicros") !== knownCost || sum("qty") !== knownQty) return null
@@ -292,7 +343,7 @@ function rowsOf(effect: LegEffect, wallet: string, unconfirmed: string | null, c
   return rows
 }
 
-type Source = { wallet: WalletResponse; view: WalletView; unconfirmed: Map<string, string>; unread: string[] }
+type Source = { wallet: WalletResponse; view: WalletView; unconfirmed: Map<string, string>; unread: string[]; received?: Received[] }
 
 /** What the chain can't back up in a wallet. Balances only depend on amounts, so this doesn't need the answers. */
 function checksOf(wallet: WalletResponse, view: WalletView, method: Method): Pick<Source, "unconfirmed" | "unread"> {
@@ -321,8 +372,11 @@ function sourcesOf(wallets: readonly WalletResponse[], method: Method, { book = 
   const histories = sides.map(({ wallet }) => ({ address: normalizeAddress(wallet.address), legs: wallet.legs }))
   for (const history of histories.slice(0, wallets.length)) assertFoldFits(history, histories.filter((other) => other !== history), method)
   // Matching needs to know when what an exchange withdrew was bought, and what each purchase cost, not only its average.
-  const { legs } = resolveLegs(sides, method, linking, { datedLots: method === "average" && country?.matchesAcquisitions === true })
-  return sides.slice(0, wallets.length).map((side) => ({ ...side, view: { ...side.view, legs: legs.get(normalizeAddress(side.wallet.address)) as PricedLeg[] } }))
+  const { legs, received } = resolveLegs(sides, method, linking, { datedLots: method === "average" && country?.matchesAcquisitions === true })
+  return sides.slice(0, wallets.length).map((side) => {
+    const address = normalizeAddress(side.wallet.address)
+    return { ...side, view: { ...side.view, legs: legs.get(address) as PricedLeg[] }, received: received.filter((item) => item.wallet === address) }
+  })
 }
 
 const moveKey = (leg: PricedLeg) => `${leg.txHash}:${leg.asset}`
@@ -561,6 +615,50 @@ function rowsFrom(sources: readonly Source[], method: Method, scope: TaxScope, c
   return rows.sort((a, b) => a.blockNum - b.blockNum || a.txIndex - b.txIndex || feeFirst(a) - feeFirst(b))
 }
 
+const NO_VALUE = "There's no price for it from when it arrived, so what it was worth isn't known."
+
+/** Why something received is listed, which is never because it's certainly income. */
+function receivedReason({ sender, why, costEntered }: Received, valued: boolean): string {
+  const known = knownSender(sender)
+  const from = `From ${sender}${known ? ` (${known.name})` : ""}.`
+  const income = "If it was pay or a reward, it's generally income at what it was worth when it arrived."
+  const notes =
+    why === "given"
+      ? [from, "You said it came from someone else.", income, "A gift generally isn't."]
+      : known?.kind === "reward"
+        ? [from, `${known.name} pays rewards, and also returns deposits, and nobody has said which this was.`, income]
+        : known?.kind === "exchange"
+          ? [from, `If it came from your own ${known.name} account, it isn't income, so say so in the app to take it off this list.`, income]
+          : [from, "Nobody has said who sent it. If it was your own, from another wallet or an exchange account, it isn't income, so say so in the app to take it off this list.", income]
+  return [...notes, ...(costEntered ? ["You entered what it cost, so if you bought it, it isn't income."] : []), ...(valued ? [] : [NO_VALUE])].join(" ")
+}
+
+/** What arrived from other addresses that may be income, oldest first. */
+function receivedRowsOf(sources: readonly Source[]): ReceivedRow[] {
+  const rows = sources.flatMap(({ wallet, received = [] }) =>
+    received.map((item): ReceivedRow => {
+      const { leg } = item
+      const valueMicros = leg.priceMicros === null ? null : worth(item.units, BigInt(leg.priceMicros), leg.decimals).toString()
+      return {
+        blockNum: leg.blockNum,
+        txIndex: leg.txIndex,
+        timestamp: leg.timestamp,
+        asset: leg.asset,
+        amount: item.units.toString(),
+        decimals: leg.decimals,
+        valueMicros,
+        priceSource: valueMicros === null ? null : leg.priceSource,
+        from: item.sender,
+        why: item.why,
+        reason: receivedReason(item, valueMicros !== null),
+        wallet: wallet.address,
+        txHash: leg.txHash,
+      }
+    }),
+  )
+  return rows.sort((a, b) => a.blockNum - b.blockNum || a.txIndex - b.txIndex)
+}
+
 /** Every row, oldest first, with a transaction's fee before what it did, the way the fold reads them. */
 export function taxRows(wallets: readonly WalletResponse[], { method, scope, country }: Pick<TaxSettings, "method" | "scope"> & { country?: TaxCountryCode }, context: TaxContext = {}): TaxRow[] {
   const rules = country ? TAX_COUNTRIES[country] : null
@@ -617,10 +715,13 @@ const money = (micros: string | null) => (micros === null ? "unknown" : microsCe
 
 const STATUS_LABELS: Record<TaxRowStatus, string> = { resolved: "OK", estimated: "ESTIMATED", "self-reported": "SELF-REPORTED", unresolved: "UNKNOWN GAIN" }
 
-const CSV_HEADER = ["Date (UTC)", "Type", "Asset", "Amount", "Proceeds", "Cost", "Gain", "Currency", "Method", "Calculation", "Price source", "Status", "Notes", "Wallet", "Transaction"]
+const CSV_HEADER = ["Date (UTC)", "Type", "Asset", "Amount", "Proceeds", "Cost", "Gain", "Value when received", "Currency", "Method", "Calculation", "Price source", "Status", "Notes", "Wallet", "Transaction"]
 
-/** Notes are rows too, right under the header where they'll be seen, and every row has every column, so the file still parses. */
-export function taxCsv(rows: readonly TaxRow[], notes: readonly string[], { method, scope, currency, methodLabel = METHOD_LABELS[method] }: Pick<TaxSettings, "method" | "scope"> & { currency: CurrencyCode; methodLabel?: string }): string {
+/**
+ * Notes are rows too, right under the header where they'll be seen, and every row has every column, so the file still parses.
+ * What was received comes after the sales, fees and sends, since it isn't one of them and has no gain.
+ */
+export function taxCsv(rows: readonly TaxRow[], notes: readonly string[], { method, scope, currency, methodLabel = METHOD_LABELS[method] }: Pick<TaxSettings, "method" | "scope"> & { currency: CurrencyCode; methodLabel?: string }, received: readonly ReceivedRow[] = []): string {
   const noteRow = (note: string) => CSV_HEADER.map((column) => (column === "Type" ? "Note" : column === "Notes" ? note : ""))
   const eventRow = (row: TaxRow) => [
     row.timestamp.slice(0, 19).replace("T", " "),
@@ -630,6 +731,7 @@ export function taxCsv(rows: readonly TaxRow[], notes: readonly string[], { meth
     money(row.proceedsMicros),
     money(row.costMicros),
     money(row.gainMicros),
+    "",
     currency,
     methodLabel,
     SCOPE_LABELS[scope],
@@ -639,7 +741,25 @@ export function taxCsv(rows: readonly TaxRow[], notes: readonly string[], { meth
     row.wallet,
     `https://basescan.org/tx/${row.txHash}`,
   ]
-  return `${[CSV_HEADER, ...notes.map(noteRow), ...rows.map(eventRow)].map((cells) => cells.map(csvCell).join(",")).join("\r\n")}\r\n`
+  const receivedRow = (row: ReceivedRow) => [
+    row.timestamp.slice(0, 19).replace("T", " "),
+    "Received",
+    row.asset,
+    unitsCell(row.amount, row.decimals),
+    "",
+    "",
+    "",
+    money(row.valueMicros),
+    currency,
+    "",
+    "",
+    row.priceSource === null ? "None" : PRICE_SOURCE_LABELS[row.priceSource],
+    "POSSIBLY INCOME",
+    row.reason,
+    row.wallet,
+    `https://basescan.org/tx/${row.txHash}`,
+  ]
+  return `${[CSV_HEADER, ...notes.map(noteRow), ...rows.map(eventRow), ...received.map(receivedRow)].map((cells) => cells.map(csvCell).join(",")).join("\r\n")}\r\n`
 }
 
 /**
@@ -658,6 +778,7 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
   const allRows = rowsFrom(sources, method, scope, country)
   if (code === "CA") flagSuperficialLosses(allRows, sources, context.book)
   const rows = year === null ? allRows : allRows.filter((row) => taxYearOf(row.timestamp, country) === year)
+  const received = receivedRowsOf(sources).filter((row) => year === null || taxYearOf(row.timestamp, country) === year)
   const partialYear = year === null ? null : partialYearNote(year, historyStart(wallets), country)
   const count = (status: TaxRowStatus) => rows.filter((row) => row.status === status).length
   const unresolved = count("unresolved")
@@ -683,9 +804,11 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
   if (given > 0) warnings.push(`${plural(given, "row")} of ${rows.length.toLocaleString("en-US")} ${given === 1 ? "uses" : "use"} a market price from when something you said came from someone else arrived. ${country.marketWarning}`)
   if (superficial > 0) warnings.push(`${plural(superficial, "loss", "losses")} may be superficial, because more of the same asset was acquired within 30 days. A superficial loss can't be deducted, so check ${superficial === 1 ? "it" : "them"} before filing.`)
   if (tentative > 0) warnings.push(`${plural(tentative, "sale or fee", "sales or fees")} happened less than 30 days before the end of what's been read, so ${tentative === 1 ? "its" : "their"} cost may still change with what's bought next.`)
+  if (received.length > 0) warnings.push(`${plural(received.length, "thing")} you received from other addresses may be income, like pay or rewards. The full report lists ${received.length === 1 ? "it" : "them"} as Received, with what ${received.length === 1 ? "it was" : "each was"} worth when ${received.length === 1 ? "it" : "they"} arrived, so check ${received.length === 1 ? "it" : "each one"}.`)
   for (const { wallet, asset } of withheldIn(sources.flatMap(({ view }) => view.legs))) warnings.push(withheldSentence(wallet, asset))
   for (const source of sources) warnings.push(...walletWarnings(source, named))
-  if (method !== country.method) warnings.push(country.methodWarning)
+  const methodWarning = method === country.method ? undefined : country.methodWarnings[method]
+  if (methodWarning) warnings.push(methodWarning)
   if (scope !== country.scope) warnings.push(country.scopeWarning)
   if (!TAX_COUNTRY_CODES.some((other) => TAX_COUNTRIES[other].currency === currency)) warnings.unshift(`This report only knows the rules of ${listOf(TAX_COUNTRY_CODES.map((other) => TAX_COUNTRIES[other].inSentence))}, and none of them reports in ${currency}. If you report in ${currency}, these rules and this layout may not apply where you do.`)
   else if (currency !== country.currency) warnings.push(`This is in ${currency}, and ${country.inSentence} reports in ${country.currency}. Change your main currency to export it in ${country.currency}.`)
@@ -704,7 +827,7 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
     ...COMMON_NOTES,
     ...country.notes,
   ]
-  const filename = `tax-report-${first.address.slice(0, 8)}-${year === null ? "" : `${yearLabel(year, country).replace(/ to \d\d/, "-")}-`}${code}-${method === "fifo" ? "oldest-first" : "average"}-${currency}.csv`
+  const filename = `tax-report-${first.address.slice(0, 8)}-${year === null ? "" : `${yearLabel(year, country).replace(/ to \d\d/, "-")}-`}${code}-${METHOD_SLUGS[method]}-${currency}.csv`
   const methodLabel = methodLabelOf(method, country)
   const summary = `Prepared for ${country.inSentence}${year === null ? "" : `, ${yearLabel(year, country)}`}: ${methodLabel.toLowerCase()}, ${SCOPE_LABELS[scope].toLowerCase()}, in ${currency}.`
 
@@ -724,6 +847,7 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
     soldCount: events.filter((event) => event.type === "Sold").length,
     feeCount: events.filter((event) => event.type === "Network fee").length,
     sentCount: events.filter((event) => event.type === "Sent").length,
+    receivedCount: received.length,
     unknownCount: events.filter((event) => event.unknown).length,
     unknownWallets: wallets.map((wallet) => wallet.address.toLowerCase()).filter((address) => unknownIn.has(address)),
     unresolvedCount: unresolved,
@@ -735,7 +859,7 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
     notes,
     preview: rows.slice(0, PREVIEW_ROWS).map(({ timestamp, type, asset, amount, decimals, gainMicros, status }) => ({ timestamp, type, asset, amount, decimals, gainMicros, status })),
     filename,
-    csv: taxCsv(rows, [TAX_DISCLAIMER, summary, ...warnings, ...notes], { method, scope, currency, methodLabel }),
+    csv: taxCsv(rows, [TAX_DISCLAIMER, summary, ...warnings, ...notes], { method, scope, currency, methodLabel }, received),
     form: taxFormOf(code, rows, [TAX_DISCLAIMER, summary, ...warnings], filename),
   }
 }

@@ -3,7 +3,7 @@ import { formatSignedMoney, shortHash, type CurrencyCode, type Method } from "@p
 import type { TaxReportResponse } from "../core/api.ts"
 import { failureOf, jsonPost, readResponse, type ReadFailure } from "../core/read-failure.ts"
 import type { Book } from "../core/book.ts"
-import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, readOtherWallets, savedOtherWallets, type TaxCountryCode, type TaxScope, type TaxYear } from "../core/tax.ts"
+import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, isTaxMethod, readOtherWallets, savedOtherWallets, type TaxCountryCode, type TaxScope, type TaxYear } from "../core/tax.ts"
 import { METHOD_LABELS, METHOD_NAME, answerQuestionsLabel, est, panelProblem } from "../core/wording.ts"
 import { ProblemNotice } from "./ProblemNotice.tsx"
 import { downloadCsv } from "./download.ts"
@@ -21,10 +21,7 @@ function readCountry(currency: CurrencyCode): TaxCountryCode {
   return TAX_COUNTRY_CODES.find((code) => TAX_COUNTRIES[code].currency === currency) ?? "US"
 }
 
-const readMethod = (): Method | null => {
-  const value = localStorage.getItem(METHOD_KEY)
-  return value === "average" || value === "fifo" ? value : null
-}
+const readMethod = (): string | null => localStorage.getItem(METHOD_KEY)
 
 const readScope = (): TaxScope | null => {
   const value = localStorage.getItem(SCOPE_KEY)
@@ -83,7 +80,7 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
   const close = useRef<HTMLButtonElement>(null)
   const [country, setCountry] = useState(() => readCountry(currency))
   // Nothing chosen means whatever the country calls for. Choosing another country goes back to that.
-  const [chosenMethod, setChosenMethod] = useState<Method | null>(readMethod)
+  const [chosenMethod, setChosenMethod] = useState<string | null>(readMethod)
   const [chosenScope, setChosenScope] = useState<TaxScope | null>(readScope)
   const [years, setYears] = useState<{ year: number; label: string }[]>([])
   const [othersText, setOthersText] = useState(readOthers)
@@ -93,7 +90,8 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
   const [loading, setLoading] = useState(true)
 
   const rules = TAX_COUNTRIES[country]
-  const method = chosenMethod ?? rules.method
+  // One the country doesn't allow, like one remembered from another, goes back to what it calls for.
+  const method = isTaxMethod(country, chosenMethod) ? chosenMethod : rules.method
   const scope = chosenScope ?? rules.scope
   const { others, bad: badOther } = useMemo(() => readOtherWallets(othersText, address), [othersText, address])
   const isDemo = address === "demo"
@@ -196,7 +194,7 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
               remember(COUNTRY_KEY, country)
               chooseMethod(e.target.value === rules.method ? null : (e.target.value as Method))
             }}>
-            {(["average", "fifo"] as const).map((m) => (
+            {rules.methods.map((m) => (
               <option key={m} value={m}>
                 {METHOD_LABELS[m]}
                 {defaultTag(m === rules.method)}
@@ -265,6 +263,12 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
                 <div>
                   <dt className="small muted">Sent to other addresses</dt>
                   <dd>{report.sentCount.toLocaleString("en-US")}</dd>
+                </div>
+              ) : null}
+              {report.receivedCount > 0 ? (
+                <div>
+                  <dt className="small muted">Received, may be income</dt>
+                  <dd>{report.receivedCount.toLocaleString("en-US")}</dd>
                 </div>
               ) : null}
               <div>

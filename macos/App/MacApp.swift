@@ -69,6 +69,10 @@ struct MacApp: App {
         TypingHistory.shared.start()
         // So an order still going when this last quit gets its cost.
         let purchases = PurchaseTracker(store: store)
+        // A one-use key is kept until its purchase's order says nothing more is coming. What changed while this was closed is caught up first.
+        // One that can't be written down now is still in memory, and the tracker still has it for next time.
+        for purchase in purchases.purchases { try? hotWallet.purchaseChanged(purchase, wallet: purchase.wallet) }
+        purchases.onChange = { [hotWallet] in try hotWallet.purchaseChanged($1, wallet: $0) }
         purchases.start()
         _purchases = State(initialValue: purchases)
         let notifications = MoneyNotifications(center: Self.postsNotifications ? .current() : nil)

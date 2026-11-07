@@ -15,14 +15,20 @@ public enum Mode: String, Codable, Sendable {
     }
 }
 
+/// See `Method` in `packages/sdk/src/fold.ts`. Newest first and highest cost first are only for a tax report where they're allowed.
 public enum CostMethod: String, Codable, Sendable, CaseIterable, Identifiable {
-    case average, fifo
+    case average, fifo, lifo, hifo
+
+    /// What the portfolio offers. The others only reward picking what to sell, so they stay in the tax report.
+    public static let portfolio: [CostMethod] = [.average, .fifo]
 
     public var id: Self { self }
     public var label: String {
         switch self {
         case .average: "Average"
         case .fifo: "Oldest first"
+        case .lifo: "Newest first"
+        case .hifo: "Highest cost first"
         }
     }
 }

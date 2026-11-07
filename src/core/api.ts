@@ -204,6 +204,8 @@ export type TaxReportResponse = {
   soldCount: number
   feeCount: number
   sentCount: number
+  /** What arrived from other addresses that may be income, which the file lists after the sales. Not in `rowCount`. */
+  receivedCount: number
   /** Of those, how many have an unknown gain, in whole or in part. `unresolvedCount` counts the file's rows instead. */
   unknownCount: number
   /** The wallets with something unknown, in the order of `wallets`, so a client can open the right one's questions. */

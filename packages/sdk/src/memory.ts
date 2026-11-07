@@ -20,7 +20,7 @@ export class WalletsBusyError extends Error {
   }
 }
 
-/** What one row costs at the peak of reading and folding it. Measured on staging's busiest wallets through `/api/portfolio` (WORK-570). */
+/** What one row costs at the peak of reading and folding it. Measured on staging's busiest wallets through `/api/portfolio`. */
 const BYTES_PER_ROW = 10_000
 /** What the heap limit counts that rows can't use: the young generation, and the server before it's read anything. */
 const HEAP_FOR_THE_REST = 200_000_000
@@ -38,7 +38,7 @@ export type RowHolder = { heldRows(): number; evictOldest(): boolean }
 
 /**
  * First reads loading at once when nothing else is being read. A wallet holds its rows while its next query waits its turn, so
- * these add up: 14 wallets of 11,000 to 28,000 rows ran a 512 MB heap out, before any had started folding (WORK-570). Loaded rows
+ * these add up: 14 wallets of 11,000 to 28,000 rows ran a 512 MB heap out, before any had started folding. Loaded rows
  * cost about a fifth of what they do at the peak, and a third of the budget for each leaves room for that on top of what's kept.
  */
 const LOADS_AT_ONCE = 3

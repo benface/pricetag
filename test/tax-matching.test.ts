@@ -99,7 +99,7 @@ describe("the UK's matching rules", () => {
     assert.deepEqual(costs(uk([wallet])), [[200, 100]])
     assert.deepEqual(costs(taxRows([wallet], { method: "fifo", scope: "pooled", country: "GB" })), [[100, 200]])
     const report = taxReportOf([wallet], { country: "GB", method: "fifo", scope: "pooled" })
-    assert.ok(report.warnings.includes(TAX_COUNTRIES.GB.methodWarning))
+    assert.ok(report.warnings.includes(TAX_COUNTRIES.GB.methodWarnings.fifo as string))
   })
 
   it("matches a network fee like a sale, since paying one is a disposal", () => {

@@ -1,9 +1,11 @@
 import HotWalletKit
+import KeyVault
 import PricetagKit
 import SwiftUI
 
-/// Picks what to buy and sends it to the provider's page, which takes the payment. It all lands in spending money, and what's above the cap
-/// sweeps to savings, or stays there until there's a savings wallet. This never signs anything.
+/// Picks what to buy and sends it to the provider's page, which takes the payment. What fits lands in spending money. More than that, with
+/// a savings wallet, lands at a new address made for this purchase alone, and all of it moves on to savings. Without one, it lands in
+/// Spending Money and stays there, above the cap, until there's a savings wallet. This never signs anything.
 struct BuySheet: View {
     let wallet: HotWallet
     let purchases: PurchaseTracker
@@ -47,7 +49,7 @@ struct BuySheet: View {
     private var token: Token { asset == .eth ? Base.eth : Base.tokens.first { $0.symbol == asset.rawValue } ?? Base.eth }
 
     private var plan: BuyPlan {
-        BuyPlan(usdMicros: usdMicros, token: token, priceUsdMicros: asset == .eth ? wallet.snapshot?.ethUsdMicros : wallet.snapshot?.usdcUsdMicros, holdings: wallet.holdings, capUsdMicros: wallet.settings.capUsdMicros, roomUsdMicros: wallet.topUpRoom, fees: wallet.snapshot?.fees, destination: wallet.settings.sweepDestination)
+        BuyPlan(usdMicros: usdMicros, token: token, priceUsdMicros: asset == .eth ? wallet.snapshot?.ethUsdMicros : wallet.snapshot?.usdcUsdMicros, holdings: wallet.holdings, capUsdMicros: wallet.settings.capUsdMicros, roomUsdMicros: wallet.topUpRoom, fees: wallet.snapshot?.fees, destination: wallet.settings.sweepDestination, throughOneUseKey: wallet.buysThroughOneUseKey(usdMicros: usdMicros))
     }
 
     /// What the savings wallet is called, because that's what someone knows it by. Nil without one.
@@ -121,7 +123,11 @@ struct BuySheet: View {
             Text("\(PurchaseWording.provider)'s minimum is about \(display.whole(BuyPlan.minimumUsdMicros, rounding: .up)), depending on how you pay.")
                 .secondaryText()
         case .noGasToSweep:
-            Notice(.warning, HotWalletWording.buyNoGas(asset.rawValue, savings: savingsName))
+            if plan.isThroughOneUseKey, let savingsName {
+                Notice(.warning, HotWalletWording.buyNoGasThroughOneUseKey(asset.rawValue, savings: savingsName))
+            } else {
+                Notice(.warning, HotWalletWording.buyNoGas(asset.rawValue, savings: savingsName))
+            }
         case .notReadYet:
             Text("Reading this wallet…")
                 .secondaryText()
@@ -139,7 +145,8 @@ struct BuySheet: View {
     }
 
     private var whereItGoes: String {
-        HotWalletWording.buyLands(fits: plan.fits > 0 ? wallet.money(plan.fits) : nil, aboveCap: plan.aboveCap > 0 ? wallet.money(plan.aboveCap) : nil, savings: savingsName)
+        if plan.isThroughOneUseKey, let savingsName { return HotWalletWording.buyThroughOneUseKey(savings: savingsName) }
+        return HotWalletWording.buyLands(fits: plan.fits > 0 ? wallet.money(plan.fits) : nil, aboveCap: plan.aboveCap > 0 ? wallet.money(plan.aboveCap) : nil, savings: savingsName)
     }
 
     private var buttons: some View {
@@ -163,9 +170,22 @@ struct BuySheet: View {
     }
 
     private func start() async {
-        guard let address = wallet.address, let cryptoAmount else { return }
+        guard wallet.address != nil, let cryptoAmount else { return }
         isStarting = true
         defer { isStarting = false }
+        // Made now, and on disk, before its address goes to the provider. Only Spending Money's address ever goes otherwise.
+        let address: EthereumAddress
+        if plan.isThroughOneUseKey {
+            guard let key = await wallet.createOneUseKey() else {
+                failure = wallet.lastActionProblem ?? HotWalletWording.changedWhileWaiting
+                return
+            }
+            address = key
+        } else if let spending = wallet.address {
+            address = spending
+        } else {
+            return
+        }
         do {
             // What was typed goes to the page, so it starts at that number, and not at what a rate made of it.
             let typed = display.isConverted ? Money(micros: String(UInt128(chosen) * Money.dollar), currency: display.currency) : nil
@@ -173,6 +193,8 @@ struct BuySheet: View {
             openURL(page)
             started()
             dismiss()
+        } catch is RecordsNotSaved {
+            failure = HotWalletWording.cantSaveRecords
         } catch {
             failure = failureMessage(for: error)
         }

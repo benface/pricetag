@@ -2,8 +2,8 @@ import assert from "node:assert/strict"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { after, before, describe, it } from "node:test"
-import { ASSETS, ETH_ADDRESS, foldPositions, type LegPart, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
-import type { Source } from "@pricetag/sdk/internal"
+import { ASSETS, ETH_ADDRESS, USDC_ADDRESS, buildLegs, derivePricedRows, foldPositions, type LegPart, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
+import { createRates, type RoundReader, type Source } from "@pricetag/sdk/internal"
 import type { PortfolioResponse, TaxReportResponse, WalletResponse } from "../src/core/api.ts"
 import { costKey, emptyBook, parseBook, type Book } from "../src/core/book.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
@@ -98,7 +98,8 @@ const cellsOf = (report: TaxReportResponse) => {
   const [header, ...rows] = parseCsv(report.csv) as [string[], ...string[][]]
   return rows.map((row) => Object.fromEntries(header.map((name, i) => [name, row[i]])) as Record<string, string>)
 }
-const eventsOf = (report: TaxReportResponse) => cellsOf(report).filter((row) => row.Type !== "Note")
+/** The sales, fees and sends, without what was received, which only some tests are about. */
+const eventsOf = (report: TaxReportResponse) => cellsOf(report).filter((row) => row.Type !== "Note" && row.Type !== "Received")
 
 describe("taxRows", () => {
   const legs = [buy(10, 1n, 1000), buy(20, 1n, 3000), sell(30, 1n, 2500)]
@@ -356,7 +357,7 @@ describe("taxReportOf", () => {
     const report = taxReportOf([DEMO_WALLET], { country: "US", method: "fifo", scope: "per-wallet" })
     const rows = parseCsv(report.csv)
     assert.ok(rows.every((row) => row.length === rows[0]?.length))
-    assert.deepEqual(rows[0], ["Date (UTC)", "Type", "Asset", "Amount", "Proceeds", "Cost", "Gain", "Currency", "Method", "Calculation", "Price source", "Status", "Notes", "Wallet", "Transaction"])
+    assert.deepEqual(rows[0], ["Date (UTC)", "Type", "Asset", "Amount", "Proceeds", "Cost", "Gain", "Value when received", "Currency", "Method", "Calculation", "Price source", "Status", "Notes", "Wallet", "Transaction"])
     assert.match(cellsOf(report)[0]?.Notes ?? "", /^Not tax advice/)
     assert.equal(eventsOf(report).length, report.rowCount)
   })
@@ -393,10 +394,10 @@ describe("taxReportOf", () => {
     const quiet = taxReportOf([wallet], { country: "US", method: "fifo", scope: "per-wallet" })
     assert.deepEqual(quiet.warnings, [])
     const us = taxReportOf([wallet], { country: "US", method: "average", scope: "pooled" })
-    assert.ok(us.warnings.includes(TAX_COUNTRIES.US.methodWarning))
+    assert.ok(us.warnings.includes(TAX_COUNTRIES.US.methodWarnings.average as string))
     assert.ok(us.warnings.includes(TAX_COUNTRIES.US.scopeWarning))
     const ca = taxReportOf([cad({ rates: demoRates("CAD") })], { country: "CA", method: "fifo", scope: "per-wallet" })
-    assert.ok(ca.warnings.includes(TAX_COUNTRIES.CA.methodWarning))
+    assert.ok(ca.warnings.includes(TAX_COUNTRIES.CA.methodWarnings.fifo as string))
     assert.ok(ca.warnings.includes(TAX_COUNTRIES.CA.scopeWarning))
   })
 
@@ -616,6 +617,10 @@ describe("the user's answers in a report", () => {
       const rows = eventsOf(report)
       assert.deepEqual(rows.map((r) => [r.Amount, r.Cost, r.Gain, r.Status]), [["1", "unknown", "unknown", "UNKNOWN GAIN"]])
       assert.equal(report.gainMicros, foldBook(wallet, [], "fifo", bookOf(...TIED)).positions[0]?.values.realizedMicros)
+    })
+
+    it("never lists it as received, even when nothing says what it cost", () => {
+      for (const buys of [DATED, TIED]) for (const method of ["fifo", "average"] as const) assert.equal(taxReportOf([wallet], { ...US, method }, { book: bookOf(...buys) }).receivedCount, 0, method)
     })
 
     it("still has all of it at its known cost, if all of it's sold", () => {
@@ -840,6 +845,144 @@ describe("the user's answers in a report", () => {
       const [row] = eventsOf(taxReportOf([wallet], CA, { book: answering({ [SELLER]: { kind: "someone-else" } }) }))
       assert.deepEqual([row?.Cost, row?.Status], ["4000.000000", "ESTIMATED"])
       assert.match(row?.Notes ?? "", /worth when it arrived/, "and says the rest is what it was worth")
+    })
+  })
+
+  describe("what was received that may be income", () => {
+    const receivedOf = (report: TaxReportResponse) => cellsOf(report).filter((row) => row.Type === "Received")
+    const MERKL = "0x3ef3d8ba38ebe18db133cec108f4d14ce00dd9ae"
+
+    it("lists what nobody has answered for at what it was worth, after the sales, as possibly income", () => {
+      const report = taxReportOf([held([arrived(10, SELLER), sell(30, 1n, 2500)])], US)
+      assert.deepEqual(cellsOf(report).filter((row) => row.Type !== "Note").map((row) => row.Type), ["Sold", "Received"])
+      const [row] = receivedOf(report)
+      assert.deepEqual([row?.Amount, row?.["Value when received"], row?.Proceeds, row?.Cost, row?.Gain, row?.Status, row?.["Price source"]], ["1", "2000.000000", "", "", "", "POSSIBLY INCOME", "Market price feed (Chainlink)"])
+      assert.match(row?.Notes ?? "", new RegExp(`^From ${SELLER}\\. Nobody has said who sent it\\.`))
+      assert.equal(report.receivedCount, 1)
+      assert.equal(report.rowCount, 1, "it isn't a sale, fee or send")
+      assert.ok(report.warnings.some((warning) => /^1 thing you received .* may be income/.test(warning)))
+    })
+
+    it("lists what the user said came from someone else, and says a gift generally isn't income", () => {
+      for (const settings of [US, CA]) {
+        const [row] = receivedOf(taxReportOf([held([arrived(10, SELLER)])], settings, { book: answering({ [SELLER]: { kind: "someone-else" } }) }))
+        assert.equal(row?.["Value when received"], "2000.000000")
+        assert.match(row?.Notes ?? "", /You said it came from someone else\..*A gift generally isn't\./)
+      }
+    })
+
+    it("names a sender that pays rewards, and an exchange the user may have an account at", () => {
+      const fromMerkl = receivedOf(taxReportOf([held([arrived(10, MERKL)])], US))[0]
+      assert.match(fromMerkl?.Notes ?? "", /\(Merkl\)\. Merkl pays rewards/)
+      const fromCoinbase = receivedOf(taxReportOf([held([arrived(10, "0x71660c4005ba85c37ccec55d0c4493e66fe775d3")])], US))[0]
+      assert.match(fromCoinbase?.Notes ?? "", /If it came from your own Coinbase account, it isn't income/)
+    })
+
+    it("says unknown when there's no price, never 0", () => {
+      const [row] = receivedOf(taxReportOf([held([leg(10, E18, { kind: "transfer", priceMicros: null, priceSource: null, parts: [part(A, "credit", E18, SELLER)] })])], US))
+      assert.deepEqual([row?.["Value when received"], row?.["Price source"]], ["unknown", "None"])
+      assert.match(row?.Notes ?? "", /what it was worth isn't known/)
+    })
+
+    it("leaves out what the user's own wallets, exchange accounts, bridges and mints sent", () => {
+      const cases: [string, WalletResponse[], Book?][] = [
+        ["a wallet said to be theirs", [held([arrived(10, SELLER)])], answering({ [SELLER]: { kind: "mine" } })],
+        ["an exchange account", [held([arrived(10, SELLER)])], answering({ [SELLER]: { kind: "my-exchange" } })],
+        ["a bridge", [held([arrived(10, "0x4200000000000000000000000000000000000010")])]],
+        ["a mint", [held([arrived(10, `0x${"0".repeat(40)}`)])]],
+        ["another wallet in the report", [walletOf(A, [arrived(5, SELLER), sent(10, B)]), walletOf(B, [arrived(10, A, B)])], answering({ [SELLER]: { kind: "mine" } })],
+      ]
+      for (const [name, wallets, book] of cases) {
+        const report = taxReportOf(wallets, US, book ? { book } : {})
+        assert.deepEqual([receivedOf(report).length, report.receivedCount], [0, 0], name)
+      }
+    })
+
+    it("still lists what has a cost entered or noted, since what it cost doesn't say whether it was pay", () => {
+      const cases: [string, WalletResponse, Book?][] = [
+        ["a cost entered", held([arrived(10, SELLER)]), answering({}, { [costKey(A, arrived(10, SELLER).id)]: { micros: usd(1000), currency: "USD" } })],
+        ["a cost entered for what someone else sent", held([arrived(10, SELLER)]), answering({ [SELLER]: { kind: "someone-else" } }, { [costKey(A, arrived(10, SELLER).id)]: { micros: usd(1000), currency: "USD" } })],
+        ["a note", { ...held([arrived(10, SELLER)]), notes: [{ noteTx: hash(99), blockNum: 11, txHash: hash(10), asset: "ETH", usdMicros: usd(700) }] }],
+      ]
+      for (const [name, wallet, book] of cases) {
+        const [row] = receivedOf(taxReportOf([wallet], US, book ? { book } : {}))
+        assert.equal(row?.["Value when received"], "2000.000000", name)
+        assert.match(row?.Notes ?? "", /if you bought it, it isn't income/, name)
+      }
+    })
+
+    it("lists all of what each sender sent, even when something left in the same transaction", () => {
+      const netted = leg(10, E18, { kind: "transfer", parts: [part(A, "credit", 3n * E18, SELLER), part(A, "debit", 2n * E18, B)] })
+      const rows = receivedOf(taxReportOf([held([netted])], US))
+      assert.deepEqual(rows.map((row) => [row.Amount, row["Value when received"]]), [["3", "6000.000000"]])
+    })
+
+    /** A funded wallet that gets 3 USDC from someone else in block 10 and sends `sentBack` back in the same transaction, built from the chain's rows. */
+    const sentBackWallet = (sentBack: bigint) => {
+      const E6 = 1_000_000n
+      const row = (block: number, side: LegRow["side"], amount: bigint, counterparty: string): LegRow => ({ block_num: block, timestamp: new Date(Date.UTC(2026, 10, 4) + block * 2000).toISOString(), tx_hash: hash(block), tx_index: 0, log_index: side === "credit" ? 0 : 1, token: USDC_ADDRESS, account: A, side, amount: (amount * E6).toString(), kind: "erc20", counterparty })
+      const references = [5, 10].map((blockNum) => ({ blockNum, ethUsd: "200000000000", usdcUsd: "100000000" }))
+      const rows = [row(5, "credit", 10n, `0x${"f".repeat(40)}`), row(10, "credit", 3n, SELLER), row(10, "debit", sentBack, B)]
+      const { legs, netted } = buildLegs({ account: A, rows, references, priced: derivePricedRows(rows, references) })
+      return walletOf(A, legs, netted.length > 0 ? { netted } : {})
+    }
+
+    it("lists what someone sent even when as much or more left in the same transaction, from the chain's rows", () => {
+      for (const sentBack of [2n, 3n, 4n]) {
+        const wallet = sentBackWallet(sentBack)
+        for (const settings of [US, { ...US, method: "average" as const }]) {
+          const rowsOf = receivedOf(taxReportOf([wallet], settings)).filter((r) => r.Transaction?.endsWith(hash(10)))
+          assert.deepEqual(rowsOf.map((r) => [r.Amount, r["Value when received"]]), [["3", "3.000000"]], `sent back ${sentBack}, ${settings.method}`)
+        }
+      }
+    })
+
+    it("reads the exchange rate where what arrived netted to nothing, and a rate the feed doesn't have stays unknown", async () => {
+      const wallet = sentBackWallet(3n)
+      assert.ok(wallet.netted?.some((l) => l.blockNum === 10) && !wallet.legs.some((l) => l.blockNum === 10), "block 10 has no leg, only what netted")
+      // 0.80 USD for one CAD, at every block the feed is asked for, except the ones left out.
+      const readerWithout = (missing: number[]) => {
+        const asked: number[] = []
+        const read: RoundReader = async (_currency, blocks) => {
+          asked.push(...blocks)
+          return new Map(blocks.filter((block) => !missing.includes(block)).map((block) => [block, { answer: "80000000", updatedAt: Date.parse(leg(block, 0n).timestamp) / 1000 }]))
+        }
+        return { read, asked }
+      }
+      for (const method of ["fifo", "average"] as const) {
+        const settings = { country: "CA", method, scope: "pooled" } as const
+        const { read, asked } = readerWithout([])
+        const rates = await createRates(read)("CAD", wallet)
+        assert.ok(asked.includes(10), method)
+        const [row] = receivedOf(taxReportOf([{ ...wallet, currency: "CAD", rates }], settings)).filter((r) => r.Transaction?.endsWith(hash(10)))
+        assert.deepEqual([row?.Amount, row?.["Value when received"], row?.Currency], ["3", "3.750000", "CAD"], method)
+
+        const gap = readerWithout([10])
+        const without = await createRates(gap.read)("CAD", wallet)
+        const [unknown] = receivedOf(taxReportOf([{ ...wallet, currency: "CAD", rates: without }], settings)).filter((r) => r.Transaction?.endsWith(hash(10)))
+        assert.equal(unknown?.["Value when received"], "unknown", method)
+      }
+    })
+
+    it("lists what arrived even when nothing says where it goes among what's held", () => {
+      const uncertain = { ...arrived(10, SELLER), orderUnknown: "always" as const }
+      assert.equal(taxReportOf([held([uncertain])], US).receivedCount, 1)
+    })
+
+    it("only lists the year asked for", () => {
+      const late = leg(10, E18, { kind: "transfer", timestamp: "2027-01-02T00:00:00.000Z", parts: [part(A, "credit", E18, SELLER)] })
+      const wallet = walletOf(A, [arrived(5, SELLER), late], { latest: { blockNum: 1000, timestamp: "2027-02-01T00:00:00.000Z" } })
+      assert.equal(taxReportOf([wallet], { ...US, year: 2026 }).receivedCount, 1)
+      assert.equal(taxReportOf([wallet], { ...US, year: 2027 }).receivedCount, 1)
+      assert.equal(taxReportOf([wallet], US).receivedCount, 2)
+    })
+
+    it("isn't on Form 8949 or Schedule 3, which only list sales, and they say where it is", () => {
+      for (const settings of [US, CA]) {
+        const form = taxReportOf([held([arrived(10, SELLER), sell(30, 1n, 2500)])], settings).form
+        assert.ok(form && !form.csv.includes(SELLER))
+        assert.match(form?.csv ?? "", /What you received isn't a sale either, so it's only in the full report/)
+      }
     })
   })
 

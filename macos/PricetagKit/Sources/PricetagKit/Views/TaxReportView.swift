@@ -101,7 +101,7 @@ public struct TaxReportView: View {
                 ForEach(TaxCountry.allCases) { Text($0.name).tag($0) }
             }
             Picker(Wording.methodName, selection: Binding(get: { model.method }, set: { model.setMethod($0) })) {
-                ForEach(CostMethod.allCases) { Text($0.label + defaultTag($0 == model.country.defaultMethod)).tag($0) }
+                ForEach(model.country.methods) { Text($0.label + defaultTag($0 == model.country.defaultMethod)).tag($0) }
             }
             Picker("Wallets", selection: Binding(get: { model.scope }, set: { model.setScope($0) })) {
                 ForEach(TaxScope.allCases) { Text($0.label + defaultTag($0 == model.country.defaultScope)).tag($0) }
@@ -203,6 +203,9 @@ public struct TaxReportView: View {
             if report.sentCount > 0 {
                 countRow("Sent to other addresses", report.sentCount)
             }
+            if let received = report.receivedCount, received > 0 {
+                countRow("Received, may be income", received)
+            }
             LabeledContent("Total gain") {
                 if let gain = report.gainMicros, let text = report.gainText {
                     LiveNumber(text, tone: Tone(signed: gain))
@@ -289,8 +292,14 @@ public struct TaxReportView: View {
     private func previewSection(_ report: TaxReport) -> some View {
         Section {
             if report.preview.isEmpty {
-                Text(report.yearLabel.map { "Nothing to report in \($0)." } ?? "Nothing to report.")
-                    .secondaryText()
+                // What was received isn't in the preview, but it's still in the file.
+                if (report.receivedCount ?? 0) > 0 {
+                    Text(report.yearLabel.map { "No sales, fees or sends in \($0). The file lists what you received." } ?? "No sales, fees or sends. The file lists what you received.")
+                        .secondaryText()
+                } else {
+                    Text(report.yearLabel.map { "Nothing to report in \($0)." } ?? "Nothing to report.")
+                        .secondaryText()
+                }
             }
             ForEach(Array(report.preview.enumerated()), id: \.offset) { _, row in
                 previewRow(row, currency: report.currency)

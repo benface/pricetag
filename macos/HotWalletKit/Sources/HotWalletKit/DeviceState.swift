@@ -34,6 +34,10 @@ public struct SignedRecord: Codable, Equatable, Identifiable, Sendable {
         case note
         /// Approvals taken back. `to` is who could spend, `symbol` what they could spend, and nothing moved.
         case revoke
+        /// What a purchase brought to its one-use key, on its way to savings. See `OneUseKey`.
+        case purchase
+        /// ETH from Spending Money to a one-use key, for the fee to move a purchase that came without any.
+        case purchaseGas
     }
 
     public let hash: String
@@ -76,6 +80,8 @@ public struct StolenKeyAlarm: Codable, Equatable, Sendable {
         case nonceAhead(signed: UInt64, onchain: UInt64)
         /// Something else used a nonce this app signed for.
         case nonceTaken(nonce: UInt64, ours: String)
+        /// A key made for one purchase sent something this app didn't sign. Nothing but this Mac ever had that key.
+        case oneUseKeySpent(address: EthereumAddress)
 
         var isNonceCount: Bool {
             if case .nonceAhead = self { true } else { false }
@@ -100,6 +106,47 @@ public struct Rotation: Codable, Equatable, Sendable {
     }
 }
 
+/// A key made for one large purchase, so it arrives where no site has ever been approved and no old copy of a key can reach.
+/// What lands moves on to savings, and once the key's empty it's retired like a replaced one. Until then it stays in the vault,
+/// however long that takes, and whatever happens to Spending Money.
+public struct OneUseKey: Codable, Equatable, Sendable {
+    public let address: EthereumAddress
+    /// Savings when it was made, for when there's none set by the time it moves.
+    public let destination: EthereumAddress
+    public let createdAt: Date
+    /// Like `DeviceWalletState.settledThroughBlock`, for this key's own transactions.
+    public var settledThroughBlock: UInt64?
+    /// How many times Spending Money has sent it ETH for a fee. Capped, so nothing can drain Spending Money a little at a time.
+    public var gasSends: Int
+    /// What its purchase's order says. Nil in older records, which counts as `.expected`, so nothing's deleted on a guess.
+    public var delivery: Delivery?
+
+    /// Whether the purchase it was made for can still bring something. Only the order can say it can't, so an empty key, or one that's
+    /// sent something, still waits for that. Anything else could arrive at an address that has no key anymore.
+    public enum Delivery: Codable, Equatable, Sendable {
+        /// Made, and its address may not have reached the provider. Nobody's been shown a page to pay on, so it waits a while, then goes.
+        case notStarted
+        /// The provider has its address, and there's no order yet. Someone saying they didn't buy it takes this back to `notStarted`.
+        case expected
+        /// There's an order, and it hasn't said it's done. Only the order can let this go: hiding its row doesn't, since a delivery's
+        /// block can be unknown when it's hidden.
+        case ordered
+        /// Delivered in this block. Once a read reaches it, and the key's empty, there's nothing more coming.
+        case delivered(block: UInt64)
+        /// The order failed, so nothing's coming.
+        case failed
+    }
+
+    public init(address: EthereumAddress, destination: EthereumAddress, createdAt: Date, settledThroughBlock: UInt64? = nil, gasSends: Int = 0, delivery: Delivery? = .notStarted) {
+        self.address = address
+        self.destination = destination
+        self.createdAt = createdAt
+        self.settledThroughBlock = settledThroughBlock
+        self.gasSends = gasSends
+        self.delivery = delivery
+    }
+}
+
 /// What only this device can know. Unlike settings, this never syncs, because each device has its own key and history.
 public struct DeviceWalletState: Codable, Equatable, Sendable {
     public var active: EthereumAddress?
@@ -121,12 +168,17 @@ public struct DeviceWalletState: Codable, Equatable, Sendable {
     public var connectedSites: [String]?
     /// Permits each key signed for sites that may still be used. Optional because older records don't have it.
     public var signedPermits: [EthereumAddress: [SignedPermit]]?
+    /// One-use keys still in use. Optional because older records don't have it.
+    public var oneUseKeys: [OneUseKey]?
+    /// Every one-use key this device has made, the retired ones included, so their purchases stay findable. Optional because older records don't have it.
+    public var purchaseKeys: [EthereumAddress]?
 
     public init() {}
 }
 
 /// The real failure can name a local file, so nothing past here gets to repeat it.
-struct RecordsNotSaved: Error {}
+/// The device records couldn't be written. Public so the app can word it, since it's this Mac's problem and not the server's.
+public struct RecordsNotSaved: Error {}
 
 public protocol DeviceStateStore: Sendable {
     func load() throws -> DeviceWalletState
