@@ -67,7 +67,6 @@ public struct Estimates: Codable, Sendable, Equatable {
     public let unrealized: Bool
 }
 
-/// How a position's activity compares with what the chain says it holds, at the same block.
 /// ETH that arrived in a block with no transaction showing it, and the ones that took a token from this wallet there.
 public struct UnseenEth: Codable, Sendable, Equatable {
     public let blockNum: Int
@@ -75,6 +74,7 @@ public struct UnseenEth: Codable, Sendable, Equatable {
     public let txHashes: [String]
 }
 
+/// How a position's activity compares with what the chain says it holds, at the same block.
 public struct Reconciliation: Codable, Sendable, Equatable {
     public enum Status: String, Codable, Sendable {
         /// They match, to the smallest unit.
@@ -453,7 +453,6 @@ public struct Portfolio: Codable, Sendable, Equatable {
     public let withheld: [WithheldCost]
     /// What became of each purchase in the book, among the wallets read.
     public let purchases: [PurchaseMatch]?
-    public let marketChecked: Bool
     /// Every wallet in it and how far each one's read has got, when it's all of the user's wallets as one.
     public var wallets: [CombinedWallet]? = nil
     /// All Yours' wallets being read again, whose last read is what's in the numbers.
@@ -544,8 +543,6 @@ public struct ExplanationLeg: Codable, Sendable, Equatable, Identifiable {
     public let costSource: String?
     /// Its cost or proceeds rest on an estimate.
     public let estimated: Bool
-    /// Some of what arrived has a known cost and some doesn't.
-    public let partlyUnknown: Bool
     public let blockNum: Int
     public let timestamp: String
     public let txHash: String
@@ -571,7 +568,6 @@ public struct ExplanationLeg: Codable, Sendable, Equatable, Identifiable {
     public var date: Date? { parseTimestamp(timestamp) }
     /// What the wallet already held has no transaction behind it, and neither does ETH that arrived with none to name.
     public var hasTransaction: Bool { !opening && !txHash.isEmpty }
-    public var transactionURL: URL? { hasTransaction ? Basescan.transaction(txHash) : nil }
 }
 
 public struct Explanation: Codable, Sendable, Equatable {

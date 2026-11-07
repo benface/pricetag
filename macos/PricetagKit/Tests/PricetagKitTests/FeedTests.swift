@@ -890,12 +890,12 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         let portfolio = try partialPortfolio { removingPrice(of: "USDC", in: &$0) }
         #expect(!portfolio.largestHoldings(5).map(\.asset).contains("USDC"))
         #expect(portfolio.isValuePartial)
-        #expect(portfolio.partialValueReason == "USDC has no price right now.")
+        #expect(portfolio.partialValueReason == "The value leaves out USDC, which has no price right now.")
     }
 
     @Test func anUnreadBalanceIsntCalledAMissingPrice() throws {
         let portfolio = try partialPortfolio(valueCoverage: ["known": 7, "missing": 1]) { $0["unreadAssets"] = ["wstETH"] }
-        #expect(portfolio.partialValueReason == "Couldn't read the balance of wstETH.")
+        #expect(portfolio.partialValueReason == "The value leaves out wstETH, whose balance couldn't be read.")
     }
 
     @Test func anUncheckedBalanceSaysSoUnlessItsStillCurrent() throws {
@@ -904,15 +904,15 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
                 self.changing("AERO", in: &object) { $0["reconciliation"] = ["status": "unchecked", "heldIsCurrent": isCurrent] }
             }
         }
-        #expect(try unchecked(false).partialValueReason == "Couldn't check the balance of AERO.")
-        #expect(try unchecked(true).partialValueReason == "This value isn't complete.")
+        #expect(try unchecked(false).partialValueReason == "Couldn't check the balance of AERO, so its value is an estimate.")
+        #expect(try unchecked(true).partialValueReason == "The value isn't complete.")
     }
 
     @Test func incompleteHistorySaysSo() throws {
         let portfolio = try partialPortfolio { object in
             changing("AERO", in: &object) { $0["shortfallQty"] = "5" }
         }
-        #expect(portfolio.partialValueReason == "Incomplete history for AERO.")
+        #expect(portfolio.partialValueReason == "Incomplete history for AERO, so its numbers may not be all of it.")
     }
 
     @Test func aValueWithSeveralCausesNamesEach() throws {
@@ -924,11 +924,11 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         let reason = try #require(portfolio.partialValueReason)
         #expect(reason.contains("have no price right now."))
         #expect(reason.contains("USDC") && reason.contains("DAI"))
-        #expect(reason.contains("Couldn't read the balance of wstETH."))
+        #expect(reason.contains("The value leaves out wstETH, whose balance couldn't be read."))
     }
 
     @Test func noKnownCauseDoesntGuessOne() throws {
-        #expect(try partialPortfolio { _ in }.partialValueReason == "This value isn't complete.")
+        #expect(try partialPortfolio { _ in }.partialValueReason == "The value isn't complete.")
     }
 
     @Test func aWholeValueIsntPartial() throws {

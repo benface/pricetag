@@ -12,7 +12,7 @@ import Testing
         #expect(cells[1] == Format.amount(usdc.values.qty, decimals: usdc.decimals))
         #expect(cells[2] == usdc.price.map { Format.estimate(Format.price($0.micros, portfolio.currency), usdc.estimates.value) })
         // Unknown stays unknown, and never reads as $0 or 0%.
-        #expect(cells[4] == Wording.pnlUnavailable)
+        #expect(cells[4] == "Cost unknown")
         #expect(cells[5] == Wording.unknown)
     }
 

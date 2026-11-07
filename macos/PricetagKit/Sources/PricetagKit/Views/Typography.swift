@@ -5,8 +5,6 @@ import SwiftUI
 extension Font {
     /// The one number a page is about. The text styles stop at 26 points, which is too small to anchor a page.
     public static let displayLarge = display(40)
-    /// The one number on something smaller, like the popover.
-    public static let displayMedium = display(30)
     /// What sits beside a display number, and a big sentence in its place.
     public static let displaySmall = display(24)
     /// What a sheet is called.

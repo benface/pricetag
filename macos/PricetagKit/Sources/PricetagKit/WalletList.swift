@@ -188,9 +188,6 @@ public struct WalletList: Equatable, Sendable {
 
     public var all: [WalletEntry] { (allYours.map { [$0] } ?? []) + yours + watching + recent + (demo.map { [$0] } ?? []) }
 
-    /// What All Yours adds up: every wallet listed under Yours.
-    public var allYoursAddresses: [String] { yours.map(\.address) }
-
     /// What each wallet is called here, for saying which wallet something is in.
     public var names: [String: String] {
         Dictionary((yours + watching + recent).map { ($0.address, $0.title) }, uniquingKeysWith: { first, _ in first })

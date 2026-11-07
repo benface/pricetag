@@ -184,7 +184,7 @@ struct BuySheet: View {
             started()
             dismiss()
         } catch {
-            failure = PurchaseTracker.message(for: error)
+            failure = failureMessage(for: error)
         }
     }
 }

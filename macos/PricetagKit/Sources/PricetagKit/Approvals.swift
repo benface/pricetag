@@ -108,7 +108,7 @@ public final class ApprovalsModel {
         } catch is CancellationError {
             return
         } catch let error as FetchError {
-            failed(Self.message(error))
+            failed(failureMessage(for: error))
         } catch {
             failed("Couldn't read this wallet's approvals.")
         }
@@ -116,13 +116,5 @@ public final class ApprovalsModel {
 
     private func failed(_ message: String) {
         if approvals == nil { state = .failed(message) } else { refreshFailure = message }
-    }
-
-    static func message(_ error: FetchError) -> String {
-        switch error {
-        case .unreachable: "Can't reach the server."
-        case .timedOut: "The server took too long. Try again in a moment."
-        case .ampUnavailable(let message), .noAmpConfigured(let message), .rejected(let message), .tooBig(let message), .needsInvite(let message), .priceChanged(let message), .notCaughtUp(let message), .rateLimited(let message, _): message
-        }
     }
 }

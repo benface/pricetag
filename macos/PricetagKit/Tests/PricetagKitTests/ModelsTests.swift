@@ -61,7 +61,7 @@ import Testing
         #expect(explanation.title == "AERO: Realized PnL")
         let leg = try #require(explanation.legs.first)
         #expect(!leg.effect.isEmpty)
-        #expect(leg.transactionURL?.host() == "basescan.org")
+        #expect(leg.hasTransaction)
         #expect(leg.date != nil)
     }
 
@@ -131,7 +131,7 @@ import Testing
     {"id":"opening:DAI","asset":"DAI","delta":"5","decimals":18,"kind":"transfer","priceMicros":null,"priceSource":null,"priceNote":null,"costLabel":"unknown","estimated":false,"partlyUnknown":false,"blockNum":1,"timestamp":"2026-11-04T00:00:00.000Z","txHash":"","opening":true,"summary":"Already held 5 DAI when this history starts.","unknown":"What this cost isn't known yet.","answerable":true,"effect":"Adds 5 DAI","netting":null}
     """
     let leg = try JSONDecoder().decode(ExplanationLeg.self, from: Data(json.utf8))
-    #expect(leg.transactionURL == nil)
+    #expect(!leg.hasTransaction)
 }
 
 @Test func ethThatArrivedWithNoTransactionToNameHasNoLinkOrProof() throws {
@@ -141,7 +141,6 @@ import Testing
     let leg = try JSONDecoder().decode(ExplanationLeg.self, from: Data(json.utf8))
     #expect(leg.isIncoming)
     #expect(!leg.hasTransaction)
-    #expect(leg.transactionURL == nil)
 }
 
 /// The Mac app's screenshot scenes read these, and one the models can't decode stops every scene that uses it.
@@ -188,7 +187,7 @@ import Testing
         fails.withLock { $0 = true }
         await model.load()
         #expect(model.approvals == approvals)
-        #expect(model.refreshFailure == "Can't reach the server.")
+        #expect(model.refreshFailure == Wording.cantReachServer)
         fails.withLock { $0 = false }
         await model.load()
         #expect(model.refreshFailure == nil)

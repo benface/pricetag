@@ -71,11 +71,11 @@ public struct AddSavingsLink: Equatable, Identifiable, Sendable {
         parts.percentEncodedQuery = parts.percentEncodedQuery?.replacing("+", with: "%20")
         guard let items = parts.queryItems else { return nil }
         let value = { (name: String) in items.first { $0.name == name }?.value }
-        guard let address = value("address"), Self.isAddress(address) else { return nil }
+        guard let address = value("address"), WalletAddress.isValid(address) else { return nil }
         self.address = address
         name = String((value("name") ?? "").prefix(40))
         var seen = Set([address.lowercased()])
-        linked = Array((value("linked") ?? "").split(separator: ",").map(String.init).filter { Self.isAddress($0) && seen.insert($0.lowercased()).inserted }.prefix(Self.mostSuggestions))
+        linked = Array((value("linked") ?? "").split(separator: ",").map(String.init).filter { WalletAddress.isValid($0) && seen.insert($0.lowercased()).inserted }.prefix(Self.mostSuggestions))
     }
 
     /// What to link once someone's answered: only what they accepted, and only while they're adding the wallet the link named. Edit
@@ -87,10 +87,6 @@ public struct AddSavingsLink: Equatable, Identifiable, Sendable {
 
     /// More than anyone would have in use, and all of them have to fit on a sheet.
     private static let mostSuggestions = 8
-
-    private static func isAddress(_ text: String) -> Bool {
-        text.wholeMatch(of: /0x[0-9a-fA-F]{40}/) != nil
-    }
 }
 
 /// A browser on this Mac.

@@ -169,9 +169,9 @@ public final class PortfolioStore {
     public var asksForInvite: Bool { needsInvite && !isInviteDeclined }
     /// What the user has said about where things came from. It stays on this device.
     private var answers: Book
-    /// What each answer replaced, newest last, so Undo is always there. Accounts aren't in here, so it can't bring back one that's gone.
     /// When each answer was given and what it was about, for the list of answers. Never sent anywhere.
     public private(set) var answerDetails: AnswerDetails
+    /// What each answer replaced, newest last, so Undo is always there. Accounts aren't in here, so it can't bring back one that's gone.
     private var history: [HistoryEntry] = []
     /// What Undo took back, newest last, until something else changes.
     private var future: [HistoryEntry] = []
@@ -289,9 +289,8 @@ public final class PortfolioStore {
         if readAnswers == nil { SetAside.keep(key: Keys.answerDetails, in: defaults) }
         self.answerDetails = (SetAside.decoded(AnswerDetails.self, key: Keys.answerDetails, in: defaults) ?? AnswerDetails()).keeping(answers)
         self.selectedRule = defaults.string(forKey: Keys.rule)
-        // All Yours isn't a wallet, so it's never one to remember, whatever an earlier version saved.
-        var saved = (SetAside.decoded([SavedWallet].self, key: Keys.savedWallets, in: defaults) ?? []).filter { !WalletAddress.isAllYours($0.address) }
-        // From before there was a list, the wallet being shown is all there is to remember.
+        var saved = SetAside.decoded([SavedWallet].self, key: Keys.savedWallets, in: defaults) ?? []
+        // With a list that couldn't be read, the wallet being shown is all there is to remember.
         if let address, address != WalletAddress.demo, !WalletAddress.isAllYours(address), !saved.contains(where: { $0.address == address }) {
             saved.append(SavedWallet(address: address, lastSeen: now()))
         }
@@ -751,7 +750,6 @@ public final class PortfolioStore {
         answersChanged()
     }
 
-    /// The numbers on screen aren't what they'd be now, so they can't be called live, and the next ones are on their way.
     /// Who an invite is for: the scheme, host and port, which is what a browser would call the same site.
     nonisolated public static func origin(of url: URL) -> String {
         "\(url.scheme?.lowercased() ?? "")://\(url.host()?.lowercased() ?? "")\(url.port.map { ":\($0)" } ?? "")"
@@ -765,6 +763,7 @@ public final class PortfolioStore {
         customSource?(url) ?? PricetagClient(serverURL: url, invite: Self.invites(in: defaults)[Self.origin(of: url)])
     }
 
+    /// The numbers on screen aren't what they'd be now, so they can't be called live, and the next ones are on their way.
     private func answersChanged() {
         if address != nil { feed = .reading }
         wantsLastRead = true

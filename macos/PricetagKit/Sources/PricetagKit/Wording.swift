@@ -12,7 +12,6 @@ public enum Wording {
     /// Saved answers, wallets or purchases this version can't read, which are kept rather than replaced.
     public static let unreadableSaved = "Some of what you saved can't be read by this version, so costs that rely on it may show as unknown. A copy is kept on this device."
     public static let balanceCheck = "Balance check"
-    public static let startingBalance = "Starting balance"
     public static let pnlHelp = "PnL is profit and loss: what you've gained or lost so far."
     public static let realizedHelp = "Gain or loss on what you've sold or spent."
     public static let unrealizedHelp = "Gain or loss on what you still hold, at the current price."
@@ -52,8 +51,6 @@ public enum Wording {
     public static let returnHelp = "Unrealized PnL as a share of what you paid for what you still hold."
 
     public static let holdTitle = "Compared with holding ETH"
-    public static let holdWallet = "This wallet, after network fees"
-    public static let holdEth = "If you'd held ETH instead"
     public static let holdPast = "Past results don't predict future ones."
 
     public static let rulesTitle = "Pricing rule"
@@ -175,11 +172,6 @@ public enum Wording {
     /// Said wherever a match is, because this part of it can't fail.
     static func unrecorded(_ position: Position) -> String? {
         position.reconciliation?.unrecordedQty.map { "\(Format.amount($0, decimals: position.decimals)) \(position.asset) arrived with no transaction to show for it, so that part comes from the balance, and the match doesn't confirm it." }
-    }
-
-    /// What there is instead of a chart, so what's short isn't mistaken for nothing.
-    public static func transactionsSoFar(_ count: Int) -> String {
-        count == 1 ? "1 transaction so far." : "\(Format.block(count)) transactions so far."
     }
 
     public static func feesUnknown(_ count: Int) -> String {
@@ -311,17 +303,6 @@ public enum Wording {
     }
     /// Where earlier answers are, so none is stuck once it's given.
     public static let answersPlace = "You can change any answer in Settings, under Answers."
-
-    /// Why a value is partial, for its tooltip. Names the holdings, because they may not be on screen. With no cause known, it only says what's sure.
-    public static func partialValue(noPrice: [String], unread: [String], unchecked: [String], incompleteHistory: [String]) -> String {
-        func list(_ assets: [String]) -> String { assets.joined(separator: ", ") }
-        var causes: [String] = []
-        if !noPrice.isEmpty { causes.append("\(list(noPrice)) \(noPrice.count == 1 ? "has" : "have") no price right now.") }
-        if !unread.isEmpty { causes.append("Couldn't read the balance of \(list(unread)).") }
-        if !unchecked.isEmpty { causes.append("Couldn't check the balance of \(list(unchecked)).") }
-        if !incompleteHistory.isEmpty { causes.append("Incomplete history for \(list(incompleteHistory)).") }
-        return causes.isEmpty ? "This value isn't complete." : causes.joined(separator: " ")
-    }
 
     /// `leavesOut` in a few words. The biggest thing it leaves out, because the rest is a click away.
     public static func shortLeavesOut(_ totals: Totals, _ currency: CurrencyCode) -> String? {
@@ -494,7 +475,6 @@ public enum Wording {
     public static let noValueToChart = "Nothing here had a known price when it moved, so there's no value to chart. It isn't zero."
     public static let valueChartHelp = "What this wallet held, at the prices when each of its transactions happened. Prices are only read then, so the dashed line between two transactions is an estimate."
     public static let valueChartLeavesOut = "Something here doesn't add up to what the wallet holds, or had no price, so the chart can't say what it was worth. The value above still counts it when it can."
-    public static let tooNewToChart = "Not enough history for a chart yet."
     public static let reading = "Reading this wallet. The first read can take a minute."
     /// A failed read never touches what's onchain, so this is true of every problem the feed has.
     /// Always on screen in a watch-only build, so nobody takes it for a wallet that can move money.

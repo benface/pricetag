@@ -12,18 +12,8 @@ public struct HoldingRow: View {
         self.isLive = isLive
     }
 
-    private var pnlText: String { Self.pnlText(position, currency) }
-    private var valueText: String { Self.valueText(position, currency) }
-
-    static func pnlText(_ position: Position, _ currency: CurrencyCode) -> String {
-        if let pnl = position.pnlMicros { return Format.estimate(Format.signedMoney(pnl, currency), position.estimates.realized || position.estimates.unrealized) }
-        return position.isHeld && position.values.averageCostMicros == nil ? "Cost unknown" : Wording.pnlUnavailable
-    }
-
-    static func valueText(_ position: Position, _ currency: CurrencyCode) -> String {
-        if !position.isHeld { return "—" }
-        return position.values.valueMicros.map { Format.estimate(Format.money($0, currency), position.estimates.value) } ?? Wording.noPrice
-    }
+    private var pnlText: String { position.pnlText(currency) }
+    private var valueText: String { position.valueText(currency) }
 
     public var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -54,8 +44,8 @@ public struct HoldingRow: View {
         if let check = OnchainCheck.label(for: position) { parts.append(check) }
         if let amount { parts.append(Spoken.number("amount", amount)) }
         if let price { parts.append(Spoken.number("price", price)) }
-        parts.append(position.isHeld ? Spoken.number("value", valueText(position, currency)) : "no longer held")
-        let pnl = pnlText(position, currency)
+        parts.append(position.isHeld ? Spoken.number("value", position.valueText(currency)) : "no longer held")
+        let pnl = position.pnlText(currency)
         parts.append(position.pnlMicros == nil ? pnl : Spoken.number("PnL", pnl))
         if let returnText { parts.append(Spoken.number("return", returnText)) }
         if !isLive { parts.append(Spoken.notUpdating) }
@@ -63,7 +53,7 @@ public struct HoldingRow: View {
     }
 }
 
-/// Says when a position doesn't match the chain or can't be checked, or has a number nobody can work out yet. A row with nothing to flag shows nothing.
+/// Says when a position doesn't match the chain or can't be checked. A row with nothing to flag shows nothing.
 public struct OnchainCheck: View {
     let position: Position
     @Environment(\.backgroundProminence) private var prominence

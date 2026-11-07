@@ -3,9 +3,19 @@ extension Position {
     /// Tabs between them, so it pastes into a spreadsheet as cells and into a message as one line.
     public func copyText(currency: CurrencyCode) -> String {
         let priceText = price.map { Format.estimate(Format.price($0.micros, currency), estimates.value) } ?? Wording.noPrice
-        let value = isHeld ? values.valueMicros.map { Format.estimate(Format.money($0, currency), estimates.value) } ?? Wording.noPrice : "—"
-        let pnl = pnlMicros.map { Format.estimate(Format.signedMoney($0, currency), estimates.realized || estimates.unrealized) } ?? Wording.pnlUnavailable
-        return [asset, Format.amount(values.qty, decimals: decimals), priceText, value, pnl, isHeld ? returnText : "—"].joined(separator: "\t")
+        return [asset, Format.amount(values.qty, decimals: decimals), priceText, valueText(currency), pnlText(currency), isHeld ? returnText : "—"].joined(separator: "\t")
+    }
+
+    /// What it's worth. Nothing for what's no longer held, and never $0 for what has no price.
+    public func valueText(_ currency: CurrencyCode) -> String {
+        if !isHeld { return "—" }
+        return values.valueMicros.map { Format.estimate(Format.money($0, currency), estimates.value) } ?? Wording.noPrice
+    }
+
+    /// What it's made. A cost nobody can work out yet says so, because that's what there is to fix.
+    public func pnlText(_ currency: CurrencyCode) -> String {
+        if let pnlMicros { return Format.estimate(Format.signedMoney(pnlMicros, currency), estimates.realized || estimates.unrealized) }
+        return isHeld && values.averageCostMicros == nil ? "Cost unknown" : Wording.pnlUnavailable
     }
 
     /// Unknown whenever its cost is, and never 0%. With a known cost of nothing, there's no share of it to show.

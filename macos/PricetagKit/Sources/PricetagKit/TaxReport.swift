@@ -123,7 +123,6 @@ public struct TaxReport: Codable, Sendable, Equatable {
     public let unknownWallets: [String]
     public let unresolvedCount: Int
     public let estimatedCount: Int
-    public let selfReportedCount: Int
     /// Only rows whose gain is known, and nil when none is. Read it next to `unresolvedCount`.
     public let gainMicros: String?
     public let disclaimer: String
@@ -291,15 +290,7 @@ public final class TaxReportModel {
             state = .ready(report)
         } catch {
             guard !Task.isCancelled, !(error is CancellationError) else { return }
-            state = .failed(Self.message(for: error))
-        }
-    }
-
-    private static func message(for error: any Error) -> String {
-        switch error as? FetchError {
-        case .ampUnavailable(let message), .noAmpConfigured(let message), .rejected(let message), .tooBig(let message), .needsInvite(let message), .priceChanged(let message), .notCaughtUp(let message), .rateLimited(let message, _): message
-        case .timedOut: Wording.serverTooSlow
-        case .unreachable, nil: Wording.cantReachServer
+            state = .failed(failureMessage(for: error))
         }
     }
 
