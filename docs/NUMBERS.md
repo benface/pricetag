@@ -265,7 +265,8 @@ Lines follow the IRS instructions for Form 8949, in box I (short-term, Part I) o
 - **Short-term or long-term** comes from when each sold unit was acquired: it's long-term from the day after its first anniversary (`termOf`).
   A sale of units held for different lengths becomes a short-term and a long-term line, with the proceeds shared by units.
   Several purchase dates on one line say `VARIOUS`, and dates are in UTC.
-- **When a date isn't known, it stays unknown.** An opening balance, or something that arrived from another address with no purchase date from an exchange file, has none.
+- **When a date isn't known, it stays unknown.** A unit keeps its date through moves between linked wallets, and something received from someone else is dated the day it arrived.
+  An opening balance has none, and neither does anything that arrived with no history behind it, like a bridge deposit or an amount with only a cost someone entered, unless an exchange file has its purchase date.
   Those lines go in their own group, "How long it was held isn't known", with no box and no total, since they can't be added to either part.
 - **Only Oldest first keeps purchase dates.** Average mixes every purchase together, so with it every line lands in that unknown group.
 - **Each part's total** only adds lines whose amounts are all known, and says how many it leaves out. With none known there's no total, never $0.
@@ -281,14 +282,14 @@ The total leaves out unknown amounts the same way.
 A loss can't be deducted when the same asset is acquired within 30 days before or after the sale and is still held 30 days after (`flagSuperficialLosses`).
 The report checks this across the wallets in it, and **only warns**: it marks the row, adds a warning, and counts the flagged losses next to the Schedule 3 total, but doesn't change any amount or add the loss to the new cost.
 When the 30 days after haven't all been read yet, it says the loss may turn out to be superficial.
-It can't see a spouse's or a company's wallets, which the rule counts too, or when something that arrived from elsewhere was bought, unless an exchange file says.
+It can't see a spouse's or a company's wallets, which the rule counts too, and doesn't count something that arrived with no history behind it, like a bridge deposit, as a new purchase, unless an exchange file says when it was bought.
 
 ### What it still doesn't do
 
 - It doesn't list what was received, so pay and other income aren't in it.
 - It doesn't adjust a superficial loss, or check the US wash sale rule, which the report says to ask an accountant about.
 - Choosing specific units to sell isn't available.
-- It only knows what reached these wallets. What came from elsewhere has no date or cost unless an exchange file or an answer gives one.
+- It only knows what reached these wallets. Something that arrived with no history behind it has no date unless an exchange file gives one, and no cost unless an exchange file or an answer does.
 - An unknown amount stays `unknown` in every file and every total, never $0.
 
 On an older wallet, most rows start with an unknown gain, until the user answers for what it held before the first block read.
