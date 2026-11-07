@@ -80,6 +80,19 @@ public enum FeedState: Equatable, Sendable {
     }
 }
 
+extension FeedState {
+    /// Whether the menu bar's panel says what kind of wallet this is. Not when the line beside it or under it already says the same:
+    /// "Demo wallet", "No wallet yet", or "Reading this wallet…".
+    public func showsWalletBadge(portfolio: Portfolio?) -> Bool {
+        switch self {
+        case .noWallet: false
+        case .reading: portfolio != nil
+        case .live: portfolio?.mode != .demo
+        default: true
+        }
+    }
+}
+
 /// One number's explanation, in full context, because the same number means something else on another wallet, method or server.
 public struct ExplanationRequest: Hashable, Sendable {
     public let target: ExplainTarget

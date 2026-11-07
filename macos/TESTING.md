@@ -50,6 +50,14 @@ It shows what's said and in what order, and ends a line with `{spelled out: …}
 
 macOS doesn't give other apps Dynamic Type: SwiftUI's text styles stay the same size whatever `dynamicTypeSize` says. Larger text on a Mac comes from the display's "Larger Text" setting, which makes the screen smaller, so the small-window scenes (`main-smallest`, `settings-small-display` and the like) are the check for it.
 
+### Adding a scene
+
+A scene is a case in `TestScene` and one line in its `spec`, both in `App/TestMode/TestScene.swift`. That line says everything that's different about the scene, and the compiler fails on a scene without one. Then it's in `shot.sh list` and `all`. Add it to `needsRealWindow` only if a render gets it wrong.
+
+`FixtureSource.swift` is what stands in for the server, and `TestSceneViews.swift` has views that only scenes use. A hot wallet state goes in `HotWalletFixture.swift`, and another currency needs its `demo-portfolio-xyz.json` and `demo-explanation-xyz.json`: put them in `PricetagKit/Tests/PricetagKitTests/Resources`, with a symlink in `App/TestMode` like the others, so the tests read the same files the app does.
+
+The `hot-wallet-*` scenes draw Spending Money's real page, overview included, without the window around it, so that everything down to the settings fits in the picture.
+
 ## 2. Capture a real window
 
 ```sh
@@ -100,7 +108,7 @@ Don't do it yourself. Finish, and put a short checklist for benface in your hand
 - The real popover under the menu bar, and that clicking outside it closes it.
 - Opening the window from the popover brings it to the front, and adds the Dock icon and menus. Closing it takes them away.
 - Keyboard shortcuts, keyboard focus, and sheets opening over the window.
-- The spending money window's confirmation dialogs, and Touch ID, which asks inside the window. Its sheets are scenes, without the window behind them.
+- Spending Money's confirmation dialogs, and Touch ID, which asks inside the window. Its sheets are scenes, without the window behind them.
 - The app's look when it's active and in front.
 
 ## The hosted build
@@ -117,7 +125,7 @@ Nothing takes focus, but each launch puts an icon in the menu bar for a moment, 
 
 ## How it's kept apart from the real app
 
-- All of it is in `App/TestMode/` and `OffscreenRenderer.swift`, inside `#if DEBUG`. The fixtures are left out of release builds in `App.xcconfig`.
+- Nearly all of it is in `App/TestMode/` and `OffscreenRenderer.swift`, inside `#if DEBUG`. `App/TestMode/` and the fixtures are left out of release builds in `App.xcconfig`. The real views have a few small hooks: `showsOnlyPage` in `MainWindow.swift` and `sceneNetworkAddress` in `SpendingMoneyPage.swift` are `#if DEBUG` too, and only a scene ever sets `opensFirstProof` in `ExplanationPane.swift`.
 - Debug builds have their own bundle ID, and the test mode's settings are only registered in memory, so it never reads or writes anyone's settings.
 - It never touches a key. Its hot wallet (`HotWalletFixture.swift`) reads once from a fake node and the fixtures and is never started, keeps nothing, and has a signer with no key behind it, so it never reaches the Keychain or the Secure Enclave. A scene that gets as far as making a key, signing, sending a transaction or asking for Touch ID fails instead of drawing it. The approval scenes (`site-*`, `send-waiting`, `sweep`) only draw what's around Touch ID: they're given a state, never ask, and show a stand-in for the system's glyph, which draws nothing until it's really asking. The `site-connect`, `site-transaction`, `site-transaction-cad`, `site-preview`, `site-preview-unknown`, `site-preview-long`, `site-unlimited-approval` and `site-typed-permit` scenes send a real request through `SiteBridge`, with a fake node that can say what a transaction would cost and do, and stop at the approval window, which is never in front, so it never asks. Approving them would reach that same signer and fail.
 - `shot.sh` builds without the sandbox. A sandboxed build's container is tied to its signature, and macOS stops the launch to ask about it when that changes.
@@ -172,7 +180,3 @@ A test that waits for something needs a deadline. If it spins forever and `swift
 Build products stay in each worktree on purpose, so one branch's can't pass as another's, and nothing signed or cryptographic is shared. Seeding a new worktree from another's would save about a third of a package's first build, not skip it, because the paths in them are absolute. So a new worktree's first `check:mac` compiles everything, and the largest part of that is the Release build, at over a minute.
 
 `RenderTests` and `ContrastTests` really draw, on the main actor, and other tests on the main actor wait behind them. So a test's reported time can say more about what ran beside it than about the test: run it alone with `--filter` before calling it slow.
-
-## Adding a scene
-
-Add a case to `TestScene` in `App/TestMode/TestMode.swift`, give it a feed and a view, and it's in `shot.sh list` and `all`. Set `needsRealWindow` only if a render gets it wrong. A hot wallet state goes in `HotWalletFixture`, and another currency needs its `demo-portfolio-xyz.json` and `demo-explanation-xyz.json`: put them in `PricetagKit/Tests/PricetagKitTests/Resources`, with a symlink in `App/TestMode` like the others, so the tests read the same files the app does.

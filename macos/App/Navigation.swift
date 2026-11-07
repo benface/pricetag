@@ -43,6 +43,36 @@ enum AppSection: String, CaseIterable, Identifiable {
     }
 }
 
+/// Something asked for from elsewhere, which may have no window open yet. It waits in `Navigation.pending` until what it's for is on screen,
+/// and that takes it. There's only ever one: whatever was asked for last is what the person wants now.
+enum Intent: Equatable {
+    /// The extension's Top Up button, or Top Up in the menu bar. Spending Money's page takes these, and the next four.
+    case topUp
+    case send
+    /// Buy needs a savings wallet first.
+    case addSavings
+    /// The web app sent over an account from a device. The page opens the sheet that asks the person to check it, and the sheet takes it.
+    case addSavingsFromDevice(AddSavingsLink)
+    /// A notification was clicked. The page scrolls to its row and lights it up.
+    case show(row: String)
+    /// Delete was chosen in the wallet list. The page asks to confirm it.
+    case deleteSpendingMoney
+    /// The window takes these three from any section.
+    case buy
+    case receive
+    case export
+    /// ⌘F. The search field of the section showing takes it.
+    case search
+
+    /// What only Spending Money's page can take. If it doesn't get made, there's no page, and left waiting these would open by surprise once there is one.
+    var needsSpendingMoney: Bool {
+        switch self {
+        case .topUp, .send, .addSavings, .addSavingsFromDevice, .show: true
+        case .deleteSpendingMoney, .buy, .receive, .export, .search: false
+        }
+    }
+}
+
 /// What the main window shows, set from the popover and the menus too.
 @Observable
 final class Navigation {
@@ -75,26 +105,12 @@ final class Navigation {
     @ObservationIgnored var onSwitcherClosed: (() -> Void)?
     /// Welcome was chosen in the Help menu, with a wallet already showing.
     var isShowingWelcomeAgain = false
-    /// The extension's Top Up button was pressed. Spending Money's page takes it from here.
-    var wantsTopUp = false
-    /// The menu bar's Send button was pressed. Spending Money's page takes it from here.
-    var wantsSend = false
-    /// Buy was pressed. It isn't tied to a section, so the window takes it from anywhere.
-    var isBuying = false
-    /// Receive was pressed. Like Buy, the window takes it from anywhere.
-    var isReceiving = false
-    /// The extension's Receive button was pressed. The menu bar item opens the window for it, since nothing else may be open.
-    var wantsReceive = false
-    /// Delete was chosen in the wallet list. Spending Money's page asks to confirm it.
-    var wantsDelete = false
-    /// Buy needs a savings wallet first. Spending Money's page takes it from here.
-    var wantsAddSavings = false
-    /// The web app sent over an account from a device. Spending Money's page asks the person to check it.
-    var addingSavings: AddSavingsLink?
+    /// What's been asked for and not been taken yet.
+    var pending: Intent?
     /// There's no Spending Money to show yet, or it can't be opened. This says what it is, and is the only place that makes a key.
     var isSettingUpSpendingMoney = false {
         // Here and not in a view, for the same reason as the wallet list. Cancelled, there's no page to take what was asked for.
-        didSet { if oldValue, !isSettingUpSpendingMoney, hotWallet.address == nil { forgetSpendingMoneyRequests() } }
+        didSet { if oldValue, !isSettingUpSpendingMoney, hotWallet.address == nil, pending?.needsSpendingMoney == true { pending = nil } }
     }
     /// Asked for from a row in the wallet list, which closes first. So it's the window that holds this.
     var removingFromSavings: WalletEntry?
@@ -107,13 +123,8 @@ final class Navigation {
     private(set) var resolvingWallet: String?
     /// Where to go back to once those questions close.
     private(set) var returnWallet: String?
-    var isExporting = false
-    /// ⌘F was pressed. The search field of the section showing takes it from here.
-    var wantsSearch = false
     /// What's being searched for in the holdings, until they're left. It's here so a test scene can set it.
     var holdingsQuery = ""
-    /// A notification was clicked. Spending Money scrolls to its row and lights it up, and the window opens if it's closed.
-    var shownRow: String?
 
     func switchWallet() {
         isSwitchingWallet = true
@@ -170,25 +181,25 @@ final class Navigation {
     /// Goes to spending money and asks for its Send sheet, which appears once the page is on screen.
     func send() {
         showSpendingMoney()
-        wantsSend = true
+        pending = .send
     }
 
     /// Goes to spending money and asks for its Top Up sheet, which appears once the page is on screen.
     func topUp() {
         showSpendingMoney()
-        wantsTopUp = true
+        pending = .topUp
     }
 
     /// Goes to spending money and adds a savings wallet, which appears once the page is on screen.
     func addSavings() {
         showSpendingMoney()
-        wantsAddSavings = true
+        pending = .addSavings
     }
 
     /// Goes to spending money and asks to confirm deleting it, which appears once the page is on screen.
     func deleteSpendingMoney() {
         showSpendingMoney()
-        wantsDelete = true
+        pending = .deleteSpendingMoney
     }
 
     /// What ⌘F searches: the holdings on the overview. The other sections have no search of their own, so it goes to the transactions.
@@ -205,13 +216,13 @@ final class Navigation {
     /// Puts the cursor in the holdings' search field on the overview. From anywhere else, goes to the transactions and puts it in theirs.
     func find() {
         if section != .overview { section = .transactions }
-        wantsSearch = true
+        pending = .search
     }
 
     /// Goes to spending money and shows one of its rows, which it scrolls to once the page is on screen.
     func show(row: String) {
         showSpendingMoney()
-        shownRow = row
+        pending = .show(row: row)
     }
 
     /// Spending Money's page is the one chosen, whether or not the window's open.
@@ -252,15 +263,6 @@ final class Navigation {
         guard resolvingWallet == nil, let returnWallet else { return }
         self.returnWallet = nil
         store.setWallet(returnWallet)
-    }
-
-    /// Left waiting, these would open by surprise once there's a page, and the ones already set couldn't be asked for again.
-    private func forgetSpendingMoneyRequests() {
-        wantsTopUp = false
-        wantsSend = false
-        wantsAddSavings = false
-        addingSavings = nil
-        shownRow = nil
     }
 
     private func forgetPendingQuestions() {

@@ -171,9 +171,8 @@ struct SettingsView: View {
     /// Both fields at once, whichever was left last, so an invite is always saved for the server beside it. One that was only
     /// still showing from the last server stays that server's, and the new one's own shows instead.
     private func applyConnection() {
-        let value = server.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: value), url.scheme == "http" || url.scheme == "https", url.host() != nil else {
-            serverError = "That isn't a web address. It should look like \(PortfolioStore.defaultServerURL.absoluteString)."
+        guard let url = WebAddress.read(server) else {
+            serverError = WebAddress.problem(example: PortfolioStore.defaultServerURL)
             return
         }
         serverError = nil

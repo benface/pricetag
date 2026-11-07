@@ -55,3 +55,11 @@ extension View {
         onAppear(perform: DockPresence.windowAppeared).onDisappear(perform: DockPresence.windowDisappeared)
     }
 }
+
+extension OpenWindowAction {
+    /// A menu bar app is behind whatever's in front, so a window it opens has to come forward too.
+    func bringingForward(id: String) {
+        self(id: id)
+        DockPresence.bringForward()
+    }
+}

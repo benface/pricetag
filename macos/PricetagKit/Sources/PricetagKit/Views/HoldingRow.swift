@@ -16,13 +16,12 @@ public struct HoldingRow: View {
     private var valueText: String { Self.valueText(position, currency) }
 
     static func pnlText(_ position: Position, _ currency: CurrencyCode) -> String {
-        if let pnl = position.pnlMicros { return Format.estimate(Format.signedMoney(pnl, currency), position.estimates.realized || position.estimates.unrealized) }
+        if let pnl = position.pnlText(currency) { return pnl }
         return position.isHeld && position.values.averageCostMicros == nil ? "Cost unknown" : Wording.pnlUnavailable
     }
 
     static func valueText(_ position: Position, _ currency: CurrencyCode) -> String {
-        if !position.isHeld { return "—" }
-        return position.values.valueMicros.map { Format.estimate(Format.money($0, currency), position.estimates.value) } ?? Wording.noPrice
+        position.valueText(currency)
     }
 
     public var body: some View {

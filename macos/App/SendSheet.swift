@@ -292,7 +292,7 @@ struct SendConfirmation: View {
         if let address = model.recipient {
             rows.append(ConfirmationRow(label: "To", value: address.checksummed, isAddress: true, name: model.recipientName))
         }
-        if let fee = model.feeText { rows.append(ConfirmationRow(label: "Network fee", value: "About \(fee)")) }
+        if let fee = model.feeText { rows.append(.networkFee(fee)) }
         return rows
     }
 }
@@ -381,7 +381,7 @@ struct SweepSheet: View {
             rows.append(ConfirmationRow(label: "To", value: destination.address.checksummed, isAddress: true, name: destination.name))
         }
         if let preview, !preview.transfers.isEmpty {
-            rows.append(ConfirmationRow(label: "Network fee", value: "About \(preview.feeUsdMicros.map(wallet.money) ?? "\(Format.amount(String(preview.feeWei), decimals: 18)) ETH")"))
+            rows.append(.networkFee(usdMicros: preview.feeUsdMicros, wei: preview.feeWei, money: wallet.money))
         }
         return rows
     }

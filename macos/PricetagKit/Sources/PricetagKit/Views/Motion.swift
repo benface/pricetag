@@ -47,27 +47,50 @@ extension View {
         modifier(ArrivalModifier(edge: edge))
     }
 
-    /// A cost that's just become known, lit softly and fading by itself. The number's already what's real by then.
-    public func justKnown(_ isOn: Bool) -> some View {
-        lit(isOn, Tone.gain.color)
-    }
-
-    /// Something new in a list, like what was just sent, so the eye finds it. It fades the same way.
-    public func justAdded(_ isOn: Bool) -> some View {
-        lit(isOn, .accentColor, opacity: 0.12)
-    }
-
-    private func lit(_ isOn: Bool, _ color: Color, opacity: Double = 0.2) -> some View {
+    /// Lit softly while `isOn`, coming up quickly and fading slowly. Only a color changes, so this stays with Reduce Motion on.
+    public func flash(_ isOn: Bool, _ look: FlashLook) -> some View {
         background {
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(color)
-                .opacity(isOn ? opacity : 0)
-                .padding(.horizontal, -5)
-                .padding(.vertical, -2)
-                // It comes up quickly and goes slowly.
+            RoundedRectangle(cornerRadius: look.cornerRadius, style: .continuous)
+                .fill(look.color)
+                .opacity(isOn ? look.opacity : 0)
+                .padding(.horizontal, -look.margin.width)
+                .padding(.vertical, -look.margin.height)
                 .animation(isOn ? Motion.feedback : .easeOut(duration: 0.8 * Motion.slowdown), value: isOn)
         }
     }
+
+    /// Ends a flash. Whenever `trigger` changes to something other than `rest`, this waits, then calls `end`, which should put it back.
+    /// What's lit is whoever holds the trigger's to say, since it can be many rows at once.
+    public func flash<Trigger: Equatable>(trigger: Trigger, rest: Trigger, for duration: Duration = Motion.highlight, end: @escaping @MainActor () -> Void) -> some View {
+        task(id: trigger) {
+            guard trigger != rest else { return }
+            try? await Task.sleep(for: duration)
+            if !Task.isCancelled { end() }
+        }
+    }
+}
+
+/// What a flash says.
+public enum FlashLook {
+    /// A cost that's just become known. The number's already what's real by then.
+    case known
+    /// Something new in a list, like what was just sent, so the eye finds it.
+    case added
+    /// What a notification opened, in the system's selection color, so it's found at a glance.
+    case found
+
+    fileprivate var color: Color { self == .known ? Tone.gain.color : .accentColor }
+
+    fileprivate var opacity: Double {
+        switch self {
+        case .known: 0.2
+        case .added: 0.12
+        case .found: 0.18
+        }
+    }
+
+    fileprivate var cornerRadius: CGFloat { self == .found ? 6 : 5 }
+    fileprivate var margin: CGSize { self == .found ? CGSize(width: 6, height: 4) : CGSize(width: 5, height: 2) }
 }
 
 private struct MotionModifier<Value: Equatable>: ViewModifier {
