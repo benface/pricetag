@@ -35,7 +35,7 @@ import { csvCell, microsCell, unitsCell } from "./csv.ts"
 import { rateSource } from "./explain.ts"
 import { resolveLegs, withheldIn } from "./resolve.ts"
 import { taxFormOf } from "./tax-forms.ts"
-import { dayNumber, matchUk } from "./tax-matching.ts"
+import { UK_TIME_ZONE, dayNumber, localDate, matchUk, startOfDate } from "./tax-matching.ts"
 import { METHOD_LABELS, withheldSentence } from "./wording.ts"
 
 export type TaxCountryCode = "CA" | "GB" | "US"
@@ -65,6 +65,10 @@ export type TaxCountry = {
   yearStart: string
   /** With Average, each sale is first matched to what was acquired the same day and in the 30 days after, as the UK does. */
   matchesAcquisitions: boolean
+  /** Whose clock its days and tax year go by. UTC where the report hasn't been told otherwise, like the file's dates. */
+  timeZone: string
+  /** What a sentence calls that clock. */
+  timeZoneName: string
 }
 
 /** Adding a country takes an entry here and a case in `TaxReport.swift`. */
@@ -87,6 +91,8 @@ export const TAX_COUNTRIES: Record<TaxCountryCode, TaxCountry> = {
     ],
     yearStart: "01-01",
     matchesAcquisitions: false,
+    timeZone: "UTC",
+    timeZoneName: "UTC",
   },
   GB: {
     code: "GB",
@@ -102,13 +108,16 @@ export const TAX_COUNTRIES: Record<TaxCountryCode, TaxCountry> = {
     marketWarning: "In the UK, that's generally the cost of pay you paid Income Tax on, but a gift's cost depends on who gave it.",
     notes: [
       "With Average, each sale is matched first to what was bought the same day, then to what was bought in the 30 days after it, earliest first, and only then to the average cost of the rest, as HMRC's rules say. A network fee is matched the same way, since paying one is a disposal.",
-      "Days are in UTC, so something done just after midnight during British Summer Time falls on the day before, which can change what a sale is matched to.",
+      "Days and the tax year go by UK time, so something done just after midnight during British Summer Time is on the day it was in the UK. The file's dates are in UTC.",
+      "What came from an exchange is matched by when its file says each part was bought, oldest first, so a buy still on the exchange isn't matched to anything.",
       "A gift is a disposal at its market value unless it's to your spouse or civil partner. Sends to other addresses aren't matched to anything, and stay in the full report for you to say what they were.",
       "Every gain here is shown in full. The yearly tax-free allowance and losses from other years aren't taken off.",
       "Self Assessment returns have a section for cryptoassets from the 2024 to 2025 tax year on, which takes amounts in pounds sterling.",
     ],
     yearStart: "04-06",
     matchesAcquisitions: true,
+    timeZone: UK_TIME_ZONE,
+    timeZoneName: "UK time",
   },
   US: {
     code: "US",
@@ -129,6 +138,8 @@ export const TAX_COUNTRIES: Record<TaxCountryCode, TaxCountry> = {
     ],
     yearStart: "01-01",
     matchesAcquisitions: false,
+    timeZone: "UTC",
+    timeZoneName: "UTC",
   },
 }
 
@@ -300,7 +311,7 @@ export type TaxContext = { book?: Book; costsFrom?: readonly WalletResponse[] }
  * Each wallet with what the user has said filled in, the same way the apps do it. The wallets in a report are the user's
  * own, because that's what asking for them together says, so costs carry between them whatever else has been answered.
  */
-function sourcesOf(wallets: readonly WalletResponse[], method: Method, { book = emptyBook(), costsFrom = [] }: TaxContext): Source[] {
+function sourcesOf(wallets: readonly WalletResponse[], method: Method, { book = emptyBook(), costsFrom = [] }: TaxContext, country: TaxCountry | null = null): Source[] {
   const sides = [...wallets, ...costsFrom].map((wallet) => {
     const view = viewWallet(wallet)
     return { wallet, view, ...checksOf(wallet, view, method) }
@@ -309,7 +320,8 @@ function sourcesOf(wallets: readonly WalletResponse[], method: Method, { book = 
   // Working out what each inherits walks every lot, so a fold that can't fit stops here, before any of that.
   const histories = sides.map(({ wallet }) => ({ address: normalizeAddress(wallet.address), legs: wallet.legs }))
   for (const history of histories.slice(0, wallets.length)) assertFoldFits(history, histories.filter((other) => other !== history), method)
-  const { legs } = resolveLegs(sides, method, linking)
+  // Matching needs to know when what an exchange withdrew was bought, and what each purchase cost, not only its average.
+  const { legs } = resolveLegs(sides, method, linking, { datedLots: method === "average" && country?.matchesAcquisitions === true })
   return sides.slice(0, wallets.length).map((side) => ({ ...side, view: { ...side.view, legs: legs.get(normalizeAddress(side.wallet.address)) as PricedLeg[] } }))
 }
 
@@ -436,13 +448,16 @@ export function parseTaxYear(value: unknown): TaxYear | null {
   return typeof year === "number" && Number.isInteger(year) && year >= 2000 && year <= 2999 ? year : null
 }
 
-/** The tax year something happened in, named for the calendar year it starts in. In UTC, like the file's dates. */
-export function taxYearOf(timestamp: string, { yearStart }: Pick<TaxCountry, "yearStart"> = { yearStart: "01-01" }): number {
-  const year = Number(timestamp.slice(0, 4))
-  return timestamp.slice(5, 10) < yearStart ? year - 1 : year
+type YearRules = Pick<TaxCountry, "yearStart" | "timeZone">
+
+/** The tax year something happened in, named for the calendar year it starts in, by the date where it's filed. */
+export function taxYearOf(timestamp: string, { yearStart, timeZone }: YearRules = { yearStart: "01-01", timeZone: "UTC" }): number {
+  const date = localDate(timestamp, timeZone)
+  const year = Number(date.slice(0, 4))
+  return date.slice(5, 10) < yearStart ? year - 1 : year
 }
 
-const yearStartOf = (year: number, { yearStart }: Pick<TaxCountry, "yearStart">) => `${year}-${yearStart}T00:00:00.000Z`
+const yearStartOf = (year: number, { yearStart, timeZone }: YearRules) => startOfDate(`${year}-${yearStart}`, timeZone)
 
 /** What a year is called where it's filed: 2025, or 2025 to 2026 for one that starts in April, the way HMRC writes it. */
 export const yearLabel = (year: number, { yearStart }: Pick<TaxCountry, "yearStart">) => (yearStart === "01-01" ? String(year) : `${year} to ${year + 1}`)
@@ -451,7 +466,7 @@ export const yearLabel = (year: number, { yearStart }: Pick<TaxCountry, "yearSta
 function yearInSentence(year: number, country: TaxCountry): string {
   if (country.yearStart === "01-01") return String(year)
   const end = new Date(Date.parse(yearStartOf(year + 1, country)) - 1).toISOString()
-  return `the ${yearLabel(year, country)} tax year (${longDate(yearStartOf(year, country))} to ${longDate(end)})`
+  return `the ${yearLabel(year, country)} tax year (${longDate(yearStartOf(year, country), country.timeZone)} to ${longDate(end, country.timeZone)})`
 }
 
 /** When the last of these wallets' history starts, since a year is only whole once every wallet's is. */
@@ -466,14 +481,14 @@ function yearsOf(wallets: readonly WalletResponse[], country: TaxCountry): numbe
   return Array.from({ length: Math.max(0, last - first + 1) }, (_, i) => last - i)
 }
 
-const longDate = (timestamp: string) => new Date(timestamp).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" })
+const longDate = (timestamp: string, timeZone = "UTC") => new Date(timestamp).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", timeZone })
 
 /** Said plainly when a year's history isn't all here, because what's missing would change its gains. */
 function partialYearNote(year: number, start: string, country: TaxCountry): string | null {
   const startYear = taxYearOf(start, country)
   const named = yearInSentence(year, country)
-  if (startYear > year) return `Records start on ${longDate(start)}, so nothing from ${named} is here.`
-  if (startYear === year && start > yearStartOf(year, country)) return `Records start on ${longDate(start)}, so ${named} is missing everything before then.`
+  if (startYear > year) return `Records start on ${longDate(start, country.timeZone)}, so nothing from ${named} is here.`
+  if (startYear === year && start > yearStartOf(year, country)) return `Records start on ${longDate(start, country.timeZone)}, so ${named} is missing everything before then.`
   return null
 }
 
@@ -500,7 +515,11 @@ export type TaxPreviewRow = Pick<TaxRow, "timestamp" | "type" | "asset" | "amoun
 const PREVIEW_ROWS = 5
 
 const LATER_BUYS = "Part of its cost is what was bought in the 30 days after it, which UK rules match to it first."
-const TENTATIVE = "The 30 days after it haven't all been read yet, and what's bought in them would be matched to it first, so its cost may still change."
+const TENTATIVE = {
+  day: "The rest of its day hasn't been read yet, and everything bought that day counts as one purchase, at that day's average cost, which UK rules match to it first, so its cost may still change.",
+  "30 days": "The 30 days after it haven't all been read yet, and what's bought in them would be matched to it first, so its cost may still change.",
+} as const
+const TENTATIVE_NOTES: readonly string[] = Object.values(TENTATIVE)
 
 /** The last whole day read, since a balance after that could still change. */
 const readThroughOf = (sources: readonly Pick<Source, "wallet">[]) => sources.map(({ wallet }) => timestampOfBlock(wallet.coverage.toBlock, wallet.latest)).reduce((a, b) => (a < b ? a : b))
@@ -508,7 +527,7 @@ const readThroughOf = (sources: readonly Pick<Source, "wallet">[]) => sources.ma
 /** Each debit's effect, by asset: the fold's, or under the UK's matching rules, with what that says about each one. */
 function effectsOf(legs: readonly PricedLeg[], method: Method, country: TaxCountry | null, readThrough: string): { asset: string; effects: { leg: PricedLeg; effect: LegEffect; notes: string[] }[] }[] {
   if (method === "average" && country?.matchesAcquisitions) {
-    return matchUk(legs, dayNumber(readThrough) - 1).map(({ asset, effects }) => ({ asset, effects: effects.map(({ leg, effect, laterBuys, tentative }) => ({ leg, effect, notes: [...(laterBuys ? [LATER_BUYS] : []), ...(tentative ? [TENTATIVE] : [])] })) }))
+    return matchUk(legs, dayNumber(readThrough, country.timeZone) - 1, country.timeZone).map(({ asset, effects }) => ({ asset, effects: effects.map(({ leg, effect, laterBuys, tentative }) => ({ leg, effect, notes: [...(laterBuys ? [LATER_BUYS] : []), ...(tentative ? [TENTATIVE[tentative]] : [])] })) }))
   }
   return foldPositions(legs, method, {}).map(({ asset, effects }) => ({ asset, effects: effects.map((effect) => ({ leg: effect.leg, effect, notes: [] })) }))
 }
@@ -544,7 +563,8 @@ function rowsFrom(sources: readonly Source[], method: Method, scope: TaxScope, c
 
 /** Every row, oldest first, with a transaction's fee before what it did, the way the fold reads them. */
 export function taxRows(wallets: readonly WalletResponse[], { method, scope, country }: Pick<TaxSettings, "method" | "scope"> & { country?: TaxCountryCode }, context: TaxContext = {}): TaxRow[] {
-  return rowsFrom(sourcesOf(wallets, method, context), method, scope, country ? TAX_COUNTRIES[country] : null)
+  const rules = country ? TAX_COUNTRIES[country] : null
+  return rowsFrom(sourcesOf(wallets, method, context, rules), method, scope, rules)
 }
 
 const walletWords = (text: string) => text.split(/[\s,]+/).filter(Boolean)
@@ -631,7 +651,7 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
   const country = TAX_COUNTRIES[code]
   const first = wallets[0] as WalletResponse
   const { currency } = first
-  const sources = sourcesOf(wallets, method, context)
+  const sources = sourcesOf(wallets, method, context, country)
   const named = wallets.length > 1
   const years = yearsOf(wallets, country)
   const year = settings.year === "latest" ? (years[0] ?? null) : settings.year === "all" || settings.year === undefined ? null : settings.year
@@ -645,7 +665,7 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
   const selfReported = count("self-reported")
   const given = rows.filter((row) => row.givenCost).length
   const superficial = rows.filter((row) => row.lossRule !== undefined).length
-  const tentative = new Set(rows.filter((row) => row.reason?.includes(TENTATIVE)).map(eventKey)).size
+  const tentative = new Set(rows.filter((row) => TENTATIVE_NOTES.some((note) => row.reason?.includes(note))).map(eventKey)).size
   const counted = rows.filter((row) => row.gainMicros !== null)
   const events = [...eventsOf(rows).values()]
   // Where to fix what's unknown: the wallets whose sales say so, and any wallet holding an asset with an unknown gain
@@ -680,7 +700,7 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
     ...(fromAnswers.length > 0 ? [`This includes the wallets you've said are yours: ${fromAnswers.map(shortHash).join(", ")}.`] : []),
     ...sources.map((source) => coverageNote(source, named)),
     ...(currency === "USD" ? [] : [`Amounts convert at the rate when each transaction happened, from ${rateSource(currency)}. A tax authority may expect another source.`]),
-    ...(year === null ? [] : [`Only what happened in ${yearInSentence(year, country)} is listed, by its date in UTC. What it cost still counts everything before it.`]),
+    ...(year === null ? [] : [`Only what happened in ${yearInSentence(year, country)} is listed, by its date in ${country.timeZoneName}. What it cost still counts everything before it.`]),
     ...COMMON_NOTES,
     ...country.notes,
   ]

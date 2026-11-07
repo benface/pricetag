@@ -1,7 +1,9 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import type { PricedLeg } from "@pricetag/sdk/core"
+import { ETH_ADDRESS, type LegPart, type PricedLeg } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../src/core/api.ts"
+import { emptyBook } from "../src/core/book.ts"
+import { parseCoinbaseCsv } from "../src/core/exchange-import.ts"
 import { DEMO_WALLET } from "../src/core/fixtures.ts"
 import { TAX_COUNTRIES, taxReportOf, taxRows, taxYearOf, yearLabel, type TaxRow } from "../src/core/tax.ts"
 import { shares } from "../src/core/tax-matching.ts"
@@ -125,9 +127,61 @@ describe("the UK's matching rules", () => {
     assert.match(row?.reason ?? "", /haven't all been read yet/)
     const report = taxReportOf([wallet], { country: "GB", method: "average", scope: "pooled", year: "all" })
     assert.ok(report.warnings.some((warning) => /1 sale or fee happened less than 30 days before the end/.test(warning)))
-    // Fully matched the same day, nothing later can change it.
+    // Fully matched the same day, once that day's all read, nothing later can change it.
     const [sameDay] = uk([walletOf(A, [buy("2026-05-01", 2, 2000), buy("2026-12-20", 1, 2500), sell("2026-12-20", 1, 3000)])])
-    assert.doesNotMatch(sameDay?.reason ?? "", /haven't all been read/)
+    assert.doesNotMatch(sameDay?.reason ?? "", /haven't all been read|hasn't been read/)
+  })
+
+  it("says a sale matched the same day may still change while the rest of that day isn't read, and stops once it is", () => {
+    const legs = [at("2026-12-20", E18, { costMicros: gbp(100), costLabel: "paid", timestamp: "2026-12-20T09:00:00.000Z" }), at("2026-12-20", -E18, { proceedsMicros: gbp(200), timestamp: "2026-12-20T10:00:00.000Z" })]
+    const midday = walletOf(A, legs, "2026-12-20T14:00:00.000Z")
+    const [row] = uk([midday])
+    assert.deepEqual(costs([row as TaxRow]), [[100, 100]])
+    assert.match(row?.reason ?? "", /rest of its day hasn't been read yet/)
+    const report = taxReportOf([midday], { country: "GB", method: "average", scope: "pooled", year: "all" })
+    assert.ok(report.warnings.some((warning) => /1 sale or fee happened less than 30 days before the end/.test(warning)))
+    // Another buy that day would change it: all of a day's buys count as one, at their average.
+    const [changed] = uk([walletOf(A, [...legs, at("2026-12-20", E18, { costMicros: gbp(300), costLabel: "paid", timestamp: "2026-12-20T13:00:00.000Z" })], "2026-12-20T14:00:00.000Z")])
+    assert.deepEqual(costs([changed as TaxRow]), [[200, 0]])
+    // Read past midnight in the UK, the day's done and nothing can change it.
+    const [settled] = uk([walletOf(A, legs, "2026-12-21T00:30:00.000Z")])
+    assert.doesNotMatch(settled?.reason ?? "", /hasn't been read|haven't all been read/)
+    assert.ok(!taxReportOf([walletOf(A, legs, "2026-12-21T00:30:00.000Z")], { country: "GB", method: "average", scope: "pooled", year: "all" }).warnings.some((warning) => /less than 30 days/.test(warning)))
+  })
+
+  it("goes by days in UK time, so just after midnight in summer is the next day", () => {
+    // 23:30 UTC on July 1 is 00:30 on July 2 in the UK, the same day as the sale, so the sale is matched to it.
+    const summer = uk([walletOf(A, [buy("2026-05-01", 1, 1000), at("2026-07-01", E18, { costMicros: gbp(3000), costLabel: "paid", timestamp: "2026-07-01T23:30:00.000Z" }), at("2026-07-02", -E18, { proceedsMicros: gbp(2500), timestamp: "2026-07-02T10:00:00.000Z" })])])
+    assert.deepEqual(costs(summer), [[3000, -500]])
+    // In winter the UK is on UTC, so 23:30 on December 1 is still December 1, before the sale's day, and the sale takes the average.
+    const winter = uk([walletOf(A, [buy("2026-05-01", 1, 1000), at("2026-12-01", E18, { costMicros: gbp(3000), costLabel: "paid", timestamp: "2026-12-01T23:30:00.000Z" }), at("2026-12-02", -E18, { proceedsMicros: gbp(2500), timestamp: "2026-12-02T10:00:00.000Z" })])])
+    assert.deepEqual(costs(winter), [[2000, 500]])
+    // Across the clocks going forward: 23:30 UTC on March 31 is April 1 in the UK, 31 days after March 1, so it's not matched.
+    const spring = uk([walletOf(A, [buy("2026-01-05", 1, 1000), at("2026-03-01", -E18, { proceedsMicros: gbp(2500), timestamp: "2026-03-01T12:00:00.000Z" }), at("2026-03-31", E18, { costMicros: gbp(3000), costLabel: "paid", timestamp: "2026-03-31T23:30:00.000Z" })])])
+    assert.deepEqual(costs(spring), [[1000, 1500]])
+  })
+
+  it("matches what an exchange file says was bought, by when it was bought, without counting the withdrawal as a purchase", () => {
+    const SELLER = `0x${"5".repeat(40)}`
+    const part: LegPart = { logIndex: 0, token: ETH_ADDRESS, account: A, side: "credit", amount: (2n * E18).toString(), kind: "eth", counterparty: SELLER }
+    const usd = (dollars: number) => (BigInt(dollars) * 1_000_000n).toString()
+    const arrival = at("2026-04-02", 2n * E18, { kind: "transfer", priceMicros: usd(2400), parts: [part], timestamp: "2026-04-02T12:00:00.000Z" })
+    const legs = [
+      at("2026-01-01", 2n * E18, { priceMicros: usd(3000), costMicros: usd(6000), costLabel: "paid" }),
+      at("2026-03-01", -E18, { priceMicros: usd(2000), proceedsMicros: usd(2000) }),
+      at("2026-04-01", -E18, { priceMicros: usd(2400), proceedsMicros: usd(2400) }),
+      arrival,
+      at("2026-05-01", -2n * E18, { priceMicros: usd(3500), proceedsMicros: usd(7000) }),
+    ]
+    const row = (when: string, type: string, quantity: string, total = "$0") => `${when},${type},ETH,${quantity},USD,$0,$0,${total},$0,x`
+    const file = parseCoinbaseCsv(`Timestamp,Transaction Type,Asset,Quantity Transacted,Price Currency,Price at Transaction,Subtotal,Total (inclusive of fees and/or spread),Fees and/or Spread,Notes\n${[row("2026-03-10T10:00:00Z", "Buy", "1", "$2100"), row("2026-04-01T10:00:00Z", "Buy", "1", "$2500"), row(arrival.timestamp, "Send", "2")].join("\n")}\n`)
+    assert.ok(file)
+    const book = { ...emptyBook(), withdrawals: file.withdrawals }
+    const wallet = walletOf(A, legs, undefined, { currency: "USD" })
+    const rows = taxRows([wallet], { method: "average", scope: "pooled", country: "GB" }, { book })
+    // March 1 is matched to the exchange's March 10 buy, April 1 to its buy that day, and May 1 takes the January pool.
+    assert.deepEqual(rows.map((r) => [pounds(r.costMicros), pounds(r.gainMicros), r.status]), [[2100, -100, "self-reported"], [2500, -100, "self-reported"], [6000, 1000, "resolved"]])
+    assert.match(rows[0]?.reason ?? "", /bought in the 30 days after it/)
   })
 
   it("matches across all the wallets in a report, and each wallet on its own when asked", () => {
@@ -138,9 +192,11 @@ describe("the UK's matching rules", () => {
   })
 
   it("lists a UK tax year from April 6 to April 5, and names it the way HMRC does", () => {
-    assert.equal(taxYearOf("2026-04-05T23:59:59.000Z", TAX_COUNTRIES.GB), 2025)
-    assert.equal(taxYearOf("2026-04-06T00:00:00.000Z", TAX_COUNTRIES.GB), 2026)
+    // April 6 starts at 23:00 UTC on April 5, since the UK is on summer time by then.
+    assert.equal(taxYearOf("2026-04-05T22:59:59.000Z", TAX_COUNTRIES.GB), 2025)
+    assert.equal(taxYearOf("2026-04-05T23:00:00.000Z", TAX_COUNTRIES.GB), 2026)
     assert.equal(taxYearOf("2026-04-05T23:59:59.000Z", TAX_COUNTRIES.US), 2026)
+    assert.equal(taxYearOf("2026-12-31T23:30:00.000Z", TAX_COUNTRIES.US), 2026)
     assert.equal(yearLabel(2025, TAX_COUNTRIES.GB), "2025 to 2026")
     const wallet = walletOf(A, [buy("2026-01-05", 2, 2000), sell("2026-04-05", 1, 1500), sell("2026-04-06", 1, 1500)])
     const report = taxReportOf([wallet], { country: "GB", method: "average", scope: "pooled", year: 2026 })
@@ -149,6 +205,10 @@ describe("the UK's matching rules", () => {
     assert.match(report.filename, /-2026-27-GB-average-GBP\.csv$/)
     assert.ok(report.notes.some((note) => note.includes("the 2026 to 2027 tax year (April 6, 2026 to April 5, 2027)")))
     assert.equal(report.form, null)
+    // A sale at 00:30 on April 6 in the UK is in the year that starts then, and not the one before.
+    const late = walletOf(A, [buy("2026-01-05", 2, 2000), at("2026-04-05", -E18, { proceedsMicros: gbp(1500), timestamp: "2026-04-05T23:30:00.000Z" })])
+    const yearOf = (year: number) => taxReportOf([late], { country: "GB", method: "average", scope: "pooled", year }).soldCount
+    assert.deepEqual([yearOf(2025), yearOf(2026)], [0, 1])
     // In pounds, with nothing to warn about the currency.
     assert.ok(!report.warnings.some((warning) => /reports in/.test(warning)))
   })

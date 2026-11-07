@@ -16,8 +16,38 @@ import { applyLegTaking, effectOf, emptyPosition, type CostPiece, type FoldLeg, 
 
 const DAY_MS = 86_400_000
 
-/** A UTC day, counted from 1970, so 30 days after is 30 more. */
-export const dayNumber = (timestamp: string) => Math.floor(Date.parse(timestamp.slice(0, 10)) / DAY_MS)
+/** British civil time, which the Summer Time Act 1972 (ss. 1 and 3) makes the time for anything a statute dates, so a UK day and tax year go by it. */
+export const UK_TIME_ZONE = "Europe/London"
+
+const formatters = new Map<string, Intl.DateTimeFormat>()
+
+/** The calendar date this happened on in a time zone, as YYYY-MM-DD, which sorts as text. */
+export function localDate(timestamp: string, timeZone = "UTC"): string {
+  if (timeZone === "UTC") return new Date(timestamp).toISOString().slice(0, 10)
+  let format = formatters.get(timeZone)
+  if (!format) {
+    format = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" })
+    formatters.set(timeZone, format)
+  }
+  return format.format(new Date(timestamp))
+}
+
+/** When a calendar date starts in a time zone, as `toISOString` writes it. */
+export function startOfDate(date: string, timeZone = "UTC"): string {
+  const midnight = Date.parse(`${date}T00:00:00.000Z`)
+  if (timeZone === "UTC") return new Date(midnight).toISOString()
+  // A zone's offset is how far its clock is from UTC at that moment, and it can differ either side of the date's start.
+  const offsetAt = (ms: number) => {
+    const local = new Date(ms).toLocaleString("sv-SE", { timeZone }).replace(" ", "T")
+    return Date.parse(`${local}Z`) - Math.floor(ms / 1000) * 1000
+  }
+  let guess = midnight - offsetAt(midnight)
+  guess = midnight - offsetAt(guess)
+  return new Date(guess).toISOString()
+}
+
+/** A day in a time zone, counted from 1970, so 30 days after is 30 more. */
+export const dayNumber = (timestamp: string, timeZone = "UTC") => Math.floor(Date.parse(localDate(timestamp, timeZone)) / DAY_MS)
 
 export type MatchedEffect = {
   /** The leg as it came, since its effect's leg leaves out an order that doesn't matter here. */
@@ -25,8 +55,11 @@ export type MatchedEffect = {
   effect: LegEffect
   /** Part of its cost is what was acquired in the 30 days after it. */
   laterBuys: boolean
-  /** The 30 days after it aren't all read yet, so more could still be matched to it. */
-  tentative: boolean
+  /**
+   * Why its cost may still change: its own day isn't all read yet, and all of a day's acquisitions count as one, so another buy
+   * that day changes what it's matched to; or the 30 days after it aren't all read yet, so more could still be matched to it.
+   */
+  tentative: "day" | "30 days" | null
 }
 
 const carrying = (decimals: number, qty: bigint, orderUnknown?: FoldLeg["orderUnknown"]): FoldLeg => ({
@@ -73,14 +106,14 @@ const acquiredHere = (leg: PricedLeg, label: string) => !leg.opening && (leg.kin
  * What a credit brought that was acquired on a known day, which can be matched, and the rest, which only joins the pool. Order in a
  * block doesn't matter to a day's matching, so what's matched drops it. What joins the pool keeps it, since there it can.
  */
-function splitCredit(leg: PricedLeg): { acquired: { day: number; leg: PricedLeg }[]; pooled: PricedLeg | null } {
+function splitCredit(leg: PricedLeg, timeZone: string): { acquired: { day: number; leg: PricedLeg }[]; pooled: PricedLeg | null } {
   const { orderUnknown: _, ...plain } = leg
-  if (!leg.pieces) return acquiredHere(leg, leg.costLabel) ? { acquired: [{ day: dayNumber(leg.timestamp), leg: plain }], pooled: null } : { acquired: [], pooled: leg }
+  if (!leg.pieces) return acquiredHere(leg, leg.costLabel) ? { acquired: [{ day: dayNumber(leg.timestamp, timeZone), leg: plain }], pooled: null } : { acquired: [], pooled: leg }
   const acquired: { day: number; leg: PricedLeg }[] = []
   const pooled: CostPiece[] = []
   for (const piece of leg.pieces) {
     const at = piece.boughtAt || (piece.acquiredAt && !piece.undated ? piece.acquiredAt : null) || (!piece.undated && acquiredHere(leg, piece.label) ? leg.timestamp : null)
-    if (at) acquired.push({ day: dayNumber(at), leg: { ...plain, delta: piece.qty, pieces: [piece] } })
+    if (at) acquired.push({ day: dayNumber(at, timeZone), leg: { ...plain, delta: piece.qty, pieces: [piece] } })
     else pooled.push(piece)
   }
   const pooledQty = pooled.reduce((sum, piece) => sum + BigInt(piece.qty), 0n)
@@ -107,9 +140,9 @@ type Disposal = { index: number; day: number; qty: bigint }
 
 /**
  * Each debit's effect, in order, for one asset's legs in the order they happened. `readThroughDay` is the last day every wallet
- * here has been read to the end of, which says whether the 30 days after a disposal are all known.
+ * here has been read to the end of, which says whether a disposal's day and the 30 days after it are all known. Days are in `timeZone`.
  */
-function matchAsset(legs: readonly PricedLeg[], readThroughDay: number): MatchedEffect[] {
+function matchAsset(legs: readonly PricedLeg[], readThroughDay: number, timeZone: string): MatchedEffect[] {
   const decimals = (legs[0] as PricedLeg).decimals
   const empty = () => emptyPosition("average", decimals)
   const acquisitions: Acquisition[] = []
@@ -118,10 +151,10 @@ function matchAsset(legs: readonly PricedLeg[], readThroughDay: number): Matched
   legs.forEach((leg, index) => {
     const delta = BigInt(leg.delta)
     if (delta > 0n) {
-      const { acquired, pooled } = splitCredit(leg)
+      const { acquired, pooled } = splitCredit(leg, timeZone)
       for (const part of acquired) acquisitions.push({ ...part, arrival: index, qty: BigInt(part.leg.delta) })
       if (pooled) pooledCredits.set(index, pooled)
-    } else if (delta < 0n && leg.kind !== "transfer") disposals.push({ index, day: dayNumber(leg.timestamp), qty: -delta })
+    } else if (delta < 0n && leg.kind !== "transfer") disposals.push({ index, day: dayNumber(leg.timestamp, timeZone), qty: -delta })
   })
 
   // The plan, by quantity: each day's acquisitions and disposals, then what's matched the same day and in the 30 days after.
@@ -177,7 +210,7 @@ function matchAsset(legs: readonly PricedLeg[], readThroughDay: number): Matched
   }
 
   // What each disposal is matched to, shared among a day's disposals by how much each disposed of, since they count as one.
-  const matchedFor = new Map<number, { pieces: CostPiece[]; laterBuys: boolean; tentative: boolean }>()
+  const matchedFor = new Map<number, { pieces: CostPiece[]; laterBuys: boolean; tentative: MatchedEffect["tentative"] }>()
   const disposalsOn = groupBy(disposals)
   for (const day of [...disposedOn.keys()].sort((a, b) => a - b)) {
     const matches = later.get(day) ?? []
@@ -185,7 +218,7 @@ function matchAsset(legs: readonly PricedLeg[], readThroughDay: number): Matched
     for (const match of matches) matched = putIn(matched, draw(match.day, match.qty))
     const ofDay = disposalsOn.get(day) as Disposal[]
     const parts = shares(ofDay.map(({ qty }) => qty), held(matched))
-    const tentative = (disposedOn.get(day) as bigint) > (sameDay.get(day) as bigint) && day + 30 > readThroughDay
+    const tentative = day > readThroughDay ? "day" : (disposedOn.get(day) as bigint) > (sameDay.get(day) as bigint) && day + 30 > readThroughDay ? "30 days" : null
     ofDay.forEach((disposal, i) => {
       const taken = takeOut(matched, parts[i] as bigint)
       matched = taken.state
@@ -205,7 +238,7 @@ function matchAsset(legs: readonly PricedLeg[], readThroughDay: number): Matched
       return
     }
     if (delta === 0n) return
-    const matched = matchedFor.get(index) ?? { pieces: [], laterBuys: false, tentative: false }
+    const matched = matchedFor.get(index) ?? { pieces: [], laterBuys: false, tentative: null }
     const matchedQty = matched.pieces.reduce((sum, piece) => sum + BigInt(piece.qty), 0n)
     const fromPool = takeOut(pool, -delta - matchedQty, leg.orderUnknown === "always" ? "always" : undefined)
     pool = fromPool.state
@@ -217,13 +250,13 @@ function matchAsset(legs: readonly PricedLeg[], readThroughDay: number): Matched
   return effects
 }
 
-/** Every debit's effect under the UK's rules, by asset. Legs are in the order they happened, as the fold reads them. */
-export function matchUk(legs: readonly PricedLeg[], readThroughDay: number): { asset: string; effects: MatchedEffect[] }[] {
+/** Every debit's effect under the UK's rules, by asset, with days in UK time. Legs are in the order they happened, as the fold reads them. */
+export function matchUk(legs: readonly PricedLeg[], readThroughDay: number, timeZone = UK_TIME_ZONE): { asset: string; effects: MatchedEffect[] }[] {
   const byAsset = new Map<string, PricedLeg[]>()
   for (const leg of legs) {
     const list = byAsset.get(leg.asset)
     if (list) list.push(leg)
     else byAsset.set(leg.asset, [leg])
   }
-  return [...byAsset].map(([asset, assetLegs]) => ({ asset, effects: matchAsset(assetLegs, readThroughDay) }))
+  return [...byAsset].map(([asset, assetLegs]) => ({ asset, effects: matchAsset(assetLegs, readThroughDay, timeZone) }))
 }
