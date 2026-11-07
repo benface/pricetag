@@ -3,7 +3,7 @@ import { describe, it } from "node:test"
 import { portfolioOf } from "../src/core/portfolio.ts"
 import { USD_CONTEXT, explainMetric } from "../src/core/explain.ts"
 import { createWallets, sharedMarket, type ReadL1Fees, type Source, type WindowRows } from "@pricetag/sdk/internal"
-import { ASSETS, ETH_ADDRESS, LAST_2S_BLOCK, USDC_ADDRESS, foldWallet, msBetweenBlocks, pnlOverTime, priceSampleBlocks, shortHash, usdView, type FeedRound, type LegRow, type Reference } from "@pricetag/sdk/core"
+import { ASSETS, ETH_ADDRESS, LAST_2S_BLOCK, USDC_ADDRESS, foldWallet, msBetweenBlocks, pnlOverTime, priceSampleBlocks, shortHash, usdView, type FeedRound, type LegRow, type Reference, type WalletData } from "@pricetag/sdk/core"
 
 const ME = "0x00000000000000000000000000000000000000aa"
 
@@ -2282,20 +2282,25 @@ describe("a client that runs for a long time", () => {
   const HOUR = 3600_000
   const aero = (block: number): LegRow => ({ ...row(block), token: AERO, kind: "erc20", amount: (10n ** 18n).toString() })
 
-  it("lets go of market prices no read has used in a day, and reads them again when one's needed", async () => {
+  const OTHER = "0x00000000000000000000000000000000000000bb"
+  const DEGEN = "0x4ed4e862860bed51a9570b96d89af5e1b0efefed"
+  const NOW = Date.parse("2026-11-04T00:00:00.000Z") / 1000
+
+  it("lets go of market prices no read has used in a day, once no kept wallet uses them, and reads them again when one's needed", async () => {
     let time = 0
     let head = 1000
     const marketReads: number[] = []
     const { source } = fake(new Map([[950, [aero(950)]]]), () => reference(head))
     const withMarket: Source = {
       ...source,
+      readWindow: async (address, from, to) => (address === ME ? source.readWindow(address, from, to) : { rows: [], priced: [], gasUnknown: [] }),
       marketReady: async () => true,
       async readMarketTrades(_, __, to) {
         marketReads.push(to)
         return []
       },
     }
-    const wallets = createWallets(withMarket, async () => headAt(head)(), noFees, console, { now: () => time })
+    const wallets = createWallets(withMarket, async () => headAt(head)(), noFees, console, { now: () => time, maxWallets: 1 })
     const first = await wallets.get(ME)
     const read = marketReads.length
     assert.ok(read > 0)
@@ -2305,9 +2310,77 @@ describe("a client that runs for a long time", () => {
     assert.equal(marketReads.length, read, "what a read keeps using stays")
     head += 1
     time += 25 * HOUR
+    await wallets.get(ME)
+    assert.equal(marketReads.length, read, "and so does what a kept wallet uses, however long ago")
+    // Reading another wallet lets go of this one, so a day later nothing kept uses its prices.
+    await wallets.get(OTHER)
+    time += 25 * HOUR
+    await wallets.get(OTHER)
     const later = await wallets.get(ME)
     assert.deepEqual(marketReads.slice(read).sort(), marketReads.slice(0, read).sort(), "each one unused for a day is read again")
     assert.deepEqual(later.legs, first.legs, "and the numbers don't change")
+  })
+
+  it("keeps a kept wallet's market prices when another wallet's read lets go of what's unused", async () => {
+    let time = 0
+    let head = 1000
+    const swap = [
+      { ...aero(950), side: "debit" as const },
+      { ...aero(950), token: DEGEN, log_index: 1 },
+    ]
+    const { source } = fake(new Map([[950, swap]]), () => reference(head))
+    const withMarket: Source = {
+      ...source,
+      readWindow: async (address, from, to) => (address === ME ? source.readWindow(address, from, to) : { rows: [], priced: [], gasUnknown: [] }),
+      marketReady: async () => true,
+      readMarketTrades: async (asset, _, to) => [0, 1, 2].map((i) => ({ asset, blockNum: to - i, txHash: `0xmarket${i}`, usdMicros: "1000000", notionalUsdMicros: "500000000" })),
+    }
+    const wallets = createWallets(withMarket, async () => headAt(head)(), noFees, console, { now: () => time })
+    const first = await wallets.get(ME)
+    const numbers = (wallet: WalletData) => [wallet.legs.find((l) => l.asset === "AERO")?.priceMicros, wallet.legs.find((l) => l.asset === "DEGEN")?.costMicros]
+    assert.deepEqual(numbers(first), ["1000000", "1000000"])
+    // A saved response is shown again without a read, the way the server does.
+    for (let hour = 1; hour <= 25; hour++) {
+      time = hour * HOUR
+      assert.deepEqual(numbers(wallets.peek(ME) as WalletData), numbers(first))
+    }
+    head += 1
+    await wallets.get(OTHER)
+    const after = wallets.peek(ME) as WalletData
+    assert.deepEqual(numbers(after), numbers(first))
+    assert.deepEqual(after.legs, first.legs)
+  })
+
+  it("keeps a kept wallet's chart answers from its feeds when another wallet's read lets go of what's unused", async () => {
+    let time = 0
+    let head = 1000
+    const feedReads: number[] = []
+    const { source } = fake(new Map([[950, [aero(950)]], [960, [{ ...aero(960), token: DEGEN, account: OTHER }]]]), () => reference(head))
+    const withFeeds: Source = {
+      ...source,
+      readWindow: async (address, from, to) => {
+        const window = await source.readWindow(address, from, to)
+        return { ...window, rows: window.rows.filter((r) => r.account === address) }
+      },
+      async readFeedRounds(assets, blocks) {
+        feedReads.push(...blocks)
+        return new Map(blocks.map((block) => [block, Object.fromEntries(assets.map((asset) => [asset, { answer: "63000000", updatedAt: NOW - 60, blockNum: block, timestamp: "2026-11-04T00:00:00.000Z" }]))]))
+      },
+    }
+    const wallets = createWallets(withFeeds, async () => headAt(head)(), noFees, console, { now: () => time })
+    const first = await wallets.get(ME)
+    assert.equal(first.marketMarks[950]?.AERO, "630000")
+    assert.deepEqual(first.feedMarks, { 950: ["AERO"] })
+    for (let hour = 1; hour <= 25; hour++) {
+      time = hour * HOUR
+      wallets.peek(ME)
+    }
+    head += 1
+    const read = feedReads.length
+    await wallets.get(OTHER)
+    assert.ok(feedReads.length > read, "the other wallet's chart reads a feed, so this wallet's response is worked out again")
+    const after = wallets.peek(ME) as WalletData
+    assert.deepEqual([after.marketMarks, after.feedMarks], [first.marketMarks, first.feedMarks])
   })
 
   it("forgets a reorg once the tables and every wallet kept are past it", async () => {
@@ -2337,5 +2410,50 @@ describe("a client that runs for a long time", () => {
     }
     assert.equal(await fixedReadQueries(1), 2, "until it's forgotten, a read before the reorg's blocks asks how far the tables have got")
     assert.equal(await fixedReadQueries(11), 1, "after, it doesn't need to")
+  })
+
+  it("forgets a reorg once token_trades is past it too, even when no wallet trades a token off the list", async () => {
+    let time = 0
+    let head = 1000
+    let processedReads = 0
+    let tokensReached = 1000
+    const tokenProgress: number[] = []
+    const { source } = fake(new Map([[950, [row(950)]]]), () => reference(head))
+    const counting: Source = {
+      ...source,
+      async processedThrough(after, at) {
+        processedReads += 1
+        return source.processedThrough(after, at)
+      },
+      readTokenActivity: async () => [],
+      async tokenActivityThrough(after) {
+        tokenProgress.push(after)
+        return tokensReached >= after ? tokensReached : null
+      },
+    }
+    const wallets = createWallets(counting, async () => headAt(head)(), noFees, console, { now: () => time })
+    await wallets.get(ME)
+    assert.deepEqual(tokenProgress, [], "with no reorg, nothing asks")
+    await wallets.rewind(900, 1000)
+    head = 1100
+    await wallets.get(ME)
+    assert.deepEqual(tokenProgress, [1000], "once the tables are past it, token_trades is asked")
+    time += 11 * 60_000
+    await wallets.get(ME)
+    let before = processedReads
+    await wallets.get(OTHER, { to: 950 })
+    assert.equal(processedReads - before, 2, "token_trades hadn't got past it, so it's kept")
+    tokensReached = 1100
+    head = 1101
+    await wallets.get(ME)
+    time += 11 * 60_000
+    await wallets.get(ME)
+    const asked = tokenProgress.length
+    before = processedReads
+    await wallets.get("0x00000000000000000000000000000000000000cc", { to: 950 })
+    assert.equal(processedReads - before, 1, "and then forgotten")
+    head = 1102
+    await wallets.get(ME)
+    assert.equal(tokenProgress.length, asked, "with nothing left to wait for, it isn't asked again")
   })
 })

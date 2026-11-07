@@ -17,7 +17,7 @@ import { openingLegs, type BalanceSnapshot } from "./reconcile.ts"
 import { ASSETS } from "./tokens.ts"
 import type { Mode, UnlistedToken, WalletData } from "./wallet-data.ts"
 import { createEthChecks, settle, withUnseenEth, type CurrentResponse } from "./wallet-eth.ts"
-import { MARKET_HEAD_BUCKET_BLOCKS, assetsHeld, bucketOf, chartReads, createPriceCache, feedMark, feedPrices, marketKey, marketWanted, type ChartRounds, type MarketOn } from "./wallet-prices.ts"
+import { MARKET_HEAD_BUCKET_BLOCKS, assetsHeld, bucketOf, chartReads, createPriceCache, feedMark, feedPrices, marketKey, marketWanted, pricesUsedBy, type ChartRounds, type MarketOn } from "./wallet-prices.ts"
 import { isComplete, isL1FeeCurrent, isL1FeeSettled, l1FeeRows, settledThrough, type Cached, type L1Fee, type Reorg } from "./wallet-state.ts"
 
 export { settledThrough } from "./wallet-state.ts"
@@ -79,7 +79,7 @@ const MAX_WALLETS = 20
 const MAX_REFUSED = 1_000
 /** A busy wallet catches up over a few refreshes, and until then the swaps left say they aren't confirmed. */
 const MAX_ETH_BALANCES_PER_READ = 400
-/** How long a price or feed answer no read has used is kept. A wallet that's read keeps using its own, so this is only what's been left behind. */
+/** How long a price or feed answer no read has used is kept, unless a kept wallet uses it. So this is only what's been left behind. */
 const UNUSED_MS = 24 * 3600_000
 /** How often to look for those, and for reorgs every table is past. */
 const SWEEP_EVERY_MS = 10 * 60_000
@@ -173,6 +173,8 @@ function sampleBlocksOf({ rows, latest }: Pick<Cached, "rows" | "latest">): numb
 }
 
 const keyOf = (address: string, { from, to }: BlockRange) => `${address.toLowerCase()}:${from ?? ""}:${to ?? ""}`
+/** The address a wallet's key was made with. */
+const addressOfKey = (key: string) => key.split(":")[0] as string
 /** The `to` a wallet's key was made with. */
 const toOfKey = (key: string) => {
   const to = key.split(":")[2]
@@ -253,16 +255,18 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     return unsettled.length > 0 ? Math.min(...unsettled.map(({ from }) => from)) : null
   }
 
+  const isPast = (reorg: Reorg, reached: number) => settledThrough(reached) >= reorg.oldTip
+
   /**
-   * Lets go of what's only kept for reads that stopped coming: prices and feed answers no read has used in a day, and reorgs
+   * Lets go of what's only kept for reads that stopped coming: prices and feed answers no read has used in a day and no kept
+   * wallet's response is worked out from, since one shown again with no new read would lose them, and reorgs
    * that the tables, `token_trades` and every wallet kept are all past. Without this, a server that runs for weeks keeps growing.
    */
   function sweep() {
     const time = now()
     if (time - sweptAt < SWEEP_EVERY_MS) return
     sweptAt = time
-    pricing.forgetUnusedSince(time - UNUSED_MS)
-    const isPast = (reorg: Reorg, reached: number) => settledThrough(reached) >= reorg.oldTip
+    pricing.forgetUnusedSince(time - UNUSED_MS, new Set([...wallets].flatMap(([key, wallet]) => pricesUsedBy(addressOfKey(key), wallet))))
     for (let i = reorgs.length - 1; i >= 0; i--) {
       const reorg = reorgs[i] as Reorg
       const tokensPast = !source.readTokenActivity || isPast(reorg, pricing.tokensReached)
@@ -410,6 +414,9 @@ export function createWallets(source: Source, currentHead: () => Promise<Head>, 
     const { headBucket, unpriced, wanted } = marketWanted(wallet, wallet.priced, Math.min(wallet.coveredTo, head.blockNum), current)
     const marketRead = await pricing.loadMarket(wanted, { reads: chartReads(address, wallet.rows, wallet.opening), references: wallet.references, head: chain.blockNum })
     await pricing.loadTokenActivity(address, wallet.rows, chain.blockNum)
+    // Once the tables are past a reorg, only `token_trades` can still hold it up, so it's asked even if this wallet needs none of it.
+    const tokensBehind = reorgs.filter((reorg) => isPast(reorg, tablesSeen) && !isPast(reorg, pricing.tokensReached))
+    if (tokensBehind.length > 0) await pricing.checkTokensPast(Math.min(...tokensBehind.map(({ oldTip }) => oldTip)), chain.blockNum)
     for (const asset of unpriced) {
       const price = pricing.marketAt(`${asset}:${headBucket}`)
       if (price) current[asset] = { micros: price.usdMicros, source: "market", blockNum: price.blockNum }

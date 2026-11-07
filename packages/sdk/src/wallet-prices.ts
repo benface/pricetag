@@ -86,6 +86,23 @@ export function marketWanted(wallet: Pick<Cached, "rows" | "opening" | "closing"
   return { headBucket, unpriced, wanted: [...unpriced.map((asset) => ({ asset, bucket: headBucket })), ...unpricedMoves(wallet.rows, priced).map(({ asset, block }) => ({ asset, bucket: bucketOf(block) }))] }
 }
 
+/**
+ * Every market price and feed answer a kept wallet's response can be worked out from, by `<asset>:<bucket>`: its movements', its chart's,
+ * and what it holds now. A response is worked out again whenever a price changes anywhere, so letting go of one of these would change a
+ * wallet nobody read again.
+ */
+export function pricesUsedBy(address: string, wallet: Pick<Cached, "rows" | "opening" | "closing" | "lastBalances" | "latest" | "coveredTo">): string[] {
+  const heads = new Set([wallet.latest.blockNum, Math.min(wallet.coveredTo, wallet.latest.blockNum)].map((block) => bucketOf(block, MARKET_HEAD_BUCKET_BLOCKS)))
+  return [
+    ...wallet.rows.flatMap((row) => {
+      const token = tokenByAddress(row.token)
+      return token && !token.oracle ? [marketKey({ asset: token.asset, bucket: bucketOf(row.block_num) })] : []
+    }),
+    ...chartReads(address, wallet.rows, wallet.opening).map(marketKey),
+    ...assetsHeld(wallet).flatMap((asset) => [...heads].map((bucket) => marketKey({ asset, bucket }))),
+  ]
+}
+
 /** The feeds' prices, given what ETH's worth. Each rule has its own ETH price, so this isn't part of a wallet's facts. */
 export function feedPrices(rounds: Record<string, FeedRound>, prices: LatestPrices): LatestPrices {
   return Object.fromEntries(Object.entries(rounds).flatMap(([asset, round]) => {
@@ -129,8 +146,8 @@ class UsedMap<K, V> {
   *[Symbol.iterator](): IterableIterator<[K, V]> {
     for (const [key, { value }] of this.#entries) yield [key, value]
   }
-  forgetUnusedSince(time: number): void {
-    for (const [key, { usedAt }] of this.#entries) if (usedAt < time) this.#entries.delete(key)
+  forgetUnusedSince(time: number, keep: ReadonlySet<K>): void {
+    for (const [key, { usedAt }] of this.#entries) if (usedAt < time && !keep.has(key)) this.#entries.delete(key)
   }
 }
 
@@ -461,9 +478,23 @@ export function createPriceCache(source: Source, logger: Logger, reorgs: readonl
     forgetPricesFrom,
     forgetTokenTradesFrom,
     marketPricesAt,
-    /** Lets go of prices and feed answers no read has used since `time`. A read that needs one again reads it again. */
-    forgetUnusedSince(time: number) {
-      for (const cache of [market, chartRounds, noAnswers]) cache.forgetUnusedSince(time)
+    /** Lets go of prices and feed answers no read has used since `time`, except `keep`. A read that needs one again reads it again. */
+    forgetUnusedSince(time: number, keep: ReadonlySet<string>) {
+      for (const cache of [market, chartRounds, noAnswers]) cache.forgetUnusedSince(time, keep)
+    },
+    /**
+     * Asks how far `token_trades` has got, for a reorg that only it can still be replaying. A wallet that trades no token off the list
+     * never asks otherwise, and the reorg would be kept forever. A failed read is asked again next time.
+     */
+    async checkTokensPast(oldTip: number, head: number): Promise<void> {
+      if (!source.readTokenActivity || !source.tokenActivityThrough || settledThrough(tokensReached) >= oldTip) return
+      const startedAt = rewinds
+      try {
+        const reached = await source.tokenActivityThrough(oldTip, head)
+        if (reached !== null && startedAt === rewinds) tokensReached = Math.max(tokensReached, reached)
+      } catch (error) {
+        logger.warn(`Token market progress check failed: ${describeError(error)}`)
+      }
     },
   }
 }
