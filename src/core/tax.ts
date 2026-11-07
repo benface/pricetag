@@ -348,7 +348,7 @@ function namedIn(book: Book, wallet: WalletResponse, legs: readonly PricedLeg[])
  * Each wallet with what the user has said filled in, the same way the apps do it. The wallets in a report are the user's
  * own, because that's what asking for them together says, so costs carry between them whatever else has been answered.
  */
-function sourcesOf(wallets: readonly WalletResponse[], method: Method, { book: given = emptyBook(), costsFrom = [], namedUnits = true }: TaxContext): Source[] {
+function sourcesOf(wallets: readonly WalletResponse[], method: Method, { book: given = emptyBook(), costsFrom = [], namedUnits = true }: TaxContext): { sources: Source[]; lenders: Source[] } {
   const { unitChoices: _, ...withoutChoices } = given
   const book: Book = namedUnits ? given : withoutChoices
   const sides = [...wallets, ...costsFrom].map((wallet) => {
@@ -360,10 +360,11 @@ function sourcesOf(wallets: readonly WalletResponse[], method: Method, { book: g
   const histories = sides.map(({ wallet }) => ({ address: normalizeAddress(wallet.address), legs: wallet.legs }))
   for (const history of histories.slice(0, wallets.length)) assertFoldFits(history, histories.filter((other) => other !== history), method)
   const { legs, received } = resolveLegs(sides, method, linking)
-  return sides.slice(0, wallets.length).map((side) => {
+  const all = sides.map((side) => {
     const address = normalizeAddress(side.wallet.address)
     return { ...side, view: { ...side.view, legs: legs.get(address) as PricedLeg[] }, received: received.filter((item) => item.wallet === address), ...namedIn(book, side.wallet, side.view.legs) }
   })
+  return { sources: all.slice(0, wallets.length), lenders: all.slice(wallets.length) }
 }
 
 const moveKey = (leg: PricedLeg) => `${leg.txHash}:${leg.asset}`
@@ -558,6 +559,32 @@ function markChosen(rows: TaxRow[], chosen: ChosenUnits | null, method: Method):
   return rows
 }
 
+/**
+ * What became of the units named for sends that aren't rows of their own, by `<wallet>:<leg id>`: a move between the report's
+ * wallets, which keeps the sender's cost, and any send from a wallet it only takes costs from. Each still decides what's left to
+ * sell, or what arrived cost, so a record it couldn't use falls back as loudly as a sale's. Pooled, a move between the report's
+ * wallets takes nothing from the pool, so only what the others sent counts.
+ */
+function movedChoices(sources: readonly Source[], lenders: readonly Source[], method: Method, scope: TaxScope): Map<string, ChosenUnits> {
+  const outcomes = new Map<string, ChosenUnits>()
+  const moves = movesBetween([...sources, ...lenders])
+  const within = movesBetween(sources)
+  for (const [i, { wallet, view, namedLate }] of [...sources, ...lenders].entries()) {
+    const lender = i >= sources.length
+    if (!lender && scope === "pooled") continue
+    if (!view.legs.some((leg) => leg.takes || namedLate?.has(leg.id))) continue
+    for (const position of foldPositions(view.legs, method, {})) {
+      for (const effect of position.effects) {
+        const { leg } = effect
+        if (BigInt(leg.delta) >= 0n || !isMove(leg, lender ? moves : within)) continue
+        const chosen = chosenOf(effect, namedLate)
+        if (chosen !== null) outcomes.set(`${wallet.address}:${leg.id}`, chosen)
+      }
+    }
+  }
+  return outcomes
+}
+
 function rowsFrom(sources: readonly Source[], method: Method, scope: TaxScope, country: TaxCountry | null): TaxRow[] {
   const rows: TaxRow[] = []
   const lateIn = new Map(sources.map((source) => [source.wallet.address, source.namedLate]))
@@ -633,7 +660,7 @@ function receivedRowsOf(sources: readonly Source[]): ReceivedRow[] {
 
 /** Every row, oldest first, with a transaction's fee before what it did, the way the fold reads them. */
 export function taxRows(wallets: readonly WalletResponse[], { method, scope, country }: Pick<TaxSettings, "method" | "scope"> & { country?: TaxCountryCode }, context: TaxContext = {}): TaxRow[] {
-  return rowsFrom(sourcesOf(wallets, method, context), method, scope, country ? TAX_COUNTRIES[country] : null)
+  return rowsFrom(sourcesOf(wallets, method, context).sources, method, scope, country ? TAX_COUNTRIES[country] : null)
 }
 
 const walletWords = (text: string) => text.split(/[\s,]+/).filter(Boolean)
@@ -739,7 +766,7 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
   const country = TAX_COUNTRIES[code]
   const first = wallets[0] as WalletResponse
   const { currency } = first
-  const sources = sourcesOf(wallets, method, { ...context, namedUnits: code === "US" })
+  const { sources, lenders } = sourcesOf(wallets, method, { ...context, namedUnits: code === "US" })
   const named = wallets.length > 1
   const years = yearsOf(wallets)
   const year = settings.year === "latest" ? (years[0] ?? null) : settings.year === "all" || settings.year === undefined ? null : settings.year
@@ -771,7 +798,9 @@ export function taxReportOf(wallets: readonly WalletResponse[], settings: TaxSet
   if (given > 0) warnings.push(`${plural(given, "row")} of ${rows.length.toLocaleString("en-US")} ${given === 1 ? "uses" : "use"} a market price from when something you said came from someone else arrived. ${country.marketWarning}`)
   if (superficial > 0) warnings.push(`${plural(superficial, "loss", "losses")} may be superficial, because more of the same asset was acquired within 30 days. A superficial loss can't be deducted, so check ${superficial === 1 ? "it" : "them"} before filing.`)
   if (received.length > 0) warnings.push(`${plural(received.length, "thing")} you received from other addresses may be income, like pay or rewards. The full report lists ${received.length === 1 ? "it" : "them"} as Received, with what ${received.length === 1 ? "it was" : "each was"} worth when ${received.length === 1 ? "it" : "they"} arrived, so check ${received.length === 1 ? "it" : "each one"}.`)
-  const chosenEvents = (chosen: ChosenUnits) => eventsOf(rows.filter((row) => row.chosenUnits === chosen)).size
+  // A move's record changes what later sales cost, whenever it happened, so those count whatever the year.
+  const moved = [...movedChoices(sources, lenders, method, scope).values()]
+  const chosenEvents = (chosen: ChosenUnits) => eventsOf(rows.filter((row) => row.chosenUnits === chosen)).size + moved.filter((outcome) => outcome === chosen).length
   const salesOrSends = (count: number) => plural(count, "sale or send", "sales or sends")
   const refused = chosenEvents("refused")
   const late = chosenEvents("late")

@@ -8,7 +8,7 @@
 // in whole tokens, like 0.25. Rows with the same wallet, transaction and asset are one record.
 
 import { isAddress, normalizeAddress, tokenBySymbol } from "@pricetag/sdk/core"
-import { MAX_CHOICE_TAKES, parseUnitChoice, type UnitChoice } from "./book.ts"
+import { MAX_CHOICE_TAKES, onCalendar, parseUnitChoice, type UnitChoice } from "./book.ts"
 import { parseCsvLine } from "./exchange-import.ts"
 
 export const UNIT_CHOICE_COLUMNS = ["Recorded at", "Wallet", "Transaction", "Asset", "Bought on", "Amount"] as const
@@ -33,14 +33,14 @@ function unitsOf(text: string, decimals: number): bigint | null {
 /** A moment as `toISOString` writes it, or a UTC day as it was given. */
 function boughtAtOf(text: string): string | null {
   const clean = text.trim()
-  if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) return Number.isNaN(Date.parse(clean)) ? null : clean
+  if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) return onCalendar(clean) ? clean : null
   return momentOf(clean)
 }
 
 /** Only with a time zone, since a moment without one could be any of a day's worth of them. */
 function momentOf(text: string): string | null {
   const clean = text.trim()
-  if (!/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/i.test(clean)) return null
+  if (!/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/i.test(clean) || !onCalendar(clean)) return null
   const ms = Date.parse(clean.replace(" ", "T"))
   return Number.isNaN(ms) ? null : new Date(ms).toISOString()
 }

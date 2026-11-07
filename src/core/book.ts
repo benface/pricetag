@@ -336,8 +336,22 @@ function parsePurchase(value: unknown): Purchase | null {
   return { provider: row.provider, order: row.order, wallet: normalizeAddress(row.wallet), asset: row.asset, units: row.units, txHash: row.txHash.toLowerCase(), blockNum: blockNum as number | null, cost, costUsdMicros: costUsdMicros as string | null }
 }
 
-const isMoment = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) && !Number.isNaN(Date.parse(value))
-const isDay = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value))
+/**
+ * Whether a date, with the time after it if there is one, is one the calendar has: a real day of its month, and a time and offset
+ * on the clock. `Date.parse` rolls some that aren't, like February 30, into the next month, which would name another day.
+ */
+export function onCalendar(text: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?)?(?:Z|[+-](\d{2}):?(\d{2}))?$/i.exec(text)
+  if (!match) return false
+  const [year, month, day, hour = 0, minute = 0, second = 0, offsetHour = 0, offsetMinute = 0] = match.slice(1).map((part) => (part === undefined ? undefined : Number(part))) as (number | undefined)[]
+  const date = new Date(0)
+  date.setUTCFullYear(year as number, (month as number) - 1, day as number)
+  const isDate = date.getUTCFullYear() === year && date.getUTCMonth() === (month as number) - 1 && date.getUTCDate() === day
+  return isDate && hour <= 23 && minute <= 59 && second <= 59 && offsetHour <= 23 && offsetMinute <= 59
+}
+
+const isMoment = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) && onCalendar(value)
+const isDay = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && onCalendar(value)
 const isTxHash = (value: unknown): value is string => typeof value === "string" && /^0x[0-9a-fA-F]{64}$/.test(value)
 
 export function parseUnitChoice(value: unknown): UnitChoice | null {

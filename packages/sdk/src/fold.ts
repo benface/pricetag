@@ -816,6 +816,7 @@ function planOf(lots: Window<Lot>, takes: readonly TakeChoice[], qty: bigint): M
     if (wanted > available) return null
     if (wanted < available && open.some((lot) => costsDiffer(open[0] as Lot, lot))) return null
     for (const lot of open) {
+      if (wanted === 0n) break
       const n = wanted < leftOf(lot) ? wanted : leftOf(lot)
       plan.set(lot, (plan.get(lot) ?? 0n) + n)
       wanted -= n
@@ -839,7 +840,7 @@ function take(state: PositionState, held: Held, qty: bigint, plan: ReadonlyMap<L
   const ordered: Window<Lot> = stored ? whole(plan ? stored : (inTakeOrder(stored, state.method) as Lot[])) : held
   const unplaced = new Set<Lot>()
   const split = plan
-    ? new Set([...plan].flatMap(([lot, n]) => (lot.wholeCostOnly && n < BigInt(lot.qty) ? [lot] : [])))
+    ? new Set([...plan].flatMap(([lot, n]) => (lot.wholeCostOnly && n > 0n && n < BigInt(lot.qty) ? [lot] : [])))
     : new Set(stored ? lotsSplitBy({ lots: ordered.array }, taking, state.method, unplaced) : lotsSplitBy(state, taking))
   const answerable = !plan && stored !== null && split.size > 0 && splitIsAnswerable(stored, state.method)
   let kept: Lot[] = []
