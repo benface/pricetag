@@ -308,14 +308,17 @@ const estimatedOf = (lot: Lot) => BigInt(lot.estimatedCostMicros ?? "0")
 /** What a position's lots add up to. Only a known cost's estimate counts, as in `valuePosition`. */
 type LotSums = { qty: bigint; unknownCostQty: bigint; cost: bigint; estimatedCost: bigint }
 
-/** What a lots array the fold didn't make adds up to, so a state passed in more than once is only added up once. */
-const lotSums = new WeakMap<readonly Lot[], LotSums>()
+/**
+ * What a lots array the fold didn't make adds up to, so a state passed in more than once is only added up once. With its length,
+ * since a state the fold made can share its array with one passed in, and a later step can add to it.
+ */
+const lotSums = new WeakMap<readonly Lot[], { sums: LotSums; length: number }>()
 
 function sumsOf(lots: readonly Lot[]): LotSums {
   const known = lotSums.get(lots)
-  if (known) return known
+  if (known?.length === lots.length) return known.sums
   const sums = addSums(noSums(), lots, 1n)
-  lotSums.set(lots, sums)
+  lotSums.set(lots, { sums, length: lots.length })
   return sums
 }
 
@@ -343,8 +346,12 @@ function addSums(sums: LotSums, lots: readonly Lot[], sign: 1n | -1n): LotSums {
  */
 type Window<T> = { array: T[]; front: readonly T[]; from: number; to: number }
 
-/** A state's lots, and what they add up to, carried from one step to the next so no step adds up every lot it holds. */
-type Held = Window<Lot> & { sums: LotSums }
+/**
+ * A state's lots, and what they add up to, carried from one step to the next so no step adds up every lot it holds. `owned` when
+ * its array is one the fold made for the states it made, the only kind it adds to. Lots in a state passed in belong to whoever
+ * passed it, even when that state is a copy of one the fold made and shares its array, and so do what's left of them after a sale.
+ */
+type Held = Window<Lot> & { sums: LotSums; owned: boolean }
 
 const whole = <T>(array: T[]): Window<T> => ({ array, front: [], from: 0, to: array.length })
 const isWhole = (w: Window<unknown>) => w.front.length === 0 && w.from === 0 && w.to === w.array.length
@@ -355,22 +362,11 @@ function* lotsIn<T>(w: Window<T>): Generator<T> {
   for (let i = 0; i < sizeOf(w); i++) yield lotAt(w, i)
 }
 
-/**
- * The arrays the fold made itself, which are the only ones it adds to. One passed in, even in a state it made, belongs to someone
- * else, who might hold on to it.
- */
-const ownArrays = new WeakSet<readonly unknown[]>()
-
-function own<T>(lots: T[]): T[] {
-  ownArrays.add(lots)
-  return lots
-}
-
 /** These lots in a new array. Not `concat`: once anything defines `Symbol.isConcatSpreadable`, as Apache Arrow does, V8 makes every `concat` far slower. */
 function copyOf<T>(w: Window<T>): T[] {
   const lots = w.front.slice()
   for (let i = w.from; i < w.to; i++) lots.push(w.array[i] as T)
-  return own(lots)
+  return lots
 }
 
 /** These lots as one array, which is the shared one when they're all of it. */
@@ -404,7 +400,7 @@ function insertByDate(lots: Window<Lot>, lot: Lot): Window<Lot> {
     withFacts(lots.array, facts).push(lot)
     return { ...lots, to: lots.to + 1 }
   }
-  const next: Lot[] = own([])
+  const next: Lot[] = []
   for (let i = 0; i < sizeOf(lots); i++) {
     if (i === at) next.push(lot)
     next.push(lotAt(lots, i))
@@ -486,12 +482,12 @@ function credit(state: PositionState, held: Held, leg: FoldLeg, qty: bigint): He
   const added = arrivals(state, leg, qty)
   // Adding a lot, or merging it into a pool, adds its units and cost to what's held, so the sums only need what arrived.
   const sums = addSums({ ...held.sums }, added, 1n)
-  if (state.method !== "fifo") return { ...whole(added.reduce<Lot[]>((lots, lot) => addLot(state, lots, lot), arrayOf(held))), sums }
-  // Oldest first adds to the end of the array this state shares with those before it, unless the fold didn't make it, or something
-  // has already added to it, and copies it otherwise.
-  const owned = ownArrays.has(held.array) && held.to === held.array.length
-  const start = added.length === 0 || owned ? held : whole(withFacts(copyOf(held), factsOf(held.array)))
-  return { ...added.reduce(insertByDate, start), sums }
+  if (added.length === 0) return { ...held, sums }
+  if (state.method !== "fifo") return { ...whole(added.reduce<Lot[]>((lots, lot) => addLot(state, lots, lot), arrayOf(held))), sums, owned: true }
+  // Oldest first adds to the end of the array this state shares with those before it, unless the fold didn't make it for the states
+  // it made, or something has already added to it, and copies it otherwise. Either way, what it adds to is the fold's own.
+  const start = held.owned && held.to === held.array.length ? held : whole(withFacts(copyOf(held), factsOf(held.array)))
+  return { ...added.reduce(insertByDate, start), sums, owned: true }
 }
 
 /** The lots a credit adds, before any of them is merged with what's held. */
@@ -660,7 +656,7 @@ function take(state: PositionState, held: Held, qty: bigint): Taken {
   const heldQty = before.qty
   const taking = qty < heldQty ? qty : heldQty
   const split = new Set(lotsSplitBy(state, taking))
-  const kept: Lot[] = own([])
+  const kept: Lot[] = []
   let left: Window<Lot> | null = null
   const result: Taken = { held, pieces: [], knownQty: 0n, knownCost: 0n, estimatedCost: 0n, givenCost: 0n, reportedQty: 0n, purchasedQty: 0n, purchaseSources: [], unknownQty: 0n, shortfall: qty - taking, split }
   // What's left adds up to what was held, less what lost its cost and what was taken.
@@ -722,7 +718,8 @@ function take(state: PositionState, held: Held, qty: bigint): Taken {
   // Units we never saw arrive have no cost anyone can carry.
   if (result.shortfall > 0n) result.pieces.push({ qty: result.shortfall.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0" })
   // What's left is some of what was held, and each lot keeps its dates, so what could be among them still could.
-  result.held = { ...(left ?? whole(withFacts(kept, factsOf(held.array)))), sums }
+  // A copy is the fold's own, and what's left in the shared array belongs to whoever that array did.
+  result.held = left ? { ...left, sums, owned: left.array === held.array ? held.owned : true } : { ...whole(withFacts(kept, factsOf(held.array))), sums, owned: true }
   return result
 }
 
@@ -757,9 +754,9 @@ function withoutCosts(taken: Taken): Taken {
 /** What's still held, with no cost anyone can rely on, since how much of each lot is left depends on the same order. */
 function lotsWithoutCosts(state: PositionState, held: Held): Held {
   const { qty } = held.sums
-  let lots: Lot[] = own([])
+  let lots: Lot[] = []
   for (const lot of lotsIn(held)) lots = addLot(state, lots, withoutCost(lot))
-  return { ...whole(lots), sums: { qty, unknownCostQty: qty, cost: 0n, estimatedCost: 0n } }
+  return { ...whole(lots), sums: { qty, unknownCostQty: qty, cost: 0n, estimatedCost: 0n }, owned: true }
 }
 
 /** Applies a leg, and says what a debit took, which is what a transfer to a linked wallet carries with it. */
@@ -816,8 +813,11 @@ function madeHeld(state: PositionState): Held | undefined {
   return held && (lazy.has(state) || state.lots === held.array) ? held : undefined
 }
 
-/** What this state holds. One the fold didn't make holds its `lots`, and nothing here adds to them. */
-const heldOf = (state: PositionState): Held => madeHeld(state) ?? { ...whole(state.lots), sums: sumsOf(state.lots) }
+/** What this state holds. One the fold didn't make, a copy of one it did included, holds its `lots`, and nothing here adds to them. */
+const heldOf = (state: PositionState): Held => madeHeld(state) ?? { ...whole(state.lots), sums: sumsOf(state.lots), owned: false }
+
+/** Whether this state's `lots` reads as what it holds, which a state the fold made stops doing once a later step adds to its array. */
+const readsAsHeld = (state: PositionState, held: Held) => lazy.has(state) || held.to === held.array.length
 
 function windowOf<T>(state: { lots: readonly T[] }): Window<T> {
   return (madeHeld(state as unknown as PositionState) as Window<T> | undefined) ?? whole(state.lots as T[])
@@ -830,7 +830,8 @@ function windowOf<T>(state: { lots: readonly T[] }): Window<T> {
 export function applyLegTaking(state: PositionState, leg: FoldLeg): LegApplied {
   const held = heldOf(state)
   const delta = BigInt(leg.delta)
-  if (delta === 0n) return { state, taken: [], known: null, split: null }
+  // Nothing changes, but a state whose array a later step has added to is handed back as it was made, so its `lots` says so.
+  if (delta === 0n) return { state: readsAsHeld(state, held) ? state : made(tallyOf(state), held), taken: [], known: null, split: null }
   if (delta > 0n) return { state: made(tallyOf(state), credit(state, held, leg, delta)), taken: [], known: null, split: null }
 
   const qty = -delta

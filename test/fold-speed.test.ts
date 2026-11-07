@@ -136,6 +136,51 @@ describe("oldest first on purchases that all stay open", () => {
     assert.deepEqual(earlier, saved)
   })
 
+  it("never adds to the lots of a state it didn't make, even one copied from a state it did", () => {
+    const legs = mixed(60)
+    const buy = legs[21] as FoldLeg
+    // From a state a purchase made, which holds all of its array, and one a sale made, which holds part of it.
+    for (const at of [20, 21, 30]) {
+      const earlier = fold("fifo", legs.slice(0, at))
+      const saved = structuredClone(earlier)
+      const shallow = { ...earlier }
+      const reassigned = { ...earlier, lots: earlier.lots }
+      const sameLots = shallow.lots
+      // Each answers as a copy made before would: a purchase, a sale and then a purchase, and what the purchase leaves held.
+      for (const copy of [shallow, reassigned]) {
+        const bought = applyLeg(copy, buy)
+        assert.deepEqual(bought, applyLeg(structuredClone(saved), buy))
+        assert.deepEqual(valuePosition(bought, PRICE), valuePosition(structuredClone(bought), PRICE))
+        assert.deepEqual(applyLeg(applyLeg(copy, sellOne), buy), applyLeg(applyLeg(structuredClone(saved), sellOne), buy))
+        assert.deepEqual(valuePosition(copy, PRICE), valuePosition(saved, PRICE))
+        assert.deepEqual(copy, saved)
+      }
+      assert.equal(sameLots.length, saved.lots.length)
+      // And the state the fold made still adds to its own array, and reads as it was.
+      assert.deepEqual(applyLeg(earlier, buy), applyLeg(structuredClone(saved), buy))
+      assert.deepEqual(valuePosition(earlier, PRICE), valuePosition(saved, PRICE))
+    }
+  })
+
+  it("hands back a saved state as it was made when a leg changes nothing", () => {
+    const legs = mixed(60)
+    const nothing: FoldLeg = { ...sellOne, id: "nothing", delta: "0" }
+    // A purchase after it adds to its array, whether it holds all of it, as after a purchase, or part of it, as after a sale.
+    const buy: FoldLeg = { ...(legs[0] as FoldLeg), id: "next", blockNum: 500, timestamp: "2026-01-02T00:00:00.000Z" }
+    for (const at of [1, 2, 19, 21, 30]) {
+      const earlier = fold("fifo", legs.slice(0, at))
+      const saved = structuredClone(earlier)
+      applyLeg(earlier, buy)
+      const same = applyLeg(earlier, nothing)
+      // Its lots, and so any copy of it, say what it held, and it goes on from there as the saved copy does.
+      assert.deepEqual(same, saved)
+      assert.deepEqual(structuredClone(same), saved)
+      assert.deepEqual(JSON.parse(JSON.stringify(same)), saved)
+      assert.deepEqual(valuePosition(same, PRICE), valuePosition(saved, PRICE))
+      assert.deepEqual(legs.slice(at).reduce(applyLeg, same), legs.slice(at).reduce(applyLeg, structuredClone(saved)))
+    }
+  })
+
   it("answers the same about a saved state's unknown cost once a later lot is added to it", () => {
     // Only known as a whole with no date, so it would split what's ahead of it if it were there.
     staysAsMade([unit("unknown", 20, {})], [unit("whole", 30, { kind: "swap", delta: "2000000", pieces: [piece("2000000", "500", { label: "paid", wholeCostOnly: true })] })])
