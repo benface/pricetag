@@ -170,7 +170,7 @@ struct MainWindow: View {
             WelcomeAgain()
         }
         .sheet(isPresented: $navigation.isSettingUpSpendingMoney) {
-            SpendingMoneySetup(wallet: hotWallet, store: store) { navigation.isSettingUpSpendingMoney = false }
+            SpendingMoneySetup(wallet: hotWallet, store: store, purchases: purchases) { navigation.isSettingUpSpendingMoney = false }
                 .frame(width: 480, height: 400)
         }
         .confirmationDialog(navigation.removingFromSavings.map { "Remove \($0.title) from savings?" } ?? "", isPresented: Binding(get: { navigation.removingFromSavings != nil }, set: { if !$0 { navigation.removingFromSavings = nil } }), presenting: navigation.removingFromSavings) { entry in
