@@ -24,6 +24,7 @@ import Testing
         #expect(report.scope == .pooled)
         #expect(report.csv.hasPrefix("Date (UTC),Type,Asset,"))
         #expect(report.unresolvedCount > 0)
+        #expect(report.receivedCount == 3)
     }
 
     @Test func marksWhatRestsOnAnEstimate() throws {
@@ -51,11 +52,16 @@ import Testing
         #expect(report.defaults.scope == report.country.defaultScope)
         #expect(TaxCountry.US.defaultMethod == .fifo)
         #expect(TaxCountry.US.defaultScope == .perWallet)
+        #expect(TaxCountry.GB.defaultMethod == .average)
+        #expect(TaxCountry.GB.defaultScope == .pooled)
+        #expect(TaxCountry.GB.matchesAcquisitions && !TaxCountry.CA.matchesAcquisitions)
     }
 
     @Test func guessesTheCountryFromTheCurrencyUntilOneIsChosen() {
         #expect(model(currency: .CAD).country == .CA)
         #expect(model(currency: .USD).country == .US)
+        #expect(model(currency: .GBP).country == .GB)
+        #expect(model(currency: .EUR).country == .US)
         let defaults = freshDefaults()
         model(currency: .USD, defaults: defaults).setCountry(.CA)
         #expect(model(currency: .USD, defaults: defaults).country == .CA)
@@ -77,6 +83,29 @@ import Testing
         model.setCountry(.CA)
         #expect(model.method == .average)
         #expect(model.scope == .pooled)
+    }
+
+    @Test func offersNewestAndHighestCostFirstOnlyWhereTheRulesCanAllowThem() {
+        #expect(TaxCountry.US.methods == [.fifo, .lifo, .hifo, .average])
+        #expect(TaxCountry.CA.methods == [.average, .fifo])
+        #expect(CostMethod.portfolio == [.average, .fifo])
+        let defaults = freshDefaults()
+        let us = model(defaults: defaults)
+        us.setCountry(.US)
+        us.setMethod(.hifo)
+        #expect(us.method == .hifo)
+        #expect(model(defaults: defaults).method == .hifo)
+        let ca = model()
+        ca.setCountry(.CA)
+        ca.setMethod(.lifo)
+        #expect(ca.method == .average)
+    }
+
+    @Test func aRememberedMethodTheCountryDoesntAllowGoesBackToItsDefault() {
+        let defaults = freshDefaults()
+        defaults.set("CA", forKey: "taxCountry")
+        defaults.set("hifo", forKey: "taxMethod")
+        #expect(model(defaults: defaults).method == .average)
     }
 
     @Test func remembersAnOverride() {

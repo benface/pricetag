@@ -21,6 +21,8 @@ extension SignedRecord {
         case .sent: "Sent to \(Format.shortHash(to.checksummed))"
         case .note: "Published for anyone to read"
         case .revoke: "Revoked, for \(Format.shortHash(to.checksummed))"
+        case .purchase: "Bought straight into savings"
+        case .purchaseGas: "Fee to move a purchase to savings"
         }
     }
 
@@ -50,7 +52,8 @@ extension SentTransaction {
         case .site: record.amount == "0" ? "Transaction for \(record.site.map(siteName) ?? "a site")" : "Send \(amount) for \(record.site.map(siteName) ?? "a site")"
         case .note: "Publish what you paid for \(record.symbol)"
         case .revoke: "Revoke an approval for \(record.symbol)"
-        case .aboveCap, .manual, .rotation: "Move \(amount) to savings"
+        case .aboveCap, .manual, .rotation, .purchase: "Move \(amount) to savings"
+        case .purchaseGas: "Send \(amount) to pay for moving a purchase"
         }
         self.init(txHash: record.hash, date: record.createdAt, summary: summary, to: record.to.lowercased, asset: record.reason == .note || record.reason == .revoke ? nil : record.symbol, status: status)
     }

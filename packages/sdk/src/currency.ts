@@ -7,7 +7,7 @@
 import { timestampOfBlock } from "./chain.ts"
 import type { PricedLeg } from "./legs.ts"
 import { marketMarked, referenceMarks, type LatestPrices, type MarkEstimated, type MarkPrice } from "./portfolio.ts"
-import type { WalletData } from "./wallet.ts"
+import type { WalletData } from "./wallet-data.ts"
 
 export type CurrencyCode = "USD" | "CAD" | "EUR" | "GBP" | "CHF" | "AUD" | "NZD" | "SGD" | "MXN" | "BRL" | "TRY" | "ZAR"
 
@@ -114,6 +114,8 @@ export function atCurrentRate(usdMicros: string, rateMicros: string): string {
 export type WalletView = {
   currency: CurrencyCode
   legs: PricedLeg[]
+  /** `WalletData.netted`, converted the same way. */
+  netted?: PricedLeg[]
   prices: LatestPrices
   markPrice: MarkPrice
   markEstimated: MarkEstimated
@@ -137,7 +139,7 @@ const readsOf = ({ references, priceSamples = [] }: Pick<WalletData, "references
 
 /** The wallet as its own USD facts, whatever its currency. */
 export function usdView(wallet: WalletData): WalletView {
-  return { currency: "USD", legs: wallet.legs, prices: wallet.prices, markPrice: referenceMarks(readsOf(wallet), wallet.marketMarks), markEstimated: marketMarked(wallet.marketMarks, wallet.feedMarks), latestRate: null, missingRateTxs: [] }
+  return { currency: "USD", legs: wallet.legs, ...(wallet.netted ? { netted: wallet.netted } : {}), prices: wallet.prices, markPrice: referenceMarks(readsOf(wallet), wallet.marketMarks), markEstimated: marketMarked(wallet.marketMarks, wallet.feedMarks), latestRate: null, missingRateTxs: [] }
 }
 
 export function viewWallet(wallet: WalletData): WalletView {
@@ -146,14 +148,15 @@ export function viewWallet(wallet: WalletData): WalletView {
   const answers = new Map<number, bigint | null>()
   const missingRateTxs = new Set<string>()
 
-  const legs = wallet.legs.map((leg): PricedLeg => {
+  // What netted to nothing isn't an amount anything shows, so it doesn't count as one that couldn't be converted.
+  const toCurrency = (leg: PricedLeg, shown = true): PricedLeg => {
     const answer = usableAnswer(rates.byBlock[leg.blockNum], leg.timestamp)
-    answers.set(leg.blockNum, answer)
+    if (shown) answers.set(leg.blockNum, answer)
     // Nothing to convert, like what a wallet already held at an unknown cost, so there's no rate to speak of.
     if (leg.priceMicros === null && leg.costMicros === null && leg.proceedsMicros === null) return leg
     const usd = { priceUsdMicros: leg.priceMicros, costUsdMicros: leg.costMicros, proceedsUsdMicros: leg.proceedsMicros }
     if (answer === null) {
-      missingRateTxs.add(leg.txHash)
+      if (shown) missingRateTxs.add(leg.txHash)
       return { ...leg, priceMicros: null, priceSource: null, costMicros: null, proceedsMicros: null, costLabel: "unknown", conversion: { ...usd, rateMicros: null } }
     }
     return {
@@ -163,7 +166,9 @@ export function viewWallet(wallet: WalletData): WalletView {
       proceedsMicros: convert(leg.proceedsMicros, answer),
       conversion: { ...usd, rateMicros: rateOf(answer) },
     }
-  })
+  }
+  const legs = wallet.legs.map((leg) => toCurrency(leg))
+  const netted = wallet.netted?.map((leg) => toCurrency(leg, false))
 
   for (const { blockNum } of wallet.priceSamples ?? []) {
     if (!answers.has(blockNum)) answers.set(blockNum, usableAnswer(rates.byBlock[blockNum], timestampOfBlock(blockNum, wallet.latest)))
@@ -182,6 +187,7 @@ export function viewWallet(wallet: WalletData): WalletView {
   return {
     currency: wallet.currency,
     legs,
+    ...(netted ? { netted } : {}),
     prices,
     markPrice: (blockNum, asset) => {
       const answer = answers.get(blockNum)

@@ -3,7 +3,7 @@ import { formatSignedMoney, isAddress, shortHash, type CurrencyCode, type Method
 import type { TaxReportResponse } from "../core/api.ts"
 import { failureOf, jsonPost, readResponse, type ReadFailure } from "../core/read-failure.ts"
 import { isDemoWallet, type Book } from "../core/book.ts"
-import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, typedOtherWallets, walletsInReport, type TaxCountryCode, type TaxScope, type TaxYear } from "../core/tax.ts"
+import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, isTaxMethod, typedOtherWallets, walletsInReport, type TaxCountryCode, type TaxScope, type TaxYear } from "../core/tax.ts"
 import { METHOD_LABELS, METHOD_NAME, answerQuestionsLabel, est, panelProblem } from "../core/wording.ts"
 import { ProblemNotice } from "./ProblemNotice.tsx"
 import { downloadCsv } from "./download.ts"
@@ -19,13 +19,10 @@ const OTHERS_KEY = "pricetag.taxOtherWallets"
 function readCountry(currency: CurrencyCode): TaxCountryCode {
   const value = localStorage.getItem(COUNTRY_KEY)
   if (isTaxCountryCode(value)) return value
-  return currency === "CAD" ? "CA" : "US"
+  return TAX_COUNTRY_CODES.find((code) => TAX_COUNTRIES[code].currency === currency) ?? "US"
 }
 
-const readMethod = (): Method | null => {
-  const value = localStorage.getItem(METHOD_KEY)
-  return value === "average" || value === "fifo" ? value : null
-}
+const readMethod = (): string | null => localStorage.getItem(METHOD_KEY)
 
 const readScope = (): TaxScope | null => {
   const value = localStorage.getItem(SCOPE_KEY)
@@ -42,12 +39,14 @@ async function fetchReport(address: string, request: object, signal: AbortSignal
   return readResponse<TaxReportResponse>(await fetch(`/api/tax-report/${address}`, jsonPost(request, signal)))
 }
 
-const RULES: Record<TaxCountryCode, string> = { CA: "Canada's rules", US: "US rules" }
+const RULES: Record<TaxCountryCode, string> = { CA: "Canada's rules", GB: "UK rules", US: "US rules" }
 
-/** Overview's numbers and this report's can differ only through the method, so it says so and why. */
+/** Overview's numbers and this report's can differ through the method, or the UK's matching, so it says so and why. */
 function methodNote(method: Method, overview: Method, country: TaxCountryCode): string | null {
-  if (method === overview) return null
-  if (method === TAX_COUNTRIES[country].method) return `Overview uses ${METHOD_LABELS[overview]}, but ${RULES[country]} call for ${METHOD_LABELS[method]}, so this report uses that. Its gains can differ from Overview's.`
+  const matching = method === "average" && TAX_COUNTRIES[country].matchesAcquisitions
+  const matchingNote = `${RULES[country]} match each sale to what was bought the same day or in the 30 days after before averaging the rest, so its gains can differ from Overview's.`
+  if (method === overview) return matching ? matchingNote : null
+  if (method === TAX_COUNTRIES[country].method) return `Overview uses ${METHOD_LABELS[overview]}, but ${RULES[country]} call for ${METHOD_LABELS[method]}, so this report uses that. ${matching ? matchingNote : "Its gains can differ from Overview's."}`
   return `Overview uses ${METHOD_LABELS[overview]}, and you chose ${METHOD_LABELS[method]} here, so its gains can differ from Overview's.`
 }
 
@@ -86,9 +85,9 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
   const close = useRef<HTMLButtonElement>(null)
   const [country, setCountry] = useState(() => readCountry(currency))
   // Nothing chosen means whatever the country calls for. Choosing another country goes back to that.
-  const [chosenMethod, setChosenMethod] = useState<Method | null>(readMethod)
+  const [chosenMethod, setChosenMethod] = useState<string | null>(readMethod)
   const [chosenScope, setChosenScope] = useState<TaxScope | null>(readScope)
-  const [years, setYears] = useState<number[]>([])
+  const [years, setYears] = useState<{ year: number; label: string }[]>([])
   const [adding, setAdding] = useState("")
   const [badAdd, setBadAdd] = useState<string | null>(null)
   const [report, setReport] = useState<TaxReportResponse | null>(null)
@@ -97,7 +96,8 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
   const [loading, setLoading] = useState(true)
 
   const rules = TAX_COUNTRIES[country]
-  const method = chosenMethod ?? rules.method
+  // One the country doesn't allow, like one remembered from another, goes back to what it calls for.
+  const method = isTaxMethod(country, chosenMethod) ? chosenMethod : rules.method
   const scope = chosenScope ?? rules.scope
   const isDemo = address === "demo" || isDemoWallet(address)
 
@@ -124,7 +124,7 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
     setError(null)
     fetchReport(address, { country, method, scope, year, currency, also: alongside.filter((other) => other !== address.toLowerCase()), book }, controller.signal)
       .then((next) => {
-        setYears(next.years)
+        setYears(next.years.map((option, i) => ({ year: option, label: next.yearLabels[i] ?? String(option) })))
         setReport(next)
         setLoading(false)
       })
@@ -153,7 +153,7 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
     chooseScope(null)
   }
   // The newest year shows as itself once a report has said which that is.
-  const shownYear = year === "latest" && years[0] !== undefined ? years[0] : year
+  const shownYear = year === "latest" && years[0] !== undefined ? years[0].year : year
   const note = methodNote(method, overviewMethod, country)
   const defaultTag = (isDefault: boolean) => (isDefault ? " (default)" : "")
   const ready = report !== null && !loading
@@ -202,9 +202,9 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
             }}>
             {years.length === 0 && year === "latest" ? <option value="latest">Newest</option> : null}
             {/* Until the report says which years there are, the one chosen is still one of them. */}
-            {(typeof year === "number" && !years.includes(year) ? [year, ...years] : years).map((option) => (
-              <option key={option} value={option}>
-                {option}
+            {(typeof year === "number" && !years.some((option) => option.year === year) ? [{ year, label: String(year) }, ...years] : years).map((option) => (
+              <option key={option.year} value={option.year}>
+                {option.label}
               </option>
             ))}
             <option value="all">All years</option>
@@ -227,7 +227,7 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
               remember(COUNTRY_KEY, country)
               chooseMethod(e.target.value === rules.method ? null : (e.target.value as Method))
             }}>
-            {(["average", "fifo"] as const).map((m) => (
+            {rules.methods.map((m) => (
               <option key={m} value={m}>
                 {METHOD_LABELS[m]}
                 {defaultTag(m === rules.method)}
@@ -309,7 +309,7 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
 
         {report ? (
           <>
-            <h3 className="tax-year">{report.year === null ? "In all years" : `In ${report.year}`}</h3>
+            <h3 className="tax-year">{report.yearLabel === null ? "In all years" : `In ${report.yearLabel}`}</h3>
             <dl className="tax-counts">
               <div>
                 <dt className="small muted">Sales</dt>
@@ -323,6 +323,12 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
                 <div>
                   <dt className="small muted">Sent to other addresses</dt>
                   <dd>{report.sentCount.toLocaleString("en-US")}</dd>
+                </div>
+              ) : null}
+              {report.receivedCount > 0 ? (
+                <div>
+                  <dt className="small muted">Received, may be income</dt>
+                  <dd>{report.receivedCount.toLocaleString("en-US")}</dd>
                 </div>
               ) : null}
               <div>

@@ -5,27 +5,36 @@ import Foundation
 import Observation
 
 public enum TaxCountry: String, Codable, Sendable, CaseIterable, Identifiable {
-    case CA, US
+    case CA, GB, US
 
     public var id: Self { self }
 
     public var name: String {
         switch self {
         case .CA: "Canada"
+        case .GB: "United Kingdom"
         case .US: "United States"
         }
     }
 
     public var defaultMethod: CostMethod {
         switch self {
-        case .CA: .average
+        case .CA, .GB: .average
         case .US: .fifo
+        }
+    }
+
+    /// What the report offers here, default first: only what this country's rules can allow. See `TAX_COUNTRIES` in `src/core/tax.ts`.
+    public var methods: [CostMethod] {
+        switch self {
+        case .CA, .GB: [.average, .fifo]
+        case .US: [.fifo, .lifo, .hifo, .average]
         }
     }
 
     public var defaultScope: TaxScope {
         switch self {
-        case .CA: .pooled
+        case .CA, .GB: .pooled
         case .US: .perWallet
         }
     }
@@ -34,13 +43,21 @@ public enum TaxCountry: String, Codable, Sendable, CaseIterable, Identifiable {
     public var rules: String {
         switch self {
         case .CA: "Canada's rules"
+        case .GB: "UK rules"
         case .US: "US rules"
         }
     }
 
+    /// With Average, each sale is first matched to what was bought the same day and in the 30 days after: see `src/core/tax-matching.ts`.
+    public var matchesAcquisitions: Bool { self == .GB }
+
     /// Until one is chosen, the main currency is the best guess.
     static func guess(from currency: CurrencyCode) -> TaxCountry {
-        currency == .CAD ? .CA : .US
+        switch currency {
+        case .CAD: .CA
+        case .GBP: .GB
+        default: .US
+        }
     }
 }
 
@@ -115,8 +132,12 @@ public struct TaxReport: Codable, Sendable, Equatable {
     public let defaults: Defaults
     /// nil when it lists every year.
     public let year: Int?
-    /// Newest first.
+    /// Newest first, each named for the calendar year it starts in.
     public let years: [Int]
+    /// What each of `years` is called where it's filed, like 2025, or 2025 to 2026 in the UK.
+    public let yearLabels: [String]
+    /// What `year` is called. nil when it lists every year.
+    public let yearLabel: String?
     /// Why the year's history isn't all here, when it isn't.
     public let partialYear: String?
     public let rowCount: Int
@@ -124,6 +145,8 @@ public struct TaxReport: Codable, Sendable, Equatable {
     public let soldCount: Int
     public let feeCount: Int
     public let sentCount: Int
+    /// What arrived from other addresses that may be income, listed after the sales. nil from a server that doesn't list it.
+    public let receivedCount: Int?
     /// Of those, how many have an unknown gain, in whole or in part.
     public let unknownCount: Int
     /// The wallets with something unknown, in the order of `wallets`.
@@ -198,6 +221,8 @@ public final class TaxReportModel {
     public private(set) var year: TaxYear = .latest
     /// Every year with some history, newest first, from the last report.
     public private(set) var years: [Int] = []
+    /// What each of `years` is called, from the same report.
+    private var yearLabels: [Int: String] = [:]
     public private(set) var state: State = .loading
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -212,7 +237,8 @@ public final class TaxReportModel {
         chosenScope = defaults.string(forKey: Keys.scope).flatMap(TaxScope.init(rawValue:))
     }
 
-    public var method: CostMethod { chosenMethod ?? country.defaultMethod }
+    /// One the country doesn't allow goes back to what it calls for.
+    public var method: CostMethod { chosenMethod.flatMap { country.methods.contains($0) ? $0 : nil } ?? country.defaultMethod }
     public var scope: TaxScope { chosenScope ?? country.defaultScope }
 
     public func setCountry(_ next: TaxCountry) {
@@ -226,6 +252,7 @@ public final class TaxReportModel {
     }
 
     public func setMethod(_ next: CostMethod) {
+        guard country.methods.contains(next) else { return }
         chosenMethod = next == country.defaultMethod ? nil : next
         defaults.set(chosenMethod?.rawValue, forKey: Keys.method)
         // What's remembered has to say which country this override is for.
@@ -242,6 +269,11 @@ public final class TaxReportModel {
     public var shownYear: TaxYear {
         if year == .latest, let newest = years.first { return .year(newest) }
         return year
+    }
+
+    /// What a year is called where it's filed, which only a report says.
+    public func label(of year: Int) -> String {
+        yearLabels[year] ?? String(year)
     }
 
     public func setYear(_ next: TaxYear) {
@@ -295,6 +327,7 @@ public final class TaxReportModel {
             let report = try await fetch(request)
             guard !Task.isCancelled else { return }
             years = report.years
+            yearLabels = Dictionary(zip(report.years, report.yearLabels), uniquingKeysWith: { first, _ in first })
             state = .ready(report)
         } catch {
             guard !Task.isCancelled, !(error is CancellationError) else { return }

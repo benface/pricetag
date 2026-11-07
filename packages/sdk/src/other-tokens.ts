@@ -2,7 +2,7 @@
 // the fold, the totals, sweeps and the cap never see them, so a token anyone can send can't change a number or move any money.
 // Everything a contract answers is untrusted. It can lie, revert, burn all its gas or call itself USDC.
 
-import type { LegRow } from "./legs.ts"
+import { signedAmount, type LegRow } from "./legs.ts"
 import { TOKENS, tokenByAddress } from "./tokens.ts"
 
 export type OtherToken = {
@@ -248,7 +248,7 @@ function movedTokens(rows: readonly LegRow[], account: string, gasUnknown: Reado
       moved.collectible = true
       moved.unreadable = true
     } else if (/^\d+$/.test(row.amount)) {
-      moved.net += row.side === "credit" ? BigInt(row.amount) : -BigInt(row.amount)
+      moved.net += signedAmount(row)
       if (BigInt(row.amount) !== 0n) moved.someMoved = true
     } else {
       // ERC-1155 logs have no amount the dataset can read, and its `balanceOf` takes an item as well.

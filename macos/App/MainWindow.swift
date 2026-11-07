@@ -170,7 +170,7 @@ struct MainWindow: View {
             WelcomeAgain()
         }
         .sheet(isPresented: $navigation.isSettingUpSpendingMoney) {
-            SpendingMoneySetup(wallet: hotWallet, store: store) { navigation.isSettingUpSpendingMoney = false }
+            SpendingMoneySetup(wallet: hotWallet, store: store, purchases: purchases) { navigation.isSettingUpSpendingMoney = false }
                 .frame(width: 480, height: 400)
         }
         .confirmationDialog(navigation.removingFromSavings.map { "Remove \($0.title) from savings?" } ?? "", isPresented: Binding(get: { navigation.removingFromSavings != nil }, set: { if !$0 { navigation.removingFromSavings = nil } }), presenting: navigation.removingFromSavings) { entry in
@@ -563,7 +563,7 @@ struct CostMethodMenu: View {
     var body: some View {
         Menu {
             Picker(Wording.methodName, selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
-                ForEach(CostMethod.allCases) { Text($0.label).tag($0) }
+                ForEach(CostMethod.portfolio) { Text($0.label).tag($0) }
             }
             .pickerStyle(.inline)
         } label: {

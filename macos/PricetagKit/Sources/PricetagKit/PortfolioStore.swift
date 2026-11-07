@@ -142,7 +142,7 @@ public final class PortfolioStore {
         let address = defaults.string(forKey: StoreKeys.wallet)
         let serverURL = defaults.string(forKey: StoreKeys.server).flatMap(URL.init(string:)) ?? Self.defaultServerURL
         self.address = address
-        self.method = defaults.string(forKey: StoreKeys.method).flatMap(CostMethod.init(rawValue:)) ?? .average
+        self.method = defaults.string(forKey: StoreKeys.method).flatMap(CostMethod.init(rawValue:)).flatMap { CostMethod.portfolio.contains($0) ? $0 : nil } ?? .average
         self.currency = defaults.string(forKey: StoreKeys.currency).flatMap(CurrencyCode.init(rawValue:)) ?? .USD
         self.holdingsSort = defaults.string(forKey: StoreKeys.holdingsSort).flatMap(HoldingsSort.init(rawValue:)) ?? .largestFirst
         self.menuBarShows = defaults.string(forKey: StoreKeys.menuBar).flatMap(MenuBarShows.init(rawValue:)) ?? .value

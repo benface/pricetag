@@ -23,15 +23,29 @@ public struct BuyPlan: Equatable, Sendable {
     public let aboveCap: UInt128
     public let problem: Problem?
 
+    /// Through a one-use key, all of it goes on to savings, and none of it stops in Spending Money. See `OneUseKey`.
+    public let isThroughOneUseKey: Bool
+
     /// Nothing above the room and the minimum is this app's to limit. The provider applies its own limits to the account.
-    public init(usdMicros amount: UInt128, token: Token, priceUsdMicros: UInt128?, holdings: [Holding], capUsdMicros: UInt128, roomUsdMicros: UInt128, fees: FeeQuote?, destination: EthereumAddress?) {
-        fits = min(amount, roomUsdMicros)
-        aboveCap = amount.subtractingClamped(roomUsdMicros)
+    public init(usdMicros amount: UInt128, token: Token, priceUsdMicros: UInt128?, holdings: [Holding], capUsdMicros: UInt128, roomUsdMicros: UInt128, fees: FeeQuote?, destination: EthereumAddress?, throughOneUseKey: Bool = false) {
+        isThroughOneUseKey = throughOneUseKey && destination != nil
+        fits = isThroughOneUseKey ? 0 : min(amount, roomUsdMicros)
+        aboveCap = isThroughOneUseKey ? amount : amount.subtractingClamped(roomUsdMicros)
         if holdings.isEmpty {
             // Nothing's been read, so there's no room to measure against yet, and no amount to judge.
             problem = .notReadYet
         } else if amount < Self.minimumUsdMicros {
             problem = .belowMinimum
+        } else if isThroughOneUseKey {
+            // ETH pays for its own move. A token needs some sent from Spending Money, for its move and, to be safe, a second try.
+            if token.isNative {
+                problem = nil
+            } else if let fees {
+                let eth = holdings.first { $0.token.isNative }?.balance ?? 0
+                problem = eth >= Self.gasForOneUseKey(token, fees: fees) ? nil : .noGasToSweep
+            } else {
+                problem = .notReadYet
+            }
         } else if let fees, let priceUsdMicros, let after = Self.holdings(holdings, buying: amount, of: token, priceUsdMicros: priceUsdMicros) {
             // What a sweep would make of it, whatever the amount: the provider's page can change it, so a token that can't move at all is a problem even if this much would fit.
             // Without a savings wallet nothing sweeps yet, but a token with no ETH beside it can't be moved by anyone, so that's still a problem.
@@ -40,6 +54,11 @@ public struct BuyPlan: Equatable, Sendable {
         } else {
             problem = .notReadYet
         }
+    }
+
+    /// What Spending Money needs in ETH so a token bought through a one-use key can move on: what it sends, and the fee to send it.
+    static func gasForOneUseKey(_ token: Token, fees: FeeQuote) -> UInt128 {
+        2 * fees.costWei(of: token) + fees.costWei(of: Base.eth)
     }
 
     /// The holdings once this has arrived. A token that isn't held yet isn't among them. Nil with nothing read, or no price to work out how much that is.

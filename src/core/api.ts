@@ -189,10 +189,14 @@ export type TaxReportResponse = {
   currency: CurrencyCode
   /** What this country calls for, so a client can tell an override. */
   defaults: { method: Method; scope: TaxScope }
-  /** The calendar year listed, in UTC, or null for everything. */
+  /** The tax year listed, in the country's time zone (UK time for the UK, UTC otherwise), named for the calendar year it starts in, or null for everything. */
   year: number | null
-  /** Every year with some history, newest first. */
+  /** Every tax year with some history, newest first. */
   years: number[]
+  /** What each of `years` is called where it's filed, like 2025, or 2025 to 2026 in the UK. */
+  yearLabels: string[]
+  /** What `year` is called, or null for everything. */
+  yearLabel: string | null
   /** When `year`'s history isn't all here, why, in a sentence. It's also the first warning. */
   partialYear: string | null
   rowCount: number
@@ -200,6 +204,8 @@ export type TaxReportResponse = {
   soldCount: number
   feeCount: number
   sentCount: number
+  /** What arrived from other addresses that may be income, which the file lists after the sales. Not in `rowCount`. */
+  receivedCount: number
   /** Of those, how many have an unknown gain, in whole or in part. `unresolvedCount` counts the file's rows instead. */
   unknownCount: number
   /** The wallets with something unknown, in the order of `wallets`, so a client can open the right one's questions. */

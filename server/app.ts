@@ -29,7 +29,7 @@ import { createApprovals, demoApprovals, type Approvals } from "./approvals.ts"
 import { createContractCheck } from "./contract.ts"
 import { recordOf } from "../src/core/record.ts"
 import { pathOf, type Env } from "./shared.ts"
-import { TAX_COUNTRIES, isTaxCountryCode, parseTaxYear, taxReportOf, walletsInReport, type TaxScope } from "../src/core/tax.ts"
+import { TAX_COUNTRIES, isTaxCountryCode, isTaxMethod, parseTaxYear, taxReportOf, walletsInReport, type TaxScope } from "../src/core/tax.ts"
 
 const DEMO_UNVERIFIABLE = "This is the demo wallet, so there's no real block to check."
 
@@ -729,8 +729,8 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     const { country } = choices
     if (typeof country !== "string" || !isTaxCountryCode(country)) return sendJson(res, 400, { error: "That country isn't supported." })
     const defaults = TAX_COUNTRIES[country]
-    const method = choices.method === null || choices.method === undefined ? defaults.method : parseMethod(typeof choices.method === "string" ? choices.method : "")
-    if (!method) return sendJson(res, 400, { error: "The method is either average or fifo." })
+    const method = choices.method === null || choices.method === undefined ? defaults.method : typeof choices.method === "string" && isTaxMethod(country, choices.method) ? choices.method : null
+    if (!method) return sendJson(res, 400, { error: `For ${defaults.name}, the method is one of ${defaults.methods.join(", ")}.` })
     const scope = choices.scope === null || choices.scope === undefined ? defaults.scope : parseScope(typeof choices.scope === "string" ? choices.scope : "")
     if (!scope) return sendJson(res, 400, { error: "The calculation is either pooled or per-wallet." })
     const year = parseTaxYear(choices.year)

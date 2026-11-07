@@ -95,7 +95,7 @@ struct SettingsView: View {
                 }
                 .help("Costs use the rate when each transaction happened, and values use the current rate.")
                 Picker(Wording.methodName, selection: Binding(get: { store.method }, set: { store.setMethod($0) })) {
-                    ForEach(CostMethod.allCases) { Text($0.label).tag($0) }
+                    ForEach(CostMethod.portfolio) { Text($0.label).tag($0) }
                 }
                 .help(Wording.methodHelp)
                 Picker("Menu bar shows", selection: Binding(get: { store.menuBarShows }, set: { store.setMenuBarShows($0) })) {

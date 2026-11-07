@@ -782,7 +782,7 @@ describe("wording", () => {
   const costLabels = ["paid", "inherited", "received at market", "self-reported", "unknown"] as const
   const kinds = ["swap", "transfer", "gas"] as const
   const vectors = {
-    methods: { average: wording.METHOD_LABELS.average, fifo: wording.METHOD_LABELS.fifo },
+    methods: wording.METHOD_LABELS,
     modes: wording.MODE_LABELS,
     actions: kinds.flatMap((kind) => [true, false].map((incoming) => ({ kind, incoming, label: wording.actionLabel(kind, incoming) }))),
     priceSources: (["oracle", "swap", "market"] as const).map((source) => ({ source, label: wording.priceSourceLabel(source) })),

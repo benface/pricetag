@@ -2,7 +2,7 @@
 // This is what catches what we can't see without traces, like internal ETH transfers.
 
 import type { PricedLeg, UnseenEth } from "./legs.ts"
-import { TOKENS } from "./tokens.ts"
+import { tokenBySymbol } from "./tokens.ts"
 
 /** Onchain balances at a block, by asset, in smallest units. An asset whose read failed isn't in `amounts`. */
 export type BalanceSnapshot = { blockNum: number; amounts: Record<string, string> }
@@ -56,7 +56,7 @@ export type Reconciliation =
     }
 
 /** The last read, plus what's moved since. It can't be below zero, whatever the legs say. */
-export function estimateHeld(last: { blockNum: number; amount: string }, legs: readonly PricedLeg[]): bigint {
+function estimateHeld(last: { blockNum: number; amount: string }, legs: readonly PricedLeg[]): bigint {
   const held = legs.filter((leg) => leg.blockNum > last.blockNum).reduce((sum, leg) => sum + BigInt(leg.delta), BigInt(last.amount))
   return held > 0n ? held : 0n
 }
@@ -91,7 +91,12 @@ export function reconcile(asset: string, legs: readonly PricedLeg[], shortfall: 
   }
 }
 
-export const decimalsOf = (asset: string) => TOKENS.find((t) => t.symbol === asset)?.decimals ?? 18
+/** Only for an asset on the allowlist, which is all a balance is read for. */
+export function decimalsOf(asset: string): number {
+  const token = tokenBySymbol(asset)
+  if (!token) throw new Error(`${asset} isn't on the allowlist, so its decimals aren't known`)
+  return token.decimals
+}
 
 /**
  * What the wallet already held before the first block read, as one leg per asset. What it paid for those units

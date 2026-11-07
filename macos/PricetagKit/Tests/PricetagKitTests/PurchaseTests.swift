@@ -146,6 +146,62 @@ struct PurchaseTrackerTests {
         #expect(tracker.phase(of: tracker.purchases(of: wallet)[0]) == .arriving)
     }
 
+    @Test func saysWhenAPurchaseStartsChangesOrIsDismissed() async throws {
+        let (tracker, _, source, _) = setup()
+        var told: [(String, OnrampOrder.Status?, Bool)] = []
+        tracker.onChange = { told.append(($0, $1?.order?.status, $1 == nil)) }
+        _ = try await tracker.begin(wallet: wallet, asset: "ETH", dollars: 25, cryptoAmount: "0.008")
+        await source.say([OnrampOrder(id: "order", status: .pending)])
+        await tracker.check()
+        await tracker.check()
+        await source.say([delivered()])
+        await tracker.check()
+        tracker.dismiss(try #require(tracker.purchases(of: wallet).first))
+        #expect(told.map(\.0) == Array(repeating: wallet, count: 4))
+        #expect(told.map(\.1) == [nil, .pending, .succeeded, .succeeded], "only when something changed")
+        #expect(told.map(\.2) == [false, false, false, false], "hiding a row with an order doesn't say nothing was bought")
+    }
+
+    @Test func onlyAPageWithNoOrderIsDismissedAsNotBought() async throws {
+        let (tracker, _, source, _) = setup()
+        var told: [TrackedPurchase?] = []
+        tracker.onChange = { told.append($1) }
+        _ = try await tracker.begin(wallet: wallet, asset: "ETH", dollars: 25, cryptoAmount: "0.008")
+        let stale = try #require(tracker.purchases(of: wallet).first)
+        await source.say([OnrampOrder(id: "order", status: .pending)])
+        await tracker.check()
+        // A row from before its order turned up still sends the order.
+        tracker.dismiss(stale)
+        #expect(told.last??.order?.status == .pending)
+
+        _ = try await tracker.begin(wallet: wallet, asset: "ETH", dollars: 25, cryptoAmount: "0.008")
+        tracker.dismiss(try #require(tracker.purchases(of: wallet).first))
+        #expect(told.count == 5)
+        #expect(told.last! == nil, "I Didn't Buy It, from a page with no order")
+    }
+
+    /// What holds the address has to have written the purchase down: without that, no page opens, and a dismissed row stays.
+    @Test func nothingOpensOrIsForgottenUntilItsWrittenDown() async throws {
+        struct CantSave: Error {}
+        let (tracker, _, _, _) = setup()
+        var fails = true
+        tracker.onChange = { _, _ in if fails { throw CantSave() } }
+        await #expect(throws: CantSave.self) { _ = try await tracker.begin(wallet: wallet, asset: "ETH", dollars: 25, cryptoAmount: "0.008") }
+        #expect(tracker.purchases.isEmpty)
+
+        fails = false
+        _ = try await tracker.begin(wallet: wallet, asset: "ETH", dollars: 25, cryptoAmount: "0.008")
+        let row = try #require(tracker.purchases.first)
+        fails = true
+        tracker.dismiss(row)
+        #expect(tracker.purchases.count == 1)
+        #expect(tracker.problem == PurchaseWording.cantForgetYet)
+        fails = false
+        tracker.dismiss(row)
+        #expect(tracker.purchases.isEmpty)
+        #expect(tracker.problem == nil, "a retry that works takes the explanation away too")
+    }
+
     @Test func recordsNoCostUntilAnOrderSaysAllOfIt() {
         #expect(delivered(cost: nil).purchase == nil, "Nothing said what it cost")
         #expect(delivered(cost: nil, usd: "25810000").purchase?.cost == paid, "Its USD total is still what it cost")
@@ -345,7 +401,6 @@ struct PurchaseTrackerTests {
         let (_, store, source, defaults) = setup()
         let settled = (0..<8).map { TrackedPurchase(ref: "done\($0)", wallet: wallet, asset: "ETH", dollars: 25, startedAt: .now, order: delivered(id: "done\($0)")) }
         defaults.set(try JSONEncoder().encode([old()] + settled), forKey: "purchases")
-        await source.say([])
         let tracker = PurchaseTracker(store: store, defaults: defaults, matchOf: { _ in nil })
         await tracker.check()
         #expect(tracker.purchases.contains { $0.ref == "ref" })
