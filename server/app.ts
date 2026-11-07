@@ -302,6 +302,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     lastAnswers.clear()
     await Promise.all([created?.shared?.rewind(block, oldTip), ...[...new Set([wallets, ...rules.map((r) => r.wallets)])].map((w) => w?.rewind(block, oldTip))])
     created?.readRates.rewind?.(block)
+    await created?.approvals?.rewind(block)
     // The new chain can be shorter, and the head is only read from the last one on.
     if (head && head.blockNum >= block) head = { ...head, blockNum: block - 1 }
     headReadAt = 0

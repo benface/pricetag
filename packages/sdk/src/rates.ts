@@ -79,6 +79,9 @@ export type ReadRates = (currency: CurrencyCode, wallet: Pick<WalletData, "legs"
 /** Reads rates, and forgets the ones from blocks a reorg replaced, when it can. */
 export type RatesReader = ReadRates & { rewind?(block: number): void }
 
+/** How many blocks' rates each currency keeps, the oldest read going first. One that's gone is only read again. */
+const MAX_SETTLED_BLOCKS = 100_000
+
 export function createRates(readRounds: RoundReader): RatesReader {
   const settled = new Map<CurrencyCode, Map<number, RateRound>>()
   /** With the chain's head when it was read. Anything not yet settled could have changed once that moves. */
@@ -101,6 +104,10 @@ export function createRates(readRounds: RoundReader): RatesReader {
     const read = wanted.size > 0 ? await readRounds(currency, [...wanted]) : new Map<number, RateRound>()
     const isSameChain = startedAt === rewinds
     if (isSameChain) for (const [block, round] of read) if (block <= settledThrough(chain)) known.set(block, round)
+    for (const at of known.keys()) {
+      if (known.size <= MAX_SETTLED_BLOCKS) break
+      known.delete(at)
+    }
 
     const byBlock: Rates["byBlock"] = {}
     for (const block of blocks) {

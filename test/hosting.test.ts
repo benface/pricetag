@@ -132,6 +132,34 @@ describe("the gate", () => {
   })
 })
 
+describe("a local shutdown", () => {
+  it("ends an open stream without invites, so it doesn't wait the full drain", async () => {
+    const hosting = hostingOf({})
+    const api = gate(async (_req, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream" })
+      res.write(": open\n\n")
+      return true
+    }, hosting, () => ({ amp: false, buying: false }))
+    const server = createServer(createHandler(api, null))
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    try {
+      const { port } = server.address() as { port: number }
+      const ended = await new Promise<boolean>((resolve, reject) => {
+        request({ host: "127.0.0.1", port, path: "/api/events" }, (res) => {
+          res.once("data", () => api.drain())
+          res.on("end", () => resolve(true))
+          res.resume()
+        }).on("error", reject).end()
+        setTimeout(() => resolve(false), 2000).unref()
+      })
+      assert.ok(ended)
+    } finally {
+      server.closeAllConnections()
+      server.close()
+    }
+  })
+})
+
 describe("checkouts", () => {
   const OTHER = "another-invite-for-tests-only-0123456"
   const CHECKOUT = "/api/onramp/checkout"

@@ -167,6 +167,9 @@ export type ApprovalsConfig = {
 /** What's been found of a wallet so far: every candidate in its history from `from` through `through`. */
 type Held = { from: number; through: number; candidates: Candidate[] }
 
+/** How many wallets' histories are kept, the least recently read going first. One that's gone is only read again. */
+const MAX_HELD_WALLETS = 500
+
 export function createApprovals(query: Query, config: ApprovalsConfig) {
   const base = `"${config.baseDataset}"`
   const held = new Map<string, Held>()
@@ -231,7 +234,9 @@ export function createApprovals(query: Query, config: ApprovalsConfig) {
     const merged = new Map((kept?.candidates ?? []).map((c) => [candidateKey(c), c]))
     for (const candidate of candidates) merged.set(candidateKey(candidate), candidate)
     const next: Held = { from: kept?.from ?? from, through, candidates: [...merged.values()] }
+    held.delete(address)
     held.set(address, next)
+    if (held.size > MAX_HELD_WALLETS) held.delete(held.keys().next().value as string)
     return { held: next, from: source }
   }
 
@@ -267,6 +272,21 @@ export function createApprovals(query: Query, config: ApprovalsConfig) {
   }
 
   return {
+    /**
+     * Blocks from `block` on were replaced, so they're read again. What was found in them stays a candidate, since each is
+     * checked at the head anyway, and one the new chain doesn't have just shows what it allows now.
+     */
+    async rewind(block: number): Promise<void> {
+      await Promise.allSettled(
+        [...held.keys()].map((address) =>
+          inTurn(address, async () => {
+            const known = held.get(address)
+            if (known && known.through >= block) held.set(address, { ...known, through: Math.max(known.from, block) - 1 })
+          }),
+        ),
+      )
+    },
+
     /** A wallet's approvals that still allow something at `head`. */
     read: (address: string, head: Head): Promise<ApprovalsResponse> =>
       inTurn(address, async () => {

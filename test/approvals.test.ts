@@ -164,6 +164,26 @@ describe("reading a wallet's approvals", () => {
     assert.deepEqual(queries.filter((sql) => sql.includes(".logs")).map((sql) => /BETWEEN (\d+) AND (\d+)/.exec(sql)!.slice(1)), [["1001", "1010"]])
     assert.ok(!queries.some((sql) => sql.includes(".approvals")), "it doesn't ask for the missing table again")
   })
+
+  it("reads the blocks a reorg replaced again, so an approval granted on the new chain is found", async () => {
+    let replaced = false
+    const queries: string[] = []
+    const query = async <T>(sql: string): Promise<T[]> => {
+      queries.push(sql)
+      if (sql.includes(".approvals")) throw new Error("table 'approvals' not found")
+      if (sql.includes(".logs")) return (replaced && sql.includes("BETWEEN 995 AND 1000") ? [{ ...log(997, USDC_ADDRESS, APPROVAL_TOPIC, ME, SPENDER), timestamp: 1_799_000_000_000 }] : []) as T[]
+      const calldata = /X'([0-9a-f]+)', \d+\) AS r/.exec(sql)![1]!
+      return [{ r: { data: answer(calldata, state) } }] as T[]
+    }
+    const approvals = createApprovals(query, { baseDataset: "base", dataset: null, network: "base_mainnet", historyFrom: () => 100 })
+    assert.ok(!(await approvals.read(ME, head)).approvals.some((a) => a.spender === SPENDER))
+    replaced = true
+    await approvals.rewind(995)
+    queries.length = 0
+    const read = await approvals.read(ME, head)
+    assert.deepEqual(queries.filter((sql) => sql.includes(".logs")).map((sql) => /BETWEEN (\d+) AND (\d+)/.exec(sql)!.slice(1)), [["995", "1000"]])
+    assert.ok(read.approvals.some((a) => a.spender === SPENDER && a.grantedBlock === 997))
+  })
 })
 
 describe("checking contracts nobody vouches for", () => {

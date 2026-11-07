@@ -189,7 +189,10 @@ export function gate(handle: Handle, hosting: Hosting, health: () => Record<stri
       }
       return true
     }
-    if (path === null || !path.startsWith("/api/") || hosting.invites.size === 0) return handle(req, res)
+    if (path === null || !path.startsWith("/api/")) return handle(req, res)
+    const isStream = path === "/api/events" && req.method === "GET"
+    // Without invites it's one person, so there's no limit, but a stream is still counted, or a shutdown waits the full drain for it.
+    if (hosting.invites.size === 0) return isStream && !admitStream("", res, Infinity) ? true : handle(req, res)
 
     const who = inviteOf(req, hosting.invites)
     if (!who) {
@@ -201,24 +204,28 @@ export function gate(handle: Handle, hosting: Hosting, health: () => Record<stri
       refuse(res, 429, SLOW_DOWN, wait)
       return true
     }
-    if (path === "/api/events" && req.method === "GET") {
-      if (draining) {
-        refuse(res, 503, "Shutting down.")
-        return true
-      }
-      const open = streams.get(who) ?? new Set<ServerResponse>()
-      if (open.size >= hosting.limits.streams) {
-        refuse(res, 429, "Too many windows are open with this invite.", 60)
-        return true
-      }
-      open.add(res)
-      streams.set(who, open)
-      res.on("close", () => {
-        open.delete(res)
-        if (open.size === 0) streams.delete(who)
-      })
-    }
+    if (isStream && !admitStream(who, res, hosting.limits.streams)) return true
     return inLane(who, () => handle(req, res))
+  }
+
+  /** Counts an event stream, so `drain` can end it, or turns it away. */
+  function admitStream(who: string, res: ServerResponse, limit: number): boolean {
+    if (draining) {
+      refuse(res, 503, "Shutting down.")
+      return false
+    }
+    const open = streams.get(who) ?? new Set<ServerResponse>()
+    if (open.size >= limit) {
+      refuse(res, 429, "Too many windows are open with this invite.", 60)
+      return false
+    }
+    open.add(res)
+    streams.set(who, open)
+    res.on("close", () => {
+      open.delete(res)
+      if (open.size === 0) streams.delete(who)
+    })
+    return true
   }
 
   return Object.assign(handler, {

@@ -5,7 +5,7 @@ import { timestampOfBlock } from "./chain.ts"
 import type { RateRound } from "./currency.ts"
 import { answerToMicros, isSanePrice, type PricedLeg, type Reference } from "./legs.ts"
 import type { FeedMarks, MarketMarks } from "./market.ts"
-import { decimalsOf, estimateHeld, reconcile, type Onchain, type Reconciliation } from "./reconcile.ts"
+import { decimalsOf, reconcile, type Onchain, type Reconciliation } from "./reconcile.ts"
 import { TOKENS, TOKEN_FEEDS } from "./tokens.ts"
 
 export type Head = { blockNum: number; timestamp: string }
