@@ -15,10 +15,11 @@
 // Which other methods each country allows, from the same sources:
 // - Canada, none: s. 47(1) averages identical properties whatever order they're sold in, so only Oldest first is offered on top,
 //   with a warning, for someone comparing.
-// - US, newest first and highest cost first: 1.1012-1(j)(3) lets you identify which units you sell, including in your own wallet,
-//   if your books and records name them no later than the date and time of the sale, by any identifier such as purchase date
-//   or price. A rule like these, recorded before selling, names them that way. That they count as a standing rule is our reading,
-//   and an accountant should confirm it. Choosing units after the fact, which a report would be doing, doesn't count.
+// - US, newest first and highest cost first: 1.1012-1(j)(2) lets you identify which units you sell from your own wallet ((j)(3)
+//   is for units a broker holds), if your books and records name them no later than the date and time of the sale, by any
+//   identifier such as purchase date or price. A rule like these, recorded before selling, names them that way. That they count as a standing rule is our reading,
+//   and an accountant should confirm it. Choosing units after the fact, which a report would be doing, doesn't count. IRS digital
+//   asset FAQs Q82 says the same goes for units you transfer, so the rule has to cover sending and spending too, not only selling.
 //
 // What something received from someone else costs, which decides whether its market price is a cost or an estimate:
 // - Canada, the market price is the cost: Income Tax Act s. 69(1)(c) deems a gift acquired at fair market value, and
@@ -95,8 +96,8 @@ export const TAX_COUNTRIES: Record<TaxCountryCode, TaxCountry> = {
     currency: "USD",
     methodWarnings: {
       average: "US rules use oldest first in each wallet unless you identify specific units, so Average may not be accepted.",
-      lifo: "US rules only allow Newest first if your own records said you'd sell that way before each sale. If they didn't, Oldest first is what applies.",
-      hifo: "US rules only allow Highest cost first if your own records said you'd sell that way before each sale. If they didn't, Oldest first is what applies.",
+      lifo: "US rules only allow Newest first if your own records said you'd use it before each time you sold, spent or sent any. If they didn't, Oldest first is what applies.",
+      hifo: "US rules only allow Highest cost first if your own records said you'd use it before each time you sold, spent or sent any. If they didn't, Oldest first is what applies.",
     },
     scopeWarning: "US rules have tracked cost wallet by wallet since January 1, 2025, so calculating all wallets together may not be accepted.",
     marketIsCost: false,

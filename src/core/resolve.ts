@@ -4,7 +4,7 @@
 // or from a provider's order that matches a movement exactly. The rest come from here, and the fold then runs on the result.
 // An unanswered sender stays unknown: it could be the user's own wallet, so assuming otherwise would be a guess.
 
-import { applyLegTaking, assertFoldFits, emptyPosition, firstMarks, foldWallet, unconfirmedAssets, formatAmount, formatPaid, historyGaps, keepsLots, lessPaidAt, lotsSplitBy, normalizeAddress, orderMatters, plainAmount, ranking, sharePaidAt, shortHash, usableAnswer, usdView, viewWallet, withoutCurrency, worth, type CostPiece, type CurrencyCode, type HistoryGap, type HoldComparison, type Method, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
+import { applyLegTaking, assertFoldFits, emptyPosition, firstMarks, foldWallet, unconfirmedAssets, formatAmount, formatPaid, historyGaps, keepsLots, lessPaidAt, lotsSplitBy, normalizeAddress, orderMatters, plainAmount, ranking, sharePaidAt, shortHash, splitIsAnswerable, usableAnswer, usdView, viewWallet, withoutCurrency, worth, type CostPiece, type CurrencyCode, type HistoryGap, type HoldComparison, type Method, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import { NO_FACTS, legsByTransaction, transactionFacts } from "./activity.ts"
 import type { BookPoint, BookPreview, WalletResponse } from "./api.ts"
 import { costKey, isDemoWallet, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type ExchangeLot, type ExchangeWithdrawal, type Money, type Purchase, type Receipt, type SenderAnswer } from "./book.ts"
@@ -73,7 +73,7 @@ function moneyIn(side: Side, money: Money, leg: PricedLeg): string | null {
 }
 
 /** Part of a piece whose cost is only known for all of it, so this part has none, and neither does the rest. */
-const withoutItsCost = (piece: CostPiece, units: bigint): CostPiece => ({ qty: units.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0", unanswerable: true, ...(piece.unconfirmedBy ? { unconfirmedBy: piece.unconfirmedBy } : {}), ...(piece.acquiredBlock === undefined ? {} : { acquiredBlock: piece.acquiredBlock, acquiredAt: piece.acquiredAt as string }), ...(piece.undated ? { undated: true as const } : {}), ...ranking(piece) })
+const withoutItsCost = (piece: CostPiece, units: bigint, answerable = false): CostPiece => ({ qty: units.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0", ...(answerable ? {} : { unanswerable: true as const }), ...(piece.unconfirmedBy ? { unconfirmedBy: piece.unconfirmedBy } : {}), ...(piece.acquiredBlock === undefined ? {} : { acquiredBlock: piece.acquiredBlock, acquiredAt: piece.acquiredAt as string }), ...(piece.undated ? { undated: true as const } : {}), ...ranking(piece) })
 
 /** Part of a piece, with its share of the cost. Taking it all takes all of the cost, so rounding never loses any. */
 function slice(piece: CostPiece, qty: bigint): CostPiece {
@@ -136,7 +136,9 @@ export function allocateTaken(taken: readonly CostPiece[], transfers: readonly S
       for (const piece of lotsSplitBy({ lots: taken }, through, method)) divided.add(piece)
     }
   }
-  let left = taken.map((piece) => (divided.has(piece) ? withoutItsCost(piece, BigInt(piece.qty)) : piece))
+  // By highest cost first, who got what can wait on an answer to what something cost, which says where it ranks.
+  const answerable = divided.size > 0 && splitIsAnswerable(taken, method)
+  let left = taken.map((piece) => (divided.has(piece) ? withoutItsCost(piece, BigInt(piece.qty), answerable) : piece))
   const allocated = new Map<string, CostPiece[]>()
   for (const { address, units } of recipients) {
     const pieces: CostPiece[] = []

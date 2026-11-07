@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import { ETH_ADDRESS, type LegPart, type PricedLeg } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../src/core/api.ts"
-import { costKey, emptyBook, type Book } from "../src/core/book.ts"
+import { costKey, emptyBook, type Book, type ExchangeWithdrawal } from "../src/core/book.ts"
 import { parseCoinbaseCsv } from "../src/core/exchange-import.ts"
 import { DEMO_WALLET } from "../src/core/fixtures.ts"
 import { termOf } from "../src/core/tax-forms.ts"
@@ -343,7 +343,7 @@ describe("newest first and highest cost first", () => {
     assert.deepEqual(lineOf("hifo").lines, [["Part I (short-term)", "I", "1 ETH", "05/01/2026", "07/01/2026", "2500.000000", "3000.000000", "", "", "-500.000000"]])
   })
 
-  it("say in plain words which they are, and that US rules only allow them when your records said so before each sale", () => {
+  it("say in plain words which they are, and that US rules only allow them when your records said so before each sale or transfer", () => {
     for (const [method, name, slug] of [["lifo", "newest first", "newest-first"], ["hifo", "highest cost first", "highest-cost-first"]] as const) {
       const { report } = lineOf(method)
       assert.equal(report.filename, `tax-report-${A.slice(0, 8)}-US-${slug}-USD.csv`)
@@ -351,6 +351,64 @@ describe("newest first and highest cost first", () => {
       assert.ok(report.warnings.includes(TAX_COUNTRIES.US.methodWarnings[method] as string))
       assert.doesNotMatch(report.csv, /FIFO|LIFO|HIFO/)
     }
+  })
+
+  describe("never say what a sale cost when what it took depends on something unknown", () => {
+    const US = (method: "lifo" | "hifo") => ({ country: "US", method, scope: "per-wallet" }) as const
+    const rows = (report: ReturnType<typeof taxReportOf>) => linesOf(report.form?.csv ?? "").filter((line) => line[2] !== "Total").map((line) => line.slice(5, 7))
+    const answered = (l: PricedLeg, amount: number): Book => ({ ...emptyBook(), costs: entered(A, l, amount) })
+
+    // $300, then one with no known cost, then two sales. If the unknown one cost $100, the first sale took the $300 purchase.
+    const unknown = arrived(2, "2025-02-01", SELLER)
+    const legs = [buy(1, "2025-01-01", 1n, 300), unknown, sell(3, "2025-03-01", 1n, 500)]
+
+    it("by highest cost first, for every sale after one that took something with no known cost, until that cost is answered", () => {
+      const wallet = walletOf([...legs, sell(4, "2025-04-01", 1n, 500)], READ)
+      assert.deepEqual(rows(taxReportOf([wallet], US("hifo"))), [["500.000000", "unknown"], ["500.000000", "unknown"]])
+      assert.deepEqual(rows(taxReportOf([wallet], US("hifo"), { book: answered(unknown, 100) })), [["500.000000", "300.000000"], ["500.000000", "100.000000"]])
+    })
+
+    it("by highest cost first, for what's left after it moves to a linked wallet", () => {
+      const move = [sent(4, "2025-04-01", B), arrived(4, "2025-04-01", A, B)] as const
+      const wallets = [walletOf([...legs, move[0]], READ), walletOf([move[1], sell(5, "2025-05-01", 1n, 500)], READ, B)]
+      const ofB = (book = emptyBook()) => linesOf(taxReportOf(wallets, US("hifo"), { book }).form?.csv ?? "").filter((line) => line[4] === "05/01/2025").map((line) => line.slice(5, 7))
+      assert.deepEqual(ofB(), [["500.000000", "unknown"]])
+      assert.deepEqual(ofB(answered(unknown, 100)), [["500.000000", "100.000000"]])
+    })
+
+    it("by highest cost first, when it takes all of a lot an exchange only knows the cost of as a whole", () => {
+      // 2 ETH for $600 in all, bought together, could be $500 and $100, and then the two that cost the most are $700.
+      const withdrawn = arrived(2, "2025-01-03", SELLER)
+      const withdrawal: ExchangeWithdrawal = { exchange: "Coinbase", asset: "ETH", units: (2n * E18).toString(), at: withdrawn.timestamp, cost: { micros: usd(600), currency: "USD" }, fifoCostMicros: usd(600), fifoLots: [{ units: (2n * E18).toString(), micros: usd(600), at: "2024-12-01T00:00:00.000Z", wholeCostOnly: true as const }], toAddress: A }
+      const report = (units: bigint) => taxReportOf([walletOf([buy(1, "2025-01-02", 1n, 200), { ...withdrawn, delta: (2n * E18).toString(), parts: [part(A, "credit", 2n * E18, SELLER)] }, sell(3, "2025-01-04", units, 500 * Number(units))], READ)], US("hifo"), { book: { ...emptyBook(), withdrawals: [withdrawal] } })
+      assert.deepEqual(rows(report(2n)), [["1000.000000", "unknown"]])
+      assert.deepEqual(rows(report(3n)), [["1500.000000", "800.000000"]], "selling everything takes everything")
+    })
+
+    describe("by newest first, after an exchange withdrawal that doesn't say when it was bought", () => {
+      // 1 ETH for $400 on the 2nd, then 2 ETH that cost $300 in all, from an exchange, on the 3rd. They could be older than the $400.
+      const withdrawn = leg(2, "2025-01-03", 2n * E18, { kind: "transfer", parts: [part(A, "credit", 2n * E18, SELLER)] })
+      const book: Book = { ...emptyBook(), withdrawals: [{ exchange: "Coinbase", asset: "ETH", units: (2n * E18).toString(), at: withdrawn.timestamp, cost: { micros: usd(300), currency: "USD" }, fifoCostMicros: usd(300), toAddress: A }] }
+      const held = [buy(1, "2025-01-02", 1n, 400), withdrawn]
+
+      for (const units of [1n, 2n]) {
+        it(`has no cost for selling ${units} ETH, or for selling the rest later`, () => {
+          const wallet = walletOf([...held, sell(3, "2025-01-04", units, 500 * Number(units)), sell(4, "2025-01-05", 3n - units, 500 * Number(3n - units))], READ)
+          assert.deepEqual(rows(taxReportOf([wallet], US("lifo"), { book })).map(([, cost]) => cost), ["unknown", "unknown"])
+        })
+      }
+
+      it("has no cost for what's sent to a linked wallet, even all of what arrived", () => {
+        const move = [leg(3, "2025-01-04", -2n * E18, { kind: "transfer", parts: [part(A, "debit", 2n * E18, B)] }), leg(3, "2025-01-04", 2n * E18, { kind: "transfer", parts: [part(B, "credit", 2n * E18, A)] })] as const
+        const wallets = [walletOf([...held, move[0]], READ), walletOf([move[1], sell(4, "2025-01-05", 2n, 1000)], READ, B)]
+        assert.deepEqual(rows(taxReportOf(wallets, US("lifo"), { book })), [["1000.000000", "unknown"]])
+      })
+
+      it("knows what selling everything cost", () => {
+        const wallet = walletOf([...held, sell(3, "2025-01-04", 3n, 1500)], READ)
+        assert.deepEqual(rows(taxReportOf([wallet], US("lifo"), { book })), [["500.000000", "400.000000"], ["1000.000000", "300.000000"]])
+      })
+    })
   })
 
   it("are only offered where the rules can allow them", () => {
