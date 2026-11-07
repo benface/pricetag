@@ -66,6 +66,35 @@ import Testing
         #expect(found?.point.txHash == "0x0")
     }
 
+    @Test func theNearestTransactionIsWhatLookingAtEveryOneWouldFind() {
+        // Several in one block, one with no transaction, and gaps of different sizes.
+        func same(_ second: Int, _ tx: Int) -> PnlPoint {
+            let moment = point(second, "1000000")
+            return PnlPoint(blockNum: tx, timestamp: moment.timestamp, txHash: "0x\(tx)", pnlMicros: "1000000", excludedCount: 0)
+        }
+        let series = PnlSeries(points: [same(0, 100), point(4, "1"), same(10, 101), same(10, 102), point(12, "1", tx: false), same(20, 103), same(20, 104), same(21, 105)])
+        let all = series.plotted.filter { $0.point.txHash != nil }
+        for half in -4...60 {
+            let date = Date(timeIntervalSince1970: 1_800_000_000 + Double(half) / 2)
+            let expected = all.min { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) }
+            #expect(series.nearestTransaction(to: date)?.id == expected?.id, "at \(Double(half) / 2)")
+        }
+        #expect(PnlSeries(points: [point(0, "1", tx: false)]).nearestTransaction(to: .now) == nil)
+    }
+
+    @Test func aPointReadsTheSameAfterBeingSavedAndItsDateIsWorkedOutOnce() throws {
+        var known = point(5, "1000000")
+        known.valueEstimated = true
+        let json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(known)) as! [String: Any]
+        #expect(json["timestamp"] as? String == known.timestamp)
+        #expect(json["valueEstimated"] == nil, "that's never from a server")
+        let read = try JSONDecoder().decode(PnlPoint.self, from: JSONEncoder().encode(known))
+        #expect(read.date == Date(timeIntervalSince1970: 1_800_000_005))
+        #expect(!read.valueEstimated)
+        #expect(read.timestamp == known.timestamp)
+        #expect(PnlPoint(blockNum: 1, timestamp: "not a date", txHash: nil, pnlMicros: nil, excludedCount: 0).date == nil)
+    }
+
     private func portfolio(points: [PnlPoint]) throws -> Portfolio {
         var object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(demoPortfolio())) as! [String: Any]
         object["points"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(points))

@@ -22,8 +22,8 @@ private actor Orders: PortfolioSource {
     func fail(_ error: FetchError?) { failure = error }
     func sendPage(_ url: String) { page = url }
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio { throw FetchError.unreachable }
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation { throw FetchError.unreachable }
+    func portfolio(_ read: ReadContext, timeout: Duration) async throws -> Portfolio { throw FetchError.unreachable }
+    func explanation(of target: ExplainTarget, _ read: ReadContext, shown: [String]?) async throws -> Explanation { throw FetchError.unreachable }
     func onrampCheckout(address: String, asset: String, cryptoAmount: String, fiat: Money?) async throws -> OnrampCheckout {
         if let failure { throw failure }
         askedFiat = fiat
@@ -42,8 +42,8 @@ private actor PausingOrders: PortfolioSource {
     private var pause: CheckedContinuation<Void, Never>?
     var isPaused: Bool { pause != nil }
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio { throw FetchError.unreachable }
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation { throw FetchError.unreachable }
+    func portfolio(_ read: ReadContext, timeout: Duration) async throws -> Portfolio { throw FetchError.unreachable }
+    func explanation(of target: ExplainTarget, _ read: ReadContext, shown: [String]?) async throws -> Explanation { throw FetchError.unreachable }
     func onrampOrders(ref: String) async throws -> [OnrampOrder] {
         if ref == "older" { return [delivered(id: ref)] }
         laterReads += 1

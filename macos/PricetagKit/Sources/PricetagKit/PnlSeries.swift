@@ -22,6 +22,7 @@ struct PnlSeries {
     /// Where nothing is known, from the first unknown point to the next known one, or the end.
     let gaps: [ClosedRange<Date>]
     let plotted: [Plotted]
+    let transactions: PlottedTransactions
 
     init(points: [PnlPoint]) {
         let plotted = points.compactMap { point -> Plotted? in
@@ -53,13 +54,47 @@ struct PnlSeries {
         self.segments = segments
         self.gaps = gaps
         self.plotted = plotted
+        transactions = PlottedTransactions(plotted)
+    }
+}
+
+/// The points with a transaction behind them, ready for a pointer that asks about them on every move.
+struct PlottedTransactions {
+    /// Oldest first, and in their order in the series where they're at the same moment.
+    private let byDate: [PnlSeries.Plotted]
+    private let byID: [String: PnlSeries.Plotted]
+
+    init(_ plotted: [PnlSeries.Plotted]) {
+        byDate = plotted.filter { $0.point.txHash != nil }.sorted { $0.date < $1.date }
+        byID = Dictionary(byDate.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
+    subscript(id: String) -> PnlSeries.Plotted? { byID[id] }
+
+    /// The earlier of two as near as each other, and the first of several at the same moment.
+    func nearest(to date: Date) -> PnlSeries.Plotted? {
+        let after = firstIndex(atOrAfter: date)
+        guard after > 0 else { return byDate.first }
+        let before = byDate[firstIndex(atOrAfter: byDate[after - 1].date)]
+        guard after < byDate.count else { return before }
+        return abs(byDate[after].date.timeIntervalSince(date)) < abs(before.date.timeIntervalSince(date)) ? byDate[after] : before
+    }
+
+    private func firstIndex(atOrAfter date: Date) -> Int {
+        var low = 0
+        var high = byDate.count
+        while low < high {
+            let middle = (low + high) / 2
+            if byDate[middle].date < date { low = middle + 1 } else { high = middle }
+        }
+        return low
+    }
 }
 
 /// What a chart can point at.
 protocol PlottedSeries {
     var plotted: [PnlSeries.Plotted] { get }
+    var transactions: PlottedTransactions { get }
     /// Everything drawn, for VoiceOver's own chart tools.
     func spokenPoints(_ currency: CurrencyCode) -> [Spoken.ChartPoint]
 }
@@ -67,12 +102,12 @@ protocol PlottedSeries {
 extension PlottedSeries {
     /// A transaction by its ID, as these points say it is now. nil once it's out of view.
     func transaction(id: String?) -> PnlSeries.Plotted? {
-        id.flatMap { id in plotted.first { $0.id == id && $0.point.txHash != nil } }
+        id.flatMap { transactions[$0] }
     }
 
     /// The transaction nearest to a date, known or not, so a click on a gap still opens its legs.
     func nearestTransaction(to date: Date) -> PnlSeries.Plotted? {
-        plotted.filter { $0.point.txHash != nil }.min { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) }
+        transactions.nearest(to: date)
     }
 }
 
@@ -100,6 +135,7 @@ struct ValueSeries: PlottedSeries {
     let lines: [Line]
     let gaps: [ClosedRange<Date>]
     let plotted: [PnlSeries.Plotted]
+    let transactions: PlottedTransactions
     /// Every value drawn, before and after each transaction, in order.
     let readings: [Reading]
     /// The same, for the scale.
@@ -150,6 +186,7 @@ struct ValueSeries: PlottedSeries {
         self.lines = lines
         self.gaps = gaps
         self.plotted = plotted
+        transactions = PlottedTransactions(plotted)
         self.readings = readings
         isolated = Set(plotted.filter { $0.value != nil && !joined.contains($0.id) }.map(\.id))
     }

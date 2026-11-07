@@ -240,9 +240,7 @@ extension Portfolio {
 
     /// Why the value is partial, for its tooltip, by the same causes the SDK counts. nil when it isn't.
     public var partialValueReason: String? {
-        guard isValuePartial else { return nil }
-        let gaps = valueGaps
-        return Wording.partialValue(noPrice: gaps.noPrice, unread: gaps.unread, unchecked: gaps.unchecked, incompleteHistory: gaps.incompleteHistory)
+        isValuePartial ? Wording.valueGaps(valueGaps) : nil
     }
 
     /// Why the value is partial, by the same causes the SDK counts. The first two are left out of it. The last two are in it,

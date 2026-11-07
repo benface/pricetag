@@ -26,12 +26,12 @@ actor BookSource: PortfolioSource {
         previewRefusals.append(retryAfter)
     }
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
-        books.append(book)
+    func portfolio(_ read: ReadContext, timeout: Duration) async throws -> Portfolio {
+        books.append(read.book)
         return portfolios.count > 1 ? portfolios.removeFirst() : portfolios[0]
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, _ read: ReadContext, shown: [String]?) async throws -> Explanation {
         throw FetchError.unreachable
     }
 
@@ -42,8 +42,8 @@ actor BookSource: PortfolioSource {
         return previewAnswers
     }
 
-    func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> String {
-        books.append(book)
+    func exportCSV(_ read: ReadContext, shown: [String]?) async throws -> String {
+        books.append(read.book)
         return ""
     }
 
@@ -616,7 +616,7 @@ actor BookSource: PortfolioSource {
         #expect(await source.books.last == expected)
         _ = try? await store.comparison()
         #expect(await source.books.last == expected)
-        #expect(store.explanationRequest(for: .asset("ETH", .value))?.book == expected)
+        #expect(store.explanationRequest(for: .asset("ETH", .value))?.read.book == expected)
         #expect(store.book.senders[wallet]?.kind == .mine, "it's still an account, for anything that isn't the demo")
     }
 

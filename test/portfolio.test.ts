@@ -18,6 +18,7 @@ import { PRESET_FIAT } from "../server/coinbase.ts"
 import { RULE_TEXT, differenceOf, ruleNote, showRuleDifference, showRuleValue, whySentence, type RuleComparison } from "../src/core/rules.ts"
 import { proofOf, verificationOf } from "../server/proof.ts"
 import { assertMatchesFixture } from "./support/fixtures.ts"
+import { NO_FACTS } from "../src/core/activity.ts"
 
 describe("the hot wallet's allowlist", () => {
   it("matches what the Swift package has compiled in", () => {
@@ -309,7 +310,9 @@ describe("what the value chart can join", () => {
   })
 
   it("matches the file the Swift package reads", () => {
-    assertMatchesFixture("value-breaks.json", { unnamedEth, differentOmissions })
+    // As the server sends them: a point with no facts of its own still says so.
+    const sent = (points: typeof unnamedEth) => points.map((point) => ({ ...point, ...NO_FACTS }))
+    assertMatchesFixture("value-breaks.json", { unnamedEth: sent(unnamedEth), differentOmissions: sent(differentOmissions) })
   })
 
   describe("with prices read between transactions", () => {

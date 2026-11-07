@@ -48,9 +48,9 @@ struct WordingVectors: Decodable {
         let help: String?
     }
     struct Sentences: Decodable {
-        let methodName, methodHelp, averagePricePaid, networkFees, balanceCheck, startingBalance, pnlHelp, realizedHelp, unrealizedHelp, returnHelp: String
+        let methodName, methodHelp, averagePricePaid, networkFees, balanceCheck, pnlHelp, realizedHelp, unrealizedHelp, returnHelp: String
         let notStarted, unpricedFees, demo, pnlUnavailable, nothingToChart, reading, notAnAddress, rulesTitle, rulesHelp: String
-        let holdTitle, holdWallet, holdEth, holdPast: String
+        let holdTitle, holdPast: String
         let answerQuestions, showMissing, senderQuestion, senderWhy, costQuestion, costWhy, exchangeCostWhy, allAnswered, nothingLeft: String
         let moneyUnaffected: String
     }
@@ -136,14 +136,11 @@ struct WordingVectors: Decodable {
         #expect(Wording.rulesTitle == sentences.rulesTitle)
         #expect(Wording.rulesHelp == sentences.rulesHelp)
         #expect(Wording.holdTitle == sentences.holdTitle)
-        #expect(Wording.holdWallet == sentences.holdWallet)
-        #expect(Wording.holdEth == sentences.holdEth)
         #expect(Wording.holdPast == sentences.holdPast)
         #expect(Wording.methodHelp == sentences.methodHelp)
         #expect(Wording.averagePricePaid == sentences.averagePricePaid)
         #expect(Wording.networkFees == sentences.networkFees)
         #expect(Wording.balanceCheck == sentences.balanceCheck)
-        #expect(Wording.startingBalance == sentences.startingBalance)
         #expect(Wording.pnlHelp == sentences.pnlHelp)
         #expect(Wording.realizedHelp == sentences.realizedHelp)
         #expect(Wording.unrealizedHelp == sentences.unrealizedHelp)

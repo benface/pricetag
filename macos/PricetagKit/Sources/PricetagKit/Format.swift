@@ -98,7 +98,6 @@ public enum Format {
         isPositive(units) ? "+\(amount(units, decimals: decimals))" : amount(units, decimals: decimals)
     }
 
-    /// An estimate has to look different from an exact value, wherever it's shown.
     /// A return in basis points as a signed percentage, to a tenth, or whole once it's 1,000% or more. A return that rounds to nothing has no sign.
     public static func percent(bps: String) -> String {
         guard let value = Decimal(string: bps) else { return Wording.unknown }
@@ -117,6 +116,7 @@ public enum Format {
         return "\(sign)\(grouped(whole)).\(NSDecimalNumber(decimal: rounded - whole * 10).intValue)%"
     }
 
+    /// An estimate has to look different from an exact value, wherever it's shown.
     public static func estimate(_ text: String, _ isEstimate: Bool) -> String {
         isEstimate ? "≈\(text)" : text
     }
@@ -157,10 +157,11 @@ public enum Format {
 
     /// An address in groups of four, in two lines of five, so it can be checked a piece at a time. The "0x" stays on the first group.
     public static func groupedAddress(_ address: String) -> [String] {
-        let digits = Array(address.hasPrefix("0x") ? address.dropFirst(2) : Substring(address))
-        let groups = stride(from: 0, to: digits.count, by: 4).map { String(digits[$0..<min($0 + 4, digits.count)]) }
-        guard !groups.isEmpty else { return [] }
-        let prefixed = [(address.hasPrefix("0x") ? "0x" : "") + groups[0]] + groups.dropFirst()
+        let groups = addressGroups(address)
+        let prefix = groups.prefix(address.hasPrefix("0x") ? 1 : 0).joined()
+        let digits = groups.dropFirst(prefix.isEmpty ? 0 : 1)
+        guard let first = digits.first else { return [] }
+        let prefixed = [prefix + first] + digits.dropFirst()
         let half = (prefixed.count + 1) / 2
         return [prefixed[..<half], prefixed[half...]].filter { !$0.isEmpty }.map { $0.joined(separator: " ") }
     }

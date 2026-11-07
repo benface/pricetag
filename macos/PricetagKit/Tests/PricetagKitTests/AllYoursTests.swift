@@ -12,12 +12,12 @@ private actor AllYoursSource: PortfolioSource {
     private(set) var asked: [(address: String, linked: [String])] = []
     private(set) var proofs: [String] = []
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
-        asked.append((address, linked))
+    func portfolio(_ read: ReadContext, timeout: Duration) async throws -> Portfolio {
+        asked.append((read.address, read.linked))
         return try resource("all-yours-portfolio", as: Portfolio.self)
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, _ read: ReadContext, shown: [String]?) async throws -> Explanation {
         throw FetchError.unreachable
     }
 
@@ -33,11 +33,11 @@ private actor AnswersInTurn: PortfolioSource {
 
     init(_ answers: [Result<Portfolio, FetchError>]) { self.answers = answers }
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
+    func portfolio(_ read: ReadContext, timeout: Duration) async throws -> Portfolio {
         try answers.removeFirst().get()
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, _ read: ReadContext, shown: [String]?) async throws -> Explanation {
         throw FetchError.unreachable
     }
 
@@ -65,16 +65,16 @@ private actor ForgetfulServer: PortfolioSource {
         if !(shown ?? []).allSatisfy(has.contains) { throw FetchError.notCaughtUp("Not yet") }
     }
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
+    func portfolio(_ read: ReadContext, timeout: Duration) async throws -> Portfolio {
         answers.removeFirst()
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, _ read: ReadContext, shown: [String]?) async throws -> Explanation {
         try refusing(shown)
         return Explanation(currency: .USD, title: "Value", value: "\(has.count) wallets", sourceValue: nil, lines: [], legCount: 0, legs: [])
     }
 
-    func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> String {
+    func exportCSV(_ read: ReadContext, shown: [String]?) async throws -> String {
         try refusing(shown)
         return has.sorted().joined(separator: "\n")
     }
@@ -124,6 +124,24 @@ private func answer(_ states: KeyValuePairs<String, CombinedWallet.State>, block
     totals["valueMicros"] = value
     object["totals"] = totals
     return try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: object))
+}
+
+/// Answers every read with nothing still on its way, and remembers which wallets it was asked about.
+private actor UpToDateServer: PortfolioSource {
+    private(set) var asked: [[String]] = []
+
+    func portfolio(_ read: ReadContext, timeout: Duration) async throws -> Portfolio {
+        asked.append(read.linked)
+        return try answer([a: .read, b: .read], block: 10, at: Date())
+    }
+
+    func explanation(of target: ExplainTarget, _ read: ReadContext, shown: [String]?) async throws -> Explanation {
+        throw FetchError.unreachable
+    }
+
+    func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof {
+        throw FetchError.unreachable
+    }
 }
 
 @MainActor
@@ -193,10 +211,10 @@ struct AllYoursTests {
         configuration.protocolClasses = [BehindProtocol.self]
         let client = PricetagClient(serverURL: URL(string: "http://127.0.0.1:1")!, configuration: configuration)
         await #expect(throws: FetchError.notCaughtUp("Not yet")) {
-            try await client.exportCSV(address: WalletAddress.allYours, method: .average, currency: .USD, rule: nil, linked: [a, b], shown: [a, b], book: Book())
+            try await client.exportCSV(ReadContext(address: WalletAddress.allYours, method: .average, currency: .USD, rule: nil, linked: [a, b], book: Book()), shown: [a, b])
         }
         await #expect(throws: FetchError.notCaughtUp("Not yet")) {
-            try await client.explanation(of: .total(.value), address: WalletAddress.allYours, method: .average, currency: .USD, rule: nil, linked: [a, b], shown: [a], book: Book())
+            try await client.explanation(of: .total(.value), ReadContext(address: WalletAddress.allYours, method: .average, currency: .USD, rule: nil, linked: [a, b], book: Book()), shown: [a])
         }
         #expect(BehindProtocol.bodies.compactMap { $0["shown"] as? [String] } == [[a, b], [a]])
     }
@@ -362,7 +380,7 @@ struct AllYoursTests {
         #expect(two.allYours?.title == "All Yours")
         #expect(two.allYours?.detail == "2 wallets")
         #expect(two.all.first?.kind == .allYours, "at the top")
-        #expect(two.allYoursAddresses == [a, b], "and never a wallet that's only watched")
+        #expect(two.yours.map(\.address) == [a, b], "and never a wallet that's only watched")
         #expect(!two.pickable.contains { $0.kind == .allYours }, "it has no address to paste anywhere")
         #expect(two.allYours?.canRename == false && two.allYours?.canRemove == false)
         #expect(two.names[b] == "Ledger")
@@ -380,7 +398,6 @@ struct AllYoursTests {
         defaults.set(try JSONEncoder().encode(Book().answering(a, .mine, focus: nil).answering(b, .mine, focus: nil)), forKey: "answers")
         let store = PortfolioStore(defaults: defaults, makeSource: { _ in AllYoursSource() })
         #expect(store.address == WalletAddress.allYours)
-        #expect(store.savedWallets.map(\.address) == [d])
         let list = WalletList(spending: nil, savings: [], linked: store.book.linkedWallets, saved: store.savedWallets, current: store.address)
         #expect(list.all.filter { $0.address == WalletAddress.allYours }.map(\.kind) == [.allYours], "once, as itself")
         #expect(list.recent.isEmpty && list.watching.map(\.address) == [d])
@@ -418,5 +435,47 @@ struct AllYoursTests {
         await #expect(throws: FetchError.unreachable) { try await store.proof(leg: "0x2:ETH", address: b) }
         await #expect(throws: CancellationError.self) { try await store.proof(leg: "0x2:ETH", address: d) }
         #expect(await source.proofs == [b])
+    }
+
+    /// A failure rather than a test that never ends.
+    private func until(_ condition: () async -> Bool) async throws {
+        let deadline = Date.now.addingTimeInterval(10)
+        while await !condition(), Date.now < deadline { try await Task.sleep(for: .milliseconds(2)) }
+        #expect(await condition())
+    }
+
+    /// What's showing is whatever was chosen since launch, not what the app opened on.
+    @Test func takingAWalletOffTheListChangesAllYoursChosenAfterLaunch() async throws {
+        let defaults = UserDefaults(suiteName: "all-yours-\(UUID().uuidString)")!
+        defaults.set(d, forKey: "wallet")
+        let server = UpToDateServer()
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in server })
+        defer { store.stop() }
+        store.setLinkedWallets([a, b, c])
+        store.setWallet(WalletAddress.allYours)
+        try await until { await server.asked.last == [a, b, c] && store.feed == .live }
+
+        let removal = store.changeWallet(c, name: "Remove from List") { store.removeWallet(c, showing: nil) }
+        #expect(store.feed == .reading, "the total on screen still has it")
+        try await until { await server.asked.last == [a, b] && store.feed == .live }
+
+        store.restore(removal)
+        #expect(store.feed == .reading, "the total on screen still leaves it out")
+        try await until { await server.asked.last == [a, b, c] && store.feed == .live }
+    }
+
+    /// Opened on All Yours, then moved on: the one wallet showing has nothing to do with the list.
+    @Test func takingAWalletOffTheListLeavesAnotherWalletLive() async throws {
+        let defaults = UserDefaults(suiteName: "all-yours-\(UUID().uuidString)")!
+        defaults.set(WalletAddress.allYours, forKey: "wallet")
+        let server = UpToDateServer()
+        let store = PortfolioStore(defaults: defaults, makeSource: { _ in server })
+        defer { store.stop() }
+        store.setLinkedWallets([a, b, c])
+        store.setWallet(d)
+        try await until { store.feed == .live }
+
+        store.removeWallet(c, showing: nil)
+        #expect(store.feed == .live)
     }
 }

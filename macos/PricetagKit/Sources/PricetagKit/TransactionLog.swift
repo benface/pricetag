@@ -66,7 +66,7 @@ public struct TransactionItem: Identifiable, Equatable, Sendable {
         amount = point.amount
         gain = point.gain
         unknownCost = point.unknownCost
-        answerableCost = point.answerableCost
+        answerableCost = point.answerableCost ?? []
         wallets = point.wallets ?? []
         self.status = status
         isRead = true

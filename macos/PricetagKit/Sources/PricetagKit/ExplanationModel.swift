@@ -51,11 +51,3 @@ public final class ExplanationModel {
         }
     }
 }
-
-func failureMessage(for error: any Error) -> String {
-    switch error as? FetchError {
-    case .ampUnavailable(let message), .noAmpConfigured(let message), .rejected(let message), .tooBig(let message), .needsInvite(let message), .priceChanged(let message), .notCaughtUp(let message), .rateLimited(let message, _): message
-    case .timedOut: Wording.serverTooSlow
-    case .unreachable, nil: Wording.cantReachServer
-    }
-}

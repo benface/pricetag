@@ -123,8 +123,8 @@ final class MovedPriceProtocol: URLProtocol, @unchecked Sendable {
 
 /// A source that has nothing, for a store that's never read.
 private struct FixtureFree: PortfolioSource {
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio { throw FetchError.unreachable }
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation { throw FetchError.unreachable }
+    func portfolio(_ read: ReadContext, timeout: Duration) async throws -> Portfolio { throw FetchError.unreachable }
+    func explanation(of target: ExplainTarget, _ read: ReadContext, shown: [String]?) async throws -> Explanation { throw FetchError.unreachable }
 }
 
 /// Hands a request for an HTTPS address to the real server on this Mac, invite and all, because that address has no certificate to test with.
@@ -166,8 +166,8 @@ private final class ForwardingProtocol: URLProtocol, @unchecked Sendable {
 /// A source that answers like a hosted server that takes no invite it's given.
 private struct InvitedSource: PortfolioSource {
     func rules() async throws -> [PricingRule] { throw FetchError.needsInvite("This server needs an invite.") }
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio { throw FetchError.unreachable }
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation { throw FetchError.unreachable }
+    func portfolio(_ read: ReadContext, timeout: Duration) async throws -> Portfolio { throw FetchError.unreachable }
+    func explanation(of target: ExplainTarget, _ read: ReadContext, shown: [String]?) async throws -> Explanation { throw FetchError.unreachable }
 }
 
 /// A server that takes only the invite it's told to, whichever client asks.
@@ -196,8 +196,8 @@ private final class InviteGate: @unchecked Sendable {
 private struct InviteGateSource: PortfolioSource {
     let gate: InviteGate
     func rules() async throws -> [PricingRule] { try await gate.answer() }
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio { throw FetchError.unreachable }
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation { throw FetchError.unreachable }
+    func portfolio(_ read: ReadContext, timeout: Duration) async throws -> Portfolio { throw FetchError.unreachable }
+    func explanation(of target: ExplainTarget, _ read: ReadContext, shown: [String]?) async throws -> Explanation { throw FetchError.unreachable }
 }
 
 @MainActor @Suite struct InvitePromptTests {

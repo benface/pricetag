@@ -1,110 +1,16 @@
-// The live feed: reads when the server says there's a new block, polls when it can't say, remembers the wallet, and knows
-// whether what it holds is still true.
+// What the app asks of a wallet, and the one place the app asks it: the wallet, its settings and its server live here, and the live feed,
+// the answers and their history, the saved list and the current rate each have a type of their own, which this puts together.
 
 import Foundation
 import Observation
 
-/// What the list and the answers said about one wallet, before a change to it.
-public struct WalletListSnapshot: Sendable {
-    let address: String
-    let answer: SenderAnswer?
-    let undoDepth: Int
-    /// The answer the change gave, and the undo entry it made, if it made one.
-    var changedAnswer: SenderAnswer?
-    var undoEntry: UUID?
-    let saved: SavedWallet?
-    let orderIndex: Int?
-    let wasHidden: Bool
-    let wasShowing: Bool
-}
-
-/// One step Undo can take back: the answers before it, what the Edit menu calls it, and for a change to one wallet, the rest of what it changed.
-private struct HistoryEntry {
-    /// Kept through Undo and Redo, so the wallet list's own Undo can still find the change it made.
-    let id: UUID
-    let name: String
-    /// Before the step while it's in the undo history, and after it while it's in the redo history.
-    var book: Book
-    /// When the answers in `book` were given, and what they were about, so Undo and Redo put back each answer's own date.
-    var details: AnswerDetails
-    var wallet: WalletStep?
-}
-
-/// A change to one wallet as the wallet list makes it. Undo puts all of it back, and Redo makes it again.
-private struct WalletStep {
-    var snapshot: WalletListSnapshot
-    let change: () -> Void
-    let alsoUndo: (() -> Void)?
-}
-
-public enum FeedState: Equatable, Sendable {
-    case noWallet
-    /// Waiting on an answer, which the first time for a wallet can take a minute, or on one of All Yours' wallets being read again.
-    /// Numbers on screen are the last answer, and may be old.
-    case reading
-    case live
-    /// The server and Amp both answer, but Amp's newest block is old.
-    case behind(seconds: Int)
-    /// The chain is current, but the dataset hasn't processed up to it yet.
-    case catchingUp
-    case serverUnreachable
-    /// The server answers, but this wallet's read didn't finish in as long as a first read gets.
-    case tooSlow
-    case ampUnavailable(String)
-    case noAmpConfigured(String)
-    case rejected(String)
-    /// The server refused this wallet as having more history than it can hold, so there are no numbers for it.
-    case tooBig(String)
-    /// The server is holding this client back for now, which clears by itself.
-    case rateLimited(String)
-    /// The server answers, but it couldn't update some of All Yours' wallets, so the numbers stay as they were last read. Those wallets' notices say which.
-    case walletsOutdated
-
-    /// Only this state may show a number as current.
-    public var isLive: Bool { self == .live }
-
-    /// The last read failed or is old, so whatever's on screen has stopped moving.
-    public var isStale: Bool {
-        switch self {
-        case .noWallet, .reading, .live, .catchingUp: false
-        case .behind, .serverUnreachable, .tooSlow, .ampUnavailable, .noAmpConfigured, .rejected, .tooBig, .rateLimited, .walletsOutdated: true
-        }
-    }
-
-    /// A blip, usually, so the status alone says so until it's gone on a while. The others say the numbers are old from the start.
-    public var canBeBrief: Bool {
-        switch self {
-        case .serverUnreachable, .tooSlow, .ampUnavailable, .rateLimited: true
-        default: false
-        }
-    }
-}
-
-extension FeedState {
-    /// Whether the menu bar's panel says what kind of wallet this is. Not when the line beside it or under it already says the same:
-    /// "Demo wallet", "No wallet yet", or "Reading this wallet…".
-    public func showsWalletBadge(portfolio: Portfolio?) -> Bool {
-        switch self {
-        case .noWallet: false
-        case .reading: portfolio != nil
-        case .live: portfolio?.mode != .demo
-        default: true
-        }
-    }
-}
-
 /// One number's explanation, in full context, because the same number means something else on another wallet, method or server.
 public struct ExplanationRequest: Hashable, Sendable {
     public let target: ExplainTarget
-    public let address: String
-    public let method: CostMethod
-    public let currency: CurrencyCode
-    public let rule: String?
-    public let linked: [String]
+    public let read: ReadContext
     /// All Yours' wallets in the numbers on screen, which the explanation can't leave out.
     public let shown: [String]?
     public let serverURL: URL
-    public let book: Book
 }
 
 /// Whether anything answers at the server's address, whichever wallet is showing, and even with none.
@@ -125,74 +31,55 @@ public final class PortfolioStore {
         guard let host = host?.trimmingCharacters(in: .whitespaces), !host.isEmpty, host.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" }) else { return nil }
         return URL(string: "https://\(host)")
     }
-    /// Past this, the newest block is too old to call live.
-    static let behindAfterSeconds = 120
     /// As long as a read of a wallet the server hasn't read yet can take.
     nonisolated static let firstReadTimeout: Duration = .seconds(180)
 
-    /// What the store holds, which may not be current: read `feed` before calling it live. While a new wallet's, method's, currency's
-    /// or rule's numbers are on their way, the feed is `.reading` and this holds the last ones known, so the screen doesn't go blank.
-    /// They're always this wallet's, though they can be by the last method, currency or rule it was read in.
-    public private(set) var portfolio: Portfolio? {
-        didSet { portfolioRevision &+= 1 }
-    }
-    /// Goes up each time `portfolio` is replaced, however that happens: a read, the last read on the server, or what's kept from
-    /// before. `updatedAt` only changes with a fresh read, so whatever's worked out from `portfolio` keys on this instead.
-    public private(set) var portfolioRevision = 0
-    public private(set) var feed: FeedState {
-        didSet { noteProblem() }
-    }
-    /// Whether what's wrong has been worth saying beyond the status: it can't clear by itself in a moment, or it's had `longProblem` to. A read that's trying again keeps it.
-    public private(set) var isProblemLong = false
-    @ObservationIgnored private var longProblemTask: Task<Void, Never>?
+    @ObservationIgnored private let feedLoop: FeedLoop
+    @ObservationIgnored private let answerHistory: AnswerHistory
+    @ObservationIgnored private let walletList: SavedWalletList
+    @ObservationIgnored private let rates: RateReader
+
+    /// What the store holds, which may not be current: read `feed` before calling it live. See `FeedLoop`.
+    public var portfolio: Portfolio? { feedLoop.portfolio }
+    /// Goes up each time `portfolio` is replaced, however that happens, so whatever's worked out from `portfolio` keys on this.
+    public var portfolioRevision: Int { feedLoop.portfolioRevision }
+    public var feed: FeedState { feedLoop.feed }
+    /// Whether what's wrong has been worth saying beyond the status.
+    public var isProblemLong: Bool { feedLoop.isProblemLong }
     /// What was wrong when someone asked to try again. It stands until that read answers.
-    public private(set) var retriedProblem: FeedState?
-    /// When the read that's running now started, so a long one can say how long it's been, including a retry after a failure. nil between reads.
-    /// A change starts a new read, so it starts this over. A read that waits longer on the same request keeps it.
-    public private(set) var readingSince: Date? {
-        didSet { noteRead() }
-    }
+    public var retriedProblem: FeedState? { feedLoop.retriedProblem }
+    /// When the read that's running now started, so a long one can say how long it's been. nil between reads.
+    public var readingSince: Date? { feedLoop.readingSince }
     /// Whether the read that's running has gone on for `longReadSeconds`, so it's worth saying more than that it's running.
-    public private(set) var isReadLong = false
-    @ObservationIgnored private var longReadTask: Task<Void, Never>?
-    /// Which read `readingSince` belongs to, so one a change left behind can't clear it when it finally ends.
-    @ObservationIgnored private var readCount = 0
-    public private(set) var updatedAt: Date?
+    public var isReadLong: Bool { feedLoop.isReadLong }
+    public var updatedAt: Date? { feedLoop.updatedAt }
     public private(set) var address: String?
     public private(set) var method: CostMethod
     public private(set) var currency: CurrencyCode
     /// How the holdings are ordered. It's the same for every wallet, and it's remembered.
     public var holdingsSort: HoldingsSort {
-        didSet { defaults.set(holdingsSort.rawValue, forKey: Keys.holdingsSort) }
+        didSet { defaults.set(holdingsSort.rawValue, forKey: StoreKeys.holdingsSort) }
     }
     public private(set) var menuBarShows: MenuBarShows
-    /// What one USD buys right now in `currency`, for what isn't part of a wallet's own read. Nil in USD, or with no current rate.
-    private var currentRate: CurrentRate?
     public private(set) var serverURL: URL
     /// What the server at `serverURL` knows this person by, or nil. Each invite belongs to the server it was given for, so it never
     /// follows the user to another one, and it's only sent over HTTPS.
     public private(set) var invite: String?
     /// The server at `serverURL` answered that it needs an invite, and hasn't taken one since.
-    public private(set) var needsInvite = false
+    public internal(set) var needsInvite = false
     /// What the last question to the server found, for when there's no wallet being read to say so.
     public private(set) var serverCheck = ServerCheck.checking
     /// They said not now, so nothing asks again until they give an invite or move to another server.
     private var isInviteDeclined = false
     /// Whether to ask for an invite now. Giving one stops asking until the server answers, and if it's refused, this asks again.
     public var asksForInvite: Bool { needsInvite && !isInviteDeclined }
-    /// What the user has said about where things came from. It stays on this device.
-    private var answers: Book
-    /// What each answer replaced, newest last, so Undo is always there. Accounts aren't in here, so it can't bring back one that's gone.
     /// When each answer was given and what it was about, for the list of answers. Never sent anywhere.
-    public private(set) var answerDetails: AnswerDetails
-    private var history: [HistoryEntry] = []
-    /// What Undo took back, newest last, until something else changes.
-    private var future: [HistoryEntry] = []
-    public var undoStack: [Book] { history.map(\.book) }
+    public var answerDetails: AnswerDetails { answerHistory.details }
+    public var undoStack: [Book] { answerHistory.undoStack }
     /// What each entry of `undoStack` takes back, in a menu's words, as in "Undo Answer".
-    public var undoNames: [String] { history.map(\.name) }
-    public var redoStack: [Book] { future.map(\.book) }
-    public var redoNames: [String] { future.map(\.name) }
+    public var undoNames: [String] { answerHistory.undoNames }
+    public var redoStack: [Book] { answerHistory.redoStack }
+    public var redoNames: [String] { answerHistory.redoNames }
     /// The server's pricing rules. Empty when it has only one, so there's nothing to choose.
     public private(set) var rules: [PricingRule] = []
     /// What to ask the server for, or nil for its default.
@@ -200,11 +87,11 @@ public final class PortfolioStore {
     /// The user's own wallets. Transfers between them carry their cost, and aren't new purchases.
     public private(set) var linkedWallets: [String] = []
     /// Wallets the user has looked at, for the switcher. Addresses and names only.
-    public private(set) var savedWallets: [SavedWallet]
+    public var savedWallets: [SavedWallet] { walletList.saved }
     /// How the user arranged the list.
-    public private(set) var walletOrder: [String]
+    public var walletOrder: [String] { walletList.order }
     /// Taken off the list, but still the user's, so costs keep following their money.
-    public private(set) var hiddenWallets: [String]
+    public var hiddenWallets: [String] { walletList.hidden }
 
     @ObservationIgnored private(set) var source: any PortfolioSource {
         didSet {
@@ -214,11 +101,11 @@ public final class PortfolioStore {
             rulesFailureRetry?.cancel()
             rulesFailureRetry = nil
             rulesRead = nil
-            rateHeldUntil = nil
+            rates.sourceChanged()
         }
     }
     /// How many times `source` has been replaced, so an answer from an earlier one can tell.
-    @ObservationIgnored private var sourceChanges = 0
+    @ObservationIgnored private(set) var sourceChanges = 0
     /// Asks for the rules again once the server has room. While it's there, nobody else asks.
     @ObservationIgnored private var rulesRetry: Task<Void, Never>?
     /// Asks for the rules again after a read that failed, so a server that comes up later still gets its rules read. Anyone can ask before then.
@@ -226,38 +113,11 @@ public final class PortfolioStore {
     @ObservationIgnored private let rulesRetryDelay: Duration
     /// The read of the rules that's under way, which anyone else asking joins, so one answer settles it.
     @ObservationIgnored private var rulesRead: Task<Void, Never>?
-    @ObservationIgnored private var cache: PortfolioCache
-    /// Something changed, so the server can answer from what it last read while the real read runs.
-    @ObservationIgnored private var wantsLastRead = true
     /// Nil reads the server with the invite.
     @ObservationIgnored private let customSource: (@Sendable (URL) -> any PortfolioSource)?
     public private(set) var hasUnreadableSaved: Bool
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let now: @Sendable () -> Date
-    @ObservationIgnored private let reachableDelay: Duration
-    @ObservationIgnored private let unreachableDelay: Duration
-    @ObservationIgnored private let pushedDelay: Duration
-    /// When the server said it'd have room again, after holding this client back.
-    @ObservationIgnored private var heldUntil: Date?
-    private let longProblem: Duration
-    @ObservationIgnored private let liveFor: Duration
-    @ObservationIgnored private var pollTask: Task<Void, Never>?
-    @ObservationIgnored private var eventsTask: Task<Void, Never>?
-    @ObservationIgnored private var liveExpiry: Task<Void, Never>?
-    /// The server is telling this store about new blocks, so a read only needs to happen on a timer in case that stops working.
-    @ObservationIgnored private var isPushed = false
-    /// What the next read is waiting on, which a new block cuts short.
-    @ObservationIgnored private var sleeper: Task<Void, Never>?
-    @ObservationIgnored private var rateTask: Task<Void, Never>?
-    @ObservationIgnored private let rateRetryDelay: Duration
-    /// When the server said it'd have room for a rate read again. Starting over doesn't change that, but another server or invite does.
-    @ObservationIgnored private var rateHeldUntil: Date?
-    /// Lets a rate go at the end of its time, when the server said to wait past that.
-    @ObservationIgnored private var rateExpiry: Task<Void, Never>?
-    private static let rateDelay: Duration = .seconds(300)
-    private static let rateLasts: TimeInterval = 60 * 60
-    /// A block arrived during a read, which may have missed it.
-    @ObservationIgnored private var wakePending = false
 
     public init(
         defaults: UserDefaults = .standard,
@@ -275,54 +135,41 @@ public final class PortfolioStore {
         rulesRetryDelay: Duration = .seconds(15),
         longProblem: Duration = .seconds(60)
     ) {
-        self.longProblem = longProblem
-        self.rateRetryDelay = rateRetryDelay
         self.rulesRetryDelay = rulesRetryDelay
         self.defaults = defaults
         self.customSource = makeSource
         self.now = now
-        self.reachableDelay = reachableDelay
-        self.unreachableDelay = unreachableDelay
-        self.pushedDelay = pushedDelay
-        self.liveFor = liveFor
-        let address = defaults.string(forKey: Keys.wallet)
-        let serverURL = defaults.string(forKey: Keys.server).flatMap(URL.init(string:)) ?? Self.defaultServerURL
+        let address = defaults.string(forKey: StoreKeys.wallet)
+        let serverURL = defaults.string(forKey: StoreKeys.server).flatMap(URL.init(string:)) ?? Self.defaultServerURL
         self.address = address
-        self.method = defaults.string(forKey: Keys.method).flatMap(CostMethod.init(rawValue:)) ?? .average
-        self.currency = defaults.string(forKey: Keys.currency).flatMap(CurrencyCode.init(rawValue:)) ?? .USD
-        self.holdingsSort = defaults.string(forKey: Keys.holdingsSort).flatMap(HoldingsSort.init(rawValue:)) ?? .largestFirst
-        self.menuBarShows = defaults.string(forKey: Keys.menuBar).flatMap(MenuBarShows.init(rawValue:)) ?? .value
+        self.method = defaults.string(forKey: StoreKeys.method).flatMap(CostMethod.init(rawValue:)) ?? .average
+        self.currency = defaults.string(forKey: StoreKeys.currency).flatMap(CurrencyCode.init(rawValue:)) ?? .USD
+        self.holdingsSort = defaults.string(forKey: StoreKeys.holdingsSort).flatMap(HoldingsSort.init(rawValue:)) ?? .largestFirst
+        self.menuBarShows = defaults.string(forKey: StoreKeys.menuBar).flatMap(MenuBarShows.init(rawValue:)) ?? .value
         self.serverURL = serverURL
         let invite = Self.invites(in: defaults)[Self.origin(of: serverURL)]
         self.invite = invite
-        let readAnswers = SetAside.decoded(Book.self, key: Keys.book, in: defaults)
-        let answers = readAnswers ?? Book()
-        self.answers = answers
-        // The next save only keeps details of answers it can see, so with none of them these need keeping too.
-        if readAnswers == nil { SetAside.keep(key: Keys.answerDetails, in: defaults) }
-        self.answerDetails = (SetAside.decoded(AnswerDetails.self, key: Keys.answerDetails, in: defaults) ?? AnswerDetails()).keeping(answers)
-        self.selectedRule = defaults.string(forKey: Keys.rule)
-        // All Yours isn't a wallet, so it's never one to remember, whatever an earlier version saved.
-        var saved = (SetAside.decoded([SavedWallet].self, key: Keys.savedWallets, in: defaults) ?? []).filter { !WalletAddress.isAllYours($0.address) }
-        // From before there was a list, the wallet being shown is all there is to remember.
-        if let address, address != WalletAddress.demo, !WalletAddress.isAllYours(address), !saved.contains(where: { $0.address == address }) {
-            saved.append(SavedWallet(address: address, lastSeen: now()))
-        }
-        self.savedWallets = saved
-        self.walletOrder = defaults.stringArray(forKey: Keys.walletOrder) ?? []
-        self.hiddenWallets = defaults.stringArray(forKey: Keys.hiddenWallets) ?? []
+        answerHistory = AnswerHistory(defaults: defaults, now: now)
+        self.selectedRule = defaults.string(forKey: StoreKeys.rule)
+        walletList = SavedWalletList(defaults: defaults, showing: address, now: now())
         self.hasUnreadableSaved = SetAside.hasUnseen(in: defaults)
-        self.feed = address == nil ? .noWallet : .reading
-        if address != nil { readingSince = now() }
         self.source = makeSource?(serverURL) ?? PricetagClient(serverURL: serverURL, invite: invite)
-        self.cache = PortfolioCache(directory: cacheDirectory, now: now())
-        if address != nil { portfolio = lastKnown() }
+        feedLoop = FeedLoop(hasWallet: address != nil, cacheDirectory: cacheDirectory, now: now, reachableDelay: reachableDelay, unreachableDelay: unreachableDelay, pushedDelay: pushedDelay, liveFor: liveFor, longProblem: longProblem)
+        rates = RateReader(retryDelay: rateRetryDelay, now: now)
+        feedLoop.store = self
+        rates.store = self
+        answerHistory.onChange = { [weak self] in self?.answersChanged() }
+        walletList.onHiddenChange = { [weak self] in
+            // All Yours is every wallet that's listed, so it's something else now.
+            guard let self, WalletAddress.isAllYours(self.address), feedLoop.isRunning else { return }
+            answersChanged()
+        }
+        feedLoop.showLastKnown()
     }
 
     /// Reads now, with the numbers on screen marked as on their way, because someone asked and should see it happen.
     public func refresh() {
-        if feed.isStale { retriedProblem = feed }
-        if address != nil { feed = .reading }
+        feedLoop.markRetried()
         start()
     }
 
@@ -330,82 +177,15 @@ public final class PortfolioStore {
     public func start() {
         stop()
         Task { await refreshRules() }
-        rateTask = Task { [weak self] in
-            while !Task.isCancelled {
-                guard let hasRead = await self?.readRate(), let delay = self?.rateHoldLeft ?? self?.rateRetryDelay else { return }
-                try? await Task.sleep(for: hasRead ? Self.rateDelay : delay)
-            }
-        }
-        guard address != nil else { return }
-        // In the same moment as whatever changed, so no frame shows the last read's time against the next one.
-        readingSince = now()
-        eventsTask = Task { [weak self] in await self?.followEvents() }
-        pollTask = Task { [weak self] in
-            while !Task.isCancelled {
-                guard let delay = await self?.poll() else { return }
-                await self?.wait(delay)
-            }
-        }
+        rates.start()
+        feedLoop.start()
     }
 
     public func stop() {
-        rateTask?.cancel()
-        rateTask = nil
-        rateExpiry?.cancel()
-        rateExpiry = nil
-        pollTask?.cancel()
-        pollTask = nil
+        rates.stop()
         rulesFailureRetry?.cancel()
         rulesFailureRetry = nil
-        readCount += 1
-        readingSince = nil
-        eventsTask?.cancel()
-        eventsTask = nil
-        isPushed = false
-        wakePending = false
-    }
-
-    /// Wakes a read for each new block the server reports, for as long as it can, and tries again when it stops.
-    private func followEvents() async {
-        while !Task.isCancelled {
-            guard let events = source.headEvents() else { return }
-            var again = unreachableDelay
-            do {
-                for try await _ in events {
-                    guard !Task.isCancelled else { return }
-                    isPushed = true
-                    wake()
-                }
-            } catch FetchError.rateLimited(_, let retryAfter) {
-                again = .seconds(retryAfter)
-            } catch {}
-            guard !Task.isCancelled else { return }
-            // Back to polling straight away, not after the long wait that being told about blocks allowed.
-            isPushed = false
-            wake()
-            try? await Task.sleep(for: again)
-        }
-    }
-
-    private func wake() {
-        // A new block isn't a reason to ask a server that's said to wait.
-        if let heldUntil, now() < heldUntil { return }
-        if let sleeper { sleeper.cancel() } else { wakePending = true }
-    }
-
-    /// Waits for the next read, which a new block ends early. The usual delay only applies while the server isn't reporting blocks, or a read just failed.
-    private func wait(_ delay: Duration) async {
-        if wakePending {
-            wakePending = false
-            return
-        }
-        // While All Yours still has wallets on their way, they could be done by the next read, block or not.
-        let isWaitingOnWallets = portfolio?.isAllYours == true && (portfolio?.linkedReading.isEmpty == false || portfolio?.linkedUpdating?.isEmpty == false)
-        let duration = isPushed && delay == reachableDelay && !feed.isStale && !isWaitingOnWallets ? pushedDelay : delay
-        let sleeping = Task { _ = try? await Task.sleep(for: duration) }
-        sleeper = sleeping
-        await withTaskCancellationHandler { await sleeping.value } onCancel: { sleeping.cancel() }
-        if sleeper == sleeping { sleeper = nil }
+        feedLoop.stop()
     }
 
     /// `address` is 0x… or `WalletAddress.demo`, or nil to forget the wallet.
@@ -413,46 +193,31 @@ public final class PortfolioStore {
         let next = address?.lowercased()
         guard next != self.address else { return }
         self.address = next
-        defaults.set(next, forKey: Keys.wallet)
+        defaults.set(next, forKey: StoreKeys.wallet)
         if let next, next != WalletAddress.demo, !WalletAddress.isAllYours(next) {
-            saveWallets(SavedWallet.seeing(next, at: now(), in: savedWallets, own: book.linkedWallets))
-            saveHidden(hiddenWallets.filter { $0 != next })
+            walletList.see(next, at: now(), own: book.linkedWallets)
         }
-        // In the same moment as the address, so one wallet's numbers are never on screen under another.
-        portfolio = lastKnown()
-        updatedAt = nil
-        retriedProblem = nil
-        feed = next == nil ? .noWallet : .reading
-        wantsLastRead = true
+        feedLoop.walletChanged()
         start()
     }
 
     /// Keeps it in the list under this name, or makes it a recent one again with an empty name.
     public func renameWallet(_ address: String, to name: String) {
-        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        var next = savedWallets
-        if let index = next.firstIndex(where: { $0.address == address }) {
-            next[index].name = clean.isEmpty ? nil : clean
-            if clean.isEmpty { next[index].isKept = nil }
-        } else if !clean.isEmpty {
-            next.append(SavedWallet(address: address, name: clean, lastSeen: now()))
-        }
-        saveWallets(next)
+        walletList.rename(address, to: name, at: now())
     }
 
     /// Takes it off the list, and shows `next` if it was the one showing. Saying it's the user's goes with it, but an account this Mac's wallet
     /// holds stays theirs, so that one is only hidden.
     public func removeWallet(_ address: String, showing next: String?) {
         if linkedWallets.contains(address) {
-            saveHidden(hiddenWallets + [address])
+            walletList.hide(address)
         } else if book.senders[address]?.kind == .mine {
             var answers = book
             answers.senders[address] = nil
             setBook(answers, action: "Remove from List")
         }
-        saveWallets(savedWallets.filter { $0.address != address })
-        saveOrder(walletOrder.filter { $0 != address })
-        cache.forget(address)
+        walletList.remove(address)
+        feedLoop.forget(address)
         if self.address == address { setWallet(next) }
     }
 
@@ -472,17 +237,12 @@ public final class PortfolioStore {
 
     /// Stays under Watching, instead of falling off the list once enough others have been looked at.
     public func keepWallet(_ address: String) {
-        var next = SavedWallet.seeing(address, at: now(), in: savedWallets, own: book.linkedWallets)
-        if let index = next.firstIndex(where: { $0.address == address }) { next[index].isKept = true }
-        saveWallets(next)
+        walletList.keep(address, at: now(), own: book.linkedWallets)
     }
 
     /// `addresses` is a section as it's listed. Each section keeps its own order, so one moving doesn't disturb another.
     public func moveWallets(in addresses: [String], from source: IndexSet, to destination: Int) {
-        let moved = source.map { addresses[$0] }
-        var arranged = addresses.filter { !moved.contains($0) }
-        arranged.insert(contentsOf: moved, at: destination - source.count { $0 < destination })
-        saveOrder(walletOrder.filter { !addresses.contains($0) } + arranged)
+        walletList.move(in: addresses, from: source, to: destination)
     }
 
     /// Makes a change to one wallet, and returns what Undo needs to take back that change and nothing else. It's one step in Edit's history,
@@ -490,86 +250,37 @@ public final class PortfolioStore {
     /// the same, with `alsoUndo` for what's outside the store, and Redo makes the change again.
     @discardableResult
     public func changeWallet(_ address: String, name: String, alsoUndo: (() -> Void)? = nil, _ change: @escaping () -> Void) -> WalletListSnapshot {
-        var snapshot = WalletListSnapshot(
-            address: address,
-            answer: answers.senders[address],
-            undoDepth: undoStack.count,
-            saved: savedWallets.first { $0.address == address },
-            orderIndex: walletOrder.firstIndex(of: address),
-            wasHidden: hiddenWallets.contains(address),
-            wasShowing: self.address == address
+        answerHistory.recording(
+            WalletListSnapshot(
+                address: address,
+                answer: answers.senders[address],
+                undoDepth: undoStack.count,
+                saved: savedWallets.first { $0.address == address },
+                orderIndex: walletOrder.firstIndex(of: address),
+                wasHidden: hiddenWallets.contains(address),
+                wasShowing: self.address == address
+            ),
+            name: name,
+            alsoUndo: alsoUndo,
+            change: change
         )
-        let entriesBefore = Set(history.map(\.id))
-        let bookBefore = answers
-        let detailsBefore = answerDetails
-        change()
-        snapshot.changedAnswer = answers.senders[address]
-        // An answer the change gave is part of it, so it's this entry and not one of its own.
-        history.removeAll { !entriesBefore.contains($0.id) }
-        let id = UUID()
-        snapshot.undoEntry = id
-        history.append(HistoryEntry(id: id, name: name, book: bookBefore, details: detailsBefore, wallet: WalletStep(snapshot: snapshot, change: change, alsoUndo: alsoUndo)))
-        future = []
-        return snapshot
     }
 
     /// Takes back one change to one wallet. Whatever else has changed since stays changed, and so does anything said about this wallet since.
     public func restore(_ snapshot: WalletListSnapshot) {
         putBack(snapshot)
-        // What Undo took back may have the change in it or not, so Redo can't know what it would bring back.
-        future = []
+        answerHistory.clearRedo()
     }
 
     /// Whether the change is the last thing done, with nothing undone since. Only then can the wallet list still talk about it, and take it back without costing Redo anything.
     public func isLatestChange(_ snapshot: WalletListSnapshot) -> Bool {
-        guard let entry = snapshot.undoEntry else { return false }
-        return history.last?.id == entry && future.isEmpty
+        answerHistory.isLatest(snapshot)
     }
 
     private func putBack(_ snapshot: WalletListSnapshot) {
-        let address = snapshot.address
-        let isUnchanged = { (book: Book) in book.senders[address] == snapshot.changedAnswer }
-        let before = snapshot.undoEntry.flatMap { entry in history.first { $0.id == entry }?.details }
-        if isUnchanged(answers), answers.senders[address] != snapshot.answer {
-            var next = answers
-            next.senders[address] = snapshot.answer
-            // The wallet's answer goes back to what it was, date included, and every other answer keeps its own.
-            var details = answerDetails
-            if let before {
-                for id in Set(([answers, next]).flatMap(\.answerEntries).filter { $0.isAbout(address) }.map(\.id)) { details.restore(id, from: before) }
-            }
-            store(next, details: details)
-        }
-        // The change's own entry goes with it, wherever it is now.
-        var since = snapshot.undoDepth
-        if let entry = snapshot.undoEntry, let index = history.firstIndex(where: { $0.id == entry }) {
-            history.remove(at: index)
-            since = index
-        }
-        // What was saved for Undo since then has the change in it. Undoing something else mustn't bring it back, or its date.
-        for index in history.indices where index >= since && isUnchanged(history[index].book) {
-            let ids = history[index].book.answerEntries.filter { $0.isAbout(address) }.map(\.id)
-            history[index].book.senders[address] = snapshot.answer
-            if let before {
-                for id in ids + history[index].book.answerEntries.filter({ $0.isAbout(address) }).map(\.id) { history[index].details.restore(id, from: before) }
-            }
-        }
-        var wallets = savedWallets
-        if let index = wallets.firstIndex(where: { $0.address == address }) {
-            // A name given since is the user's latest word on it. Without one, an entry the change made goes with the change.
-            wallets[index].isKept = snapshot.saved?.isKept
-            if snapshot.saved == nil, wallets[index].name == nil { wallets.remove(at: index) }
-        } else if let saved = snapshot.saved {
-            wallets.append(saved)
-        }
-        saveWallets(wallets)
-        if let index = snapshot.orderIndex, !walletOrder.contains(address) {
-            var order = walletOrder
-            order.insert(address, at: min(index, order.count))
-            saveOrder(order)
-        }
-        saveHidden(hiddenWallets.filter { $0 != address } + (snapshot.wasHidden ? [address] : []))
-        if snapshot.wasShowing { setWallet(address) }
+        answerHistory.putBack(snapshot)
+        walletList.putBack(snapshot)
+        if snapshot.wasShowing { setWallet(snapshot.address) }
     }
 
     /// Whether something saved here couldn't be read, and nobody's been told yet.
@@ -582,28 +293,6 @@ public final class PortfolioStore {
         hasUnreadableSaved = false
     }
 
-    private func saveDetails() {
-        defaults.set(try? JSONEncoder().encode(answerDetails), forKey: Keys.answerDetails)
-    }
-
-    private func saveWallets(_ wallets: [SavedWallet]) {
-        savedWallets = wallets
-        defaults.set(try? JSONEncoder().encode(wallets), forKey: Keys.savedWallets)
-    }
-
-    private func saveOrder(_ order: [String]) {
-        walletOrder = order
-        defaults.set(order, forKey: Keys.walletOrder)
-    }
-
-    private func saveHidden(_ hidden: [String]) {
-        guard hidden != hiddenWallets else { return }
-        hiddenWallets = hidden
-        defaults.set(hidden, forKey: Keys.hiddenWallets)
-        // All Yours is every wallet that's listed, so it's something else now.
-        if WalletAddress.isAllYours(address), pollTask != nil { answersChanged() }
-    }
-
     /// A key is gone, and `next` took over from it, if anything did. Whoever's looking at its wallet follows, or they'd see an empty address and
     /// think the money vanished. Any other wallet stays, because only the user replaces that.
     public func followRetiredWallet(_ address: String, to next: String?) {
@@ -614,7 +303,7 @@ public final class PortfolioStore {
     public func setMethod(_ method: CostMethod) {
         guard method != self.method else { return }
         self.method = method
-        defaults.set(method.rawValue, forKey: Keys.method)
+        defaults.set(method.rawValue, forKey: StoreKeys.method)
         settingsChanged()
     }
 
@@ -622,7 +311,7 @@ public final class PortfolioStore {
         let next = wallets.map { $0.lowercased() }
         guard next != linkedWallets else { return }
         linkedWallets = next
-        if address != nil, pollTask != nil { answersChanged() }
+        if address != nil, feedLoop.isRunning { answersChanged() }
     }
 
     /// The answers, with the accounts in this wallet as `mine`. Nobody's asked about those, so there's nothing to undo or save, and
@@ -680,118 +369,62 @@ public final class PortfolioStore {
 
     /// USD amounts as they should read right now.
     public var moneyDisplay: MoneyDisplay {
-        MoneyDisplay(main: currency, rateMicros: currentRate?.currency == currency ? currentRate?.micros : nil)
+        MoneyDisplay(main: currency, rateMicros: rates.currentRate?.currency == currency ? rates.currentRate?.micros : nil)
     }
 
-    /// Reads the current rate. A failed read keeps the last one for a while, because the feed moves hourly at most, and after that amounts go back to USD. An answer of no rate counts straight away.
-    /// True when the server answered, so a read that failed can be tried again sooner.
+    /// Reads the current rate. True when the server answered, so a read that failed can be tried again sooner.
     @discardableResult
     public func readRate() async -> Bool {
-        let currency = self.currency
-        guard currency != .USD else {
-            currentRate = nil
-            return true
-        }
-        guard rateHoldLeft == nil else { return rateNotRead() }
-        let source = self.source
-        let asked = sourceChanges
-        let server = serverURL
-        do {
-            let micros = try await source.currentRate(currency: currency)
-            guard !Task.isCancelled, currency == self.currency, server == serverURL else { return true }
-            currentRate = micros.map { CurrentRate(currency: currency, micros: $0, readAt: now()) }
-            return true
-        } catch {
-            // The server said it whether or not anyone's still waiting on this read, and the longest wait it's given is the one that counts.
-            if case FetchError.rateLimited(_, let retryAfter) = error, asked == sourceChanges {
-                let until = now().addingTimeInterval(TimeInterval(retryAfter))
-                rateHeldUntil = max(rateHeldUntil ?? until, until)
-            }
-            if Task.isCancelled { return true }
-            return rateNotRead()
-        }
-    }
-
-    /// How much of the server's wait is left, if any.
-    private var rateHoldLeft: Duration? {
-        guard let left = rateHeldUntil?.timeIntervalSince(now()), left > 0 else { return nil }
-        return .seconds(left)
-    }
-
-    /// There's no new rate, so the last one only stays while it's new enough.
-    private func rateNotRead() -> Bool {
-        if let currentRate, now().timeIntervalSince(currentRate.readAt) > Self.rateLasts { self.currentRate = nil }
-        if let rateHoldLeft { expireRate(within: rateHoldLeft) }
-        return false
-    }
-
-    /// The next read is too late to notice a rate getting too old if it runs out within this time, and a server that said to wait isn't asked any sooner.
-    private func expireRate(within wait: Duration) {
-        guard let currentRate else { return }
-        let left = Self.rateLasts - now().timeIntervalSince(currentRate.readAt)
-        guard .seconds(left) < wait else { return }
-        rateExpiry?.cancel()
-        rateExpiry = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(left))
-            guard !Task.isCancelled, let self, self.currentRate == currentRate else { return }
-            self.currentRate = nil
-        }
+        await rates.readRate()
     }
 
     public func setCurrency(_ currency: CurrencyCode) {
         guard currency != self.currency else { return }
         self.currency = currency
-        defaults.set(currency.rawValue, forKey: Keys.currency)
+        defaults.set(currency.rawValue, forKey: StoreKeys.currency)
         settingsChanged()
     }
 
     /// Only the menu bar changes, so there's nothing to read again.
     public func setMenuBarShows(_ shows: MenuBarShows) {
         menuBarShows = shows
-        defaults.set(shows.rawValue, forKey: Keys.menuBar)
+        defaults.set(shows.rawValue, forKey: StoreKeys.menuBar)
     }
 
     public func setRule(_ id: String) {
         guard id != (selectedRule ?? rules.first?.id) else { return }
         selectedRule = id
-        defaults.set(id, forKey: Keys.rule)
+        defaults.set(id, forKey: StoreKeys.rule)
         settingsChanged()
     }
 
     /// The numbers for these settings if they've been read before. If not, the ones on screen stay until the new ones arrive.
     private func settingsChanged() {
-        if let known = lastKnown() { portfolio = known }
+        feedLoop.settingsChanged()
         answersChanged()
     }
 
-    /// The numbers on screen aren't what they'd be now, so they can't be called live, and the next ones are on their way.
     /// Who an invite is for: the scheme, host and port, which is what a browser would call the same site.
     nonisolated public static func origin(of url: URL) -> String {
         "\(url.scheme?.lowercased() ?? "")://\(url.host()?.lowercased() ?? "")\(url.port.map { ":\($0)" } ?? "")"
     }
 
     private static func invites(in defaults: UserDefaults) -> [String: String] {
-        defaults.dictionary(forKey: Keys.invites) as? [String: String] ?? [:]
+        defaults.dictionary(forKey: StoreKeys.invites) as? [String: String] ?? [:]
     }
 
     private func makeSource(_ url: URL) -> any PortfolioSource {
         customSource?(url) ?? PricetagClient(serverURL: url, invite: Self.invites(in: defaults)[Self.origin(of: url)])
     }
 
+    /// The numbers on screen aren't what they'd be now, so they can't be called live, and the next ones are on their way.
     private func answersChanged() {
-        if address != nil { feed = .reading }
-        wantsLastRead = true
+        feedLoop.markChanged()
         start()
     }
 
-    /// What this wallet last showed on this server, by these settings if it can be.
-    private func lastKnown() -> Portfolio? {
-        guard let address else { return nil }
-        return cache.last(of: address, on: serverURL, preferring: isForCurrentSettings)
-    }
-
     /// Whether these numbers answer what's being asked now. With no rule chosen, it's the server's first, and with no list of rules yet, there's no telling.
-    private func isForCurrentSettings(_ portfolio: Portfolio) -> Bool {
+    func isForCurrentSettings(_ portfolio: Portfolio) -> Bool {
         guard portfolio.method == method, portfolio.currency == currency else { return false }
         guard let rule = selectedRule ?? rules.first?.id else { return true }
         return portfolio.rule == rule
@@ -856,7 +489,7 @@ public final class PortfolioStore {
         rules = next
         if let chosen = selectedRule, !next.contains(where: { $0.id == chosen }) {
             selectedRule = nil
-            defaults.removeObject(forKey: Keys.rule)
+            defaults.removeObject(forKey: StoreKeys.rule)
             settingsChanged()
         }
     }
@@ -876,17 +509,15 @@ public final class PortfolioStore {
     public func setServerURL(_ url: URL) {
         guard url != serverURL else { return }
         serverURL = url
-        defaults.set(url.absoluteString, forKey: Keys.server)
+        defaults.set(url.absoluteString, forKey: StoreKeys.server)
         invite = Self.invites(in: defaults)[Self.origin(of: url)]
         needsInvite = false
         serverCheck = .checking
         isInviteDeclined = false
         source = makeSource(url)
         rules = []
-        // Another server's numbers can be different facts, so these aren't kept even for a moment. What's known is this server's own.
-        portfolio = lastKnown()
-        currentRate = nil
-        updatedAt = nil
+        feedLoop.serverChanged()
+        rates.forget()
         answersChanged()
     }
 
@@ -901,7 +532,7 @@ public final class PortfolioStore {
         serverCheck = .checking
         var invites = Self.invites(in: defaults)
         invites[Self.origin(of: serverURL)] = next
-        defaults.set(invites, forKey: Keys.invites)
+        defaults.set(invites, forKey: StoreKeys.invites)
         source = makeSource(serverURL)
         rules = []
         answersChanged()
@@ -920,90 +551,35 @@ public final class PortfolioStore {
     /// Takes effect right away, and the numbers follow as soon as the server has folded them. Undo goes back to what this replaced,
     /// and the Edit menu calls it `action`. Each answer this says something new for is dated now. `about` is what a question was about, in its own words, by answer.
     public func setBook(_ next: Book, about: [String: String] = [:], action: String = "Answer") {
-        let nextAnswers = answers(in: next)
-        guard nextAnswers != answers else { return }
-        let given = answers.answerEntries
-        var details = answerDetails
-        for entry in nextAnswers.answerEntries where !given.contains(where: { $0.id == entry.id && $0.says(entry) }) { details.dates[entry.id] = now() }
-        details.about.merge(about) { _, new in new }
-        history.append(HistoryEntry(id: UUID(), name: action, book: answers, details: answerDetails))
-        future = []
-        store(nextAnswers, details: details)
+        answerHistory.set(next, linked: linkedWallets, about: about, action: action)
     }
 
     /// What a provider says, and not an answer, so there's nothing to undo, and undoing an answer doesn't lose it.
     public func recordPurchase(_ purchase: Purchase) {
-        let next = answers.recording(purchase)
-        guard next != answers else { return }
-        for index in history.indices { history[index].book = history[index].book.recording(purchase) }
-        for index in future.indices { future[index].book = future[index].book.recording(purchase) }
-        store(next)
+        answerHistory.record(purchase)
     }
 
     public func undo() {
-        guard var entry = history.last else { return }
-        let detailsBefore = entry.details
-        entry.details = answerDetails
-        if let wallet = entry.wallet {
-            // All of it, as the wallet list's own Undo does: its name, its place in the list, and whether it was showing.
-            wallet.alsoUndo?()
-            putBack(wallet.snapshot)
-        } else {
-            history.removeLast()
-            let previous = entry.book
-            entry.book = answers
-            store(previous, details: detailsBefore)
-        }
-        future.append(entry)
+        answerHistory.undo(putBack: putBack)
     }
 
     public func redo() {
-        guard let entry = future.popLast() else { return }
-        if let wallet = entry.wallet {
-            // Making it again clears what's left to redo, which is still there to redo after it.
-            let rest = future
-            changeWallet(wallet.snapshot.address, name: entry.name, alsoUndo: wallet.alsoUndo, wallet.change)
-            future = rest
-            // The same change as before, so the wallet list's Undo, which knows it by its first snapshot, still finds it.
-            if let last = history.popLast() {
-                var step = last.wallet
-                step?.snapshot.undoEntry = entry.id
-                history.append(HistoryEntry(id: entry.id, name: last.name, book: last.book, details: last.details, wallet: step))
-            }
-            // The same answer as before too, so it keeps the date it had, not today's.
-            var details = answerDetails
-            for answer in answers.answerEntries where answer.isAbout(wallet.snapshot.address) { details.restore(answer.id, from: entry.details) }
-            if details != answerDetails {
-                answerDetails = details
-                saveDetails()
-            }
-        } else {
-            history.append(HistoryEntry(id: entry.id, name: entry.name, book: answers, details: answerDetails))
-            store(entry.book, details: entry.details)
+        answerHistory.redo { address, name, alsoUndo, change in
+            changeWallet(address, name: name, alsoUndo: alsoUndo, change)
         }
     }
 
-    /// `details` goes with `next`, or what's there now stays for whatever `next` still says.
-    private func store(_ next: Book, details: AnswerDetails? = nil) {
-        answers = next
-        defaults.set(try? JSONEncoder().encode(next), forKey: Keys.book)
-        answerDetails = (details ?? answerDetails).keeping(next)
-        saveDetails()
-        answersChanged()
-    }
-
-    /// A book built on `book` has the accounts in it, and they aren't answers. What was said about one before it was an account stays.
-    /// Purchases aren't answers either, and an order that's finished isn't read again, so only `recordPurchase` changes them.
-    private func answers(in next: Book) -> Book {
-        var kept = next.unlinking(linkedWallets)
-        kept.purchases = answers.purchases
-        for account in linkedWallets where next.senders[account]?.kind == .mine { kept.senders[account] = answers.senders[account] }
-        return kept
-    }
+    /// What the user has said, without the accounts in `book`.
+    private var answers: Book { answerHistory.answers }
 
     /// What goes along with a read. The demo isn't anyone's, and demo data and real data never mix, so it doesn't get this user's accounts.
-    private func bookToSend(_ book: Book, for address: String) -> Book {
+    func bookToSend(_ book: Book, for address: String) -> Book {
         WalletAddress.isDemo(address) ? book.unlinking(linkedWallets) : book
+    }
+
+    /// What a read of this wallet asks for right now.
+    private func readContext(for address: String) -> ReadContext {
+        ReadContext(address: address, method: method, currency: currency, rule: selectedRule, linked: linked(for: address), book: bookToSend(book, for: address))
     }
 
     /// What these answers would do to the headline. Nothing's kept, so asking changes nothing.
@@ -1015,7 +591,7 @@ public final class PortfolioStore {
     /// Every movement as a spreadsheet, marked so an estimate or an unknown can't pass for an exact number.
     public func exportCSV() async throws -> String {
         guard let address else { throw FetchError.unreachable }
-        return try await source.exportCSV(address: address, method: method, currency: currency, rule: selectedRule, linked: linked(for: address), shown: walletsShown, book: bookToSend(book, for: address))
+        return try await source.exportCSV(readContext(for: address), shown: walletsShown)
     }
 
     /// Reads an exchange's history, and says how many withdrawals had no usable cost. Nothing's kept until someone vouches for the file.
@@ -1030,13 +606,13 @@ public final class PortfolioStore {
 
     /// nil with no wallet, when there's nothing to explain.
     public func explanationRequest(for target: ExplainTarget) -> ExplanationRequest? {
-        address.map { ExplanationRequest(target: target, address: $0, method: method, currency: currency, rule: selectedRule, linked: linked(for: $0), shown: walletsShown, serverURL: serverURL, book: bookToSend(book, for: $0)) }
+        address.map { ExplanationRequest(target: target, read: readContext(for: $0), shown: walletsShown, serverURL: serverURL) }
     }
 
     public func explanation(for request: ExplanationRequest) async throws -> Explanation {
         // A request from before a change has nothing to say about what's on screen now.
         guard request == explanationRequest(for: request.target) else { throw CancellationError() }
-        return try await source.explanation(of: request.target, address: request.address, method: request.method, currency: request.currency, rule: request.rule, linked: request.linked, shown: request.shown, book: request.book)
+        return try await source.explanation(of: request.target, request.read, shown: request.shown)
     }
 
     /// What can't be left out of an answer about what's on screen. Nil for what's about one wallet, or with nothing on screen.
@@ -1097,206 +673,28 @@ public final class PortfolioStore {
 
     /// One read. Returns how long to wait before the next one.
     func poll() async -> Duration {
-        guard let address else { return unreachableDelay }
-        readCount += 1
-        let thisRead = readCount
-        readingSince = now()
-        defer { if thisRead == readCount { readingSince = nil } }
-        let method = self.method
-        let currency = self.currency
-        let rule = selectedRule
-        let serverURL = self.serverURL
-        let book = self.book
-        let linked = linked(for: address)
-        // An answer that arrives after a change is about something else, whatever it says.
-        let isCurrent = { [self] in !Task.isCancelled && address == self.address && method == self.method && currency == self.currency && rule == self.selectedRule && serverURL == self.serverURL && book == self.book && linked == self.linked(for: address) }
-        if wantsLastRead {
-            wantsLastRead = false
-            // Comes straight back when the server has read this wallet, so a change of method or an answer doesn't wait on the chain. It's no help if it can't.
-            let last = try? await source.lastRead(address: address, method: method, currency: currency, rule: rule, linked: linked, book: bookToSend(book, for: address))
-            guard isCurrent() else { return .zero }
-            if let last, shouldShow(last) {
-                let shown = holdingWhatsShown(last)
-                portfolio = shown
-                cache.remember(shown, of: address, on: serverURL, at: now())
-            }
-        }
-        let isOtherRule = rule != nil && portfolio?.rule != rule
-        // The first read in a currency also reads its rate at each of this wallet's transactions, and the first by a rule
-        // reads the wallet again, so they get as long as a first read.
-        let timeout: Duration = portfolio?.currency == currency && !isOtherRule ? .seconds(15) : Self.firstReadTimeout
-        let read = { [self] (timeout: Duration) in
-            try await source.portfolio(address: address, method: method, currency: currency, rule: rule, linked: linked, book: bookToSend(book, for: address), timeout: timeout)
-        }
-        do {
-            let answer = try await patiently(read, timeout: timeout, isCurrent: isCurrent)
-            guard isCurrent() else { return .zero }
-            let next = holdingWhatsShown(answer)
-            portfolio = next
-            updatedAt = now()
-            needsInvite = false
-            cache.remember(next, of: address, on: serverURL, at: now())
-            feed = state(of: next)
-            heldUntil = nil
-            expireLive()
-            return reachableDelay
-        } catch {
-            guard isCurrent(), !(error is CancellationError) else { return .zero }
-            // Numbers by another method or rule, or in another currency, are wrong now, not just old, and there's no way to get the right ones.
-            if let portfolio, !isForCurrentSettings(portfolio) { self.portfolio = nil }
-            feed = state(of: error)
-            if case .needsInvite = error as? FetchError { needsInvite = true }
-            if case FetchError.rateLimited(_, let retryAfter) = error {
-                heldUntil = now().addingTimeInterval(TimeInterval(retryAfter))
-                wakePending = false
-                return .seconds(retryAfter)
-            }
-            return feed == .serverUnreachable ? unreachableDelay : reachableDelay
-        }
-    }
-
-    private func holdingWhatsShown(_ answer: Portfolio) -> Portfolio {
-        portfolio.map(answer.holding) ?? answer
-    }
-
-    /// Not when it's behind numbers on screen that answer the same question, as it can be after a reorg or if the app has seen further.
-    private func shouldShow(_ last: Portfolio) -> Bool {
-        guard let portfolio, isForCurrentSettings(portfolio) else { return true }
-        return last.latest.blockNum >= portfolio.latest.blockNum
-    }
-
-    /// By the same clock as `ReadingClock`, so this agrees with the seconds on screen.
-    private func noteRead() {
-        longReadTask?.cancel()
-        longReadTask = nil
-        isReadLong = false
-        guard let readingSince else { return }
-        let remaining = Double(FeedState.longReadSeconds) - Date.now.timeIntervalSince(readingSince)
-        guard remaining > 0 else {
-            isReadLong = true
-            return
-        }
-        longReadTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(remaining))
-            guard let self, !Task.isCancelled else { return }
-            isReadLong = true
-        }
-    }
-
-    private func noteProblem() {
-        if feed != .reading { retriedProblem = nil }
-        guard feed.isStale else {
-            // A read says nothing yet, so whatever was wrong stands until it answers.
-            if feed != .reading {
-                longProblemTask?.cancel()
-                longProblemTask = nil
-                isProblemLong = false
-            }
-            return
-        }
-        guard !isProblemLong else { return }
-        guard feed.canBeBrief, longProblem > .zero else {
-            longProblemTask?.cancel()
-            longProblemTask = nil
-            isProblemLong = true
-            return
-        }
-        guard longProblemTask == nil else { return }
-        longProblemTask = Task { [weak self, longProblem] in
-            try? await Task.sleep(for: longProblem)
-            guard let self, !Task.isCancelled else { return }
-            isProblemLong = true
-        }
-    }
-
-    /// Stops calling these numbers live once they're older than a read should leave them, say after a Mac sleeps. Checking when a read starts
-    /// wouldn't do, because one from before it slept can still be running. This sleep counts time the Mac is asleep, so it ends on waking. Demo data
-    /// doesn't age. `stop` leaves this running, because starting over doesn't make the numbers any newer.
-    private func expireLive() {
-        liveExpiry?.cancel()
-        liveExpiry = Task { [weak self, liveFor] in
-            try? await Task.sleep(for: liveFor)
-            guard let self, !Task.isCancelled, feed == .live, portfolio?.mode != .demo else { return }
-            feed = .reading
-        }
-    }
-
-    /// A read that runs out of time says nothing about the server, which may only be slow to catch up on this wallet, say when a Mac wakes up.
-    /// If it's still answering, the read gets as long as a first read, with the numbers on screen marked as on their way.
-    private func patiently(_ read: (Duration) async throws -> Portfolio, timeout: Duration, isCurrent: () -> Bool) async throws -> Portfolio {
-        do {
-            return try await read(timeout)
-        } catch FetchError.timedOut {
-            guard await serverAnswers() else { throw FetchError.unreachable }
-            guard timeout < Self.firstReadTimeout else { throw ReadTooSlow() }
-            guard isCurrent() else { throw CancellationError() }
-            feed = .reading
-            return try await patiently(read, timeout: Self.firstReadTimeout, isCurrent: isCurrent)
-        }
-    }
-
-    /// Whether anything's there, even to say no. The rules don't depend on Amp, so they come straight back.
-    private func serverAnswers() async -> Bool {
-        do {
-            _ = try await source.rules()
-            return true
-        } catch let error as FetchError {
-            return error != .unreachable && error != .timedOut
-        } catch {
-            return false
-        }
-    }
-
-    private func state(of portfolio: Portfolio) -> FeedState {
-        guard portfolio.mode != .demo else { return .live }
-        // First, because they're why these numbers have stopped moving, however old that's made them.
-        if portfolio.linkedOutdated?.isEmpty == false { return .walletsOutdated }
-        if portfolio.linkedUpdating?.isEmpty == false { return .reading }
-        // With no way to tell how old these numbers are, they can't be called live.
-        guard let newest = portfolio.latest.date else { return .catchingUp }
-        let age = Int(now().timeIntervalSince(newest))
-        if age > Self.behindAfterSeconds { return .behind(seconds: age) }
-        return portfolio.progress.started && portfolio.progress.behindBlocks == 0 ? .live : .catchingUp
-    }
-
-    private func state(of error: any Error) -> FeedState {
-        if error is ReadTooSlow { return .tooSlow }
-        return switch error as? FetchError {
-        case .ampUnavailable(let message): .ampUnavailable(message)
-        case .noAmpConfigured(let message): .noAmpConfigured(message)
-        case .rejected(let message), .needsInvite(let message), .priceChanged(let message), .notCaughtUp(let message): .rejected(message)
-        case .tooBig(let message): .tooBig(message)
-        case .rateLimited(let message, _): .rateLimited(message)
-        case .unreachable, .timedOut, nil: .serverUnreachable
-        }
+        await feedLoop.poll()
     }
 
     /// Whether this Mac has used the app before, from anything it would have saved by now.
     public nonisolated static func hasBeenUsed(defaults: UserDefaults = .standard) -> Bool {
-        [Keys.wallet, Keys.method, Keys.currency, Keys.menuBar, Keys.server, Keys.invites, Keys.book, Keys.answerDetails, Keys.rule, Keys.savedWallets, Keys.walletOrder, Keys.hiddenWallets, Keys.holdingsSort].contains { defaults.object(forKey: $0) != nil }
-    }
-
-    private enum Keys {
-        static let wallet = "wallet"
-        static let method = "method"
-        static let currency = "currency"
-        static let menuBar = "menuBarShows"
-        static let server = "serverURL"
-        static let invites = "serverInvites"
-        static let book = "answers"
-        static let answerDetails = "answerDetails"
-        static let rule = "pricingRule"
-        static let savedWallets = "savedWallets"
-        static let walletOrder = "walletOrder"
-        static let hiddenWallets = "hiddenWallets"
-        static let holdingsSort = "holdingsSort"
+        [StoreKeys.wallet, StoreKeys.method, StoreKeys.currency, StoreKeys.menuBar, StoreKeys.server, StoreKeys.invites, StoreKeys.book, StoreKeys.answerDetails, StoreKeys.rule, StoreKeys.savedWallets, StoreKeys.walletOrder, StoreKeys.hiddenWallets, StoreKeys.holdingsSort].contains { defaults.object(forKey: $0) != nil }
     }
 }
 
-private struct ReadTooSlow: Error {}
-
-private struct CurrentRate: Equatable {
-    let currency: CurrencyCode
-    let micros: String
-    let readAt: Date
+/// Where the store and what it's made of keep things in the settings.
+enum StoreKeys {
+    static let wallet = "wallet"
+    static let method = "method"
+    static let currency = "currency"
+    static let menuBar = "menuBarShows"
+    static let server = "serverURL"
+    static let invites = "serverInvites"
+    static let book = "answers"
+    static let answerDetails = "answerDetails"
+    static let rule = "pricingRule"
+    static let savedWallets = "savedWallets"
+    static let walletOrder = "walletOrder"
+    static let hiddenWallets = "hiddenWallets"
+    static let holdingsSort = "holdingsSort"
 }

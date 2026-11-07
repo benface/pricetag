@@ -135,13 +135,10 @@ public struct TaxReportView: View {
         let wallet = wallets.first { $0.address == address }
         return HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 1) {
-                Text(wallet?.title ?? (WalletAddress.isValid(address) ? Format.shortHash(address) : address))
+                Text(wallet?.title ?? Format.shortHash(address))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                if !WalletAddress.isValid(address) {
-                    // Only from before this could only hold addresses.
-                    WarningText("This isn't a Base address.").font(.callout)
-                } else if let wallet {
+                if let wallet {
                     Text(wallet.pickDetail)
                         .font(.caption)
                         .foregroundStyle(.secondary)

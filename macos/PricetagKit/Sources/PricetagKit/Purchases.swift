@@ -212,9 +212,6 @@ public final class PurchaseTracker {
         store.refreshUnreadableSaved()
     }
 
-    /// What to say when a purchase couldn't start.
-    public static func message(for error: any Error) -> String { failureMessage(for: error) }
-
     public func purchases(of wallet: String) -> [TrackedPurchase] {
         purchases(of: [wallet])
     }

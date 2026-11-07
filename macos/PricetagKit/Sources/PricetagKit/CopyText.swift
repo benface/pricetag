@@ -2,7 +2,7 @@ extension Position {
     /// A holding as ⌘C copies it: what it is, how much, its price, what it's worth, what it made and its return, as the row shows them.
     /// Tabs between them, so it pastes into a spreadsheet as cells and into a message as one line.
     public func copyText(currency: CurrencyCode) -> String {
-        [asset, Format.amount(values.qty, decimals: decimals), priceText(currency) ?? Wording.noPrice, valueText(currency), pnlText(currency) ?? Wording.pnlUnavailable, isHeld ? returnText : "—"].joined(separator: "\t")
+        [asset, Format.amount(values.qty, decimals: decimals), priceText(currency) ?? Wording.noPrice, valueText(currency), pnlOrWhyNot(currency), isHeld ? returnText : "—"].joined(separator: "\t")
     }
 
     /// Its price right now, or nil with none.
@@ -19,6 +19,11 @@ extension Position {
     /// What it made, or nil when that's not known. What that means depends on where it's said.
     public func pnlText(_ currency: CurrencyCode) -> String? {
         pnlMicros.map { Format.estimate(Format.signedMoney($0, currency), estimates.realized || estimates.unrealized) }
+    }
+
+    /// What it made, or why that's not known. A cost nobody can work out yet says so, because that's what there is to fix.
+    public func pnlOrWhyNot(_ currency: CurrencyCode) -> String {
+        pnlText(currency) ?? (isHeld && values.averageCostMicros == nil ? "Cost unknown" : Wording.pnlUnavailable)
     }
 
     /// Unknown whenever its cost is, and never 0%. With a known cost of nothing, there's no share of it to show.
