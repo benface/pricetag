@@ -221,6 +221,9 @@ describe("what a dataset adds to a wallet's rows", () => {
     assert.equal(await answer(notStarted).marketReady!(), true, "it has the table, and hasn't written to it yet")
     await assert.rejects(answer(new Error("connection refused")).marketReady!(), "an outage says nothing about the dataset")
     assert.equal(await resolvingSource(async <T>() => [] as T[], config).marketReady!(), true)
+    const asked: string[] = []
+    await resolvingSource(async <T>(sql: string) => (asked.push(sql), [] as T[]), { ...config, priceDataset: "fork" }).marketReady!()
+    assert.ok(asked.every((sql) => sql.includes('"fork".unlisted_moves')), "a fork's trades are read from the fork, so it's the one asked")
   })
 
   it("reads an asset's trades in a range, newest first, keeping only plausible prices", async () => {
@@ -951,6 +954,7 @@ describe("head reads that overlap", () => {
       proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null },
       follow: { stream, sql: "SELECT 1", readMark: async () => ({ blockNum: tip, hash: `0x${tip}` }), logger: { warn() {} }, pollMs: 1, tickMs: 0 },
       approvals: {
+        rewind() {},
         read: async (_, head) => {
           used.push(head.blockNum)
           return { spenders: [] } as unknown as Awaited<ReturnType<Approvals["read"]>>

@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { after, before, describe, it } from "node:test"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
-import { ASSETS, ETH_ADDRESS, buildPricedLegs, foldPositions, type LegPart, type LegRow, type Method, type PricedLeg } from "@pricetag/sdk/core"
+import { ASSETS, ETH_ADDRESS, buildPricedLegs, type LegPart, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
 import { createApi } from "../server/app.ts"
 import { portfolioOf } from "../src/core/portfolio.ts"
 import type { Source } from "@pricetag/sdk/internal"
@@ -40,7 +40,7 @@ function leg(tx: string, delta: bigint, changes: Partial<PricedLeg> = {}): Price
   }
 }
 /** What a real row says about a plain ETH transfer: who was on the other side. */
-const moved = (tx: string, account: string, side: LegPart["side"], amount: bigint, counterparty: string): LegPart => ({ logIndex: 0, token: ETH_ADDRESS, account, side, amount: amount.toString(), kind: "eth", counterparty })
+const moved = (account: string, side: LegPart["side"], amount: bigint, counterparty: string): LegPart => ({ logIndex: 0, token: ETH_ADDRESS, account, side, amount: amount.toString(), kind: "eth", counterparty })
 const bought = (tx: string, qty: bigint, cost: number) => leg(tx, qty, { kind: "swap", costLabel: "paid", costMicros: String(cost * 1_000_000) })
 const sameBlock = (a: PricedLeg, b: PricedLeg): PricedLeg => ({ ...b, blockNum: a.blockNum })
 
@@ -56,17 +56,17 @@ const ethOf = (portfolio: PortfolioResponse) => portfolio.positions.find((p) => 
 describe("linked wallets in a portfolio", () => {
   it("only touches the wallet being read, and a portfolio folds it as inherited", () => {
     const buy = bought("0x1", ONE, 3000)
-    const out = leg("0x2", -ONE, { parts: [moved("0x2", HOT, "debit", ONE, COLD)] })
+    const out = leg("0x2", -ONE, { parts: [moved(HOT, "debit", ONE, COLD)] })
     const hot = walletOf(HOT, [buy, out])
-    const cold = walletOf(COLD, [sameBlock(out, leg("0x2", ONE, { parts: [moved("0x2", COLD, "credit", ONE, HOT)] }))])
+    const cold = walletOf(COLD, [sameBlock(out, leg("0x2", ONE, { parts: [moved(COLD, "credit", ONE, HOT)] }))])
     assert.equal(ethOf(portfolioOf(cold, "average", [hot]))?.values.costMicros, "3000000000")
     assert.equal(ethOf(portfolioOf(cold, "average"))?.values.costMicros, null)
   })
 
   it("keeps the rate from when it was bought, not from when it moved", () => {
     const buy = bought("0x1", ONE, 3000)
-    const out = leg("0x2", -ONE, { parts: [moved("0x2", HOT, "debit", ONE, COLD)] })
-    const credit = sameBlock(out, leg("0x2", ONE, { parts: [moved("0x2", COLD, "credit", ONE, HOT)] }))
+    const out = leg("0x2", -ONE, { parts: [moved(HOT, "debit", ONE, COLD)] })
+    const credit = sameBlock(out, leg("0x2", ONE, { parts: [moved(COLD, "credit", ONE, HOT)] }))
     const updatedAt = Date.parse(buy.timestamp) / 1000
     const rates = (legs: PricedLeg[], answers: Record<number, string>) => ({
       currency: "CAD" as const,
