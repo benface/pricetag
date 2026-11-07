@@ -146,6 +146,23 @@ export function refuse(res: ServerResponse, status: number, error: string, retry
 
 const SLOW_DOWN = "Too many requests from this invite. Try again in a minute."
 
+/** The names this Mac answers to, with any port. A site that points its own name at 127.0.0.1 still sends its own name here. */
+const LOCAL_HOST = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/
+
+/**
+ * Why a server without invites turns this request away, or null when it doesn't. Without invites, nothing but where a request
+ * comes from stands between a website and the Amp token and Coinbase key: so only this Mac's own names, which a site that
+ * rebinds its domain to 127.0.0.1 can't send, and no other site's page calling the API, which a browser says in `Sec-Fetch-Site`.
+ * The Mac app and curl send no `Sec-Fetch-Site`, and the web app's own calls are `same-origin`.
+ */
+export function localRefusal(req: IncomingMessage, path: string | null): string | null {
+  const hosts = req.headersDistinct.host ?? []
+  if (hosts.length !== 1 || !LOCAL_HOST.test((hosts[0] as string).toLowerCase())) return "This server only answers this Mac."
+  const site = req.headers["sec-fetch-site"]
+  if (path?.startsWith("/api/") && (site === "cross-site" || site === "same-site")) return "Other sites can't use this server."
+  return null
+}
+
 type Handle = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>
 
 /** Why a Coinbase checkout has to wait, and for how many seconds. */
@@ -171,7 +188,7 @@ export function checkoutLimit(hosting: Hosting, now: () => number = Date.now) {
 }
 
 /**
- * The API behind its gate. `/healthz` answers anyone, with nothing private, and turns away the host's checks once a shutdown
+ * The API behind its gate. Without invites, it only answers this Mac: see `localRefusal`. `/healthz` answers anyone, with nothing private, and turns away the host's checks once a shutdown
  * starts. Everything else under `/api/` needs an invite when there's a list of them, and stays within its limits.
  */
 export function gate(handle: Handle, hosting: Hosting, health: () => Record<string, boolean>, now: () => number = Date.now) {
@@ -181,6 +198,13 @@ export function gate(handle: Handle, hosting: Hosting, health: () => Record<stri
 
   const handler: Handle = async (req, res) => {
     const path = pathOf(req)
+    if (hosting.invites.size === 0) {
+      const refusal = localRefusal(req, path)
+      if (refusal) {
+        refuse(res, 403, refusal)
+        return true
+      }
+    }
     if (path === "/healthz") {
       if (draining) refuse(res, 503, "Shutting down.")
       else {
