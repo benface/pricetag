@@ -69,6 +69,10 @@ fi
 # The running copy may be an older build. Opening it while it's still quitting would do nothing.
 pkill -f "$app/Contents/MacOS/" 2>/dev/null || true
 while pgrep -f "$app/Contents/MacOS/" >/dev/null; do sleep 0.2; done
+# The copy `pnpm mac:install` keeps is the same app, and two of it can't both hold the wallet. Its server can stay: it's this folder's too.
+installed="$HOME/Applications/$name.app"
+pkill -f "$installed/Contents/MacOS/" 2>/dev/null || true
+while pgrep -f "$installed/Contents/MacOS/" >/dev/null; do sleep 0.2; done
 
 is_serving() { curl -fs -o /dev/null --max-time 2 "http://127.0.0.1:$port/api/portfolio/demo"; }
 

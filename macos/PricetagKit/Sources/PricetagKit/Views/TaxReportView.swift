@@ -66,6 +66,9 @@ public struct TaxReportView: View {
                         .help(report?.disclaimer ?? "Check this with an accountant before relying on it.")
                 }
                 Spacer()
+                if let form = report?.form {
+                    Button("Export as \(form.name)…") { document = TaxReportDocument(form) }
+                }
                 Button("Export CSV…") { document = report.map(TaxReportDocument.init) }
                     .buttonStyle(.borderedProminent)
                     .disabled(report == nil)
@@ -334,6 +337,11 @@ struct TaxReportDocument: FileDocument {
     init(_ report: TaxReport) {
         csv = report.csv
         filename = report.filename
+    }
+
+    init(_ form: TaxReport.Form) {
+        csv = form.csv
+        filename = form.filename
     }
 
     init(configuration: ReadConfiguration) throws {

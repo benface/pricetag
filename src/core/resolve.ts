@@ -73,7 +73,7 @@ function moneyIn(side: Side, money: Money, leg: PricedLeg): string | null {
 }
 
 /** Part of a piece whose cost is only known for all of it, so this part has none, and neither does the rest. */
-const withoutItsCost = (piece: CostPiece, units: bigint): CostPiece => ({ qty: units.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0", unanswerable: true, ...(piece.unconfirmedBy ? { unconfirmedBy: piece.unconfirmedBy } : {}), ...(piece.acquiredBlock === undefined ? {} : { acquiredBlock: piece.acquiredBlock, acquiredAt: piece.acquiredAt as string }), ...ranking(piece) })
+const withoutItsCost = (piece: CostPiece, units: bigint): CostPiece => ({ qty: units.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0", unanswerable: true, ...(piece.unconfirmedBy ? { unconfirmedBy: piece.unconfirmedBy } : {}), ...(piece.acquiredBlock === undefined ? {} : { acquiredBlock: piece.acquiredBlock, acquiredAt: piece.acquiredAt as string }), ...(piece.undated ? { undated: true as const } : {}), ...ranking(piece) })
 
 /** Part of a piece, with its share of the cost. Taking it all takes all of the cost, so rounding never loses any. */
 function slice(piece: CostPiece, qty: bigint): CostPiece {
@@ -385,7 +385,8 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
       if (someoneElse) {
         if (leg.priceMicros === null) return [unknown]
         const cost = worth(part, BigInt(leg.priceMicros), leg.decimals).toString()
-        return [{ qty: part.toString(), costMicros: cost, label: "received at market", estimatedCostMicros: cost, ...(given ? { givenCostMicros: cost } : {}) }]
+        // Received from someone else, it was acquired here and now. Through a bridge or a mint, it may have been held all along.
+        return [{ qty: part.toString(), costMicros: cost, label: "received at market", estimatedCostMicros: cost, ...(given ? { givenCostMicros: cost } : { undated: true as const }) }]
       }
       // Answered already, and answering again wouldn't change anything, because the demo never reads this wallet.
       if (answer?.kind === "mine" && isDemoWallet(address)) outsideDemo.push(sender)

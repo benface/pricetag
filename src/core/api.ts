@@ -5,6 +5,7 @@ import { hasStarted, msBetweenBlocks, type CurrencyCode, type Head, type LatestP
 import type { Estimates, HoldComparison } from "@pricetag/sdk/core"
 import type { TransactionFacts } from "./activity.ts"
 import type { Meter, Question } from "./resolve.ts"
+import type { TaxForm } from "./tax-forms.ts"
 import type { TaxCountryCode, TaxPreviewRow, TaxScope } from "./tax.ts"
 
 export { hasStarted }
@@ -218,6 +219,8 @@ export type TaxReportResponse = {
   preview: TaxPreviewRow[]
   filename: string
   csv: string
+  /** The same rows in the shape of the country's own form, like Form 8949 or Schedule 3. */
+  form: TaxForm | null
 }
 
 /**

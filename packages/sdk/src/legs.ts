@@ -163,7 +163,7 @@ export type PricedLeg = FoldLeg & {
   parts: LegPart[]
   /** Only on a leg converted out of USD. */
   conversion?: LegConversion
-  /** What the wallet already held before the first block read. It isn't a transaction, so `txHash` is empty. */
+  /** It isn't a transaction, so `txHash` is empty. */
   opening?: boolean
   /** The cost as entered, on an opening leg shown in another currency. Its cost here is an estimate, at the rate when the history starts. */
   enteredAs?: { micros: string; currency: CurrencyCode }

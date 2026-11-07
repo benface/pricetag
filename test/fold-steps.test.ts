@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { applyLeg, buildPortfolio, emptyPosition, foldPositions, lotsSplitBy, tallyOf, valuePosition, type CostLabel, type CostPiece, type FoldLeg, type KnownTaken, type Lot, type Method, type PositionState, type PricedLeg } from "@pricetag/sdk/core"
+import { applyLeg, applyLegTaking, buildPortfolio, emptyPosition, foldPositions, lotsSplitBy, tallyOf, valuePosition, type CostLabel, type CostPiece, type FoldLeg, type KnownTaken, type Lot, type Method, type PositionState, type PricedLeg } from "@pricetag/sdk/core"
 import { costCanBeAnsweredBefore, lotsSplitByBefore } from "./support/fold-before.ts"
 import { randomFrom, randomLegs } from "./support/random-legs.ts"
 
@@ -71,7 +71,7 @@ function summedBefore(state: PositionState) {
 
 /** How the tax report counted what had a known cost, from a state's lots, before the fold did it. */
 function knownBefore(lots: readonly Lot[], leavingOut: readonly Lot[] = []) {
-  const known = { qty: 0n, cost: 0n, estimated: 0n, given: 0n, reportedQty: 0n, purchasedQty: 0n, purchaseSource: null as string | null }
+  const known = { qty: 0n, cost: 0n, estimated: 0n, given: 0n, reportedQty: 0n, purchasedQty: 0n }
   for (const lot of lots) {
     if (lot.costMicros === null || leavingOut.includes(lot)) continue
     known.qty += BigInt(lot.qty)
@@ -79,16 +79,16 @@ function knownBefore(lots: readonly Lot[], leavingOut: readonly Lot[] = []) {
     known.estimated += BigInt(lot.estimatedCostMicros ?? "0")
     known.given += BigInt(lot.givenCostMicros ?? "0")
     if (lot.reported) known.reportedQty += BigInt(lot.qty)
-    if (lot.purchaseSource) {
-      known.purchasedQty += BigInt(lot.qty)
-      known.purchaseSource = lot.purchaseSource
-    }
+    if (lot.purchaseSource) known.purchasedQty += BigInt(lot.qty)
   }
   return known
 }
 
-/** What the tax report took a debit's known cost to be: what was held with one before, less the lots it split, and after. */
-function takenBefore(before: PositionState, after: PositionState, qty: bigint): KnownTaken {
+/**
+ * What the tax report took a debit's known cost to be: what was held with one before, less the lots it split, and after. Who says
+ * what was paid comes from the pieces it took with a known cost, since WORK-679 stopped naming the last one held.
+ */
+function takenBefore(before: PositionState, after: PositionState, qty: bigint, taken: readonly CostPiece[]): KnownTaken {
   const was = knownBefore(before.lots, lotsSplitByBefore(before, qty))
   const is = knownBefore(after.lots)
   const purchasedQty = was.purchasedQty - is.purchasedQty
@@ -99,12 +99,11 @@ function takenBefore(before: PositionState, after: PositionState, qty: bigint): 
     givenMicros: (was.given - is.given).toString(),
     reportedQty: (was.reportedQty - is.reportedQty).toString(),
     purchasedQty: purchasedQty.toString(),
-    // Only ever named when some of what it took was bought.
-    purchaseSource: purchasedQty > 0n ? was.purchaseSource : null,
+    purchaseSources: [...new Set(taken.flatMap((piece) => (piece.costMicros !== null && piece.purchaseSource ? [piece.purchaseSource] : [])))],
   }
 }
 
-const NOTHING_KNOWN: KnownTaken = { qty: "0", costMicros: "0", estimatedMicros: "0", givenMicros: "0", reportedQty: "0", purchasedQty: "0", purchaseSource: null }
+const NOTHING_KNOWN: KnownTaken = { qty: "0", costMicros: "0", estimatedMicros: "0", givenMicros: "0", reportedQty: "0", purchasedQty: "0", purchaseSources: [] }
 
 const priced = (legs: readonly FoldLeg[]): PricedLeg[] =>
   legs.map((leg, i) => ({ ...leg, asset: "AERO", blockNum: i + 1, timestamp: leg.timestamp as string, txHash: `0x${(i + 1).toString(16)}`, txIndex: 0, priceSource: null, priceNote: null, parts: [] }))
@@ -142,7 +141,8 @@ describe("a fold's steps, against every lot before and after", () => {
             let state = emptyPosition(method, decimals)
             legs.forEach((leg, i) => {
               const before = state
-              state = applyLeg(state, leg)
+              const applied = applyLegTaking(state, leg)
+              state = applied.state
               const effect = position.effects[i]
               const where = `seed ${seed}, ${method}, ${leg.id}`
               assert.ok(effect, where)
@@ -153,7 +153,7 @@ describe("a fold's steps, against every lot before and after", () => {
               assert.deepEqual(lotsSplitBy(before, qty), lotsSplitByBefore(before, qty), where)
               // When the order matters, nothing it took has a known cost, which the tax report has always said whatever the lots said.
               const orderless = leg.orderUnknown === "always" || (leg.orderUnknown === "fifo" && method === "fifo")
-              assert.deepEqual(effect.known, qty <= 0n ? null : orderless ? NOTHING_KNOWN : takenBefore(before, state, qty), where)
+              assert.deepEqual(effect.known, qty <= 0n ? null : orderless ? NOTHING_KNOWN : takenBefore(before, state, qty, applied.taken), where)
             })
             assert.deepEqual(position.state, state, `seed ${seed}, ${method}`)
           }
@@ -173,9 +173,10 @@ describe("a fold's steps, against every lot before and after", () => {
       let state = emptyPosition(method, 6)
       history.forEach((leg, i) => {
         const before = state
-        state = applyLeg(state, leg)
+        const applied = applyLegTaking(state, leg)
+        state = applied.state
         const qty = -BigInt(leg.delta)
-        assert.deepEqual(position?.effects[i]?.known, qty > 0n ? takenBefore(before, state, qty) : null, `${method}, ${leg.id}`)
+        assert.deepEqual(position?.effects[i]?.known, qty > 0n ? takenBefore(before, state, qty, applied.taken) : null, `${method}, ${leg.id}`)
         assert.equal(position?.effects[i]?.answerable, costCanBeAnsweredBefore(leg, before), `${method}, ${leg.id}`)
       })
     }

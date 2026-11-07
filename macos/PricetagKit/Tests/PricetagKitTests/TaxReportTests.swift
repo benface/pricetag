@@ -233,6 +233,15 @@ import Testing
         #expect(document.csv == report.csv)
         #expect(document.filename == report.filename)
     }
+
+    @Test func theFormIsTheServersWordForWord() throws {
+        let report = try resource("demo-tax-report", as: TaxReport.self)
+        let form = try #require(report.form)
+        #expect(form.name == "Schedule 3")
+        let document = TaxReportDocument(form)
+        #expect(document.csv == form.csv)
+        #expect(document.filename == form.filename)
+    }
 }
 
 @MainActor
