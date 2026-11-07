@@ -1,9 +1,9 @@
-import { useEffect, useId, useRef, useState } from "react"
+import { useEffect, useId, useMemo, useRef, useState } from "react"
 import { formatSignedMoney, isAddress, shortHash, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import type { TaxReportResponse } from "../core/api.ts"
 import { failureOf, jsonPost, readResponse, type ReadFailure } from "../core/read-failure.ts"
 import { isDemoWallet, type Book } from "../core/book.ts"
-import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, typedOtherWallets, type TaxCountryCode, type TaxScope, type TaxYear } from "../core/tax.ts"
+import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, typedOtherWallets, walletsInReport, type TaxCountryCode, type TaxScope, type TaxYear } from "../core/tax.ts"
 import { METHOD_LABELS, METHOD_NAME, answerQuestionsLabel, est, panelProblem } from "../core/wording.ts"
 import { ProblemNotice } from "./ProblemNotice.tsx"
 import { downloadCsv } from "./download.ts"
@@ -157,7 +157,8 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
   const note = methodNote(method, overviewMethod, country)
   const defaultTag = (isDefault: boolean) => (isDefault ? " (default)" : "")
   const ready = report !== null && !loading
-  const covered = report?.wallets ?? []
+  // From the book rather than the report, so a wallet that makes the report fail can still be taken out.
+  const covered = useMemo(() => walletsInReport(book, address, alongside), [book, address, alongside])
 
   const addWallet = () => {
     const next = adding.trim()
@@ -251,7 +252,7 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
         {note ? <p className="small muted">{note}</p> : null}
         {isDemo ? null : (
           <div className="field">
-            <span className="small muted">{covered.length > 1 ? `Your ${covered.length} wallets in this report` : "Your other wallets"}</span>
+            <span className="small muted">{covered.length > 1 ? `Your ${covered.length} wallets${report ? " in this report" : ""}` : "Your other wallets"}</span>
             {covered.length > 1 ? (
               <ul className="tax-wallets small">
                 {covered.map((wallet) => (

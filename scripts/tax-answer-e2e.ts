@@ -266,6 +266,26 @@ await openTax(FIRST)
 check("taking it out lasts after a reload", (await covered()).length === 0, await covered())
 check("  and it isn't the user's anywhere", await evaluate(`JSON.parse(localStorage.getItem("patina.book")).senders[${JSON.stringify(SHOP)}] === undefined`))
 
+// One too many makes the report fail, and it can still be taken out, even after a reload.
+const extras = Array.from({ length: 21 }, (_, i) => `0x9${i.toString(16).padStart(39, "0")}`)
+const full = extras.slice(0, 20).reduce((book, extra) => answerSender(book, FIRST, extra, { kind: "mine" }), emptyBook())
+const FAILED = `${TAX}?.innerText.includes("up to 20 other wallets") && !${TAX}.querySelector(".tax-counts")`
+await startFrom(full, [])
+await openTax(FIRST)
+check("a report of 21 wallets works", (await covered()).length === 21, await covered())
+await evaluate(`(() => { const input = ${TAX}.querySelector('input[aria-label="Add a wallet of yours"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, ${JSON.stringify(extras[20])}); input.dispatchEvent(new Event("input", { bubbles: true })) })()`)
+await click(TAX, "Add")
+check("one more makes it fail", await until(FAILED, "the report fails"))
+check("  and every wallet's still listed", (await covered()).length === 22, await covered())
+await send("Page.navigate", { url: `${origin}/?address=${FIRST}` })
+await until(`[...document.querySelectorAll("button")].some((b) => b.innerText.includes("Export a tax report"))`, "the wallet shows")
+await click("document", "Export a tax report…")
+check("after a reload it still fails", await until(FAILED, "the report fails again"))
+check("  and every other wallet can still be taken out", (await evaluate(`${TAX}.querySelectorAll(".tax-wallets button").length`)) === 21)
+await evaluate(`${TAX}.querySelector(${JSON.stringify(`button[aria-label="Remove ${shortHash(extras[20] as string)}, it isn't yours"]`)}).click()`)
+check("taking out the one too many brings the report back", await until(`${TAX}?.querySelectorAll(".tax-wallets li").length === 21 && ${READY}`, "the report is back"))
+check("  and it isn't the user's anymore", await evaluate(`JSON.parse(localStorage.getItem("patina.book")).senders[${JSON.stringify(extras[20])}] === undefined`))
+
 check("no page errors", pageErrors.length === 0, pageErrors)
 
 // The hardware wallet's panel, opened from the question that publishes a cost. Each of these starts from a fresh page, because a failed chunk stays failed.

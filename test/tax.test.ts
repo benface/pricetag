@@ -9,7 +9,7 @@ import { answerSender, costKey, emptyBook, parseBook, type Book } from "../src/c
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import { keepingImport, parseCoinbaseCsv } from "../src/core/exchange-import.ts"
 import { foldBook } from "../src/core/resolve.ts"
-import { TAX_COUNTRIES, parseTaxYear, taxReportOf, taxRows, typedOtherWallets, type TaxYear } from "../src/core/tax.ts"
+import { TAX_COUNTRIES, parseTaxYear, taxReportOf, taxRows, typedOtherWallets, walletsInReport, type TaxYear } from "../src/core/tax.ts"
 import { createApi } from "../server/app.ts"
 import { assertMatchesFixture } from "./support/fixtures.ts"
 import { E18 } from "./support/units.ts"
@@ -333,6 +333,33 @@ describe("typedOtherWallets", () => {
     assert.deepEqual(typedOtherWallets(`0x${"a".repeat(64)}`), [])
     assert.deepEqual(typedOtherWallets(`words ${B} 0x${B.slice(2, 10)}`), [B])
     assert.deepEqual(typedOtherWallets(""), [])
+  })
+})
+
+describe("walletsInReport", () => {
+  const C = `0x${"c".repeat(40)}`
+  const mine = answerSender(emptyBook(), A, B, { kind: "mine" })
+
+  it("lists a wallet of the user's with every other one the answers say is theirs", () => {
+    assert.deepEqual(walletsInReport(mine, A, []), [A, B])
+    assert.deepEqual(walletsInReport(mine, B.toUpperCase().replace("0X", "0x"), []), [B, A])
+  })
+
+  it("lists anyone else's wallet alone, unless others are sent with it", () => {
+    assert.deepEqual(walletsInReport(mine, C, []), [C])
+    assert.deepEqual(walletsInReport(mine, C, [C, A]), [C, A, B])
+  })
+
+  it("keeps the demo's report its own", () => {
+    const withDemo = answerSender(mine, A, DEMO_SAVINGS_ADDRESS, { kind: "mine" })
+    assert.deepEqual(walletsInReport(withDemo, A, []), [A, B])
+    assert.deepEqual(walletsInReport(withDemo, "demo", []), ["demo"])
+  })
+
+  it("lists past the limit, which is what lets one too many be taken out", () => {
+    let many = emptyBook()
+    for (let i = 0; i < 25; i++) many = answerSender(many, A, `0x9${i.toString(16).padStart(39, "0")}`, { kind: "mine" })
+    assert.equal(walletsInReport(many, A, []).length, 26)
   })
 })
 

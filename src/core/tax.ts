@@ -23,7 +23,7 @@
 
 import { assertFoldFits, foldPositions, formatDuration, isAddress, markUnknownOrder, msBetweenBlocks, normalizeAddress, orderMatters, shortHash, timestampOfBlock, unreadAssets, viewWallet, worth, type CostPiece, type CurrencyCode, type KnownTaken, type LegEffect, type Method, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type TaxReportResponse, type WalletResponse } from "./api.ts"
-import { emptyBook, linkedWallets, type Book } from "./book.ts"
+import { emptyBook, isDemoWallet, linkedWallets, type Book } from "./book.ts"
 import { csvCell, microsCell, unitsCell } from "./csv.ts"
 import { rateSource } from "./explain.ts"
 import { resolveLegs, withheldIn } from "./resolve.ts"
@@ -481,6 +481,20 @@ export function taxRows(wallets: readonly WalletResponse[], { method, scope, cou
  */
 export function typedOtherWallets(text: string): string[] {
   return [...new Set(text.split(/[\s,]+/).filter(isAddress).map((other) => other.toLowerCase()))]
+}
+
+/**
+ * The wallets a report on `address` covers, the way the server picks them: it, the ones sent `also`, and, when it's the user's,
+ * every one the answers say is theirs. The report lists these from the book, so one that makes the report fail, like one too
+ * many or one that can't be read, can still be taken out. The demo's report stays its own.
+ */
+export function walletsInReport(book: Book, address: string, also: readonly string[]): string[] {
+  const focus = address.toLowerCase()
+  if (focus === "demo" || isDemoWallet(focus)) return [focus]
+  const others = also.map((other) => other.toLowerCase()).filter((other) => other !== focus)
+  const answered = linkedWallets(book).filter((wallet) => !isDemoWallet(wallet))
+  const own = others.length > 0 || answered.includes(focus)
+  return [...new Set([focus, ...others, ...(own ? answered : [])])]
 }
 
 const plural = (count: number, one: string, many = `${one}s`) => `${count.toLocaleString("en-US")} ${count === 1 ? one : many}`
