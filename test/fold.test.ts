@@ -466,3 +466,30 @@ describe("a position's return", () => {
     assert.equal(returnBps(valuePosition(s, null)), null)
   })
 })
+
+describe("something that only says when it reached a wallet", () => {
+  const at = { blockNum: 1, timestamp: "2026-10-02T00:00:00.000Z" }
+  const arrived = (costMicros: string | null, fields: Partial<FoldLeg> = {}): FoldLeg => ({ id: "in", delta: ETH.toString(), decimals: 18, kind: "transfer", priceMicros: null, costMicros, proceedsMicros: null, costLabel: costMicros === null ? "unknown" : "self-reported", ...at, ...fields })
+  const out = (fields: Partial<FoldLeg> = {}): FoldLeg => ({ id: "out", delta: (-ETH / 2n).toString(), decimals: 18, kind: "transfer", priceMicros: null, costMicros: null, proceedsMicros: null, costLabel: "unknown", blockNum: 2, timestamp: "2026-10-03T00:00:00.000Z", ...fields })
+
+  for (const method of ["fifo", "average"] as const satisfies readonly Method[]) {
+    for (const [name, cost] of [["no cost", null], ["an entered cost", (2000n * USD).toString()]] as const) {
+      it(`stays undated with ${name}, in what's held and what leaves, under ${method}`, () => {
+        const held = applyLeg(emptyPosition(method, 18), arrived(cost))
+        assert.ok(held.lots.every((lot) => lot.undated))
+        const { state, taken } = applyLegTaking(held, out())
+        assert.ok([...state.lots, ...taken].every((lot) => lot.undated))
+      })
+
+      it(`stays undated with ${name} when an order nothing says takes its cost, under ${method}`, () => {
+        assert.ok(applyLeg(emptyPosition(method, 18), arrived(cost, { orderUnknown: "always" })).lots.every((lot) => lot.undated))
+        const { state, taken } = applyLegTaking(applyLeg(emptyPosition(method, 18), arrived(cost)), out({ orderUnknown: "always" }))
+        assert.ok([...state.lots, ...taken].every((lot) => lot.undated && lot.costMicros === null))
+      })
+    }
+  }
+
+  it("isn't undated when it was bought here", () => {
+    assert.ok(!applyLeg(emptyPosition("fifo", 18), arrived(null, { kind: "swap" })).lots[0]?.undated)
+  })
+})

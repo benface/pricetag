@@ -73,7 +73,7 @@ function moneyIn(side: Side, money: Money, leg: PricedLeg): string | null {
 }
 
 /** Part of a piece whose cost is only known for all of it, so this part has none, and neither does the rest. */
-const withoutItsCost = (piece: CostPiece, units: bigint): CostPiece => ({ qty: units.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0", unanswerable: true, ...(piece.unconfirmedBy ? { unconfirmedBy: piece.unconfirmedBy } : {}), ...(piece.acquiredBlock === undefined ? {} : { acquiredBlock: piece.acquiredBlock, acquiredAt: piece.acquiredAt as string }), ...ranking(piece) })
+const withoutItsCost = (piece: CostPiece, units: bigint): CostPiece => ({ qty: units.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0", unanswerable: true, ...(piece.unconfirmedBy ? { unconfirmedBy: piece.unconfirmedBy } : {}), ...(piece.acquiredBlock === undefined ? {} : { acquiredBlock: piece.acquiredBlock, acquiredAt: piece.acquiredAt as string }), ...(piece.undated ? { undated: true as const } : {}), ...ranking(piece) })
 
 /** Part of a piece, with its share of the cost. Taking it all takes all of the cost, so rounding never loses any. */
 function slice(piece: CostPiece, qty: bigint): CostPiece {

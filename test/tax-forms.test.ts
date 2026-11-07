@@ -247,6 +247,33 @@ describe("superficial losses", () => {
     assert.ok(!taxReportOf([walletOf(legs, "2026-01-01T00:00:00.000Z")], ca).warnings.some((warning) => warning.includes("superficial")))
   })
 
+  describe("after one transaction sends some to a linked wallet and some elsewhere", () => {
+    const OUTSIDE = `0x${"9".repeat(40)}`
+    const READ = "2026-01-01T00:00:00.000Z"
+    const received = leg(3, "2025-03-20", 2n * E18, { kind: "transfer", parts: [part(B, "credit", 2n * E18, SELLER)] })
+    // B sends 1 ETH to A and 1 to an outside address in one transaction, so it doesn't add up to nothing across them.
+    const split = leg(4, "2025-03-21", -2n * E18, { kind: "transfer", parts: [part(B, "debit", E18, A), part(B, "debit", E18, OUTSIDE)] })
+    const wallets = (later: PricedLeg[] = []) => [walletOf([buy(1, "2025-01-01", 2n, 6000), sell(2, "2025-03-01", 1n, 2000), arrived(4, "2025-03-21", B), ...later], READ), walletOf([received, split], READ, B)]
+    const superficial = (report: ReturnType<typeof taxReportOf>) => report.warnings.some((warning) => warning.includes("superficial"))
+    const withCost: Book = { ...emptyBook(), costs: entered(B, received, 4000) }
+
+    for (const [name, book] of [["with no cost", emptyBook()], ["with only a cost entered", withCost]] as const) {
+      it(`doesn't count what B received with no purchase date, ${name}`, () => {
+        assert.equal(superficial(taxReportOf(wallets(), ca, { book })), false)
+      })
+
+      it(`doesn't count it when B only supplies costs, ${name}`, () => {
+        const [a, b] = wallets()
+        const answered: Book = { ...book, senders: { [A]: { kind: "mine" }, [B]: { kind: "mine" } } }
+        assert.equal(superficial(taxReportOf([a as WalletResponse], { ...ca, scope: "per-wallet" }, { book: answered, costsFrom: [b as WalletResponse] })), false)
+      })
+
+      it(`still counts a purchase within the 30 days, ${name}`, () => {
+        assert.equal(superficial(taxReportOf(wallets([buy(5, "2025-03-25", 1n, 2100)]), ca, { book })), true)
+      })
+    }
+  })
+
   it("only checks Canada's report", () => {
     const legs = [buy(1, "2025-01-01", 2n, 6000), sell(2, "2025-03-01", 1n, 2000), buy(3, "2025-03-20", 1n, 2100)]
     assert.doesNotMatch(taxReportOf([walletOf(legs, "2026-01-01T00:00:00.000Z")], { country: "US", method: "fifo", scope: "per-wallet" }).csv, /superficial loss\./)
