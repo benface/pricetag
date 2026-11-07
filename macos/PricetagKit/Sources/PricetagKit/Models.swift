@@ -252,6 +252,8 @@ public struct PnlPoint: Codable, Sendable, Equatable, Identifiable {
     public var gain: TransactionGain? = nil
     /// What arrived with a cost nobody can work out yet.
     public var unknownCost: [String] = []
+    /// Those an answer could work out, which isn't all of them.
+    public var answerableCost: [String] = []
     /// Which of the user's wallets its transaction is in, when several are shown as one.
     public var wallets: [String]? = nil
     /// `valueMicros` was worked out for where a chart's range starts, between prices that were read, so it's never from a server.
@@ -263,7 +265,7 @@ public struct PnlPoint: Codable, Sendable, Equatable, Identifiable {
 
 extension PnlPoint {
     private enum CodingKeys: String, CodingKey {
-        case blockNum, timestamp, txHash, pnlMicros, excludedCount, summary, valueMicros, valueBeforeMicros, valueExcludedCount, valueContinues, valueRead, assets, counterparty, amount, gain, unknownCost, wallets
+        case blockNum, timestamp, txHash, pnlMicros, excludedCount, summary, valueMicros, valueBeforeMicros, valueExcludedCount, valueContinues, valueRead, assets, counterparty, amount, gain, unknownCost, answerableCost, wallets
     }
 
     /// A server from before a transaction had facts still sends the rest.
@@ -285,6 +287,7 @@ extension PnlPoint {
         amount = try container.decodeIfPresent(TransactionAmount.self, forKey: .amount)
         gain = try container.decodeIfPresent(TransactionGain.self, forKey: .gain)
         unknownCost = try container.decodeIfPresent([String].self, forKey: .unknownCost) ?? []
+        answerableCost = try container.decodeIfPresent([String].self, forKey: .answerableCost) ?? []
         wallets = try container.decodeIfPresent([String].self, forKey: .wallets)
     }
 }

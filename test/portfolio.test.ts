@@ -241,6 +241,15 @@ describe("portfolioOf", () => {
       assert.deepEqual(says(unknownCost), ["What this cost isn't known yet.", true])
       assert.deepEqual(says(unknownCost, leg(-ETH / 2n, { ...sold, orderUnknown: "always" })), ["The gain on 0.5 ETH isn't known, because what it cost isn't known yet.", false])
     })
+
+    it("and offers no question on what's spent after an unknown order, by either method", () => {
+      for (const method of ["fifo", "average"] as const) {
+        const unknownOrder = leg(-ETH / 2n, { ...sold, orderUnknown: "always" })
+        assert.deepEqual(saysIn(method, [unknownCost, unknownOrder, leg(-ETH / 4n, sold)]), ["The gain on 0.25 ETH isn't known, because what it cost isn't known yet.", false])
+        assert.deepEqual(saysIn(method, [bought, unknownOrder, leg(-ETH / 4n, sold)]), ["The gain on 0.25 ETH isn't known, because what it cost isn't known yet.", false])
+        assert.deepEqual(saysIn(method, [unknownCost, leg(-ETH / 4n, { kind: "transfer", orderUnknown: "always" }), leg(-ETH / 4n, { kind: "transfer" })]), ["What this cost isn't known yet.", false])
+      }
+    })
   })
 
   it("matches the files the Swift package reads", () => {

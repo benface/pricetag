@@ -34,7 +34,7 @@ export function positionOf({ asset, decimals, price, values, state, effects, rec
     if (!held) return realized
     return unrealized === null ? null : (BigInt(realized) + BigInt(unrealized)).toString()
   })()
-  return { asset, decimals, note: asset === "ETH" ? ETH_NOTE : null, price, values, pnlMicros: pnl, returnBps: returnBps(values), shortfallQty: state.shortfallQty, legCount: effects.length, reconciliation, noMarket, estimates, resolvable: BigInt(values.unknownCostQty) > 0n && questions.some((q) => q.arrivals.some((a) => a.asset === asset)) }
+  return { asset, decimals, note: asset === "ETH" ? ETH_NOTE : null, price, values, pnlMicros: pnl, returnBps: returnBps(values), shortfallQty: state.shortfallQty, legCount: effects.length, reconciliation, noMarket, estimates, resolvable: state.lots.some((lot) => lot.costMicros === null && !lot.unanswerable) && questions.some((q) => q.arrivals.some((a) => a.asset === asset)) }
 }
 
 function exchangeOf(view: WalletView): PortfolioExchange | null {

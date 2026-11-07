@@ -5,7 +5,7 @@ import { createWallets, readPayoutTxsAt, type Query, type ReadL1Fees, type Sourc
 import { portfolioOf } from "../src/core/portfolio.ts"
 import { costKey, emptyBook } from "../src/core/book.ts"
 import { allBalancesMatch } from "../src/core/attention.ts"
-import { USD_CONTEXT, describeEffect, explainMetric } from "../src/core/explain.ts"
+import { USD_CONTEXT, describeEffect, explainMetric, summarizeEffect } from "../src/core/explain.ts"
 import { ALL_BALANCES_MATCH } from "../src/core/wording.ts"
 import { foldBook } from "../src/core/resolve.ts"
 import { knownSender } from "../src/core/senders.ts"
@@ -782,6 +782,83 @@ describe("a pooled tax report", () => {
     const [row] = taxRows([seller, receiver], { method: "average", scope: "per-wallet" }, { book }).filter((r) => r.asset === "ETH" && r.type === "Sold")
     assert.deepEqual([row!.costMicros, row!.gainMicros], ["500000000", "500000000"])
   })
+})
+
+describe("what's spent after ETH arrived and left in one block", () => {
+  const STRANGER = "0x2222222222222222222222222222222222222222"
+  const FRIEND = "0x3333333333333333333333333333333333333333"
+  const OTHER = "0x4444444444444444444444444444444444444444"
+  const moved = (account: string, block: number, tx: string, side: LegRow["side"], amount: bigint, counterparty: string) =>
+    buildPricedLegs({ account, rows: [{ ...row(block, tx, ETH_ADDRESS, side, amount, "eth"), account, counterparty }], references: [{ blockNum: block, ethUsd: "200000000000", usdcUsd: "100000000" }], priced: [] })
+  /** 1 ETH from a stranger that a question is about, then 0.5 ETH leaving in the block 1 ETH rises, which nothing puts in order. */
+  const held = (later: PricedLeg[]): WalletResponse => {
+    const block = blockOf({ rows: [at500("0xa1", ETH_ADDRESS, "debit", E18 / 2n, "eth", OTHER)], before: E18, after: (3n * E18) / 2n })
+    return { ...block, legs: [...moved(ME, 400, "0xa0", "credit", E18, STRANGER), ...block.legs, ...later] }
+  }
+  const spent = (block: number, amount: bigint) => moved(ME, block, `0xc${block}`, "debit", amount, OTHER)
+  const foldOf = (wallet: WalletResponse, method: "average" | "fifo", others: WalletResponse[] = [], book = emptyBook()) => {
+    const fold = foldBook(wallet, others, method, book)
+    const eth = fold.positions.find((p) => p.asset === "ETH")!
+    const effect = (tx: string) => eth.effects.find(({ leg }) => leg.txHash === tx)!
+    return { fold, eth, answerable: (tx: string) => summarizeEffect(effect(tx), "USD").answerable, facts: (tx: string) => fold.points.find((point) => point.txHash === tx)! }
+  }
+
+  for (const method of ["fifo", "average"] as const) {
+    describe(`by ${method}`, () => {
+      const { fold, eth, answerable, facts } = foldOf(held(spent(600, E18 / 10n)), method)
+
+      it("has an open question that no answer to could fix it", () => {
+        assert.ok(fold.questions.some((q) => q.arrivals.some((a) => a.asset === "ETH")))
+        assert.equal(answerable("0xc600"), false)
+        assert.equal(eth.values.costMicros, null)
+      })
+
+      it("still says its cost is unknown in the transaction list, with no way to fix it", () => {
+        assert.deepEqual(facts("0xc600").unknownCost, ["ETH"])
+        assert.deepEqual(facts("0xc600").answerableCost, [])
+      })
+
+      const resolvable = (wallet: WalletResponse) => portfolioOf(wallet, method, [], emptyBook()).positions.find((p) => p.asset === "ETH")?.resolvable
+
+      it("doesn't offer to fill in what's held", () => {
+        assert.equal(resolvable(held(spent(600, E18 / 10n))), false)
+      })
+
+      it("offers one again once more arrives from someone a question can be about", () => {
+        const more = moved(ME, 600, "0xa2", "credit", E18, STRANGER)
+        assert.equal(resolvable(held(more)), true)
+        const { facts: factsAt } = foldOf(held([...more, ...spent(700, (5n * E18) / 2n)]), method)
+        assert.deepEqual(factsAt("0xa2").answerableCost, ["ETH"])
+        assert.deepEqual(factsAt("0xc700").answerableCost, ["ETH"])
+      })
+    })
+  }
+
+  it("still offers what's spent from a receipt after it, by average, where every unit shares what's unknown", () => {
+    const { answerable } = foldOf(held([...moved(ME, 600, "0xa2", "credit", E18, STRANGER), ...spent(700, E18 / 10n)]), "average")
+    assert.equal(answerable("0xc700"), true)
+  })
+
+  it("doesn't offer what's spent before reaching a receipt, oldest first", () => {
+    const { answerable } = foldOf(held([...moved(ME, 600, "0xa2", "credit", E18, STRANGER), ...spent(700, E18 / 10n)]), "fifo")
+    assert.equal(answerable("0xc700"), false)
+  })
+
+  for (const method of ["fifo", "average"] as const) {
+    it(`carries that to a linked wallet, and what it spends later, by ${method}`, () => {
+      // Its balance adds up, so what it sent carries over, rather than being unknown because its history can't be confirmed.
+      const sender = { ...held(moved(ME, 600, "0xd0", "debit", E18 / 2n, FRIEND)), balances: { blockNum: 600, amounts: { ETH: E18.toString() } } } as WalletResponse
+      const base = blockOf({ account: FRIEND, rows: [], before: 0n, after: 0n })
+      const receiver = { ...base, legs: [...moved(FRIEND, 600, "0xd0", "credit", E18 / 2n, ME), ...moved(FRIEND, 650, "0xd1", "debit", E18 / 10n, OTHER), ...moved(FRIEND, 680, "0xd2", "credit", E18, STRANGER)] } as WalletResponse
+      const { fold, answerable, facts } = foldOf(receiver, method, [sender], { ...emptyBook(), linked: [FRIEND], senders: { [ME]: { kind: "mine" } } })
+      assert.ok(fold.questions.some((q) => q.arrivals.some((a) => a.asset === "ETH")), "something else has a question open")
+      const receipt = fold.legs.find((leg) => leg.txHash === "0xd0")!
+      assert.ok(receipt.pieces!.length > 0 && receipt.pieces!.every((piece) => piece.costMicros === null && piece.unanswerable && !piece.unconfirmedBy))
+      assert.equal(answerable("0xd0"), false)
+      assert.equal(answerable("0xd1"), false)
+      assert.deepEqual([facts("0xd0").unknownCost, facts("0xd0").answerableCost], [["ETH"], []])
+    })
+  }
 })
 
 describe("a cost note about a transaction", () => {
