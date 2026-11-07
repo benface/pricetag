@@ -324,16 +324,22 @@ function isLater(lot: Lot, than: Lot): boolean {
 }
 
 /**
- * Oldest first by when it was acquired, so an inherited or imported lot goes where its own date says, not where it arrived. It
- * changes `lots` in place, which is only ever an array this step owns (see `heldCount`), so adding at the end, where blocks almost
- * always put it, doesn't copy every lot held.
+ * Oldest first by when it was acquired, so an inherited or imported lot goes where its own date says, not where it arrived. Adding
+ * at the end, where blocks almost always put it, pushes onto `lots`, which is only ever an array this step owns (see `heldCount`),
+ * so it doesn't copy every lot held. An earlier state can share that array's first lots, so a lot that goes anywhere else goes in
+ * a copy, which leaves them as they were.
  */
 function insertByDate(lots: Lot[], lot: Lot): Lot[] {
   const facts = factsWith(factsOf(lots), lot)
   const at = lot.acquiredBlock === undefined && !lot.boughtAt ? -1 : comesLast(lots, lot) ? -1 : lots.findIndex((l) => isLater(l, lot))
-  if (at < 0) lots.push(lot)
-  else lots.splice(at, 0, lot)
-  return withFacts(lots, facts)
+  if (at < 0) {
+    lots.push(lot)
+    return withFacts(lots, facts)
+  }
+  const next = lots.slice(0, at)
+  next.push(lot)
+  for (let i = at; i < lots.length; i++) next.push(lots[i] as Lot)
+  return withFacts(next, facts)
 }
 
 /**
@@ -512,8 +518,9 @@ const untied = <T extends Ranked>(run: T[]): T[][] => (isTied(run) ? [run] : run
  * and so do lots tied with each other, when only some of them go. One with no purchase date could have been bought before anything
  * ahead of it too, so what's taken could be either, and unless all of them go, none of them has a known cost.
  */
-export function lotsSplitBy<T extends Ranked>({ lots }: { lots: readonly T[] }, qty: bigint): T[] {
+export function lotsSplitBy<T extends Ranked>(state: { lots: readonly T[] }, qty: bigint): T[] {
   if (qty <= 0n) return []
+  const lots = heldLots(state)
   // Only a lot known as a whole with no date makes what's ahead of it split, from wherever it is. Without one, nothing past what's
   // taken can, so oldest first needn't look through every purchase it still holds.
   const anywhere = factsOf(lots).undatedWhole
@@ -538,7 +545,7 @@ export function lotsSplitBy<T extends Ranked>({ lots }: { lots: readonly T[] }, 
 /** Whether an answer could fix any of the unknown cost in what this much takes. An average takes from all of what's unknown. */
 export function takesAnswerableCost(state: Pick<PositionState, "lots" | "method">, qty: bigint, split: ReadonlySet<Lot> = new Set(lotsSplitBy(state, qty))): boolean {
   let through = 0n
-  for (const lot of state.lots) {
+  for (const lot of heldLots(state)) {
     // Oldest first takes nothing past what adds up to this much.
     if (state.method === "fifo" && through >= qty) return false
     through += BigInt(lot.qty)
@@ -668,10 +675,16 @@ function made(state: PositionState): PositionState {
   return state
 }
 
+/** The lots this state held when it was made, even if a later step has added to its array since. */
+function heldLots<T>(state: { lots: readonly T[] }): readonly T[] {
+  const count = heldCount.get(state as unknown as PositionState)
+  return count === undefined || count === state.lots.length ? state.lots : state.lots.slice(0, count)
+}
+
 /** This state as it was made, even if a later step has added to its lots since. */
 function current(state: PositionState): PositionState {
-  const count = heldCount.get(state)
-  return count === undefined || count === state.lots.length ? state : made({ ...state, lots: state.lots.slice(0, count) })
+  const lots = heldLots(state)
+  return lots === state.lots ? state : made({ ...state, lots: lots as Lot[] })
 }
 
 /**
