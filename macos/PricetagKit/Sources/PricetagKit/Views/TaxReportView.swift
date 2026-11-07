@@ -290,8 +290,14 @@ public struct TaxReportView: View {
     private func previewSection(_ report: TaxReport) -> some View {
         Section {
             if report.preview.isEmpty {
-                Text(report.year.map { "Nothing to report in \(String($0))." } ?? "Nothing to report.")
-                    .secondaryText()
+                // What was received isn't in the preview, but it's still in the file.
+                if (report.receivedCount ?? 0) > 0 {
+                    Text(report.year.map { "No sales, fees or sends in \(String($0)). The file lists what you received." } ?? "No sales, fees or sends. The file lists what you received.")
+                        .secondaryText()
+                } else {
+                    Text(report.year.map { "Nothing to report in \(String($0))." } ?? "Nothing to report.")
+                        .secondaryText()
+                }
             }
             ForEach(Array(report.preview.enumerated()), id: \.offset) { _, row in
                 previewRow(row, currency: report.currency)
