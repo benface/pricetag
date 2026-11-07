@@ -87,6 +87,28 @@ struct WalletListTests {
         #expect(store.undoNames.isEmpty, "nothing to add changes nothing")
     }
 
+    @Test func whatWasTypedIntoATaxReportIsLinkedWithTheWalletItsOn() {
+        let (store, defaults) = makeStore()
+        store.setWallet(b)
+        defaults.set("\(a)\n0xnope", forKey: "taxOtherWallets")
+        let model = TaxReportModel(defaults: defaults, currency: .USD, fetch: { _ in throw FetchError.unreachable })
+
+        model.carryOverTypedWallets(to: WalletAddress.demo, store: store)
+        model.carryOverTypedWallets(to: nil, store: store)
+        #expect(store.book.linkedWallets.isEmpty, "the demo's report never took them, and neither does one on no wallet")
+        #expect(defaults.string(forKey: "taxOtherWallets") != nil, "so they wait for a real wallet")
+
+        // Nobody had said anything about either. A report on b with a typed in covered both, and it still does.
+        model.carryOverTypedWallets(to: b, store: store)
+        #expect(store.book.linkedWallets == [a, b])
+        #expect(TaxReportModel.wallets(address: b, linked: [], book: store.book) == [b, a])
+        #expect(store.undoNames == ["Link Wallets from Tax Report"])
+        #expect(defaults.string(forKey: "taxOtherWallets") == nil)
+
+        model.carryOverTypedWallets(to: c, store: store)
+        #expect(store.book.linkedWallets == [a, b], "only once")
+    }
+
     @Test func aWalletMovesToYoursWithoutASignatureAndBack() throws {
         let (store, _) = makeStore()
         store.setWallet(a)

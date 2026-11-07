@@ -250,9 +250,17 @@ public final class TaxReportModel {
         year = next
     }
 
-    /// What the report used to let people type in as their other wallets, which it kept here. Saying so said they're the user's, so whoever
-    /// calls this links them, and they're gone from here. Anything that isn't an address was a typo, and goes too.
-    public func takeTypedWallets() -> [String] {
+    /// What the report used to let people type in as their other wallets. A report then covered them with whichever wallet it was on, as one
+    /// person's, so they're linked with the one it's on now, and it covers what it did. The demo's report never took them, so they wait for a
+    /// real wallet, and so does a report that isn't on one yet. One step in Edit's history.
+    public func carryOverTypedWallets(to address: String?, store: PortfolioStore) {
+        guard let address, !WalletAddress.isDemo(address) else { return }
+        let typed = takeTypedWallets()
+        if !typed.isEmpty { store.addToYours(typed, focus: address, action: "Link Wallets from Tax Report") }
+    }
+
+    /// What was typed, and it's gone from here. Anything that isn't an address was a typo, and goes too.
+    func takeTypedWallets() -> [String] {
         guard let text = defaults.string(forKey: Keys.otherWallets) else { return [] }
         defaults.removeObject(forKey: Keys.otherWallets)
         var seen = Set<String>()

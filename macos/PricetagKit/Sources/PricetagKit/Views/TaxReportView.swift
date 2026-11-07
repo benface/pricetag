@@ -79,10 +79,8 @@ public struct TaxReportView: View {
         .task(id: request) {
             if let request { await model.load(request) }
         }
-        .onAppear {
-            // Typed in here before the report used the user's own wallets. Saying so then said they're theirs, but nothing about the wallet showing.
-            let typed = model.takeTypedWallets()
-            if !typed.isEmpty { store.addToYours(typed, focus: nil, action: "Link Wallets from Tax Report") }
+        .onChange(of: reportAddress, initial: true) {
+            model.carryOverTypedWallets(to: reportAddress, store: store)
         }
         .fileExporter(
             isPresented: Binding(get: { document != nil }, set: { if !$0 { document = nil } }),

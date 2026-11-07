@@ -137,11 +137,34 @@ const buttonsIn = (of: string): Promise<string[]> => evaluate(`[...(${of}?.query
 const click = (of: string, label: string) => evaluate(`[...${of}.querySelectorAll("button")].find((b) => b.innerText.trim().startsWith(${JSON.stringify(label)})).click()`)
 const unknownShown = `${TAX}?.querySelector(".tax-unknown")`
 
-/** Opens a page from nothing, then its tax report on all years, so coming back can show the year stayed. */
-async function openReport(address: string, book: Book, others: string[] = []) {
+/** The book lives in IndexedDB, which clearing localStorage leaves, so each start empties that too. The app may have it open, so it's emptied, not deleted. */
+const EMPTY_SHELF = `new Promise((resolve, reject) => {
+  const request = indexedDB.open("patina", 1)
+  request.onupgradeneeded = () => request.result.createObjectStore("kept")
+  request.onerror = () => reject(request.error)
+  request.onsuccess = () => {
+    const transaction = request.result.transaction("kept", "readwrite")
+    transaction.objectStore("kept").clear()
+    transaction.oncomplete = () => {
+      request.result.close()
+      resolve(true)
+    }
+  }
+})`
+const TYPED_KEY = "pricetag.taxOtherWallets"
+const typedLeft = (): Promise<string | null> => evaluate(`localStorage.getItem(${JSON.stringify(TYPED_KEY)})`)
+
+/** A page from nothing, with this book and, as an older version kept them, wallets typed into the tax report. */
+async function startFrom(book: Book, others: string[]) {
   await send("Page.navigate", { url: `${origin}/` })
   await until(`document.readyState === "complete"`, "the page loads")
-  await evaluate(`localStorage.clear(); localStorage.setItem("patina.book", ${JSON.stringify(JSON.stringify(book))}); localStorage.setItem("pricetag.taxOtherWallets", ${JSON.stringify(others.join("\n"))})`)
+  await evaluate(EMPTY_SHELF)
+  await evaluate(`localStorage.clear(); localStorage.setItem("patina.book", ${JSON.stringify(JSON.stringify(book))}); ${others.length > 0 ? `localStorage.setItem(${JSON.stringify(TYPED_KEY)}, ${JSON.stringify(others.join("\n"))})` : ""}`)
+}
+
+/** Opens a page from nothing, then its tax report on all years, so coming back can show the year stayed. */
+async function openReport(address: string, book: Book, others: string[] = []) {
+  await startFrom(book, others)
   await send("Page.navigate", { url: `${origin}/?address=${address}` })
   await until(`[...document.querySelectorAll("button")].some((b) => b.innerText.includes("Export a tax report"))`, "the wallet shows")
   await click("document", "Export a tax report…")
@@ -196,6 +219,52 @@ await click(QUESTIONS, "Someone else")
 await until(`!${QUESTIONS}.querySelector(".who-card")`, "the question's answered")
 await checkCameBack(ADDED)
 check("with nothing left to ask, there's no button", await until(`${TAX}?.innerText.includes("Download CSV") && !${TAX}.querySelector("button.resolve-button")`, "the button goes"))
+
+// Wallets an older version had typed into the report. A report then covered them with whichever wallet it was on.
+const READY = `${TAX}?.querySelector('[role="status"]')?.textContent === "The report is ready."`
+const covered = (): Promise<string[]> => evaluate(`[...(${TAX}?.querySelectorAll(".tax-wallets li > span") ?? [])].map((one) => one.innerText)`)
+/** The page that's open, then its tax report, done loading. `before` runs first, like something that makes saving fail. */
+async function openTax(address: string, before = "") {
+  await send("Page.navigate", { url: `${origin}/?address=${address}` })
+  await until(`[...document.querySelectorAll("button")].some((b) => b.innerText.includes("Export a tax report"))`, "the wallet shows")
+  if (before) await evaluate(before)
+  await click("document", "Export a tax report…")
+  await until(READY, "the report is ready")
+}
+
+await startFrom(emptyBook(), [ADDED])
+await openTax("demo")
+check("on the demo, what was typed stays for a real wallet", (await typedLeft()) === ADDED, await typedLeft())
+check("  and nothing's linked", (await evaluate(`localStorage.getItem("patina.book")`)) === JSON.stringify(emptyBook()), await evaluate(`localStorage.getItem("patina.book")`))
+
+// A save that fails keeps what was typed, so the next time the report opens it tries again.
+await openTax(SECOND, `IDBObjectStore.prototype.put = function () { throw new DOMException("Full", "QuotaExceededError") }`)
+await until(`[...document.querySelectorAll(".notice")].some((n) => n.innerText.includes("couldn't save"))`, "the save fails")
+check("a link that wasn't saved keeps what was typed", (await typedLeft()) === ADDED, await typedLeft())
+// The save that was made to fail throws on the page, as it would when the disk is full. That one's expected.
+pageErrors.splice(0, pageErrors.length, ...pageErrors.filter((error) => !error.startsWith("QuotaExceededError: Full")))
+
+// Coming back, it's saved, and the report covers both, as it did when they were typed in, with nobody having answered anything.
+await openTax(SECOND)
+await until(`${TAX}?.querySelectorAll(".tax-wallets li").length === 2 && ${READY}`, "both wallets are in the report")
+check("what was typed is linked with the wallet the report's on, so it covers both", JSON.stringify(await covered()) === JSON.stringify([`${shortHash(SECOND)} · this one`, shortHash(ADDED)]), await covered())
+await until(`localStorage.getItem(${JSON.stringify(TYPED_KEY)}) === null`, "what was typed goes once it's linked")
+check("  and what was typed is gone once that's saved", (await typedLeft()) === null)
+
+// Added here by mistake, then taken out after a reload, which leaves Undo's history behind.
+await startFrom(emptyBook(), [])
+await openTax(FIRST)
+await evaluate(`(() => { const input = ${TAX}.querySelector('input[aria-label="Add a wallet of yours"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, ${JSON.stringify(SHOP)}); input.dispatchEvent(new Event("input", { bubbles: true })) })()`)
+await click(TAX, "Add")
+await until(`${TAX}?.querySelectorAll(".tax-wallets li").length === 2 && ${READY}`, "the added wallet is in the report")
+await openTax(FIRST)
+check("an added wallet's still there after a reload", JSON.stringify(await covered()) === JSON.stringify([`${shortHash(FIRST)} · this one`, shortHash(SHOP)]), await covered())
+check("  and only it can be taken out", JSON.stringify(await evaluate(`[...${TAX}.querySelectorAll(".tax-wallets button")].map((b) => b.getAttribute("aria-label"))`)) === JSON.stringify([`Remove ${shortHash(SHOP)}, it isn't yours`]))
+await click(TAX, "Not mine")
+await until(`${TAX}?.querySelectorAll(".tax-wallets li").length === 0 && ${READY}`, "it leaves the report")
+await openTax(FIRST)
+check("taking it out lasts after a reload", (await covered()).length === 0, await covered())
+check("  and it isn't the user's anywhere", await evaluate(`JSON.parse(localStorage.getItem("patina.book")).senders[${JSON.stringify(SHOP)}] === undefined`))
 
 check("no page errors", pageErrors.length === 0, pageErrors)
 

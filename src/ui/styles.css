@@ -234,6 +234,8 @@ button { font: inherit; cursor: pointer; color: inherit; }
 .field select, .field textarea, .tax-add input { font: inherit; font-size: 13px; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--control-border); background: var(--surface-1); color: inherit; }
 .field textarea, .tax-add input { font-family: ui-monospace, Menlo, monospace; resize: vertical; }
 .tax-wallets { margin: 0; padding: 0; list-style: none; font-family: ui-monospace, Menlo, monospace; }
+.tax-wallets li { display: flex; gap: 12px; align-items: baseline; }
+.tax-wallets .link { font-family: system-ui, sans-serif; font-size: 12px; }
 .tax-add { display: flex; gap: 8px; }
 .tax-add input { flex: 1; min-width: 0; }
 .tax-counts { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 0; }

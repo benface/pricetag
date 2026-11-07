@@ -5,7 +5,7 @@ import { after, before, describe, it } from "node:test"
 import { ASSETS, ETH_ADDRESS, foldPositions, type LegPart, type LegRow, type PricedLeg } from "@pricetag/sdk/core"
 import type { Source } from "@pricetag/sdk/internal"
 import type { PortfolioResponse, TaxReportResponse, WalletResponse } from "../src/core/api.ts"
-import { costKey, emptyBook, parseBook, type Book } from "../src/core/book.ts"
+import { answerSender, costKey, emptyBook, parseBook, type Book } from "../src/core/book.ts"
 import { DEMO_ADDRESS, DEMO_SAVINGS_ADDRESS, DEMO_WALLET, demoRates } from "../src/core/fixtures.ts"
 import { keepingImport, parseCoinbaseCsv } from "../src/core/exchange-import.ts"
 import { foldBook } from "../src/core/resolve.ts"
@@ -1166,6 +1166,17 @@ describe("POST /api/tax-report on real wallets", () => {
     const portfolio = (await (await fetch(`${base}/api/portfolio/${B}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ method: "fifo", book: mine }) })).json()) as PortfolioResponse
     assert.equal(portfolio.positions.find((p) => p.asset === "ETH")?.values.realizedMicros, usd(100))
     assert.equal(sale(report)?.Gain, "100.000000")
+  })
+
+  it("covers what it did when a wallet once typed in is linked with the one the report's on", async () => {
+    // How the clients carry over what used to be typed in: a report on B with A typed in covered both, as one person's.
+    const typed = await post(B, { country: "US", also: [A] })
+    const carried = await post(B, { country: "US", book: answerSender(emptyBook(), B, A, { kind: "mine" }) })
+    assert.deepEqual(carried.wallets, typed.wallets)
+    assert.deepEqual([sale(carried)?.Cost, sale(carried)?.Gain], [sale(typed)?.Cost, sale(typed)?.Gain])
+    assert.deepEqual([sale(carried)?.Cost, sale(carried)?.Gain], ["1500.000000", "100.000000"])
+    // Linked without the wallet showing, the report on B wouldn't count A, which is why the clients don't.
+    assert.deepEqual((await post(B, { country: "US", book: answerSender(emptyBook(), null, A, { kind: "mine" }) })).wallets, [B])
   })
 
   it("adds them when wallets are typed too, since that says this one is the user's", async () => {

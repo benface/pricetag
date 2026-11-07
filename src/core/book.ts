@@ -117,6 +117,17 @@ export function answerSender(book: Book, focus: string | null, sender: string, a
   return { ...book, senders }
 }
 
+/**
+ * It's not the user's after all, so costs stop following its money, the way the Mac app's Move to Watching says. Only an answer
+ * that it's theirs goes, and a device account stays linked through the device whatever the book says.
+ */
+export function unlinkWallet(book: Book, address: string): Book {
+  const wallet = normalizeAddress(address)
+  if (book.senders[wallet]?.kind !== "mine") return book
+  const { [wallet]: _, ...senders } = book.senders
+  return { ...book, senders }
+}
+
 /** Accounts from one hardware device are all the user's, and the device already proved it, so nobody's asked. This overrides any earlier answer about them. */
 export function linkDeviceAccounts(book: Book, addresses: readonly string[]): Book {
   const senders: Book["senders"] = { ...book.senders }

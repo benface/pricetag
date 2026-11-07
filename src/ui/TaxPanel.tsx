@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from "react"
 import { formatSignedMoney, isAddress, shortHash, type CurrencyCode, type Method } from "@pricetag/sdk/core"
 import type { TaxReportResponse } from "../core/api.ts"
 import { failureOf, jsonPost, readResponse, type ReadFailure } from "../core/read-failure.ts"
-import type { Book } from "../core/book.ts"
+import { isDemoWallet, type Book } from "../core/book.ts"
 import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, typedOtherWallets, type TaxCountryCode, type TaxScope, type TaxYear } from "../core/tax.ts"
 import { METHOD_LABELS, METHOD_NAME, answerQuestionsLabel, est, panelProblem } from "../core/wording.ts"
 import { ProblemNotice } from "./ProblemNotice.tsx"
@@ -59,7 +59,7 @@ function unknownSentence({ unknownCount: count, soldCount, feeCount, sentCount }
   return `${n(count)} of these ${n(total)} ${count === 1 ? "has" : "have"} an unknown gain, in whole or in part. What's unknown is left out of the total.`
 }
 
-export function TaxPanel({ address, alongside, currency, book, year, onYear, overviewMethod, questionsIn, onResolve, onLink, onClose }: {
+export function TaxPanel({ address, alongside, currency, book, year, onYear, overviewMethod, questionsIn, onResolve, onLink, onUnlink, fromDevice, onClose }: {
   address: string
   /** Wallets the report always covers with this one, on top of the ones the answers say are the user's. */
   alongside: readonly string[]
@@ -73,8 +73,12 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
   questionsIn: ReadonlyMap<string, number>
   /** Opens a wallet's questions, which can be one added here rather than the one showing. */
   onResolve: (wallet: string) => void
-  /** Says these wallets are the user's, and so is `focus` when there is one, the way answering "Mine" does. The report follows the answers. */
-  onLink: (wallets: readonly string[], focus: string | null) => void
+  /** Says these wallets are the user's, and so is `focus`, the way answering "Mine" does. The report follows the answers. `onSaved` only hears a save that worked. */
+  onLink: (wallets: readonly string[], focus: string, onSaved?: () => void) => void
+  /** Says a wallet isn't the user's after all, so it leaves every report on theirs. */
+  onUnlink: (wallet: string) => void
+  /** Accounts a hardware device proved are the user's. Those stay theirs whatever the answers say, so they can't be taken out here. */
+  fromDevice: readonly string[]
   onClose: () => void
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
@@ -95,16 +99,24 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
   const rules = TAX_COUNTRIES[country]
   const method = chosenMethod ?? rules.method
   const scope = chosenScope ?? rules.scope
-  const isDemo = address === "demo"
+  const isDemo = address === "demo" || isDemoWallet(address)
 
   useModal(dialog, close)
 
-  // Typed in here before the report used linked wallets. Saying so then said they're the user's, so they're linked, without the wallet showing, which nobody said anything about.
+  // Typed in here before the report used linked wallets. A report then covered those with whichever wallet it was on, as one
+  // person's, so they're linked with that one, and it covers what it did. The demo's report never took them, so they wait for a
+  // real wallet. What's typed stays until the link's saved, so a save that fails is tried again next time.
+  const carriedOver = useRef(false)
   useEffect(() => {
-    const typed = typedOtherWallets(localStorage.getItem(OTHERS_KEY) ?? "")
-    localStorage.removeItem(OTHERS_KEY)
-    if (typed.length > 0) onLink(typed, null)
-  }, [onLink])
+    if (isDemo || carriedOver.current) return
+    const text = localStorage.getItem(OTHERS_KEY)
+    if (text === null) return
+    carriedOver.current = true
+    const typed = typedOtherWallets(text)
+    const forget = () => localStorage.removeItem(OTHERS_KEY)
+    if (typed.length > 0) onLink(typed, address, forget)
+    else forget()
+  }, [address, isDemo, onLink])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -156,6 +168,8 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
     // Adding one here says the wallet the report's on is the user's too, or it wouldn't go with it.
     if (!covered.includes(next.toLowerCase())) onLink([next.toLowerCase()], address)
   }
+  // Only what an answer put here can be taken out here. The wallet the report's on is what it's about.
+  const removable = (wallet: string) => wallet !== address.toLowerCase() && book.senders[wallet]?.kind === "mine" && !fromDevice.includes(wallet)
 
   return (
     <dialog
@@ -241,7 +255,14 @@ export function TaxPanel({ address, alongside, currency, book, year, onYear, ove
             {covered.length > 1 ? (
               <ul className="tax-wallets small">
                 {covered.map((wallet) => (
-                  <li key={wallet}>{shortHash(wallet)}{wallet === address.toLowerCase() ? " · this one" : ""}</li>
+                  <li key={wallet}>
+                    <span>{shortHash(wallet)}{wallet === address.toLowerCase() ? " · this one" : ""}</span>
+                    {removable(wallet) ? (
+                      <button type="button" className="link" aria-label={`Remove ${shortHash(wallet)}, it isn't yours`} onClick={() => onUnlink(wallet)}>
+                        Not mine
+                      </button>
+                    ) : null}
+                  </li>
                 ))}
               </ul>
             ) : null}
