@@ -385,7 +385,8 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
       if (someoneElse) {
         if (leg.priceMicros === null) return [unknown]
         const cost = worth(part, BigInt(leg.priceMicros), leg.decimals).toString()
-        return [{ qty: part.toString(), costMicros: cost, label: "received at market", estimatedCostMicros: cost, ...(given ? { givenCostMicros: cost } : {}) }]
+        // Received from someone else, it was acquired here and now. Through a bridge or a mint, it may have been held all along.
+        return [{ qty: part.toString(), costMicros: cost, label: "received at market", estimatedCostMicros: cost, ...(given ? { givenCostMicros: cost } : { undated: true as const }) }]
       }
       // Answered already, and answering again wouldn't change anything, because the demo never reads this wallet.
       if (answer?.kind === "mine" && isDemoWallet(address)) outsideDemo.push(sender)

@@ -363,14 +363,14 @@ const dayOf = (timestamp: string, days = 0) => new Date(Date.parse(timestamp.sli
 
 /**
  * When what a credit brought was acquired, as far as anything says: when it was bought here, paid for on its way in or received,
- * the dates an exchange gives for what it withdrew, or when another of the user's wallets acquired it. Something that arrived from elsewhere with no such date says nothing, and an
+ * the dates an exchange gives for what it withdrew, or when another of the user's wallets acquired it. Something that arrived from elsewhere with no such date, through a bridge too, says nothing, and an
  * opening balance was already held, so neither is evidence of acquiring more.
  */
 function acquisitionDates(leg: PricedLeg): string[] {
   const here = !leg.opening && (leg.kind === "swap" || leg.costLabel === "paid" || leg.costLabel === "received at market")
   if (!leg.pieces) return here ? [leg.timestamp] : []
   // A piece from another of the user's wallets keeps when it was first acquired there, if anything says.
-  const dateOf = (piece: CostPiece) => piece.boughtAt || (piece.acquiredAt && !piece.undated ? piece.acquiredAt : null) || (!leg.opening && (leg.kind === "swap" || piece.label === "paid" || piece.label === "received at market") ? leg.timestamp : null)
+  const dateOf = (piece: CostPiece) => piece.boughtAt || (piece.acquiredAt && !piece.undated ? piece.acquiredAt : null) || (!leg.opening && !piece.undated && (leg.kind === "swap" || piece.label === "paid" || piece.label === "received at market") ? leg.timestamp : null)
   return leg.pieces.map(dateOf).filter((at) => at !== null)
 }
 

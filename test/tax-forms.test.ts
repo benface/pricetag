@@ -12,6 +12,8 @@ import { E18 } from "./support/units.ts"
 const A = `0x${"a".repeat(40)}`
 const B = `0x${"b".repeat(40)}`
 const SELLER = `0x${"5".repeat(40)}`
+/** Base's bridge, whose deposits may be the user's own money from elsewhere. */
+const BRIDGE = "0x4200000000000000000000000000000000000010"
 const usd = (amount: number) => (BigInt(amount) * 1_000_000n).toString()
 const hash = (n: number) => `0x${n.toString(16).padStart(64, "0")}`
 
@@ -134,6 +136,52 @@ describe("when what was sold was acquired", () => {
     const withdrawn = [walletOf([transfer, move[0]], READ), walletOf([move[1], sale], READ, B)]
     assert.deepEqual(formLines(withdrawn, { ...emptyBook(), withdrawals: [withdrawal] }, B).map((line) => line.slice(0, 10)), [undated("1000.000000", "1500.000000")])
   })
+})
+
+describe("what arrived through a bridge", () => {
+  const US = { country: "US", method: "fifo", scope: "per-wallet" } as const
+  const ca = { country: "CA", method: "average", scope: "pooled" } as const
+  const READ = "2026-01-01T00:00:00.000Z"
+  const superficial = (report: ReturnType<typeof taxReportOf>) => report.warnings.some((warning) => warning.includes("superficial"))
+  const formLines = (wallets: WalletResponse[], book: Book, wallet = A) => linesOf(taxReportOf(wallets, US, { book }).form?.csv ?? "").filter((line) => line[2] !== "Total" && line.includes(wallet))
+  const undated = (cost: string, gain: string) => ["How long it was held isn't known", "", "1 ETH", "unknown", "09/01/2025", "2500.000000", cost, "", "", gain]
+
+  it("has no known acquisition date on Form 8949, with its market estimate or a cost entered for it", () => {
+    const deposit = arrived(1, "2025-06-01", BRIDGE)
+    const wallet = walletOf([deposit, sell(2, "2025-09-01", 1n, 2500)], READ)
+    assert.deepEqual(formLines([wallet], emptyBook()).map((line) => line.slice(0, 10)), [undated("2000.000000", "500.000000")])
+    assert.deepEqual(formLines([wallet], { ...emptyBook(), costs: entered(A, deposit, 1000) }).map((line) => line.slice(0, 10)), [undated("1000.000000", "1500.000000")])
+  })
+
+  it("still has none after a move to a linked wallet", () => {
+    const move = [sent(2, "2025-07-01", B), arrived(2, "2025-07-01", A, B)] as const
+    const wallets = [walletOf([arrived(1, "2025-06-01", BRIDGE), move[0]], READ), walletOf([move[1], sell(3, "2025-09-01", 1n, 2500)], READ, B)]
+    assert.deepEqual(formLines(wallets, emptyBook(), B).map((line) => line.slice(0, 10)), [undated("2000.000000", "500.000000")])
+  })
+
+  it("keeps when it was received from someone else, which is when it was acquired", () => {
+    const gift = arrived(1, "2025-06-01", SELLER)
+    const lines = formLines([walletOf([gift, sell(2, "2025-09-01", 1n, 2500)], READ)], { ...emptyBook(), senders: { [SELLER]: { kind: "someone-else" } } })
+    assert.deepEqual(lines.map((line) => line.slice(0, 4)), [["Part I (short-term)", "I", "1 ETH", "06/01/2025"]])
+  })
+
+  for (const [name, withCost] of [["at its market estimate", false], ["with only a cost entered", true]] as const) {
+    const costs = (address: string, deposit: PricedLeg): Book["costs"] => (withCost ? entered(address, deposit, 4000) : {})
+
+    it(`isn't a new acquisition for Canada's superficial loss check, ${name}`, () => {
+      const deposit = arrived(3, "2025-03-20", BRIDGE)
+      const legs = [buy(1, "2025-01-01", 2n, 6000), sell(2, "2025-03-01", 1n, 2000), deposit]
+      const book: Book = { ...emptyBook(), costs: costs(A, deposit) }
+      assert.equal(superficial(taxReportOf([walletOf(legs, READ)], ca, { book })), false)
+      assert.equal(superficial(taxReportOf([walletOf([...legs, buy(4, "2025-03-25", 1n, 2100)], READ)], ca, { book })), true)
+    })
+
+    it(`isn't one after a move to a linked wallet either, ${name}`, () => {
+      const deposit = leg(3, "2025-03-20", E18, { kind: "transfer", parts: [part(B, "credit", E18, BRIDGE)] })
+      const wallets = [walletOf([buy(1, "2025-01-01", 2n, 6000), sell(2, "2025-03-01", 1n, 2000), arrived(4, "2025-03-21", B)], READ), walletOf([deposit, sent(4, "2025-03-21", A, B)], READ, B)]
+      assert.equal(superficial(taxReportOf(wallets, ca, { book: { ...emptyBook(), costs: costs(B, deposit) } })), false)
+    })
+  }
 })
 
 describe("Form 8949", () => {
