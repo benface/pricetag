@@ -299,7 +299,12 @@ function piecesOfWithdrawal(side: Side, { units, cost, fifoCostMicros, fifoLots,
   return pieces
 }
 
-export function resolveLegs(sides: readonly Side[], method: Method, book: Book): Resolved {
+/**
+ * `datedLots` keeps each withdrawal's purchases apart, with when each was bought, whatever the method, for rules that match a sale
+ * to what was bought around it before averaging, like the UK's. Otherwise only the methods that keep lots need them.
+ */
+export function resolveLegs(sides: readonly Side[], method: Method, book: Book, { datedLots = false }: { datedLots?: boolean } = {}): Resolved {
+  const lotsWanted = keepsLots(method) || datedLots
   const linked = new Set(linkedWallets(book))
   const read = new Map(sides.map((side) => [normalizeAddress(side.wallet.address), side]))
   const purchased = purchasedLegs(sides, book)
@@ -381,7 +386,7 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     if (BigInt(leg.delta) > 0n && orderMatters(leg, method)) {
       const { estimated: _, ...rest } = leg
       const address = normalizeAddress(side.wallet.address)
-      const withdrawal = keepsLots(method) && !book.costs[costKey(address, leg.id)] ? withdrawals.get(costKey(address, leg.id)) : undefined
+      const withdrawal = lotsWanted && !book.costs[costKey(address, leg.id)] ? withdrawals.get(costKey(address, leg.id)) : undefined
       // Still from those purchases, so it goes where they do, whatever that makes of what's ahead of it.
       const lots = withdrawal ? piecesOfWithdrawal(side, withdrawal, leg) : null
       return { ...rest, costLabel: "unknown", costMicros: null, ...(lots ? { pieces: lots.map((piece) => withoutItsCost(piece, BigInt(piece.qty))) } : {}) }
@@ -445,7 +450,7 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     // What's inherited wins, unless part of it can't be, or can't be yet, since an entered cost is for all of what arrived.
     if ((unvouched.length > 0 || !pieces.some((p) => p.label === "inherited" && p.costMicros !== null)) && report !== null) {
       // When what was already held got paid for isn't known, so there's no rate for that day, only the one when the history starts.
-      const fromWithdrawal = withdrawal && keepsLots(method) && !book.costs[costKey(address, leg.id)] && !note
+      const fromWithdrawal = withdrawal && lotsWanted && !book.costs[costKey(address, leg.id)] && !note
       const lots = fromWithdrawal ? piecesOfWithdrawal(side, withdrawal, leg) : null
       if (lots) return withPieces(leg, lots)
       const approximate = leg.opening && reportedMoney && reportedMoney.currency !== side.view.currency

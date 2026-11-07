@@ -406,11 +406,11 @@ describe("taxReportOf", () => {
     assert.ok(report.warnings.some((warning) => /Canada reports in CAD/.test(warning)))
   })
 
-  it("says first that its rules may not apply in a currency neither country reports in, and doesn't suggest switching to one", () => {
-    for (const country of ["CA", "US"] as const) {
+  it("says first that its rules may not apply in a currency no country here reports in, and doesn't suggest switching to one", () => {
+    for (const country of ["CA", "GB", "US"] as const) {
       const report = taxReportOf([{ ...wallet, currency: "EUR", rates: demoRates("EUR") }], { country, method: TAX_COUNTRIES[country].method, scope: TAX_COUNTRIES[country].scope })
       assert.equal(report.currency, "EUR")
-      assert.match(report.warnings[0] ?? "", /only knows Canada and the US, and neither reports in EUR\. If you report in EUR, these rules and this layout may not apply/)
+      assert.match(report.warnings[0] ?? "", /only knows the rules of Canada, the UK and the US, and none of them reports in EUR\. If you report in EUR, these rules and this layout may not apply/)
       assert.ok(!report.warnings.some((warning) => /Change your main currency/.test(warning)))
     }
   })

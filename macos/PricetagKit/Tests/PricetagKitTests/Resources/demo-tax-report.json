@@ -14,6 +14,10 @@
   "years": [
     2026
   ],
+  "yearLabels": [
+    "2026"
+  ],
+  "yearLabel": "2026",
   "partialYear": "Records start on November 4, 2026, so 2026 is missing everything before then.",
   "rowCount": 23,
   "soldCount": 6,
