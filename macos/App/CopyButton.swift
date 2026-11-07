@@ -17,7 +17,7 @@ struct CopyButton: View {
             Label(copied ? "Copied" : title, systemImage: copied ? "checkmark" : "doc.on.doc")
                 .contentTransition(.symbolEffect(.replace))
         }
-        .animation(Motion.state, value: copied)
+        .motion(Motion.state, value: copied)
         .help(help ?? "")
         .task(id: copied) {
             guard copied else { return }

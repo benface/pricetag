@@ -184,7 +184,6 @@ final class MotionCue {
     var scrubbed: Int?
     var stage = ProgressFooter.Stage.working("Sending…")
     var purchase = PurchasePhase.onItsWay
-    var costIsKnown = false
 }
 
 /// The chart, on its own, doing what the scene's cue says.
@@ -681,7 +680,7 @@ enum TestScene: String, CaseIterable {
     enum Chrome { case titled, hiddenTitleBar, none }
 
     /// Rendering draws the inspector's text in the wrong color in dark mode, and leaves out the title bar the site window leaves room for, so these only come from a real window.
-    var needsRealWindow: Bool { isAboutMotion || chrome == .hiddenTitleBar || rawValue.hasPrefix("main") || rawValue.hasPrefix("settings") || rawValue.hasPrefix("route") || self == .mainDetails || self == .mainDetailsProof || self == .mainFirstRunDetails || self == .mainDetailsCAD || self == .mainHoldDetails || self == .mainSmallestEnd }
+    var needsRealWindow: Bool { isAboutMotion || chrome == .hiddenTitleBar || rawValue.hasPrefix("main") || rawValue.hasPrefix("settings") || rawValue.hasPrefix("route") }
 
     var chrome: Chrome {
         switch self {
@@ -961,7 +960,7 @@ enum TestScene: String, CaseIterable {
             registered["answers"] = book
             registered["answerDetails"] = details
         }
-        if self == .resolveAnsweredWallet, let book = try? JSONEncoder().encode(Book().answering(TestScene.answeredWallet, .mine, focus: nil)) { registered["answers"] = book }
+        if self == .resolveAnsweredWallet, let book = try? JSONEncoder().encode(Book().answering(TestScene.emptyWallet, .mine, focus: nil)) { registered["answers"] = book }
         // Treasury is the user's too, and it's the wallet All Yours is still reading.
         if isAllYours, self != .walletSwitcherAllYoursTwoWallets, let book = try? JSONEncoder().encode(Book().answering(TestScene.namedWallet, .mine, focus: nil)) { registered["answers"] = book }
         if self == .hotWalletPurchases || self == .hotWalletPurchaseShown || self == .hotWalletReplacedKeyShown || self == .hotWalletPurchasesCAD || self == .hotWalletPurchasesCantCheck, let saved = try? JSONEncoder().encode(self != .hotWalletPurchasesCantCheck ? TestScene.purchases(inCAD: self == .hotWalletPurchasesCAD) : Array(TestScene.purchases().suffix(3))) { registered["purchases"] = saved }
@@ -1173,26 +1172,26 @@ enum TestScene: String, CaseIterable {
             switch self {
             case .routeSend, .routeSendOpen:
                 press = navigation.send
-                hasArrived = { !navigation.wantsSend && isOnSpendingMoney() && hasSheet() }
+                hasArrived = { navigation.pending == nil && isOnSpendingMoney() && hasSheet() }
             case .routeTopUp, .routeTopUpOpen:
                 press = navigation.topUp
-                hasArrived = { !navigation.wantsTopUp && isOnSpendingMoney() && hasSheet() }
+                hasArrived = { navigation.pending == nil && isOnSpendingMoney() && hasSheet() }
             case .routeBuy, .routeBuyOpen:
-                press = { navigation.isBuying = true }
-                hasArrived = { navigation.isBuying && hasSheet() }
+                press = { navigation.pending = .buy }
+                hasArrived = { navigation.pending == nil && hasSheet() }
             case .routeReceive, .routeReceiveOpen:
-                press = { navigation.isReceiving = true }
-                hasArrived = { navigation.isReceiving && hasSheet() }
+                press = { navigation.pending = .receive }
+                hasArrived = { navigation.pending == nil && hasSheet() }
             case .routeAddSavings:
                 press = navigation.addSavings
-                hasArrived = { !navigation.wantsAddSavings && isOnSpendingMoney() && hasSheet() }
+                hasArrived = { navigation.pending == nil && isOnSpendingMoney() && hasSheet() }
             case .routeExport, .routeExportOpen:
-                press = { navigation.isExporting = true }
-                hasArrived = { !navigation.isExporting }
+                press = { navigation.pending = .export }
+                hasArrived = { navigation.pending == nil }
             case .routeFind, .routeFindOpen:
                 navigation.section = .taxReport
                 press = navigation.find
-                hasArrived = { !navigation.wantsSearch && navigation.section == .transactions }
+                hasArrived = { navigation.pending == nil && navigation.section == .transactions }
             case .routeTopUpCancelled:
                 // There's no spending money, so it asks to make some, and that's cancelled the way the sheet's button does.
                 press = {
@@ -1202,7 +1201,7 @@ enum TestScene: String, CaseIterable {
                         navigation.isSettingUpSpendingMoney = false
                     }
                 }
-                hasArrived = { !navigation.isSettingUpSpendingMoney && !navigation.wantsTopUp && !hasSheet() }
+                hasArrived = { !navigation.isSettingUpSpendingMoney && navigation.pending == nil && !hasSheet() }
             case .routeHoldings, .routeHoldingsOpen:
                 navigation.section = .transactions
                 press = navigation.showOverview
@@ -1535,7 +1534,6 @@ enum TestScene: String, CaseIterable {
 
     private static let recipient = "0x0000000000000000000000000000000000c0ffee"
     private static let emptyWallet = "0x00000000000000000000000000000000000de301"
-    private static let answeredWallet = "0x00000000000000000000000000000000000de301"
     private static let namedWallet = "0x00000000000000000000000000000000c0ffee01"
     private static let recentWallet = "0x00000000000000000000000000000000c0ffee02"
     /// More than the list has room for, with the wallet showing at the far end.

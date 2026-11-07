@@ -36,13 +36,13 @@ struct MacApp: App {
         let hotWallet = HotWalletFactory.make(store: store)
         let navigation = Navigation(store: store, hotWallet: hotWallet)
         let siteBridge = SiteBridge(wallet: hotWallet)
-        siteBridge.onTopUp = { navigation.wantsTopUp = true }
-        siteBridge.onReceive = { navigation.wantsReceive = true }
+        siteBridge.onTopUp = { navigation.pending = .topUp }
+        siteBridge.onReceive = { navigation.pending = .receive }
         navigation.onSwitcherClosed = { store.save(navigation.pendingWalletName, hotWallet: hotWallet) }
         // A watch-only build has no scheme of its own, and no savings to add.
         if !Build.isWatchOnly {
             AppLinks.onOpen = { url in
-                if let link = AddSavingsLink(url: url) { navigation.addingSavings = link }
+                if let link = AddSavingsLink(url: url) { navigation.pending = .addSavingsFromDevice(link) }
             }
         }
         hotWallet.onLinkedWalletsChange = {
@@ -164,7 +164,7 @@ struct MacApp: App {
                 MainWindowCommand("\(Wording.answerQuestions)…") { navigation.resolve() }
                     .keyboardShortcut("r", modifiers: [.command, .shift])
                     .disabled(store.portfolio?.questions.isEmpty != false)
-                MainWindowCommand("Export as CSV…") { navigation.isExporting = true }
+                MainWindowCommand("Export as CSV…") { navigation.pending = .export }
                     .keyboardShortcut("e", modifiers: [.command, .shift])
                     .disabled(store.portfolio == nil)
                 YourAnswersCommand(navigation: navigation)
@@ -232,12 +232,12 @@ private struct WalletCommands: View {
         if !Build.isWatchOnly {
             Button("Receive…") {
                 openMainWindow()
-                navigation.isReceiving = true
+                navigation.pending = .receive
             }
             .disabled(!hotWallet.canSend)
             Button("Buy…") {
                 openMainWindow()
-                navigation.isBuying = true
+                navigation.pending = .buy
             }
             .disabled(hotWallet.availability != .ready)
             Button(HotWalletWording.title) {
@@ -257,8 +257,7 @@ private struct WalletCommands: View {
     }
 
     private func openMainWindow() {
-        openWindow(id: WindowID.main)
-        DockPresence.bringForward()
+        openWindow.bringingForward(id: WindowID.main)
     }
 }
 
@@ -342,8 +341,7 @@ private struct MainWindowCommand: View {
     var body: some View {
         Button(title) {
             action()
-            openWindow(id: WindowID.main)
-            DockPresence.bringForward()
+            openWindow.bringingForward(id: WindowID.main)
         }
     }
 }
@@ -357,8 +355,7 @@ private struct OpenSectionCommand: View {
     var body: some View {
         Button(section.title) {
             navigation.section = section
-            openWindow(id: WindowID.main)
-            DockPresence.bringForward()
+            openWindow.bringingForward(id: WindowID.main)
         }
     }
 }
@@ -379,8 +376,7 @@ struct MenuBarLabel: View {
                     shows: { store.menuBarShows },
                     setShows: { store.setMenuBarShows($0) },
                     openApp: {
-                        openWindow(id: WindowID.main)
-                        DockPresence.bringForward()
+                        openWindow.bringingForward(id: WindowID.main)
                     },
                     openSettings: {
                         openSettings()
@@ -393,8 +389,7 @@ struct MenuBarLabel: View {
                 guard count != nil else { return }
                 NSSound(named: "Sosumi")?.play()
                 navigation.showSpendingMoney()
-                openWindow(id: WindowID.main)
-                DockPresence.bringForward()
+                openWindow.bringingForward(id: WindowID.main)
                 NSApp.requestUserAttention(.criticalRequest)
             }
             // Here for the same reason. A site asked for something, and it's the app's window that answers.
@@ -409,46 +404,39 @@ struct MenuBarLabel: View {
                         if siteBridge.windowID == nil { dismissWindow(id: WindowID.siteApproval) }
                     }
                 } else {
-                    openWindow(id: WindowID.siteApproval)
-                    DockPresence.bringForward()
+                    openWindow.bringingForward(id: WindowID.siteApproval)
                 }
             }
-            .onChange(of: navigation.wantsTopUp) { _, wants in
-                guard wants else { return }
-                #if DEBUG
-                if HotWalletDebug.isQuiet {
-                    FileHandle.standardError.write(Data("TOP UP ASKED\n".utf8))
-                    return
+            // Here for the same reason. These can come from outside the app, with no window open to take them.
+            .onChange(of: navigation.pending) { _, intent in
+                switch intent {
+                case .topUp:
+                    #if DEBUG
+                    if HotWalletDebug.isQuiet {
+                        FileHandle.standardError.write(Data("TOP UP ASKED\n".utf8))
+                        return
+                    }
+                    #endif
+                    navigation.showSpendingMoney()
+                    openWindow.bringingForward(id: WindowID.main)
+                case .receive:
+                    #if DEBUG
+                    if HotWalletDebug.isQuiet {
+                        navigation.pending = nil
+                        FileHandle.standardError.write(Data("RECEIVE ASKED\n".utf8))
+                        return
+                    }
+                    #endif
+                    openWindow.bringingForward(id: WindowID.main)
+                case .addSavingsFromDevice:
+                    navigation.showSpendingMoney()
+                    openWindow.bringingForward(id: WindowID.main)
+                // A notification was clicked, so the person wants to see it, wherever the window is.
+                case .show:
+                    openWindow.bringingForward(id: WindowID.main)
+                default:
+                    break
                 }
-                #endif
-                navigation.showSpendingMoney()
-                openWindow(id: WindowID.main)
-                DockPresence.bringForward()
-            }
-            .onChange(of: navigation.wantsReceive) { _, wants in
-                guard wants else { return }
-                navigation.wantsReceive = false
-                #if DEBUG
-                if HotWalletDebug.isQuiet {
-                    FileHandle.standardError.write(Data("RECEIVE ASKED\n".utf8))
-                    return
-                }
-                #endif
-                navigation.isReceiving = true
-                openWindow(id: WindowID.main)
-                DockPresence.bringForward()
-            }
-            .onChange(of: navigation.addingSavings) { _, link in
-                guard link != nil else { return }
-                navigation.showSpendingMoney()
-                openWindow(id: WindowID.main)
-                DockPresence.bringForward()
-            }
-            // A notification was clicked, so the person wants to see it, wherever the window is.
-            .onChange(of: navigation.shownRow) { _, row in
-                guard row != nil else { return }
-                openWindow(id: WindowID.main)
-                DockPresence.bringForward()
             }
     }
 }

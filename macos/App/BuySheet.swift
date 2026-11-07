@@ -198,7 +198,7 @@ struct PurchaseRow: View {
                     .monospacedDigit()
                     .foregroundStyle(PurchaseWording.isWarning(phase) ? Tone.warning.style : Tone.secondary.style)
                     .contentTransition(.opacity)
-                    .justKnown(justArrived)
+                    .flash(justArrived, .known)
             }
             Spacer()
             Group {
@@ -224,13 +224,9 @@ struct PurchaseRow: View {
                     .help("Open this transaction")
             }
         }
-        .animation(Motion.state, value: phase)
+        .motion(Motion.state, value: phase)
         .onChange(of: isArrived) { _, arrived in justArrived = arrived }
-        .task(id: justArrived) {
-            guard justArrived else { return }
-            try? await Task.sleep(for: Motion.highlight)
-            if !Task.isCancelled { justArrived = false }
-        }
+        .flash(trigger: justArrived, rest: false) { justArrived = false }
     }
 
     /// Seen on the chain, with what it cost. Anything short of that isn't checked off.

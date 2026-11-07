@@ -180,7 +180,7 @@ struct HotWalletDetails<Overview: View>: View {
     var body: some View {
         // Inside the page's scroll view, whichever page it's on, which is the one it scrolls.
         ScrollViewReader { proxy in
-            content.onChange(of: navigation.shownRow, initial: true) { _, row in reveal(row, with: proxy) }
+            content.onChange(of: navigation.pending, initial: true) { _, intent in take(intent, with: proxy) }
         }
         .onChange(of: wallet.records.map(\.hash)) { old, new in
             newRows.rowsChanged(from: old, to: new, isCovered: isCoveredBySheet)
@@ -189,45 +189,18 @@ struct HotWalletDetails<Overview: View>: View {
         .onChange(of: isCoveredBySheet) { _, covered in
             if !covered { newRows.uncovered() }
         }
-        .task(id: newRows.lit) {
-            guard !newRows.lit.isEmpty else { return }
-            try? await Task.sleep(for: Motion.highlight)
-            if !Task.isCancelled { newRows.fade() }
-        }
+        .flash(trigger: newRows.lit, rest: []) { newRows.fade() }
+        .flash(trigger: litRow, rest: nil, for: .seconds(3)) { litRow = nil }
         .sheet(isPresented: $isAddingCold, onDismiss: { if testingSavings != nil { isSending = true } }) {
             AddColdWalletSheet(wallet: wallet, wallets: store.walletList(hotWallet: wallet).pickable, navigation: navigation, server: store.serverURL) { testingSavings = $0 }
         }
         .sheet(isPresented: $isToppingUp) { TopUpSheet(wallet: wallet, server: store.serverURL) }
-        .onChange(of: navigation.addingSavings, initial: true) { _, link in
-            // The sheet takes it from there, and it may already be open, waiting for this.
-            if link != nil { isAddingCold = true }
-        }
-        .onChange(of: navigation.wantsTopUp, initial: true) { _, wants in
-            guard wants else { return }
-            navigation.wantsTopUp = false
-            if wallet.canTopUp { isToppingUp = true }
-        }
-        .onChange(of: navigation.wantsAddSavings, initial: true) { _, wants in
-            guard wants else { return }
-            navigation.wantsAddSavings = false
-            isAddingCold = true
-        }
-        .onChange(of: navigation.wantsSend, initial: true) { _, wants in
-            guard wants else { return }
-            navigation.wantsSend = false
-            if wallet.canSend { isSending = true }
-        }
         .sheet(isPresented: $isSending, onDismiss: { testingSavings = nil }) {
             SendSheet(model: {
                 let model = SendModel(wallet: wallet, store: store)
                 model.addressText = testingSavings?.checksummed ?? ""
                 return model
             }(), wallets: store.walletList(hotWallet: wallet).pickable)
-        }
-        .onChange(of: navigation.wantsDelete, initial: true) { _, wants in
-            guard wants else { return }
-            navigation.wantsDelete = false
-            if wallet.canDelete { isConfirmingDelete = true }
         }
         .sheet(isPresented: $isSweeping) { SweepSheet(wallet: wallet) }
         .onAppear {
@@ -280,13 +253,7 @@ struct HotWalletDetails<Overview: View>: View {
                         .accessibilityHint("Change the cap")
                         .popover(isPresented: $isChangingCap, arrowEdge: .bottom) { capEditor }
                 }
-                // Only a picture of the numbers above, which are what's real.
-                Gauge(value: gaugeValue, in: 0...1) {}
-                    .gaugeStyle(.accessoryLinearCapacity)
-                    .tint(wallet.plan?.excessUsdMicros ?? 0 > 0 ? .orange : .accentColor)
-                    .accessibilityHidden(true)
-                    // So what sweeps away visibly leaves. It follows the number above, which is what's real.
-                    .motion(Motion.number, value: gaugeValue)
+                CapGauge(plan: wallet.plan, capUsdMicros: wallet.settings.capUsdMicros)
                 if let plan = wallet.plan, plan.gasKeptWei > 0 {
                     Text(HotWalletWording.keptOutOfCap(plan.gasKeptWei))
                         .font(.caption)
@@ -307,7 +274,7 @@ struct HotWalletDetails<Overview: View>: View {
                 }
                 actions
             }
-            .lit(litRow == MoneyNotice.balanceRow)
+            .flash(litRow == MoneyNotice.balanceRow, .found)
             .id(MoneyNotice.balanceRow)
         }
     }
@@ -329,11 +296,6 @@ struct HotWalletDetails<Overview: View>: View {
         return "Anything above the cap moves to your savings. \(ceiling)\(wallet.display.isConverted ? " \(HotWalletWording.capFollowsRate(wallet.display.main))" : "")"
     }
 
-    private var gaugeValue: Double {
-        guard let value = wallet.plan?.valueUsdMicros else { return 0 }
-        return min(1, Double(value) / Double(wallet.settings.capUsdMicros))
-    }
-
     /// This Mac's, including what was bought for a key that's since been replaced, which may still be arriving.
     private var shownPurchases: [TrackedPurchase] {
         guard let address else { return [] }
@@ -347,7 +309,7 @@ struct HotWalletDetails<Overview: View>: View {
             }
             ForEach(shownPurchases) { purchase in
                 PurchaseRow(purchase: purchase, phase: purchases.phase(of: purchase), main: wallet.display.main) { purchases.dismiss(purchase) }
-                    .lit(litRow == MoneyNotice.purchaseRow(purchase.ref))
+                    .flash(litRow == MoneyNotice.purchaseRow(purchase.ref), .found)
                     .id(MoneyNotice.purchaseRow(purchase.ref))
                     .arrives()
             }
@@ -480,12 +442,12 @@ struct HotWalletDetails<Overview: View>: View {
     }
 
     private var receive: some View {
-        Button("Receive…") { navigation.isReceiving = true }
+        Button("Receive…") { navigation.pending = .receive }
             .disabled(!wallet.canTopUp)
     }
 
     private var buy: some View {
-        Button("Buy…") { navigation.isBuying = true }
+        Button("Buy…") { navigation.pending = .buy }
     }
 
     private var topUp: some View {
@@ -601,8 +563,8 @@ struct HotWalletDetails<Overview: View>: View {
                 }
                 .contentShape(Rectangle())
                 .contextMenu { TransactionActions(hash: record.hash) }
-                .justAdded(newRows.lit.contains(record.hash))
-                .lit(litRow == MoneyNotice.recordRow(record.hash))
+                .flash(newRows.lit.contains(record.hash), .added)
+                .flash(litRow == MoneyNotice.recordRow(record.hash), .found)
                 .id(MoneyNotice.recordRow(record.hash))
                 .arrives()
             }
@@ -610,33 +572,68 @@ struct HotWalletDetails<Overview: View>: View {
         .motion(Motion.state, value: wallet.records.map(\.hash))
     }
 
-    /// Scrolls to what a notification was about, and lights it up long enough to find it. It's taken, so the same click works twice.
-    private func reveal(_ wanted: String?, with proxy: ScrollViewProxy) {
-        guard let wanted else { return }
-        navigation.shownRow = nil
+    /// What was asked for from elsewhere that's this page's to do. It's taken, so the same click works twice.
+    private func take(_ intent: Intent?, with proxy: ScrollViewProxy) {
+        switch intent {
+        case .topUp:
+            navigation.pending = nil
+            if wallet.canTopUp { isToppingUp = true }
+        case .send:
+            navigation.pending = nil
+            if wallet.canSend { isSending = true }
+        case .addSavings:
+            navigation.pending = nil
+            isAddingCold = true
+        case .addSavingsFromDevice:
+            // The sheet takes it from there, and it may already be open, waiting for this.
+            isAddingCold = true
+        case .deleteSpendingMoney:
+            navigation.pending = nil
+            if wallet.canDelete { isConfirmingDelete = true }
+        case .show(let row):
+            navigation.pending = nil
+            reveal(row, with: proxy)
+        case .buy, .receive, .export, .search, nil:
+            break
+        }
+    }
+
+    /// Scrolls to what a notification was about, and lights it up long enough to find it.
+    private func reveal(_ wanted: String, with proxy: ScrollViewProxy) {
         // A row from a key that's been replaced isn't here anymore, so it opens what the money's on now.
         let shown = Set(wallet.records.map { MoneyNotice.recordRow($0.hash) } + shownPurchases.map { MoneyNotice.purchaseRow($0.ref) } + (wallet.lastActionProblem == nil ? [] : [MoneyNotice.sweepProblemRow]))
         let row = shown.contains(wanted) ? wanted : MoneyNotice.balanceRow
         withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo(row, anchor: .center) }
         litRow = row
-        Task {
-            try? await Task.sleep(for: .seconds(3))
-            guard litRow == row else { return }
-            withAnimation(.easeOut(duration: 0.6)) { litRow = nil }
-        }
     }
 }
 
-/// A rounded group, like a row of a form, for a page that scrolls with the rest of a wallet's numbers.
+/// How close to the cap this is. Only a picture of the numbers beside it, which are what's real, and it follows them so that what sweeps away visibly leaves.
+struct CapGauge: View {
+    let plan: SweepPlan?
+    let capUsdMicros: UInt128
+
+    private var value: Double {
+        guard let plan else { return 0 }
+        return min(1, Double(plan.valueUsdMicros) / Double(capUsdMicros))
+    }
+
+    var body: some View {
+        Gauge(value: value, in: 0...1) {}
+            .gaugeStyle(.accessoryLinearCapacity)
+            .tint(plan?.excessUsdMicros ?? 0 > 0 ? .orange : .accentColor)
+            .accessibilityHidden(true)
+            .motion(Motion.number, value: value)
+    }
+}
+
+/// A group of rows like a form's, for a page that scrolls with the rest of a wallet's numbers.
 private struct DetailsGroup<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) { content }
+        PageGroup { content }
             .labeledContentStyle(DetailsRowStyle())
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 
@@ -720,7 +717,7 @@ private struct RecordStatus: View {
                 .foregroundStyle(status == .failed || status == .dropped ? Tone.warning.style : Tone.secondary.style)
         }
         .font(.caption)
-        .animation(Motion.state, value: status)
+        .motion(Motion.state, value: status)
     }
 }
 
@@ -838,20 +835,6 @@ struct TopUpSheet: View {
         }
         if wallet.display.isConverted { tokens.append("\(Int(dollars)) USDC") }
         return tokens.isEmpty ? "" : " (about \(tokens.joined(separator: " or ")))"
-    }
-}
-
-private extension View {
-    /// The row a notification opened, in the system's selection color, so it's found at a glance. Behind the content, since a grouped form ignores a row's own background.
-    func lit(_ isLit: Bool) -> some View {
-        background {
-            if isLit {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.18))
-                    .padding(.horizontal, -6)
-                    .padding(.vertical, -4)
-            }
-        }
     }
 }
 

@@ -500,7 +500,7 @@ struct ProgressFooter: View {
         }
         .padding(.vertical, 8)
         .softBox(cornerRadius: 18)
-        .animation(Motion.state, value: stage)
+        .motion(Motion.state, value: stage)
         .onChange(of: text) { AccessibilityNotification.Announcement(text).post() }
         .sensoryFeedback(.success, trigger: stage) { _, stage in
             if case .finished = stage { true } else { false }

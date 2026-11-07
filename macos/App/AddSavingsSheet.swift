@@ -53,9 +53,9 @@ struct AddColdWalletSheet: View {
         .padding(20)
         .frame(width: 460)
         .frame(minHeight: 400)
-        .onChange(of: navigation?.addingSavings, initial: true) { _, link in
-            guard let link else { return }
-            navigation?.addingSavings = nil
+        .onChange(of: navigation?.pending, initial: true) { _, intent in
+            guard case .addSavingsFromDevice(let link) = intent else { return }
+            navigation?.pending = nil
             model.receive(link)
         }
     }
@@ -192,9 +192,7 @@ private struct StepPage<Extra: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if let progress = model.progress {
-                StepDots(current: progress.current, total: progress.total)
-            }
+            StepProgress(model: model)
             if let picture {
                 DevicePicture(picture)
                     .stepPicture()
@@ -214,6 +212,17 @@ private struct StepPage<Extra: View>: View {
 extension StepPage where Extra == EmptyView {
     init(page: AddSavingsWording.Page, picture: DevicePicture.Kind?, model: AddSavingsModel, showsTrouble: Bool = false) {
         self.init(page: page, picture: picture, model: model, showsTrouble: showsTrouble) { EmptyView() }
+    }
+}
+
+/// How far along this is, on the steps that say.
+private struct StepProgress: View {
+    let model: AddSavingsModel
+
+    var body: some View {
+        if let progress = model.progress {
+            StepDots(current: progress.current, total: progress.total)
+        }
     }
 }
 
@@ -316,9 +325,7 @@ private struct LedgerBrowserStep: View {
 
     private var offer: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if let progress = model.progress {
-                StepDots(current: progress.current, total: progress.total)
-            }
+            StepProgress(model: model)
             Image(systemName: "safari")
                 .font(.system(size: 44, weight: .light))
                 .foregroundStyle(.secondary)
@@ -347,9 +354,7 @@ private struct LedgerBrowserStep: View {
 
     private func waiting(_ browser: InstalledBrowser) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            if let progress = model.progress {
-                StepDots(current: progress.current, total: progress.total)
-            }
+            StepProgress(model: model)
             HStack(spacing: 10) {
                 ProgressView().controlSize(.small)
                 Text("Finish in \(browser.name)")
@@ -442,9 +447,7 @@ private struct CheckStep: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if let progress = model.progress {
-                StepDots(current: progress.current, total: progress.total)
-            }
+            StepProgress(model: model)
             Text(page.title)
                 .font(.sheetTitle)
             Text(page.body)

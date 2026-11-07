@@ -77,9 +77,9 @@ struct TransactionsPage<Notices: View>: View {
         }
         .onChange(of: query) { refilter() }
         .onChange(of: asset) { refilter() }
-        .onChange(of: navigation.wantsSearch, initial: true) { _, wants in
-            guard wants else { return }
-            navigation.wantsSearch = false
+        .onChange(of: navigation.pending, initial: true) { _, intent in
+            guard intent == .search else { return }
+            navigation.pending = nil
             isSearching = true
         }
     }

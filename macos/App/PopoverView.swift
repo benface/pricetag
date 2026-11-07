@@ -336,13 +336,8 @@ struct PopoverView: View {
                 spendingMoneyTrailing
             }
             if hotWallet.address != nil, let plan = hotWallet.plan {
-                // Only a picture of the numbers above, which are what's real.
-                Gauge(value: min(1, Double(plan.valueUsdMicros) / Double(hotWallet.settings.capUsdMicros)), in: 0...1) {}
-                    .gaugeStyle(.accessoryLinearCapacity)
-                    .tint(plan.excessUsdMicros > 0 ? .orange : .accentColor)
+                CapGauge(plan: plan, capUsdMicros: hotWallet.settings.capUsdMicros)
                     .controlSize(.small)
-                    .accessibilityHidden(true)
-                    .motion(Motion.number, value: plan.valueUsdMicros)
             }
             if case .unavailable(let message) = hotWallet.availability {
                 ProblemRow("Can't open this wallet", help: message, actionTitle: "Review", action: openHotWallet)
@@ -354,32 +349,30 @@ struct PopoverView: View {
             if hotWallet.canSend {
                 HStack(spacing: 8) {
                     Button {
-                        navigation.isBuying = true
+                        navigation.pending = .buy
                         openHotWallet()
                     } label: {
-                        Label("Buy", systemImage: "plus").frame(maxWidth: .infinity)
+                        Text("Buy").frame(maxWidth: .infinity)
                     }
                     Button {
-                        navigation.isReceiving = true
+                        navigation.pending = .receive
                         openHotWallet()
                     } label: {
-                        Label("Receive", systemImage: "qrcode").frame(maxWidth: .infinity)
+                        Text("Receive").frame(maxWidth: .infinity)
                     }
                     Button {
                         navigation.send()
                         openHotWallet()
                     } label: {
-                        Label("Send", systemImage: "arrow.up").frame(maxWidth: .infinity)
+                        Text("Send").frame(maxWidth: .infinity)
                     }
                     Button {
                         navigation.topUp()
                         openHotWallet()
                     } label: {
-                        Label("Top Up", systemImage: "arrow.down").frame(maxWidth: .infinity)
+                        Text("Top Up").frame(maxWidth: .infinity)
                     }
                 }
-                // Four don't fit with their icons, and words alone say more than icons alone.
-                .labelStyle(.titleOnly)
             }
         }
         .padding(14)
@@ -430,8 +423,7 @@ struct PopoverView: View {
     private func open(_ target: ExplainTarget?) {
         if let target { navigation.explain(target) }
         dismiss()
-        openWindow(id: WindowID.main)
-        DockPresence.bringForward()
+        openWindow.bringingForward(id: WindowID.main)
     }
 
     /// `open(nil)` goes back to whichever section was showing, which suits Open but not something that promises the holdings or the wallet form.
@@ -443,8 +435,7 @@ struct PopoverView: View {
     private func openHotWallet() {
         navigation.showSpendingMoney()
         dismiss()
-        openWindow(id: WindowID.main)
-        DockPresence.bringForward()
+        openWindow.bringingForward(id: WindowID.main)
     }
 
     private func moveHighlight(by step: Int) -> KeyPress.Result {
