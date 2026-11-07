@@ -289,7 +289,7 @@ It can't see a spouse's or a company's wallets, which the rule counts too, and d
 - It doesn't list what was received, so pay and other income aren't in it.
 - It doesn't adjust a superficial loss, or check the US wash sale rule, which the report says to ask an accountant about.
 - Choosing specific units to sell isn't available.
-- It only knows what reached these wallets. Something that arrived with no history behind it has no date unless an exchange file gives one, and no cost unless an exchange file or an answer does.
+- It only knows what reached these wallets. Something that arrived with no history behind it has no date unless an exchange file gives one, and its original cost stays unknown unless an exchange file or an answer gives it. A bridge deposit or a mint is the exception: without either, it's still valued at the market price when it arrived, as an estimate, not what was first paid for it.
 - An unknown amount stays `unknown` in every file and every total, never $0.
 
 On an older wallet, most rows start with an unknown gain, until the user answers for what it held before the first block read.
