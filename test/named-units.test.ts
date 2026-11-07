@@ -125,7 +125,7 @@ const leg = (block: number, delta: bigint, fields: Partial<PricedLeg> = {}): Pri
   ...fields,
 })
 const buy = (block: number, units: bigint, paid: bigint) => leg(block, units * ETH, { costMicros: (paid * USD).toString(), costLabel: "paid" })
-const sell = (block: number, units: bigint, received: bigint) => leg(block, -units * ETH, { proceedsMicros: (received * USD).toString() })
+const sell = (block: number, units: bigint, received: bigint, fields: Partial<PricedLeg> = {}) => leg(block, -units * ETH, { proceedsMicros: (received * USD).toString(), ...fields })
 
 function walletOf(address: string, legs: PricedLeg[]): WalletResponse {
   const amounts: Record<string, string> = {}
@@ -238,6 +238,68 @@ describe("a US tax report with named units for a send between your wallets", () 
     const used = report(choice(at(29)), "fifo", [b], [a])
     assert.equal(used.gainMicros, (-1000n * USD).toString())
     assert.deepEqual(aboutNames(used), [])
+  })
+})
+
+describe("a US tax report with named units the listed rows don't show", () => {
+  const B = `0x${"b".repeat(40)}`
+  const C = `0x${"c".repeat(40)}`
+  const part = (account: string, side: "credit" | "debit", counterparty: string, units = 1n) => ({ logIndex: 0, token: "0x0", account, side, amount: (units * ETH).toString(), kind: "eth" as const, counterparty })
+  const US = { country: "US", method: "fifo", scope: "per-wallet" } as const
+  const aboutNames = (report: ReturnType<typeof taxReportOf>) => report.warnings.filter((warning) => /named/.test(warning))
+  const reportOf = (wallets: WalletResponse[], choice: UnitChoice, settings: Partial<Parameters<typeof taxReportOf>[1]> = {}, costsFrom: WalletResponse[] = []) =>
+    taxReportOf(wallets, { ...US, ...settings }, { book: { ...recordUnitChoices(emptyBook(), [choice]), ...(costsFrom.length > 0 ? { linked: costsFrom.map((wallet) => wallet.address) } : {}) }, costsFrom })
+
+  describe("an earlier year's sale", () => {
+    // In 2026, A buys 1 ETH at $1,000 and 1 at $3,000, sells 1, then sends the other to B. B sells it for $2,000 in 2027.
+    const a = walletOf(A, [buy(10, 1n, 1000n), buy(20, 1n, 3000n), sell(25, 1n, 2000n), leg(30, -ETH, { kind: "transfer", parts: [part(A, "debit", B)] })])
+    const b = walletOf(B, [leg(30, ETH, { kind: "transfer", parts: [part(B, "credit", A)] }), sell(40, 1n, 2000n, { timestamp: "2027-01-05T00:00:00.000Z" })])
+    const choice = (recordedAt: string, boughtAt = at(20)): UnitChoice => ({ wallet: A, txHash: hash(25), asset: "ETH", recordedAt, takes: [{ boughtAt, units: ETH.toString() }] })
+    const cases = [
+      ["in a later year's report", (c: UnitChoice, method: Method = "fifo") => reportOf([a, b], c, { method, year: 2027 })],
+      ["from a wallet it only takes costs from", (c: UnitChoice, method: Method = "fifo") => reportOf([b], c, { method }, [a])],
+    ] as const
+    for (const [name, report] of cases) {
+      it(`still counts, used, late, refused or averaged, ${name}`, () => {
+        const used = report(choice(at(24)))
+        assert.equal(used.gainMicros, (1000n * USD).toString())
+        assert.ok(used.notes.some((note) => /1 sale or send uses the units your records named/.test(note)))
+        assert.deepEqual(aboutNames(used), [])
+        const late = report(choice(at(26)))
+        assert.equal(late.gainMicros, (-1000n * USD).toString())
+        assert.ok(late.warnings.some((warning) => /only named units for 1 sale or send after it happened/.test(warning)))
+        const refused = report(choice(at(24), at(15)))
+        assert.equal(refused.gainMicros, (-1000n * USD).toString())
+        assert.ok(refused.warnings.some((warning) => /named units for 1 sale or send that don't match what was held then/.test(warning)))
+        assert.ok(aboutNames(report(choice(at(24)), "average")).some((warning) => /Average mixes everything bought, so the units your records named for 1 sale or send/.test(warning)))
+      })
+    }
+
+    it("leaves out a later year's records, which can't change an earlier year", () => {
+      // B's 2027 sale names a day nothing was bought, so it's refused, but only from 2027 on.
+      const later = { ...choice(at(39), at(15)), txHash: hash(40), wallet: B }
+      const report = (year: number) => taxReportOf([a, b], { ...US, year }, { book: recordUnitChoices(emptyBook(), [later]) })
+      assert.deepEqual(aboutNames(report(2026)), [])
+      assert.ok(aboutNames(report(2027)).some((warning) => /don't match what was held then/.test(warning)))
+    })
+  })
+
+  it("counts a send that only partly went to the report's wallets", () => {
+    // A buys 2 ETH at $1,000 each, then 2 at $3,000 each, then sends 1 to B and 1 to C, which isn't read. B sells for $2,000.
+    const a = walletOf(A, [buy(10, 2n, 2000n), buy(20, 2n, 6000n), leg(30, -2n * ETH, { kind: "transfer", parts: [part(A, "debit", B), { ...part(A, "debit", C), logIndex: 1 }] })])
+    const b = walletOf(B, [leg(30, ETH, { kind: "transfer", parts: [part(B, "credit", A)] }), sell(40, 1n, 2000n)])
+    const choice = (recordedAt: string, boughtAt = at(20)): UnitChoice => ({ wallet: A, txHash: hash(30), asset: "ETH", recordedAt, takes: [{ boughtAt, units: (2n * ETH).toString() }] })
+    const used = reportOf([b], choice(at(29)), {}, [a])
+    assert.equal(used.gainMicros, (-1000n * USD).toString())
+    assert.ok(used.notes.some((note) => /1 sale or send uses the units your records named/.test(note)))
+    assert.deepEqual(aboutNames(used), [])
+    const late = reportOf([b], choice(at(31)), {}, [a])
+    assert.equal(late.gainMicros, (1000n * USD).toString())
+    assert.ok(late.warnings.some((warning) => /only named units for 1 sale or send after it happened/.test(warning)))
+    const refused = reportOf([b], choice(at(29), at(15)), {}, [a])
+    assert.equal(refused.gainMicros, (1000n * USD).toString())
+    assert.ok(refused.warnings.some((warning) => /don't match what was held then/.test(warning)))
+    assert.ok(aboutNames(reportOf([b], choice(at(29)), { method: "average" }, [a])).some((warning) => /Average mixes everything bought/.test(warning)))
   })
 })
 
