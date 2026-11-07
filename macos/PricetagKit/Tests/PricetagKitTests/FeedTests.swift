@@ -16,9 +16,9 @@ actor ScriptedSource: PortfolioSource {
         self.rulesFailure = rulesFailure
     }
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
-        methods.append(method)
-        currencies.append(currency)
+    func portfolio(_ read: ReadContext, timeout: Duration) async throws -> Portfolio {
+        methods.append(read.method)
+        currencies.append(read.currency)
         timeouts.append(timeout)
         return try answers.removeFirst().get()
     }
@@ -28,7 +28,7 @@ actor ScriptedSource: PortfolioSource {
         return []
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, _ read: ReadContext, shown: [String]?) async throws -> Explanation {
         throw FetchError.unreachable
     }
 
@@ -49,11 +49,11 @@ actor ScriptedSource: PortfolioSource {
 actor GatedSource: PortfolioSource {
     private var waiting: CheckedContinuation<Portfolio, any Error>?
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
+    func portfolio(_ read: ReadContext, timeout: Duration) async throws -> Portfolio {
         try await withCheckedThrowingContinuation { waiting = $0 }
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, _ read: ReadContext, shown: [String]?) async throws -> Explanation {
         throw FetchError.unreachable
     }
 
@@ -97,7 +97,7 @@ actor TimedOutThenGatedSource: PortfolioSource {
         self.first = first
     }
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
+    func portfolio(_ read: ReadContext, timeout: Duration) async throws -> Portfolio {
         if let first {
             self.first = nil
             return first
@@ -109,7 +109,7 @@ actor TimedOutThenGatedSource: PortfolioSource {
         return try await withCheckedThrowingContinuation { waiting = $0 }
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, _ read: ReadContext, shown: [String]?) async throws -> Explanation {
         throw FetchError.unreachable
     }
 
@@ -144,8 +144,8 @@ private actor SwitchingRules: PortfolioSource {
         if let failure { throw failure }
         return ["a", "b"].map { PricingRule(id: $0, name: $0, summary: "", dataset: "benface/pricetag", hash: $0) }
     }
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio { throw FetchError.unreachable }
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation { throw FetchError.unreachable }
+    func portfolio(_ read: ReadContext, timeout: Duration) async throws -> Portfolio { throw FetchError.unreachable }
+    func explanation(of target: ExplainTarget, _ read: ReadContext, shown: [String]?) async throws -> Explanation { throw FetchError.unreachable }
 }
 
 /// `demoPortfolio()`, but from a real source, and with its newest block at a given time.
@@ -696,7 +696,7 @@ func realPortfolio(at date: Date, status: PnlStatus? = nil, method: CostMethod =
         store.setCurrency(.CAD)
         store.stop()
         #expect(before != store.explanationRequest(for: .total(.pnl)))
-        #expect(store.explanationRequest(for: .total(.pnl))?.currency == .CAD)
+        #expect(store.explanationRequest(for: .total(.pnl))?.read.currency == .CAD)
     }
 
     @Test func startsInUSDAndRemembersTheCurrencyAcrossARestart() {
@@ -1005,16 +1005,16 @@ actor RuledSource: PortfolioSource {
         self.rulesTake = rulesTake
     }
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
-        asked.append(rule)
+    func portfolio(_ read: ReadContext, timeout: Duration) async throws -> Portfolio {
+        asked.append(read.rule)
         if failing { throw FetchError.ampUnavailable("Couldn't read this wallet's data.") }
         let portfolio = try demoPortfolio()
         var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(portfolio)) as! [String: Any]
-        json["rule"] = rule ?? Self.market.id
+        json["rule"] = read.rule ?? Self.market.id
         return try JSONDecoder().decode(Portfolio.self, from: JSONSerialization.data(withJSONObject: json))
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, _ read: ReadContext, shown: [String]?) async throws -> Explanation {
         throw FetchError.unreachable
     }
 
@@ -1288,13 +1288,13 @@ actor HeldBackSource: PortfolioSource {
 
     nonisolated func headEvents() -> AsyncThrowingStream<Void, any Error>? { events }
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
+    func portfolio(_ read: ReadContext, timeout: Duration) async throws -> Portfolio {
         reads += 1
         if reads == 1 { throw FetchError.rateLimited("Too many requests.", retryAfter: retryAfter) }
         return answer
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation { throw FetchError.unreachable }
+    func explanation(of target: ExplainTarget, _ read: ReadContext, shown: [String]?) async throws -> Explanation { throw FetchError.unreachable }
 }
 
 /// Answers every read the same way, counts them, and reports new blocks when a test says so.
@@ -1318,12 +1318,12 @@ actor PushedSource: PortfolioSource {
 
     nonisolated func headEvents() -> AsyncThrowingStream<Void, any Error>? { events }
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
+    func portfolio(_ read: ReadContext, timeout: Duration) async throws -> Portfolio {
         reads += 1
         return answer
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation { throw FetchError.unreachable }
+    func explanation(of target: ExplainTarget, _ read: ReadContext, shown: [String]?) async throws -> Explanation { throw FetchError.unreachable }
 }
 
 @MainActor

@@ -1657,7 +1657,7 @@ final class FixtureSource: PortfolioSource {
     /// The same rate as the demo's CAD portfolio.
     func currentRate(currency: CurrencyCode) async throws -> String? { hasRate ? "1398601" : nil }
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
+    func portfolio(_ read: ReadContext, timeout: Duration) async throws -> Portfolio {
         let read = reads.withLock { reads in
             reads += 1
             return reads
@@ -1781,10 +1781,10 @@ final class FixtureSource: PortfolioSource {
                 object["questions"] = [Any]()
                 object["meter"] = ["open": 0, "answered": 0, "waiting": 0]
             }
-        case .empty: return try newWallet(started: true, readingLinked: false, address: address)
-        case .emptyReadingLinked: return try newWallet(started: true, readingLinked: true, address: address)
-        case .notStarted: return try newWallet(started: false, readingLinked: false, address: address)
-        case .firstRun: return try firstRun(address: address)
+        case .empty: return try newWallet(started: true, readingLinked: false, address: read.address)
+        case .emptyReadingLinked: return try newWallet(started: true, readingLinked: true, address: read.address)
+        case .notStarted: return try newWallet(started: false, readingLinked: false, address: read.address)
+        case .firstRun: return try firstRun(address: read.address)
         case .neverAnswers, .updating: try await Task.sleep(for: .seconds(600))
         case .serverDown: throw FetchError.unreachable
         case .stopsAnswering: if read > 1 { throw FetchError.unreachable }
@@ -1801,14 +1801,14 @@ final class FixtureSource: PortfolioSource {
             if read > 2 { try await Task.sleep(for: .seconds(600)) }
         case .notStartedFails: throw FetchError.ampUnavailable("Couldn't read this wallet's data.")
         }
-        return try Self.decode(fixture("demo-portfolio", currency))
+        return try Self.decode(fixture("demo-portfolio", read.currency))
     }
 
-    func lastRead(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Portfolio? {
+    func lastRead(_ read: ReadContext) async throws -> Portfolio? {
         switch feed {
-        case .updating: try Self.decode(fixture("demo-portfolio", currency))
+        case .updating: try Self.decode(fixture("demo-portfolio", read.currency))
         // What the server last read, from before the data reached this wallet.
-        case .notStartedFails: try newWallet(started: false, readingLinked: false, address: address)
+        case .notStartedFails: try newWallet(started: false, readingLinked: false, address: read.address)
         default: nil
         }
     }
@@ -1965,10 +1965,10 @@ final class FixtureSource: PortfolioSource {
         }
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, _ read: ReadContext, shown: [String]?) async throws -> Explanation {
         if feed == .firstRun {
             // In the words `onchainLines` in `src/core/explain.ts` uses for this balance.
-            let object: [String: Any] = ["currency": currency.rawValue, "title": "ETH: Balance check", "value": NSNull(), "sourceValue": NSNull(), "legCount": 0, "legs": [Any](), "lines": [
+            let object: [String: Any] = ["currency": read.currency.rawValue, "title": "ETH: Balance check", "value": NSNull(), "sourceValue": NSNull(), "legCount": 0, "legs": [Any](), "lines": [
                 "Worked out from its transactions: -0.00041 ETH.",
                 "Actual balance at block 53,525,400: 0.00164 ETH.",
                 "Difference: +0.00206 ETH.",
@@ -1978,7 +1978,7 @@ final class FixtureSource: PortfolioSource {
             return try JSONDecoder().decode(Explanation.self, from: JSONSerialization.data(withJSONObject: object))
         }
         if feed == .allYours { return try allYours("all-yours-demo-explanation") }
-        return try Self.decode(target == .holdComparison ? "demo-hold-explanation" : fixture("demo-explanation", currency))
+        return try Self.decode(target == .holdComparison ? "demo-hold-explanation" : fixture("demo-explanation", read.currency))
     }
 
     func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof {

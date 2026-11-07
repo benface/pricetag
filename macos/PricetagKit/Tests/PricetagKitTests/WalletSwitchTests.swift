@@ -11,15 +11,15 @@ actor HeldSource: PortfolioSource {
         lastReads[address] = portfolio
     }
 
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
-        try await withCheckedThrowingContinuation { waiting[address, default: []].append($0) }
+    func portfolio(_ read: ReadContext, timeout: Duration) async throws -> Portfolio {
+        try await withCheckedThrowingContinuation { waiting[read.address, default: []].append($0) }
     }
 
-    func lastRead(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Portfolio? {
-        lastReads[address]
+    func lastRead(_ read: ReadContext) async throws -> Portfolio? {
+        lastReads[read.address]
     }
 
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation {
+    func explanation(of target: ExplainTarget, _ read: ReadContext, shown: [String]?) async throws -> Explanation {
         throw FetchError.unreachable
     }
 

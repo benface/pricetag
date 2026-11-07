@@ -38,7 +38,7 @@ final class ScriptedProtocol: URLProtocol, @unchecked Sendable {
     }
 
     private func read(_ client: PricetagClient, method: CostMethod = .average) async throws -> Portfolio {
-        try await client.portfolio(address: "0xa", method: method, currency: .USD, rule: nil, linked: [], book: Book(), timeout: .seconds(5))
+        try await client.portfolio(ReadContext(address: "0xa", method: method, currency: .USD, rule: nil, linked: [], book: Book()), timeout: .seconds(5))
     }
 
     private func point(_ n: Int) throws -> [String: Any] {
@@ -138,8 +138,8 @@ final class ScriptedProtocol: URLProtocol, @unchecked Sendable {
             Data(),
         ]
         _ = try await read(client)
-        let last = try await client.lastRead(address: "0xa", method: .average, currency: .USD, rule: nil, linked: [], book: Book())
+        let last = try await client.lastRead(ReadContext(address: "0xa", method: .average, currency: .USD, rule: nil, linked: [], book: Book()))
         #expect(last == (try expected(points: 0..<11, txs: 0..<5, marks: ["points": "9:p2"])))
-        #expect(try await client.lastRead(address: "0xa", method: .average, currency: .USD, rule: nil, linked: [], book: Book()) == nil, "The server hasn't read it")
+        #expect(try await client.lastRead(ReadContext(address: "0xa", method: .average, currency: .USD, rule: nil, linked: [], book: Book())) == nil, "The server hasn't read it")
     }
 }

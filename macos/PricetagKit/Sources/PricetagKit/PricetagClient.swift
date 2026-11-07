@@ -56,14 +56,13 @@ public struct ReadContext: Hashable, Sendable {
 }
 
 public protocol PortfolioSource: Sendable {
-    /// `linked` is the user's other wallets, which transfers between carry their cost.
-    func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio
+    func portfolio(_ read: ReadContext, timeout: Duration) async throws -> Portfolio
     /// The same, from what the server last read, without waiting on a new read. It may be behind, so it's never live. Nil if the server hasn't read this wallet.
-    func lastRead(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Portfolio?
-    func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation
+    func lastRead(_ read: ReadContext) async throws -> Portfolio?
+    func explanation(of target: ExplainTarget, _ read: ReadContext, shown: [String]?) async throws -> Explanation
     /// What each set of answers would do to the headline, in the same order.
     func previews(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], candidates: [Book]) async throws -> [BookPreview]
-    func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> String
+    func exportCSV(_ read: ReadContext, shown: [String]?) async throws -> String
     func importCoinbase(csv: String) async throws -> ExchangeImport
     /// Empty when the server has only one, so there's nothing to choose.
     func rules() async throws -> [PricingRule]
@@ -89,9 +88,9 @@ public protocol PortfolioSource: Sendable {
 /// Nothing here needs to be there for a source that only reads, like one in a test.
 extension PortfolioSource {
     public func headEvents() -> AsyncThrowingStream<Void, any Error>? { nil }
-    public func lastRead(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Portfolio? { nil }
+    public func lastRead(_ read: ReadContext) async throws -> Portfolio? { nil }
     public func previews(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], candidates: [Book]) async throws -> [BookPreview] { throw FetchError.unreachable }
-    public func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> String { throw FetchError.unreachable }
+    public func exportCSV(_ read: ReadContext, shown: [String]?) async throws -> String { throw FetchError.unreachable }
     public func importCoinbase(csv: String) async throws -> ExchangeImport { throw FetchError.unreachable }
     /// Reads every wallet in it, so it gets as long as a first read.
     public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport { throw FetchError.unreachable }
@@ -114,8 +113,8 @@ private actor ReplyMemory {
     private static let kept = 4
     private var replies: [(key: String, portfolio: Portfolio)] = []
 
-    static func key(_ address: String, _ method: CostMethod, _ currency: CurrencyCode, _ rule: String?) -> String {
-        "\(address)|\(method.rawValue)|\(currency.rawValue)|\(rule ?? "")"
+    static func key(_ read: ReadContext) -> String {
+        "\(read.address)|\(read.method.rawValue)|\(read.currency.rawValue)|\(read.rule ?? "")"
     }
 
     func last(_ key: String) -> Portfolio? { replies.last { $0.key == key }?.portfolio }
@@ -195,25 +194,23 @@ public struct PricetagClient: PortfolioSource {
         }
     }
 
-    public func portfolio(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book, timeout: Duration) async throws -> Portfolio {
-        let key = ReplyMemory.key(address, method, currency, rule)
-        let portfolio = try await whole(key: key) { since in
-            try await post("/api/portfolio/\(address)", body: FoldBody(method: method, currency: currency, rule: rule, linked: linked, book: book, since: since), timeout: timeout)
+    public func portfolio(_ read: ReadContext, timeout: Duration) async throws -> Portfolio {
+        let portfolio = try await whole(key: ReplyMemory.key(read)) { since in
+            try await post("/api/portfolio/\(read.address)", body: FoldBody(read, since: since), timeout: timeout)
         }
         guard let portfolio else { throw FetchError.rejected("The price service sent something this version can't read.") }
         return portfolio
     }
 
-    public func lastRead(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], book: Book) async throws -> Portfolio? {
-        let key = ReplyMemory.key(address, method, currency, rule)
-        return try await whole(key: key) { since in
+    public func lastRead(_ read: ReadContext) async throws -> Portfolio? {
+        try await whole(key: ReplyMemory.key(read)) { since in
             // Past this, a real read is as quick, say when a currency's rates have to be read first.
-            try await post("/api/portfolio/\(address)/last", body: FoldBody(method: method, currency: currency, rule: rule, linked: linked, book: book, since: since), timeout: .seconds(5))
+            try await post("/api/portfolio/\(read.address)/last", body: FoldBody(read, since: since), timeout: .seconds(5))
         }
     }
 
-    public func explanation(of target: ExplainTarget, address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> Explanation {
-        try await decoded(post("/api/portfolio/\(address)/explain", query: target.queryItems, body: FoldBody(method: method, currency: currency, rule: rule, linked: linked, book: book, shown: shown), timeout: .seconds(30)))
+    public func explanation(of target: ExplainTarget, _ read: ReadContext, shown: [String]?) async throws -> Explanation {
+        try await decoded(post("/api/portfolio/\(read.address)/explain", query: target.queryItems, body: FoldBody(read, shown: shown), timeout: .seconds(30)))
     }
 
     public func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof {
@@ -257,8 +254,8 @@ public struct PricetagClient: PortfolioSource {
         return answer.previews
     }
 
-    public func exportCSV(address: String, method: CostMethod, currency: CurrencyCode, rule: String?, linked: [String], shown: [String]?, book: Book) async throws -> String {
-        let data = try await post("/api/portfolio/\(address)/export", body: FoldBody(method: method, currency: currency, rule: rule, linked: linked, book: book, shown: shown), timeout: .seconds(30))
+    public func exportCSV(_ read: ReadContext, shown: [String]?) async throws -> String {
+        let data = try await post("/api/portfolio/\(read.address)/export", body: FoldBody(read, shown: shown), timeout: .seconds(30))
         guard let text = String(data: data, encoding: .utf8) else { throw FetchError.rejected("The price service sent something this version can't read.") }
         return text
     }
@@ -278,7 +275,7 @@ public struct PricetagClient: PortfolioSource {
 
     public func comparison(address: String, method: CostMethod, currency: CurrencyCode, linked: [String], book: Book) async throws -> RuleComparison {
         // It reads the wallet by both rules, and a first read can take a minute each.
-        try await decoded(post("/api/portfolio/\(address)/compare", body: FoldBody(method: method, currency: currency, rule: nil, linked: linked, book: book), timeout: .seconds(180)))
+        try await decoded(post("/api/portfolio/\(address)/compare", body: FoldBody(ReadContext(address: address, method: method, currency: currency, rule: nil, linked: linked, book: book)), timeout: .seconds(180)))
     }
 
     public func onrampCheckout(address: String, asset: String, cryptoAmount: String, fiat: Money?) async throws -> OnrampCheckout {
@@ -420,6 +417,16 @@ public struct PricetagClient: PortfolioSource {
         var since: LongLists<String>? = nil
         /// All Yours' wallets in the numbers on screen, which an answer can't leave out.
         var shown: [String]? = nil
+
+        init(_ read: ReadContext, since: LongLists<String>? = nil, shown: [String]? = nil) {
+            method = read.method
+            currency = read.currency
+            rule = read.rule
+            linked = read.linked
+            book = read.book
+            self.since = since
+            self.shown = shown
+        }
     }
 
     private struct PreviewBody: Encodable {

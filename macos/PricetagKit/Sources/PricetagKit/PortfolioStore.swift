@@ -83,15 +83,10 @@ public enum FeedState: Equatable, Sendable {
 /// One number's explanation, in full context, because the same number means something else on another wallet, method or server.
 public struct ExplanationRequest: Hashable, Sendable {
     public let target: ExplainTarget
-    public let address: String
-    public let method: CostMethod
-    public let currency: CurrencyCode
-    public let rule: String?
-    public let linked: [String]
+    public let read: ReadContext
     /// All Yours' wallets in the numbers on screen, which the explanation can't leave out.
     public let shown: [String]?
     public let serverURL: URL
-    public let book: Book
 }
 
 /// Whether anything answers at the server's address, whichever wallet is showing, and even with none.
@@ -992,6 +987,11 @@ public final class PortfolioStore {
         WalletAddress.isDemo(address) ? book.unlinking(linkedWallets) : book
     }
 
+    /// What a read of this wallet asks for right now.
+    private func readContext(for address: String) -> ReadContext {
+        ReadContext(address: address, method: method, currency: currency, rule: selectedRule, linked: linked(for: address), book: bookToSend(book, for: address))
+    }
+
     /// What these answers would do to the headline. Nothing's kept, so asking changes nothing.
     public func previews(of candidates: [Book]) async throws -> [BookPreview] {
         guard let address else { throw FetchError.unreachable }
@@ -1001,7 +1001,7 @@ public final class PortfolioStore {
     /// Every movement as a spreadsheet, marked so an estimate or an unknown can't pass for an exact number.
     public func exportCSV() async throws -> String {
         guard let address else { throw FetchError.unreachable }
-        return try await source.exportCSV(address: address, method: method, currency: currency, rule: selectedRule, linked: linked(for: address), shown: walletsShown, book: bookToSend(book, for: address))
+        return try await source.exportCSV(readContext(for: address), shown: walletsShown)
     }
 
     /// Reads an exchange's history, and says how many withdrawals had no usable cost. Nothing's kept until someone vouches for the file.
@@ -1016,13 +1016,13 @@ public final class PortfolioStore {
 
     /// nil with no wallet, when there's nothing to explain.
     public func explanationRequest(for target: ExplainTarget) -> ExplanationRequest? {
-        address.map { ExplanationRequest(target: target, address: $0, method: method, currency: currency, rule: selectedRule, linked: linked(for: $0), shown: walletsShown, serverURL: serverURL, book: bookToSend(book, for: $0)) }
+        address.map { ExplanationRequest(target: target, read: readContext(for: $0), shown: walletsShown, serverURL: serverURL) }
     }
 
     public func explanation(for request: ExplanationRequest) async throws -> Explanation {
         // A request from before a change has nothing to say about what's on screen now.
         guard request == explanationRequest(for: request.target) else { throw CancellationError() }
-        return try await source.explanation(of: request.target, address: request.address, method: request.method, currency: request.currency, rule: request.rule, linked: request.linked, shown: request.shown, book: request.book)
+        return try await source.explanation(of: request.target, request.read, shown: request.shown)
     }
 
     /// What can't be left out of an answer about what's on screen. Nil for what's about one wallet, or with nothing on screen.
@@ -1096,10 +1096,11 @@ public final class PortfolioStore {
         let linked = linked(for: address)
         // An answer that arrives after a change is about something else, whatever it says.
         let isCurrent = { [self] in !Task.isCancelled && address == self.address && method == self.method && currency == self.currency && rule == self.selectedRule && serverURL == self.serverURL && book == self.book && linked == self.linked(for: address) }
+        let context = ReadContext(address: address, method: method, currency: currency, rule: rule, linked: linked, book: bookToSend(book, for: address))
         if wantsLastRead {
             wantsLastRead = false
             // Comes straight back when the server has read this wallet, so a change of method or an answer doesn't wait on the chain. It's no help if it can't.
-            let last = try? await source.lastRead(address: address, method: method, currency: currency, rule: rule, linked: linked, book: bookToSend(book, for: address))
+            let last = try? await source.lastRead(context)
             guard isCurrent() else { return .zero }
             if let last, shouldShow(last) {
                 let shown = holdingWhatsShown(last)
@@ -1112,7 +1113,7 @@ public final class PortfolioStore {
         // reads the wallet again, so they get as long as a first read.
         let timeout: Duration = portfolio?.currency == currency && !isOtherRule ? .seconds(15) : Self.firstReadTimeout
         let read = { [self] (timeout: Duration) in
-            try await source.portfolio(address: address, method: method, currency: currency, rule: rule, linked: linked, book: bookToSend(book, for: address), timeout: timeout)
+            try await source.portfolio(context, timeout: timeout)
         }
         do {
             let answer = try await patiently(read, timeout: timeout, isCurrent: isCurrent)
