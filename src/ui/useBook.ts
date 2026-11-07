@@ -121,7 +121,16 @@ export function useBook() {
   // What an order says, and not an answer either. Whoever calls this hears if it wasn't saved, so the order can be read again.
   const addPurchase = useCallback((purchase: Purchase) => save((latest) => recordPurchase(latest, purchase)), [save])
 
-  return { book, change, undo, canUndo, notSaved, linkAccounts, addPurchase }
+  // Records the user kept, like the units each sale took, aren't answers, so undo doesn't go back through them.
+  const changeRecords = useCallback(
+    (update: (latest: Book) => Book) => {
+      setBook(update)
+      act(() => changeStoredBook(shelf, update))
+    },
+    [act],
+  )
+
+  return { book, change, undo, canUndo, notSaved, linkAccounts, addPurchase, changeRecords }
 }
 
 /** What's on screen is the copy in localStorage when the shelf can't be read, so that's what the notice is about then, and where it's dismissed. */

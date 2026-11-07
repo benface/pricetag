@@ -79,6 +79,24 @@ export type Purchase = {
   costUsdMicros: string | null
 }
 
+/**
+ * Which units one sale or send took, as the user's own records named them. US rules only count that if the records named them no
+ * later than the date and time of the sale, so it's kept with when they did, and a report that chose them afterwards wouldn't count.
+ */
+export type UnitChoice = {
+  wallet: string
+  /** The transaction that sold or sent them, which is known as soon as it's signed, before it's in a block. */
+  txHash: string
+  asset: string
+  /** When the records named them, as `toISOString` writes it. */
+  recordedAt: string
+  /** Each purchase it took from, by when it was bought: a UTC day as `YYYY-MM-DD`, or a moment as `toISOString` writes it. Units are the token's smallest. */
+  takes: { boughtAt: string; units: string }[]
+}
+
+/** The most purchases one choice can name, so one record can't weigh down every fold after it. */
+export const MAX_CHOICE_TAKES = 64
+
 export type Book = {
   senders: Record<string, SenderAnswer>
   /** A cost entered for one movement, by `<wallet>:<leg id>`. */
@@ -89,6 +107,8 @@ export type Book = {
   /** How many times a hardware device has proved each account is the user's. They're in `senders` too, and this is what says a device spoke after an answer, so undoing that answer can't take them out. */
   deviceLinks?: Record<string, number>
   purchases?: Purchase[]
+  /** Units the user's records named for a sale or send. They aren't answers, so undoing an answer never touches them. */
+  unitChoices?: UnitChoice[]
 }
 
 export const emptyBook = (): Book => ({ senders: {}, costs: {}, withdrawals: [] })
@@ -133,6 +153,28 @@ export function recordPurchase(book: Book, purchase: Purchase): Book {
   const earlier = book.purchases ?? []
   if (earlier.some((one) => JSON.stringify(one) === JSON.stringify(purchase))) return book
   return { ...book, purchases: [...earlier.filter(({ order }) => order !== purchase.order), purchase] }
+}
+
+const choiceKey = ({ wallet, txHash, asset }: Pick<UnitChoice, "wallet" | "txHash" | "asset">) => `${normalizeAddress(wallet)}:${txHash.toLowerCase()}:${asset}`
+
+/**
+ * Choices added to the book. A newer record for the same sale takes over, since that's the latest word on it, and the report
+ * still only counts it if it was made in time. If nothing's new, it's the same book.
+ */
+export function recordUnitChoices(book: Book, found: readonly UnitChoice[]): Book {
+  const earlier = book.unitChoices ?? []
+  const again = new Set(found.map(choiceKey))
+  const next = [...earlier.filter((choice) => !again.has(choiceKey(choice))), ...found]
+  return same(next, earlier) ? book : { ...book, unitChoices: next }
+}
+
+/** The book without any choices for these wallets. */
+export function forgetUnitChoices(book: Book, wallets: readonly string[]): Book {
+  const mine = new Set(wallets.map(normalizeAddress))
+  const kept = (book.unitChoices ?? []).filter((choice) => !mine.has(choice.wallet))
+  if (kept.length === (book.unitChoices ?? []).length) return book
+  const { unitChoices: _, ...rest } = book
+  return kept.length === 0 ? rest : { ...rest, unitChoices: kept }
 }
 
 /** Sorted first, because a book that's been saved and read back has the same things in a different order. */
@@ -294,6 +336,23 @@ function parsePurchase(value: unknown): Purchase | null {
   return { provider: row.provider, order: row.order, wallet: normalizeAddress(row.wallet), asset: row.asset, units: row.units, txHash: row.txHash.toLowerCase(), blockNum: blockNum as number | null, cost, costUsdMicros: costUsdMicros as string | null }
 }
 
+const isMoment = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) && !Number.isNaN(Date.parse(value))
+const isDay = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value))
+const isTxHash = (value: unknown): value is string => typeof value === "string" && /^0x[0-9a-fA-F]{64}$/.test(value)
+
+export function parseUnitChoice(value: unknown): UnitChoice | null {
+  const row = recordOf(value)
+  if (!row || typeof row.wallet !== "string" || !isAddress(row.wallet) || !isTxHash(row.txHash) || typeof row.asset !== "string" || !isMoment(row.recordedAt) || !Array.isArray(row.takes)) return null
+  if (row.takes.length === 0 || row.takes.length > MAX_CHOICE_TAKES) return null
+  const takes: UnitChoice["takes"] = []
+  for (const item of row.takes) {
+    const take = recordOf(item)
+    if (!take || !(isMoment(take.boughtAt) || isDay(take.boughtAt)) || !isMicros(take.units) || BigInt(take.units) === 0n) return null
+    takes.push({ boughtAt: take.boughtAt, units: take.units })
+  }
+  return { wallet: normalizeAddress(row.wallet), txHash: row.txHash.toLowerCase(), asset: row.asset, recordedAt: row.recordedAt, takes }
+}
+
 const BOOK_KEY = "patina.book"
 
 export const isBookKey = (key: string | null) => key === null || key === BOOK_KEY
@@ -357,6 +416,16 @@ export function parseBook(value: unknown): Book | null {
     const purchase = parsePurchase(raw)
     if (!purchase) return null
     parsed.purchases = [...(parsed.purchases ?? []), purchase]
+  }
+  if (book.unitChoices !== undefined) {
+    if (!Array.isArray(book.unitChoices)) return null
+    const choices: UnitChoice[] = []
+    for (const raw of book.unitChoices) {
+      const choice = parseUnitChoice(raw)
+      if (!choice) return null
+      choices.push(choice)
+    }
+    if (choices.length > 0) parsed.unitChoices = choices
   }
   if (book.deviceLinks !== undefined) {
     const deviceLinks = recordOf(book.deviceLinks)

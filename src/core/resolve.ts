@@ -7,7 +7,7 @@
 import { applyLegTaking, assertFoldFits, emptyPosition, firstMarks, foldWallet, unconfirmedAssets, formatAmount, formatPaid, historyGaps, keepsLots, lessPaidAt, lotsSplitBy, normalizeAddress, orderMatters, plainAmount, ranking, sharePaidAt, shortHash, splitIsAnswerable, usableAnswer, usdView, viewWallet, withoutCurrency, worth, type CostPiece, type CurrencyCode, type HistoryGap, type HoldComparison, type Method, type PnlStatus, type Position, type PositionState, type PricedLeg, type Totals, type WalletView } from "@pricetag/sdk/core"
 import { NO_FACTS, legsByTransaction, transactionFacts } from "./activity.ts"
 import type { BookPoint, BookPreview, WalletResponse } from "./api.ts"
-import { costKey, isDemoWallet, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type ExchangeLot, type ExchangeWithdrawal, type Money, type Purchase, type Receipt, type SenderAnswer } from "./book.ts"
+import { costKey, isDemoWallet, isOwnWallet, linkedWallets, walletsBehind, type Book, type ExchangeCost, type ExchangeLot, type ExchangeWithdrawal, type Money, type Purchase, type Receipt, type SenderAnswer, type UnitChoice } from "./book.ts"
 import { unitsOfDecimal } from "./decimal.ts"
 import { matchWithdrawals, type ExchangeArrival } from "./exchange-import.ts"
 import { MINT_ADDRESS, knownSender, type KnownSender } from "./senders.ts"
@@ -299,6 +299,35 @@ function piecesOfWithdrawal(side: Side, { units, cost, fifoCostMicros, fifoLots,
   return pieces
 }
 
+/** Whether a leg is a sale or send someone could name units for. A network fee isn't, and neither is anything that arrived. */
+const canChooseUnits = (leg: PricedLeg) => BigInt(leg.delta) < 0n && leg.kind !== "gas" && !leg.opening
+
+/**
+ * The one sale or send in this wallet's legs a choice is about, or null when there's none, or more than one could be, since it
+ * doesn't say which. It only names a transaction and an asset.
+ */
+export function choiceLeg(choice: Pick<UnitChoice, "txHash" | "asset">, legs: readonly PricedLeg[]): PricedLeg | null {
+  const matches = legs.filter((leg) => canChooseUnits(leg) && leg.txHash.toLowerCase() === choice.txHash && leg.asset === choice.asset)
+  return matches.length === 1 ? (matches[0] as PricedLeg) : null
+}
+
+/** Whether the records named these units no later than the date and time of the sale, which is the only way US rules count them. */
+export const choiceInTime = (choice: Pick<UnitChoice, "recordedAt">, leg: Pick<PricedLeg, "timestamp">) => Date.parse(choice.recordedAt) <= Date.parse(leg.timestamp)
+
+/** What each sale or send whose units were named in time takes, by `<wallet>:<leg id>`. */
+function chosenTakes(sides: readonly Side[], book: Book): Map<string, NonNullable<PricedLeg["takes"]>> {
+  const takes = new Map<string, NonNullable<PricedLeg["takes"]>>()
+  for (const { wallet, view } of sides) {
+    const address = normalizeAddress(wallet.address)
+    for (const choice of book.unitChoices ?? []) {
+      if (choice.wallet !== address) continue
+      const leg = choiceLeg(choice, view.legs)
+      if (leg && choiceInTime(choice, leg)) takes.set(costKey(address, leg.id), choice.takes.map(({ boughtAt, units }) => ({ at: boughtAt, qty: units })))
+    }
+  }
+  return takes
+}
+
 export function resolveLegs(sides: readonly Side[], method: Method, book: Book): Resolved {
   const linked = new Set(linkedWallets(book))
   const read = new Map(sides.map((side) => [normalizeAddress(side.wallet.address), side]))
@@ -326,6 +355,7 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     }),
   )
   const withdrawals = matchWithdrawals(book.withdrawals, arrivals)
+  const takes = chosenTakes(sides, book)
 
   const steps = sides
     .flatMap((side) => side.view.legs.map((leg, index) => ({ side, leg, index })))
@@ -471,7 +501,8 @@ export function resolveLegs(sides: readonly Side[], method: Method, book: Book):
     if (at && (at.blockNum !== leg.blockNum || at.txIndex !== leg.txIndex)) carried.clear()
     at = leg
     received.push(...receivedIn(side, leg))
-    const next = resolve(side, leg)
+    const chosen = takes.get(costKey(address, leg.id))
+    const next = chosen ? { ...resolve(side, leg), takes: chosen } : resolve(side, leg)
     ;(output.get(address) as PricedLeg[])[index] = next
     const key = `${address}:${next.asset}`
     const { state, taken } = applyLegTaking(states.get(key) ?? emptyPosition(method, next.decimals, sides.length > 1), next)

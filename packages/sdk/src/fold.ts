@@ -53,7 +53,19 @@ export type FoldLeg = {
   timestamp?: string
   /** What the wallet already held before the first block read. It isn't a transaction, so its moment isn't when any of it was acquired. */
   opening?: boolean
+  /**
+   * Debits only: the units the user's own records named for this one, no later than when it happened. They take the place of the
+   * method's order, and have to add up to all of it. One that names what isn't held, or more than is, is refused, never stretched,
+   * and the method's order applies. Average mixes every purchase, so it has none to name.
+   */
+  takes?: TakeChoice[]
 }
+
+/**
+ * Units a debit took from one purchase, named by when it was bought: a UTC day as `YYYY-MM-DD`, which is every purchase that day, or
+ * a moment as `toISOString` writes it. An exchange's purchase date counts when there is one, and otherwise when it reached a wallet.
+ */
+export type TakeChoice = { at: string; qty: string }
 
 /** Part of a cost, how many units it paid for, and the block it was paid at. */
 export type PaidAt = { costMicros: string; qty: string; blockNum: number }
@@ -776,21 +788,60 @@ export function costCanBeAnswered(leg: Pick<FoldLeg, "delta" | "pieces" | "order
  */
 const withoutCost = ({ qty, legId, unconfirmedBy, acquiredBlock, acquiredAt, undated, ...rest }: Lot, answerable = false, unplaced = false): Lot => ({ qty, costMicros: null, label: "unknown", legId, ...unconfirmed(unconfirmedBy), ...(acquiredBlock === undefined ? {} : { acquiredBlock, acquiredAt: acquiredAt as string }), ...(undated || unplaced ? { undated: true as const } : {}), ...ranking(rest), ...(unplaced ? { unplaced: true as const } : {}), ...(answerable ? {} : { unanswerable: true as const }) })
 
+const isDay = (at: string) => /^\d{4}-\d{2}-\d{2}$/.test(at)
+
+/** Whether this lot was bought at the moment, or on the day, a choice names. */
+function boughtWhen(lot: Lot, at: string): boolean {
+  const date = dateOf(lot)
+  return date !== undefined && (isDay(at) ? date.slice(0, 10) === at : date === at)
+}
+
 /**
- * FIFO takes the oldest lots first, LIFO the newest and HIFO the costliest per unit. Average takes from the known and unknown pools
+ * How much each lot gives for a debit whose units were named, or null when they can't be: the names add up to something other than
+ * what left, or one names nothing held, more than is left of what it names, or part of a day's purchases that cost different
+ * amounts, which doesn't say which. Nor can one name a lot that could have been bought any time before where it is, since nothing
+ * says it's the one named. Among what one name covers, older goes first.
+ */
+function planOf(lots: Window<Lot>, takes: readonly TakeChoice[], qty: bigint): Map<Lot, bigint> | null {
+  if (takes.length === 0 || takes.some((take) => !/^\d+$/.test(take.qty) || BigInt(take.qty) === 0n)) return null
+  if (takes.reduce((sum, take) => sum + BigInt(take.qty), 0n) !== qty) return null
+  const plan = new Map<Lot, bigint>()
+  const leftOf = (lot: Lot) => BigInt(lot.qty) - (plan.get(lot) ?? 0n)
+  for (const { at, qty: named } of takes) {
+    const matches = [...lotsIn(lots)].filter((lot) => boughtWhen(lot, at))
+    if (matches.some(anyTimeBefore)) return null
+    const open = matches.filter((lot) => leftOf(lot) > 0n)
+    const available = open.reduce((sum, lot) => sum + leftOf(lot), 0n)
+    let wanted = BigInt(named)
+    if (wanted > available) return null
+    if (wanted < available && open.some((lot) => costsDiffer(open[0] as Lot, lot))) return null
+    for (const lot of open) {
+      const n = wanted < leftOf(lot) ? wanted : leftOf(lot)
+      plan.set(lot, (plan.get(lot) ?? 0n) + n)
+      wanted -= n
+    }
+  }
+  return plan
+}
+
+/**
+ * FIFO takes the oldest lots first, LIFO the newest and HIFO the costliest per unit. With a `plan`, it takes what that says instead. Average takes from the known and unknown pools
  * in proportion. What's left stays oldest first, whichever it took.
  */
-function take(state: PositionState, held: Held, qty: bigint): Taken {
+function take(state: PositionState, held: Held, qty: bigint, plan: ReadonlyMap<Lot, bigint> | null = null): Taken {
   const before = held.sums
   const heldQty = before.qty
   const taking = qty < heldQty ? qty : heldQty
   // Newest and highest cost first take from these lots in their own order, so they work on a copy. Oldest first and average take
   // straight from what's held.
-  const stored = reorders(state.method) ? copyOf(held) : null
-  const ordered: Window<Lot> = stored ? whole(inTakeOrder(stored, state.method) as Lot[]) : held
+  // What was named is taken where it's kept, so what's left stays oldest first. Only part of a lot known as a whole loses its cost.
+  const stored = plan || reorders(state.method) ? copyOf(held) : null
+  const ordered: Window<Lot> = stored ? whole(plan ? stored : (inTakeOrder(stored, state.method) as Lot[])) : held
   const unplaced = new Set<Lot>()
-  const split = new Set(stored ? lotsSplitBy({ lots: ordered.array }, taking, state.method, unplaced) : lotsSplitBy(state, taking))
-  const answerable = stored !== null && split.size > 0 && splitIsAnswerable(stored, state.method)
+  const split = plan
+    ? new Set([...plan].flatMap(([lot, n]) => (lot.wholeCostOnly && n < BigInt(lot.qty) ? [lot] : [])))
+    : new Set(stored ? lotsSplitBy({ lots: ordered.array }, taking, state.method, unplaced) : lotsSplitBy(state, taking))
+  const answerable = !plan && stored !== null && split.size > 0 && splitIsAnswerable(stored, state.method)
   let kept: Lot[] = []
   let left: Window<Lot> | null = null
   const result: Taken = { held, pieces: [], knownQty: 0n, knownCost: 0n, estimatedCost: 0n, givenCost: 0n, reportedQty: 0n, purchasedQty: 0n, purchaseSources: [], unknownQty: 0n, shortfall: qty - taking, split }
@@ -800,7 +851,7 @@ function take(state: PositionState, held: Held, qty: bigint): Taken {
   let remaining = taking
   let splitLeft = split.size
   // Where each lot left came from, so highest cost first can put them back oldest first.
-  const storedAt = stored && state.method === "hifo" ? new Map(stored.map((lot, i) => [lot, i])) : null
+  const storedAt = stored && !plan && state.method === "hifo" ? new Map(stored.map((lot, i) => [lot, i])) : null
   const from: number[] = []
   const keep = (lot: Lot, source: Lot) => {
     kept.push(lot)
@@ -820,7 +871,8 @@ function take(state: PositionState, held: Held, qty: bigint): Taken {
     if (lot !== current) addSums(addSums(sums, [current], -1n), [lot], 1n)
     const lotQty = BigInt(lot.qty)
     let n: bigint
-    if (keepsLots(state.method)) n = remaining < lotQty ? remaining : lotQty
+    if (plan) n = plan.get(current) ?? 0n
+    else if (keepsLots(state.method)) n = remaining < lotQty ? remaining : lotQty
     else n = i === size - 1 ? remaining : (taking * lotQty) / heldQty
     remaining -= n
     if (n === 0n) {
@@ -860,7 +912,7 @@ function take(state: PositionState, held: Held, qty: bigint): Taken {
   }
   // Units we never saw arrive have no cost anyone can carry.
   if (result.shortfall > 0n) result.pieces.push({ qty: result.shortfall.toString(), costMicros: null, label: "unknown", estimatedCostMicros: "0" })
-  if (state.method === "lifo") kept.reverse()
+  if (state.method === "lifo" && !plan) kept.reverse()
   if (storedAt) kept = from.map((at, i) => [at, kept[i] as Lot] as const).sort(([a], [b]) => a - b).map(([, lot]) => lot)
   // What's left is some of what was held, and each lot keeps its dates, so what could be among them still could.
   // A copy is the fold's own, and what's left in the shared array belongs to whoever that array did.
@@ -912,6 +964,8 @@ export type LegApplied = {
   known: KnownTaken | null
   /** Debits only: the lots held before that lost their cost by being taken from. */
   split: ReadonlySet<Lot> | null
+  /** Debits with `takes` only: whether it took what they name, or they were refused and it went by the method's order. Missing with average, which can't use them. */
+  chosen?: "used" | "refused"
 }
 
 /** What each state the fold made holds. Its `lots` can be longer, once a later step has added to the array it shares. */
@@ -981,9 +1035,11 @@ export function applyLegTaking(state: PositionState, leg: FoldLeg): LegApplied {
 
   const qty = -delta
   const orderless = orderMatters(leg, state.method)
-  const taken = orderless ? withoutCosts(take(state, held, qty)) : take(state, held, qty)
+  const plan = leg.takes && keepsLots(state.method) ? planOf(held, leg.takes, qty) : null
+  const chosen = leg.takes && keepsLots(state.method) ? { chosen: plan ? ("used" as const) : ("refused" as const) } : {}
+  const taken = orderless ? withoutCosts(take(state, held, qty, plan)) : take(state, held, qty, plan)
   const left = orderless ? lotsWithoutCosts(state, taken.held) : taken.held
-  const applied = (next: PositionTally): LegApplied => ({ state: made(next, left), taken: taken.pieces, known: knownTaken(taken), split: taken.split })
+  const applied = (next: PositionTally): LegApplied => ({ state: made(next, left), taken: taken.pieces, known: knownTaken(taken), split: taken.split, ...chosen })
   const next: PositionTally = {
     ...tallyOf(state),
     shortfallQty: (BigInt(state.shortfallQty) + taken.shortfall).toString(),
