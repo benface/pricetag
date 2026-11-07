@@ -7,6 +7,7 @@ struct SettingsView: View {
 
     let store: PortfolioStore
     let notifications: MoneyNotifications
+    let launchAtLogin: LaunchAtLogin
     @Binding var tab: Pane
     @State var server = ""
     @State var serverError: String?
@@ -50,7 +51,11 @@ struct SettingsView: View {
         .task { await store.refreshRules() }
         // The person may have just changed it in System Settings.
         .task { await notifications.refreshAuthorization() }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in Task { await notifications.refreshAuthorization() } }
+        .onAppear { launchAtLogin.refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await notifications.refreshAuthorization() }
+            launchAtLogin.refresh()
+        }
         .sheet(isPresented: $isComparing) { RuleComparisonSheet(store: store) }
         .sheet(isPresented: $isChangingInvite) { InvitePrompt(store: store, decline: { isChangingInvite = false }, submitted: { isChangingInvite = false }) }
         // It read one wallet's numbers once, and replacing a key can change the wallet behind it.
@@ -97,6 +102,19 @@ struct SettingsView: View {
                     ForEach(MenuBarShows.allCases) { Text($0.label).tag($0) }
                 }
                 .help("Also in the menu bar item's right-click menu. Problems with the data show whichever you choose.")
+                Toggle("Open at login", isOn: Binding(get: { launchAtLogin.isOn }, set: { launchAtLogin.setOn($0) }))
+                    .help("Also in System Settings, under General > Login Items.")
+                if launchAtLogin.state == .needsApproval {
+                    LabeledContent {
+                        Button("Open System Settings…") { launchAtLogin.openSystemSettings() }
+                            .controlSize(.small)
+                    } label: {
+                        WarningText("It's turned off in System Settings.")
+                    }
+                }
+                if let problem = launchAtLogin.problem {
+                    WarningText(problem).font(.callout)
+                }
             }
             if store.rules.count > 1 {
                 Section {

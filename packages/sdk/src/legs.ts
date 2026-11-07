@@ -23,6 +23,8 @@ export const PRICE_NOTES = {
  * `unlisted`: `amount` is a quantity, or empty when it can't be read, as with ERC-1155.
  * `unlisted_nft`: `amount` is an ERC-721 token ID, which identifies one asset and is not a quantity.
  * `unseen_eth`: ETH the wallet's balance says arrived in a block with no row to show for it. See `creditUnseenEth`.
+ * Only `getPortfolio`, and `getLegs` with an `rpcUrl`, add these. Their leg's `id` is `unseen:<block>:ETH`, and its `txHash` is
+ * the likeliest transaction, or empty when there's no telling. Other movements of ETH in that block say `orderUnknown`.
  */
 export type LegKind = "erc20" | "eth" | "gas" | "l1_fee" | "wrap" | "unwrap" | "unlisted" | "unlisted_nft" | "unseen_eth"
 

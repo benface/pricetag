@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs the Pricetag dataset on a local, throwaway Amp. See README.md.
+# Runs the Pricetag dataset on a local, throwaway Amp. See docs/OPERATIONS.md.
 #   scripts/amp start   Fresh Amp from a recent Base block, up to chain head.
 #   scripts/amp stop    Stops it and deletes everything it created.
 set -euo pipefail
@@ -102,8 +102,8 @@ write_env_block() {
     printf 'AMP_ADMIN_URL=%s\n' "$ADMIN_URL"
     printf 'PRICETAG_BASE_DATASET=%s\n' "$RAW_DATASET"
     printf 'PRICETAG_DATASET=%s\n' "$PRICETAG_DATASET"
-    # A fork set for a hosted Amp isn't registered on this one.
-    printf 'PRICETAG_FORK_DATASET=\n'
+    # Datasets and hashes set for a hosted Amp aren't registered on this one.
+    for name in PRICETAG_DATASET_HASH PRICETAG_FORK_DATASET PRICETAG_FORK_HASH PRICETAG_RATES_DATASET PRICETAG_FEEDS_DATASET PRICETAG_TOKENS_DATASET; do printf '%s=\n' "$name"; done
     printf 'PRICETAG_RPC_NETWORK=%s\n' "$RPC_NETWORK"
     printf 'PRICETAG_START_BLOCK=%s\n' "$start_block"
     printf '%s\n' "$ENV_BLOCK_END"
@@ -299,7 +299,7 @@ deploy_raw() {
 }
 
 # The raw dataset has no blocks from before the start, so the manifest gets Chainlink's prices at the start block. They're
-# read first, because it's a pity to find out they can't be read after the backfill. See "Run the dataset locally" in the README.
+# read first, because it's a pity to find out they can't be read after the backfill. See "Run the dataset locally" in docs/OPERATIONS.md.
 write_local_manifest() {
   say "Reading Chainlink's prices at block $1..."
   node "$REPO_DIR/dataset/local.ts" "$1" "$RPC_URL" > "$STATE_DIR/pricetag.json" \
@@ -368,7 +368,7 @@ cmd_start() {
   RPC_RATE_LIMIT="$(env_value BASE_RPC_RATE_LIMIT)"
   RPC_RATE_LIMIT="${RPC_RATE_LIMIT:-$DEFAULT_RPC_RATE_LIMIT}"
   if [ "$BASE_RPC_URL" = "$DEFAULT_RPC_URL" ]; then
-    say "Using the public Base RPC. Set BASE_RPC_URL in .env.local for a demo (see README.md)."
+    say "Using the public Base RPC. Set BASE_RPC_URL in .env.local for anything that matters (see docs/OPERATIONS.md)."
   else
     say "Using BASE_RPC_URL from your environment."
   fi
@@ -401,7 +401,7 @@ cmd_start() {
     say "At chain head. Query URL: $FLIGHT_URL. Stop it with: scripts/amp stop"
   else
     say "Still behind after $((HEAD_TIMEOUT_SECS / 60)) minutes, but it's still running. A rate-limited or slow RPC is the likely cause."
-    say "Check $STATE_DIR/ampd.log, or set a dedicated BASE_RPC_URL (see README.md) and start again."
+    say "Check $STATE_DIR/ampd.log, or set a dedicated BASE_RPC_URL (see docs/OPERATIONS.md) and start again."
     exit 1
   fi
 }

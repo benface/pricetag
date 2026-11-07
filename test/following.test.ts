@@ -168,7 +168,7 @@ describe("following the chain", FOLLOWING, () => {
   })
 
   it("says a reorg that replaced the last streamed block while polling, however deep, once the stream is back", async (t) => {
-    // Found on a real Amp (WORK-497): a derived table took longer than the stall timeout to recover from a 328-block reorg.
+    // On a real Amp: a derived table took longer than the stall timeout to recover from a 328-block reorg.
     const hand = handStream()
     let mark = MARK
     const chain = following(t, { stream: hand.stream, readMark: async () => mark, stallMs: 5, retryMs: 20 })
@@ -218,7 +218,7 @@ describe("following the chain", FOLLOWING, () => {
     }
 
     it("says a deep reorg that made the chain longer, from after the newest block it said that's still there", async (t) => {
-      // Found on a real Amp (WORK-497): 343 blocks replaced, with the stream down, and no tick ever said so.
+      // On a real Amp: 343 blocks replaced, with the stream down, and no tick ever said so.
       const chain = polledChain(100)
       const follow = following(t, chain.config)
       assert.deepEqual(await follow.next(), { kind: "block", blockNum: 100, reorgFrom: null, via: "polling" })
@@ -290,7 +290,7 @@ describe("following the chain", FOLLOWING, () => {
     })
 
     it("says a reorg that comes between a poll's two reads, and then the new head", async (t) => {
-      // Found in WORK-520's review: the check saw the old chain, the head the new one, and only that head got checked after.
+      // The check saw the old chain, the head the new one, and only that head got checked after.
       const chain = polledChain(100)
       let between: (() => void) | null = null
       const afterRead = <T,>(result: T) => {
@@ -350,7 +350,7 @@ describe("following the chain", FOLLOWING, () => {
   })
 
   it("counts what polling said after the last streamed block as replaced, when the stream comes back past it on another chain", async (t) => {
-    // Found in WORK-497's review: block 101 still holds, so Amp resumes with plain new blocks and reports nothing.
+    // Block 101 still holds, so Amp resumes with plain new blocks and reports nothing.
     const hand = handStream()
     let mark = MARK
     const chain = following(t, { stream: hand.stream, readMark: async () => mark, retryMs: 20 })
@@ -386,7 +386,7 @@ describe("following the chain", FOLLOWING, () => {
   })
 
   it("remembers the first block polling said through a stream that dies catching up", async (t) => {
-    // Found in WORK-497's review: the next try resumes from block 300, but the replaced blocks can be before it.
+    // The next try resumes from block 300, but the replaced blocks can be before it.
     const hand = handStream()
     let mark = MARK
     const chain = following(t, { stream: hand.stream, readMark: async () => mark, retryMs: 20 })
@@ -634,7 +634,7 @@ describe("watchWallet", FOLLOWING, () => {
 
   // Before the fix, no update came, so this would wait forever.
   it("replaces a reorg that made the chain longer, past the blocks it would re-read anyway, with no stream at all", { timeout: 5_000 }, async (t) => {
-    // Found on a real Amp (WORK-497): the replaced transfers stayed, and only the balance check said something was wrong.
+    // On a real Amp: the replaced transfers stayed, and only the balance check said something was wrong.
     const { chain, client } = chainAt(100, { legs: [], reference_prices: [{ ...REFERENCE, block_num: "100" }], balances: balancesThrough(600, "0") }, undefined, { stream: null })
     const updates = client.watchWallet(ADDRESS, { signal: t.signal })
     assert.deepEqual(legsOf((await updates.next()).value as WalletUpdate), [])
@@ -658,7 +658,7 @@ describe("watchWallet", FOLLOWING, () => {
   })
 
   it("replaces a transfer when a reorg comes between a poll's two reads, with no stream at all", { timeout: 5_000 }, async (t) => {
-    // Found in WORK-520's review: the wallet kept 160:0xdd:1 for good, though the dataset no longer had it.
+    // The wallet kept 160:0xdd:1 for good, though the dataset no longer had it.
     let between: (() => void) | null = null
     let seen: string | null = null
     const onQuery = (sql: string) => {
@@ -1394,5 +1394,41 @@ describe("the server's live events", FOLLOWING, () => {
     const { value } = await reader.read()
     assert.match(value!, /^event: head\ndata: \{"blockNum":100,.*"via":"stream"\}/)
     assert.deepEqual(await legs(), ["0xcc"])
+  })
+})
+
+describe("exchange rates once there are too many to keep", () => {
+  const HEAD = 200_000
+  const walletAt = (blocks: number[]) => ({ latest: { blockNum: HEAD, timestamp: new Date(1_800_000_000_000).toISOString() }, legs: blocks.map((blockNum) => ({ blockNum })) }) as Parameters<ReturnType<typeof createRates>>[1]
+  const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i)
+
+  it("still answers with a kept rate the same read lets go of", async () => {
+    const rates = createRates(async (_feed, blocks) => new Map(blocks.map((block) => [block, { answer: String(block), updatedAt: block } satisfies RateRound])))
+    await rates("CAD", walletAt(range(1, 100_000)))
+    const read = await rates("CAD", walletAt([1, 100_001]))
+    assert.deepEqual(Object.keys(read?.byBlock ?? {}), ["1", "100001"])
+  })
+
+  it("still answers with a kept rate another read lets go of while it waits", async () => {
+    let release = () => {}
+    const held = new Promise<void>((resolve) => (release = resolve))
+    let holdNext = false
+    let started = () => {}
+    const waiting = new Promise<void>((resolve) => (started = resolve))
+    const rates = createRates(async (_feed, blocks) => {
+      if (holdNext) {
+        holdNext = false
+        started()
+        await held
+      }
+      return new Map(blocks.map((block) => [block, { answer: String(block), updatedAt: block } satisfies RateRound]))
+    })
+    await rates("CAD", walletAt(range(1, 100_000)))
+    holdNext = true
+    const first = rates("CAD", walletAt([1, 100_001]))
+    await waiting
+    await rates("CAD", walletAt([100_002]))
+    release()
+    assert.deepEqual(Object.keys((await first)?.byBlock ?? {}), ["1", "100001"])
   })
 })

@@ -17,7 +17,7 @@ export type Hosting = {
   invites: ReadonlyMap<string, string>
   /** The header the host sets to the client's address, overwriting what the client sent. Null reads the socket's. */
   clientIpHeader: string | null
-  /** Whether it also serves the web app. A hosted one doesn't by default: see "Hosting" in the README. */
+  /** Whether it also serves the web app. A hosted one doesn't by default: see "Hosting" in docs/OPERATIONS.md. */
   servesApp: boolean
   limits: Limits
   /** How many people's Amp queries run at once. Each person's own run one at a time, and the head's don't count. */
@@ -146,6 +146,23 @@ export function refuse(res: ServerResponse, status: number, error: string, retry
 
 const SLOW_DOWN = "Too many requests from this invite. Try again in a minute."
 
+/** The names this Mac answers to, with any port. A site that points its own name at 127.0.0.1 still sends its own name here. */
+const LOCAL_HOST = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/
+
+/**
+ * Why a server without invites turns this request away, or null when it doesn't. Without invites, nothing but where a request
+ * comes from stands between a website and the Amp token and Coinbase key: so only this Mac's own names, which a site that
+ * rebinds its domain to 127.0.0.1 can't send, and no other site's page calling the API, which a browser says in `Sec-Fetch-Site`.
+ * The Mac app and curl send no `Sec-Fetch-Site`, and the web app's own calls are `same-origin`.
+ */
+export function localRefusal(req: IncomingMessage, path: string | null): string | null {
+  const hosts = req.headersDistinct.host ?? []
+  if (hosts.length !== 1 || !LOCAL_HOST.test((hosts[0] as string).toLowerCase())) return "This server only answers this Mac."
+  const site = req.headers["sec-fetch-site"]
+  if (path?.startsWith("/api/") && (site === "cross-site" || site === "same-site")) return "Other sites can't use this server."
+  return null
+}
+
 type Handle = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>
 
 /** Why a Coinbase checkout has to wait, and for how many seconds. */
@@ -171,7 +188,7 @@ export function checkoutLimit(hosting: Hosting, now: () => number = Date.now) {
 }
 
 /**
- * The API behind its gate. `/healthz` answers anyone, with nothing private, and turns away the host's checks once a shutdown
+ * The API behind its gate. Without invites, it only answers this Mac: see `localRefusal`. `/healthz` answers anyone, with nothing private, and turns away the host's checks once a shutdown
  * starts. Everything else under `/api/` needs an invite when there's a list of them, and stays within its limits.
  */
 export function gate(handle: Handle, hosting: Hosting, health: () => Record<string, boolean>, now: () => number = Date.now) {
@@ -181,6 +198,13 @@ export function gate(handle: Handle, hosting: Hosting, health: () => Record<stri
 
   const handler: Handle = async (req, res) => {
     const path = pathOf(req)
+    if (hosting.invites.size === 0) {
+      const refusal = localRefusal(req, path)
+      if (refusal) {
+        refuse(res, 403, refusal)
+        return true
+      }
+    }
     if (path === "/healthz") {
       if (draining) refuse(res, 503, "Shutting down.")
       else {
@@ -189,7 +213,10 @@ export function gate(handle: Handle, hosting: Hosting, health: () => Record<stri
       }
       return true
     }
-    if (path === null || !path.startsWith("/api/") || hosting.invites.size === 0) return handle(req, res)
+    if (path === null || !path.startsWith("/api/")) return handle(req, res)
+    const isStream = path === "/api/events" && req.method === "GET"
+    // Without invites it's one person, so there's no limit, but a stream is still counted, or a shutdown waits the full drain for it.
+    if (hosting.invites.size === 0) return isStream && !admitStream("", res, Infinity) ? true : handle(req, res)
 
     const who = inviteOf(req, hosting.invites)
     if (!who) {
@@ -201,24 +228,28 @@ export function gate(handle: Handle, hosting: Hosting, health: () => Record<stri
       refuse(res, 429, SLOW_DOWN, wait)
       return true
     }
-    if (path === "/api/events" && req.method === "GET") {
-      if (draining) {
-        refuse(res, 503, "Shutting down.")
-        return true
-      }
-      const open = streams.get(who) ?? new Set<ServerResponse>()
-      if (open.size >= hosting.limits.streams) {
-        refuse(res, 429, "Too many windows are open with this invite.", 60)
-        return true
-      }
-      open.add(res)
-      streams.set(who, open)
-      res.on("close", () => {
-        open.delete(res)
-        if (open.size === 0) streams.delete(who)
-      })
-    }
+    if (isStream && !admitStream(who, res, hosting.limits.streams)) return true
     return inLane(who, () => handle(req, res))
+  }
+
+  /** Counts an event stream, so `drain` can end it, or turns it away. */
+  function admitStream(who: string, res: ServerResponse, limit: number): boolean {
+    if (draining) {
+      refuse(res, 503, "Shutting down.")
+      return false
+    }
+    const open = streams.get(who) ?? new Set<ServerResponse>()
+    if (open.size >= limit) {
+      refuse(res, 429, "Too many windows are open with this invite.", 60)
+      return false
+    }
+    open.add(res)
+    streams.set(who, open)
+    res.on("close", () => {
+      open.delete(res)
+      if (open.size === 0) streams.delete(who)
+    })
+    return true
   }
 
   return Object.assign(handler, {

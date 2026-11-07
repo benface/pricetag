@@ -21,7 +21,7 @@
 // elsewhere, and CRA's crypto guide doesn't count moving between your own wallets as a disposition, so that keeps what they
 // first paid, which we can't see. Those stay estimates in every country, and the report says why.
 
-import { applyLegTaking, assertFoldFits, foldPositions, formatDuration, isAddress, lotsSplitBy, markUnknownOrder, msBetweenBlocks, normalizeAddress, orderMatters, shortHash, timestampOfBlock, unreadAssets, viewWallet, worth, type CostPiece, type CurrencyCode, type LegEffect, type Lot, type Method, type PositionState, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
+import { assertFoldFits, foldPositions, formatDuration, isAddress, markUnknownOrder, msBetweenBlocks, normalizeAddress, orderMatters, shortHash, timestampOfBlock, unreadAssets, viewWallet, worth, type CostPiece, type CurrencyCode, type KnownTaken, type LegEffect, type Method, type PriceSource, type PricedLeg, type WalletView } from "@pricetag/sdk/core"
 import { hasStarted, isBehind, type TaxReportResponse, type WalletResponse } from "./api.ts"
 import { emptyBook, linkedWallets, type Book } from "./book.ts"
 import { csvCell, microsCell, unitsCell } from "./csv.ts"
@@ -161,28 +161,10 @@ const ESTIMATED_COST = "Part of its cost is an estimate, from a market price or 
 const ESTIMATED_PROCEEDS = "What it sold for is an estimate, from a market price."
 const ESTIMATED_BOTH = "What it sold for and part of its cost are estimates, from market prices or exchange rates."
 const REPORTED_COST = "Part of its cost is what you entered or imported, which the chain can't confirm."
-const purchasedCost = (source: string) => `Some or all of its cost: ${source}, fees included.`
+const purchasedCost = (sources: readonly string[]) => `Some or all of its cost: ${sources.length === 1 ? sources[0] : "several exchange purchases"}, fees included.`
 const MISMATCH = "This asset's history doesn't match its onchain balance, so its cost can't be trusted."
 const UNCHECKED = "This asset hasn't been checked against its onchain balance yet, so its cost isn't shown."
 const DIFFERENT_STARTS = "These wallets' histories start at different blocks, so their costs can't be worked out together."
-
-/** Units with a known cost, what they cost, and where that cost came from. The fold keeps count, whatever a lot is labeled. */
-function knownOf(state: PositionState, leavingOut: readonly Lot[] = []) {
-  const known = { qty: 0n, cost: 0n, estimated: 0n, given: 0n, reportedQty: 0n, purchasedQty: 0n, purchaseSource: null as string | null }
-  for (const lot of state.lots) {
-    if (lot.costMicros === null || leavingOut.includes(lot)) continue
-    known.qty += BigInt(lot.qty)
-    known.cost += BigInt(lot.costMicros)
-    known.estimated += BigInt(lot.estimatedCostMicros ?? "0")
-    known.given += BigInt(lot.givenCostMicros ?? "0")
-    if (lot.reported) known.reportedQty += BigInt(lot.qty)
-    if (lot.purchaseSource) {
-      known.purchasedQty += BigInt(lot.qty)
-      known.purchaseSource = lot.purchaseSource
-    }
-  }
-  return known
-}
 
 /**
  * The pieces of known cost a debit took, oldest first, with each one's date: an exchange's purchase date when there is one,
@@ -191,9 +173,9 @@ function knownOf(state: PositionState, leavingOut: readonly Lot[] = []) {
  * arrived with a cost someone entered and no purchase date, has none, which the fold marks as `undated`. Only oldest first
  * keeps pieces apart, and only when they add up to the cost the row shows.
  */
-function acquiredOf({ leg, before }: LegEffect, knownCost: bigint, knownQty: bigint): Acquired[] | null {
-  if (before.method !== "fifo" || knownQty <= 0n) return null
-  const known = applyLegTaking(before, leg).taken.filter((piece) => piece.costMicros !== null)
+function acquiredOf({ before, taken }: LegEffect, knownCost: bigint, knownQty: bigint): Acquired[] | null {
+  if (before.method !== "fifo" || knownQty <= 0n || taken === null) return null
+  const known = taken.filter((piece) => piece.costMicros !== null)
   const sum = (field: "qty" | "costMicros") => known.reduce((total, piece) => total + BigInt(piece[field] as string), 0n)
   if (sum("costMicros") !== knownCost || sum("qty") !== knownQty) return null
   return known.map((piece) => ({ qty: piece.qty, costMicros: piece.costMicros as string, at: piece.undated ? null : piece.boughtAt || piece.acquiredAt || null }))
@@ -205,13 +187,12 @@ function rowsOf(effect: LegEffect, wallet: string, unconfirmed: string | null, c
   const delta = BigInt(leg.delta)
   if (delta >= 0n) return []
   const qty = -delta
-  // A lot with a cost only for all of it has none once part of it goes, so that cost isn't what this took.
-  const knownBefore = knownOf(before, lotsSplitBy(before, qty))
-  const knownAfter = knownOf(after)
+  // A lot with a cost only for all of it has none once part of it goes, so that cost isn't what this took. The fold left it out.
+  const known = effect.known as KnownTaken
   // What it took has no known cost, whatever its lots say, when that depends on an order nothing says.
   const orderless = orderMatters(leg, before.method)
-  const knownCost = orderless ? 0n : knownBefore.cost - knownAfter.cost
-  const unknownQty = orderless ? qty : qty - (knownBefore.qty - knownAfter.qty)
+  const knownCost = orderless ? 0n : BigInt(known.costMicros)
+  const unknownQty = orderless ? qty : qty - BigInt(known.qty)
   const row = (fields: Pick<TaxRow, "amount" | "proceedsMicros" | "costMicros" | "gainMicros" | "status" | "reason"> & { givenCost?: boolean; acquired?: Acquired[] | null }): TaxRow => ({
     givenCost: false,
     acquired: null,
@@ -245,13 +226,13 @@ function rowsOf(effect: LegEffect, wallet: string, unconfirmed: string | null, c
   const gain = BigInt(after.realizedMicros) - BigInt(before.realizedMicros)
   const resolvedProceeds = resolvedQty > 0n ? gain + knownCost : 0n
   if (resolvedQty > 0n) {
-    const given = knownBefore.given - knownAfter.given
-    const costIsEstimated = knownBefore.estimated - knownAfter.estimated - (country?.marketIsCost ? given : 0n) > 0n
+    const given = BigInt(known.givenMicros)
+    const costIsEstimated = BigInt(known.estimatedMicros) - (country?.marketIsCost ? given : 0n) > 0n
     const proceedsAreEstimated = leg.estimated === true && resolvedProceeds > 0n
     // By units rather than dollars, because $0 is a cost someone can enter.
-    const reported = knownBefore.reportedQty > knownAfter.reportedQty
+    const reported = BigInt(known.reportedQty) > 0n
     const estimate = costIsEstimated && proceedsAreEstimated ? ESTIMATED_BOTH : costIsEstimated ? ESTIMATED_COST : proceedsAreEstimated ? ESTIMATED_PROCEEDS : null
-    const purchased = knownBefore.purchasedQty > knownAfter.purchasedQty && knownBefore.purchaseSource ? purchasedCost(knownBefore.purchaseSource) : null
+    const purchased = BigInt(known.purchasedQty) > 0n && known.purchaseSources.length > 0 ? purchasedCost(known.purchaseSources) : null
     const reason = [estimate, given > 0n ? (country?.marketRowNote ?? null) : null, reported ? REPORTED_COST : null, purchased].filter((note) => note !== null).join(" ")
     rows.push(row({ amount: resolvedQty.toString(), proceedsMicros: resolvedProceeds.toString(), costMicros: knownCost.toString(), gainMicros: gain.toString(), status: estimate ? "estimated" : reported ? "self-reported" : "resolved", reason: reason || null, givenCost: given > 0n, acquired }))
   }

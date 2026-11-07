@@ -347,6 +347,9 @@ export type SharedReads = ReturnType<typeof sharedReads>
  * L1 fees, read once for good when their block is already past any reorg, so a second pricing rule reading the same
  * wallet only pays for what the first hasn't read. `tip` is the newest block known, or null when none is.
  */
+/** How many transactions' L1 fees are kept, the oldest read going first. One that's gone is only read again. */
+const MAX_SETTLED_FEES = 100_000
+
 export function settledL1Fees(read: ReadL1Fees, tip: () => number | null): ReadL1Fees & { rewind(block: number, tip: number): void } {
   const settled = new Map<string, { blockNum: number; fee: string }>()
   const reorgs: Reorg[] = []
@@ -370,6 +373,10 @@ export function settledL1Fees(read: ReadL1Fees, tip: () => number | null): ReadL
       if (fee === undefined) continue
       fees.set(txHash, fee)
       if (newest !== null && startedAt === rewinds && isFinal(blockNum, newest, reorgs)) settled.set(txHash, { blockNum, fee })
+    }
+    for (const txHash of settled.keys()) {
+      if (settled.size <= MAX_SETTLED_FEES) break
+      settled.delete(txHash)
     }
     return fees
   }
@@ -414,7 +421,6 @@ function tokenTradesThrough(query: Query, baseDataset: string, dataset: string) 
  */
 export function resolvingSource(query: Query, config: { baseDataset: string; dataset: string; priceDataset?: string; feedsDataset?: string | undefined; startBlock: number; network: string; tokensDataset?: string | undefined; followed?: Followed<StreamedTable> | undefined; maxWalletRows?: number | undefined }, shared = sharedReads(query, config)): Source {
   const { readPricedOf } = datasetReader(query, config)
-  const ds = `"${config.dataset}"`
   // What a fork of the pricing rule changes, so its market prices come from its own trades.
   const prices = `"${config.priceDataset ?? config.dataset}"`
   return {
@@ -430,9 +436,9 @@ export function resolvingSource(query: Query, config: { baseDataset: string; dat
     },
 
     async marketReady() {
-      // Only a dataset with the fix for wrong `priced_legs` rows has this table. Asking it for no rows tells them apart.
+      // Only a dataset with the fix for wrong `priced_legs` rows has this table, and it's the one trades are read from. Asking it for no rows tells them apart.
       try {
-        await query<Row>(`SELECT block_num FROM ${ds}.unlisted_moves WHERE block_num BETWEEN ${config.startBlock} AND ${config.startBlock} LIMIT 1`, 15_000)
+        await query<Row>(`SELECT block_num FROM ${prices}.unlisted_moves WHERE block_num BETWEEN ${config.startBlock} AND ${config.startBlock} LIMIT 1`, 15_000)
         return true
       } catch (error) {
         if (isNotStarted(error)) return true

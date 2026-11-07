@@ -1,11 +1,11 @@
 // Runs the fold over a wallet's priced legs, and adds up what can honestly be added up.
 
-import { applyLeg, emptyPosition, worth, valuePosition, type Method, type PositionState, type PositionValues } from "./fold.ts"
+import { applyLeg, applyLegTaking, costCanBeAnswered, emptyPosition, tallyOf, worth, valuePosition, type CostPiece, type KnownTaken, type LegApplied, type Method, type PositionState, type PositionTally, type PositionValues } from "./fold.ts"
 import { timestampOfBlock } from "./chain.ts"
 import type { RateRound } from "./currency.ts"
 import { answerToMicros, isSanePrice, type PricedLeg, type Reference } from "./legs.ts"
 import type { FeedMarks, MarketMarks } from "./market.ts"
-import { decimalsOf, estimateHeld, reconcile, type Onchain, type Reconciliation } from "./reconcile.ts"
+import { decimalsOf, reconcile, type Onchain, type Reconciliation } from "./reconcile.ts"
 import { TOKENS, TOKEN_FEEDS } from "./tokens.ts"
 
 export type Head = { blockNum: number; timestamp: string }
@@ -19,10 +19,25 @@ export type LatestPrice = {
 }
 export type LatestPrices = Record<string, LatestPrice | undefined>
 
+/**
+ * What one leg did to its position. Only counters, and what a debit took, rather than every lot before and after: holding
+ * those for every leg made oldest first's memory grow with the lots held times the legs (WORK-559).
+ */
 export type LegEffect = {
   leg: PricedLeg
-  before: PositionState
-  after: PositionState
+  before: PositionTally
+  after: PositionTally
+  /** Whether an answer could fix any of this leg's unknown cost, going by what was held before it. */
+  answerable: boolean
+  /** Debits only: what it took with a known cost. Nothing a lot lost by this leg's taking part of it counts. */
+  known: KnownTaken | null
+  /** Debits only: the pieces it took, oldest first under FIFO, each with its cost and when it was acquired. */
+  taken: CostPiece[] | null
+}
+
+/** What a leg did to a position, from what applying it already worked out, so no step goes through every lot again. */
+export function effectOf(leg: PricedLeg, before: PositionState, { state: after, known, split, taken }: LegApplied): LegEffect {
+  return { leg, before: tallyOf(before), after: tallyOf(after), answerable: costCanBeAnswered(leg, before, split ?? undefined), known, taken: known === null ? null : taken }
 }
 
 /** Which of a position's numbers rest on an estimate, so they can look different from exact ones. */
@@ -102,7 +117,7 @@ export function unreadAssets(positions: readonly Position[], { unreadBalances }:
 /** The assets `pnlOverTime` has to leave out. */
 export const unconfirmedAssets = (positions: readonly Position[], unread: readonly string[] = []) => new Set([...positions.filter(isUnconfirmed).map((p) => p.asset), ...unread])
 
-/** Oldest first holds every lot at every step, so its memory grows with the lots times the steps (WORK-559). Average has no such limit. */
+/** Oldest first's lots, more than fit in this much memory. Average has no such limit. */
 export class OldestFirstTooBigError extends Error {
   constructor() {
     super("This history is too long to work out by oldest first in this much memory. Average cost still works.")
@@ -129,8 +144,12 @@ export function limitFolds(bytes: number) {
 const BYTES_PER_LEG = 10_000
 /** What each wallet beyond the first adds to every leg, because each fold looks through all of them: 21 wallets of 1,000 legs fit, and of 1,400 didn't. */
 const BYTES_PER_LEG_PER_OTHER_WALLET = 1_000
-/** 8,000 incoming transfers fit and 9,000 didn't, which is about 12 bytes a lot. This leaves room for wallets kept in memory too. */
-const BYTES_PER_LOT = 20
+/**
+ * What a lot costs while it's open. Only the lots open at once count, since a step keeps none of them (WORK-559). With its leg, a
+ * purchase still open is charged 10,500 bytes. On the server, 10,000 of them peaked at 173 MB and 20,000 at 249 MB, so each one
+ * past the first 10,000 took 7,600 (WORK-673, peaks from V8's collections with `test/support/fifo-server.ts`).
+ */
+const BYTES_PER_LOT = 500
 /** What a lot that arrived from another wallet costs on top, because the leg it arrived on keeps its own copy of it. */
 const BYTES_PER_INHERITED_LOT = 500
 /** 3,000 lots moved between two wallets 400 times fit by average, and 1,000 times didn't, which is 3 million of these. */
@@ -181,11 +200,12 @@ const chainOrder = (histories: readonly FoldedHistory[]) =>
 /**
  * A dry run of oldest first over wallets that can pass lots between them, cheap enough to run before any of the fold does.
  * A transfer it can't rule out counts as carrying its lots, so this can say more than the fold will hold, but not less.
- * `bytesFor` gets, for each wallet, the lots open after each leg, added up, and the lots that arrived from another wallet.
- * Neither ever goes down, so this stops as soon as they're past the limit, rather than counting a history that may not fit in memory just to count it.
+ * `bytesFor` gets, for each wallet, the most lots it had open at once, and the lots that arrived from another wallet, which each
+ * leg they arrived on keeps a copy of. Neither ever goes down, so this stops as soon as they're past the limit, rather than counting a history that may not fit in memory just to count it.
  */
 function dryRunFits(histories: readonly FoldedHistory[], bytesFor: (held: readonly number[], inherited: number) => number): boolean {
   const held = histories.map(() => 0)
+  const openNow = histories.map(() => 0)
   let inherited = 0
   const addresses = addressesOf(histories)
   const open = new Map<string, OpenLots>()
@@ -198,6 +218,7 @@ function dryRunFits(histories: readonly FoldedHistory[], bytesFor: (held: readon
     const key = `${wallet}:${leg.asset}`
     const lots = open.get(key) ?? { lots: [], first: 0 }
     open.set(key, lots)
+    const before = lots.lots.length - lots.first
     if (delta < 0n) {
       const taken = closeLots(lots, -delta)
       if (address && goesTo(leg, addresses)) carried.set(`${leg.txHash}:${address}:${leg.asset}`, taken)
@@ -221,7 +242,8 @@ function dryRunFits(histories: readonly FoldedHistory[], bytesFor: (held: readon
       }
       if (left > 0n) openLot(lots, { units: left, acquired: leg.blockNum })
     }
-    held[wallet] = (held[wallet] as number) + lots.lots.length - lots.first
+    openNow[wallet] = (openNow[wallet] as number) + lots.lots.length - lots.first - before
+    held[wallet] = Math.max(held[wallet] as number, openNow[wallet] as number)
     if (bytesFor(held, inherited) > foldBytes) return false
   }
   return true
@@ -285,9 +307,9 @@ export function foldPositions(legs: readonly PricedLeg[], method: Method, prices
   const positions = new Map<string, { state: PositionState; effects: LegEffect[]; decimals: number }>()
   for (const leg of legs) {
     const position = positions.get(leg.asset) ?? { state: emptyPosition(method, leg.decimals), effects: [], decimals: leg.decimals }
-    const after = applyLeg(position.state, leg)
-    position.effects.push({ leg, before: position.state, after })
-    position.state = after
+    const applied = applyLegTaking(position.state, leg)
+    position.effects.push(effectOf(leg, position.state, applied))
+    position.state = applied.state
     positions.set(leg.asset, position)
   }
   // Whether something's held is a separate question from whether it can be checked. The chain says it's here, or said so

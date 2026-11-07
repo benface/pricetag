@@ -2,7 +2,7 @@
 // pool's trades were. This decides when they add up to a market, and says why not when they don't, so nothing here is ever a guess.
 //
 // A chain can't prove trading is honest: wallets are free to make, and a pool's fees go back to whoever funds it. So these make faking
-// slow and bound what it can do, and what a price is used for has to stay safe when it's wrong. See README.md's "Pricing any token".
+// slow and bound what it can do, and what a price is used for has to stay safe when it's wrong. See docs/NUMBERS.md's "Pricing any token".
 
 /**
  * One sender's trades on one side of a token, over a few minutes, up to the block `bin`. Amounts are in the token's smallest unit, so no decimals

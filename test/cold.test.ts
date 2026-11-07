@@ -451,7 +451,7 @@ describe("on a local chain", { skip: hasAnvil() ? false : "needs Foundry's anvil
   }
 
   test("a signed transfer lands, through the same path a device uses", async () => {
-    const { rpc, send, stop } = await chain()
+    const { send, stop } = await chain()
     try {
       const fees = { maxFeePerGas: 3_000_000_000n, maxPriorityFeePerGas: 1_000_000n }
       const transaction = plain({ nonce: 0, gas: 21_000n, value: 7n, ...fees })

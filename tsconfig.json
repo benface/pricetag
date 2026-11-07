@@ -7,6 +7,8 @@
     "jsx": "react-jsx",
     "strict": true,
     "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "noEmit": true,
     "allowJs": true,
     "allowImportingTsExtensions": true,
@@ -15,5 +17,5 @@
     "skipLibCheck": true,
     "types": ["node", "vite/client"]
   },
-  "include": ["packages", "src", "server", "test", "dataset", "scripts", "extension", "macos/swift-queue.test.ts", "vite.config.ts"]
+  "include": ["packages", "src", "server", "test", "dataset", "scripts", "extension", "macos/swift-queue.test.ts", "macos/install.test.ts", "vite.config.ts"]
 }

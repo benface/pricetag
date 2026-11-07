@@ -254,7 +254,7 @@ private struct BroadcastsForReal: ChainClient {
         #expect(StubNode.asked.count == 1)
     }
 
-    /// It used to read a limit's body as a successful answer of nothing, which a site would take at its word.
+    /// A limit's body isn't a successful answer of nothing, which a site would take at its word.
     @Test func aSiteReadThatKeepsGettingRefusedSaysSo() async {
         StubNode.script { _, _ in json(limit, status: 429) }
         await #expect(throws: ChainError.rateLimited) { _ = try await client().read("eth_call", .array([])) }
@@ -313,7 +313,7 @@ private struct BroadcastsForReal: ChainClient {
             ("eth_getTransactionCount", "0xffffffffffffffff"),
             ("eth_maxPriorityFeePerGas", mostAUInt128Holds),
             ("eth_getBlockByNumber", ["number": "0x64", "timestamp": "0x64", "baseFeePerGas": mostAUInt128Holds] as [String: Any]),
-            // Doubling this one is what used to overflow.
+            // Doubling this one is what would overflow.
             ("eth_getBlockByNumber", ["number": "0x64", "timestamp": "0x64", "baseFeePerGas": "0x80000000000000000000000000000000"] as [String: Any]),
             ("eth_getBlockByNumber", ["number": tooBigForAUInt64, "timestamp": "0x64", "baseFeePerGas": "0x5"] as [String: Any]),
             ("eth_getBlockByNumber", ["number": "0xffffffffffffffff", "timestamp": "0x64", "baseFeePerGas": "0x5"] as [String: Any]),

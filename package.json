@@ -2,6 +2,7 @@
   "name": "pricetag",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@12.3.4",
   "engines": {
     "node": ">=24"
   },
@@ -17,12 +18,14 @@
     "check": "tsc --noEmit && node --test 'test/**/*.test.ts' && vite build",
     "mac": "macos/run.sh",
     "mac:build": "macos/run.sh --build-only",
+    "mac:install": "macos/install.sh",
     "mac:shot": "macos/shot.sh",
     "mac:watch-only": "macos/watch-only.sh",
     "mac:hosted": "macos/hosted.sh",
     "check:mac": "macos/check-mac.sh",
     "check:mac:quick": "macos/check-mac.sh --quick",
     "check:swift-queue": "node macos/swift-queue.test.ts",
+    "check:mac-install": "node --test macos/install.test.ts",
     "check:anvil": "macos/anvil-test.sh",
     "check:keychain": "macos/keychain-test.sh",
     "check:watch-only": "macos/watch-only-test.sh",
@@ -37,28 +40,28 @@
     "example:watch": "node --env-file-if-exists=.env.local packages/sdk/examples/watch.ts"
   },
   "dependencies": {
+    "@noble/curves": "1.9.1",
+    "@noble/hashes": "1.8.0",
+    "@pricetag/sdk": "workspace:*",
+    "viem": "2.57.16"
+  },
+  "devDependencies": {
     "@keystonehq/animated-qr": "0.10.0",
     "@keystonehq/keystone-sdk": "0.13.0",
     "@ledgerhq/context-module": "2.8.0",
     "@ledgerhq/device-management-kit": "1.11.0",
     "@ledgerhq/device-signer-kit-ethereum": "1.18.2",
     "@ledgerhq/device-transport-kit-web-hid": "1.2.4",
-    "@noble/curves": "1.9.1",
-    "@noble/hashes": "1.8.0",
-    "@pricetag/sdk": "workspace:*",
+    "@types/node": "26.6.6",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "apache-arrow": "21.2.0",
     "buffer": "6.0.3",
     "events": "3.3.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "readable-stream": "3.6.2",
     "rxjs": "7.8.2",
-    "viem": "2.57.16"
-  },
-  "devDependencies": {
-    "@types/node": "26.6.6",
-    "@types/react": "19.3.0",
-    "@types/react-dom": "19.3.0",
-    "apache-arrow": "21.2.0",
     "typescript": "7.0.2",
     "vite": "8.3.5"
   }
