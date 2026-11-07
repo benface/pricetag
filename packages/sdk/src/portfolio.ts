@@ -1,6 +1,6 @@
 // Runs the fold over a wallet's priced legs, and adds up what can honestly be added up.
 
-import { applyLeg, emptyPosition, worth, valuePosition, type Method, type PositionState, type PositionValues } from "./fold.ts"
+import { applyLeg, costCanBeAnswered, emptyPosition, knownCostOf, lotsSplitBy, tallyOf, worth, valuePosition, type KnownCost, type Method, type PositionState, type PositionTally, type PositionValues } from "./fold.ts"
 import { timestampOfBlock } from "./chain.ts"
 import type { RateRound } from "./currency.ts"
 import { answerToMicros, isSanePrice, type PricedLeg, type Reference } from "./legs.ts"
@@ -19,10 +19,28 @@ export type LatestPrice = {
 }
 export type LatestPrices = Record<string, LatestPrice | undefined>
 
+/**
+ * What one leg did to its position. Only counters, and what a debit took, rather than every lot before and after: holding
+ * those for every leg made oldest first's memory grow with the lots held times the legs (WORK-559).
+ */
 export type LegEffect = {
   leg: PricedLeg
-  before: PositionState
-  after: PositionState
+  before: PositionTally
+  after: PositionTally
+  /** Whether an answer could fix any of this leg's unknown cost, going by what was held before it. */
+  answerable: boolean
+  /**
+   * Debits only: what was held with a known cost before, leaving out what this leg's taking cost its known cost, and after.
+   * What it took is the difference.
+   */
+  known: { before: KnownCost; after: KnownCost } | null
+}
+
+/** What a leg did to a position, worked out while both states are at hand. */
+export function effectOf(leg: PricedLeg, before: PositionState, after: PositionState): LegEffect {
+  const delta = BigInt(leg.delta)
+  const known = delta < 0n ? { before: knownCostOf(before.lots, lotsSplitBy(before, -delta)), after: knownCostOf(after.lots) } : null
+  return { leg, before: tallyOf(before), after: tallyOf(after), answerable: costCanBeAnswered(leg, before), known }
 }
 
 /** Which of a position's numbers rest on an estimate, so they can look different from exact ones. */
@@ -102,7 +120,10 @@ export function unreadAssets(positions: readonly Position[], { unreadBalances }:
 /** The assets `pnlOverTime` has to leave out. */
 export const unconfirmedAssets = (positions: readonly Position[], unread: readonly string[] = []) => new Set([...positions.filter(isUnconfirmed).map((p) => p.asset), ...unread])
 
-/** Oldest first holds every lot at every step, so its memory grows with the lots times the steps (WORK-559). Average has no such limit. */
+/**
+ * Oldest first's lots, more than fit in this much memory. The check still counts them as if every step held all of them, which
+ * stopped in WORK-559, so it refuses more than it needs to until it's measured again (WORK-673). Average has no such limit.
+ */
 export class OldestFirstTooBigError extends Error {
   constructor() {
     super("This history is too long to work out by oldest first in this much memory. Average cost still works.")
@@ -286,7 +307,7 @@ export function foldPositions(legs: readonly PricedLeg[], method: Method, prices
   for (const leg of legs) {
     const position = positions.get(leg.asset) ?? { state: emptyPosition(method, leg.decimals), effects: [], decimals: leg.decimals }
     const after = applyLeg(position.state, leg)
-    position.effects.push({ leg, before: position.state, after })
+    position.effects.push(effectOf(leg, position.state, after))
     position.state = after
     positions.set(leg.asset, position)
   }
