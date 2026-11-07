@@ -170,10 +170,15 @@ type Held = { from: number; through: number; candidates: Candidate[] }
 /** How many wallets' histories are kept, the least recently read going first. One that's gone is only read again. */
 const MAX_HELD_WALLETS = 500
 
+/** How many times a wallet's history is read again when a reorg comes while it's read. */
+const MAX_ATTEMPTS = 3
+
 export function createApprovals(query: Query, config: ApprovalsConfig) {
   const base = `"${config.baseDataset}"`
   const held = new Map<string, Held>()
   const inTurn = walletTurns()
+  /** How many reorgs have been told about, so a read that crossed one knows. */
+  let rewinds = 0
   /** Whether the dataset has the table, once a read has said. */
   let hasTable: boolean | null = config.dataset ? null : false
 
@@ -206,8 +211,23 @@ export function createApprovals(query: Query, config: ApprovalsConfig) {
     return logs
   }
 
-  /** Every candidate in the wallet's history through `head`, and where that history was read from. */
+  /** Every candidate in the wallet's history through `head`, and where that history was read from. It's only kept when no reorg came while it was read. */
   async function findCandidates(address: string, head: number): Promise<{ held: Held; from: string }> {
+    for (let attempt = 1; ; attempt++) {
+      const startedAt = rewinds
+      const found = await readCandidates(address, head)
+      if (startedAt === rewinds) {
+        held.delete(address)
+        held.set(address, found.held)
+        if (held.size > MAX_HELD_WALLETS) held.delete(held.keys().next().value as string)
+        return found
+      }
+      // What it read can be the replaced chain's, so it's read again from what the reorg left. Reorgs that keep coming can't hold the answer up for long.
+      if (attempt === MAX_ATTEMPTS) return found
+    }
+  }
+
+  async function readCandidates(address: string, head: number): Promise<{ held: Held; from: string }> {
     const owner = hexOf(address)
     const from = config.historyFrom(head)
     const known = held.get(address)
@@ -233,11 +253,7 @@ export function createApprovals(query: Query, config: ApprovalsConfig) {
     const candidates = candidatesFromLogs(address, logs)
     const merged = new Map((kept?.candidates ?? []).map((c) => [candidateKey(c), c]))
     for (const candidate of candidates) merged.set(candidateKey(candidate), candidate)
-    const next: Held = { from: kept?.from ?? from, through, candidates: [...merged.values()] }
-    held.delete(address)
-    held.set(address, next)
-    if (held.size > MAX_HELD_WALLETS) held.delete(held.keys().next().value as string)
-    return { held: next, from: source }
+    return { held: { from: kept?.from ?? from, through, candidates: [...merged.values()] }, from: source }
   }
 
   async function check(address: string, candidates: readonly Candidate[], head: Head): Promise<{ checked: CheckedApproval[]; unreadable: number }> {
@@ -273,18 +289,16 @@ export function createApprovals(query: Query, config: ApprovalsConfig) {
 
   return {
     /**
-     * Blocks from `block` on were replaced, so they're read again. What was found in them stays a candidate, since each is
-     * checked at the head anyway, and one the new chain doesn't have just shows what it allows now.
+     * Blocks from `block` on were replaced, so they're read again. A wallet whose newest grant of something was in them is
+     * read again from the start, because the grant before it, which is what's left on the new chain, was replaced in what's
+     * kept. A read that's running when this comes reads again before it answers.
      */
-    async rewind(block: number): Promise<void> {
-      await Promise.allSettled(
-        [...held.keys()].map((address) =>
-          inTurn(address, async () => {
-            const known = held.get(address)
-            if (known && known.through >= block) held.set(address, { ...known, through: Math.max(known.from, block) - 1 })
-          }),
-        ),
-      )
+    rewind(block: number): void {
+      rewinds += 1
+      for (const [address, known] of held) {
+        if (known.candidates.some((candidate) => (candidate.grant?.blockNum ?? -1) >= block)) held.delete(address)
+        else if (known.through >= block) held.set(address, { ...known, through: Math.max(known.from, block) - 1 })
+      }
     },
 
     /** A wallet's approvals that still allow something at `head`. */

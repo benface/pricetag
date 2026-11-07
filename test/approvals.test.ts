@@ -178,11 +178,65 @@ describe("reading a wallet's approvals", () => {
     const approvals = createApprovals(query, { baseDataset: "base", dataset: null, network: "base_mainnet", historyFrom: () => 100 })
     assert.ok(!(await approvals.read(ME, head)).approvals.some((a) => a.spender === SPENDER))
     replaced = true
-    await approvals.rewind(995)
+    approvals.rewind(995)
     queries.length = 0
     const read = await approvals.read(ME, head)
     assert.deepEqual(queries.filter((sql) => sql.includes(".logs")).map((sql) => /BETWEEN (\d+) AND (\d+)/.exec(sql)!.slice(1)), [["995", "1000"]])
     assert.ok(read.approvals.some((a) => a.spender === SPENDER && a.grantedBlock === 997))
+  })
+
+  it("reads again when a reorg comes while a wallet's first read is running", async () => {
+    let replaced = false
+    let release = () => {}
+    const held = new Promise<void>((resolve) => (release = resolve))
+    let reads = 0
+    const queries: string[] = []
+    const query = async <T>(sql: string): Promise<T[]> => {
+      queries.push(sql)
+      if (sql.includes(".logs")) {
+        reads += 1
+        // What the chain had when it was asked, which the first read only answers after the reorg.
+        const rows = replaced && /BETWEEN \d+ AND 1000/.test(sql) ? [{ ...log(997, USDC_ADDRESS, APPROVAL_TOPIC, ME, SPENDER), timestamp: 1_799_000_000_000 }] : []
+        if (reads === 1) await held
+        return rows as T[]
+      }
+      const calldata = /X'([0-9a-f]+)', \d+\) AS r/.exec(sql)![1]!
+      return [{ r: { data: answer(calldata, state) } }] as T[]
+    }
+    const approvals = createApprovals(query, { baseDataset: "base", dataset: null, network: "base_mainnet", historyFrom: () => 100 })
+    const first = approvals.read(ME, head)
+    while (reads === 0) await new Promise((resolve) => setImmediate(resolve))
+    replaced = true
+    approvals.rewind(995)
+    release()
+    assert.ok((await first).approvals.some((a) => a.spender === SPENDER && a.grantedBlock === 997), "the read that crossed it answers from the new chain")
+    queries.length = 0
+    const next = await approvals.read(ME, head)
+    assert.ok(next.approvals.some((a) => a.spender === SPENDER && a.grantedBlock === 997))
+    assert.ok(!queries.some((sql) => sql.includes(".logs")), "and what it read again is kept")
+  })
+
+  it("doesn't show a grant from a transaction a reorg replaced", async () => {
+    let replaced = false
+    const queries: string[] = []
+    const query = async <T>(sql: string): Promise<T[]> => {
+      queries.push(sql)
+      if (sql.includes(".logs")) {
+        const [from, to] = /BETWEEN (\d+) AND (\d+)/.exec(sql)!.slice(1).map(Number) as [number, number]
+        const chain = [{ ...log(500, USDC_ADDRESS, APPROVAL_TOPIC, ME, SPENDER), timestamp: 1_798_000_000_000 }, ...(replaced ? [] : [{ ...log(997, USDC_ADDRESS, APPROVAL_TOPIC, ME, SPENDER), timestamp: 1_799_000_000_000 }])]
+        return chain.filter((row) => row.block_num >= from && row.block_num <= to) as T[]
+      }
+      const calldata = /X'([0-9a-f]+)', \d+\) AS r/.exec(sql)![1]!
+      return [{ r: { data: answer(calldata, state) } }] as T[]
+    }
+    const approvals = createApprovals(query, { baseDataset: "base", dataset: null, network: "base_mainnet", historyFrom: () => 100 })
+    const grantOf = (read: Awaited<ReturnType<typeof approvals.read>>) => read.approvals.find((a) => a.spender === SPENDER && a.found === "history")
+    assert.equal(grantOf(await approvals.read(ME, head))?.grantedBlock, 997)
+    replaced = true
+    approvals.rewind(995)
+    const after = grantOf(await approvals.read(ME, head))
+    assert.equal(after?.grantedBlock, 500, "the grant before it, which the new chain still has")
+    assert.equal(after?.grantedTx, `0x${(500).toString(16).padStart(64, "0")}`)
   })
 })
 

@@ -954,7 +954,7 @@ describe("head reads that overlap", () => {
       proofs: { datasets: async () => [], priceBehind: async () => null, currentPriceBehind: async () => null, readBlock: async () => null },
       follow: { stream, sql: "SELECT 1", readMark: async () => ({ blockNum: tip, hash: `0x${tip}` }), logger: { warn() {} }, pollMs: 1, tickMs: 0 },
       approvals: {
-        rewind: async () => {},
+        rewind() {},
         read: async (_, head) => {
           used.push(head.blockNum)
           return { spenders: [] } as unknown as Awaited<ReturnType<Approvals["read"]>>

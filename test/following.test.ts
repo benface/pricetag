@@ -1396,3 +1396,39 @@ describe("the server's live events", FOLLOWING, () => {
     assert.deepEqual(await legs(), ["0xcc"])
   })
 })
+
+describe("exchange rates once there are too many to keep", () => {
+  const HEAD = 200_000
+  const walletAt = (blocks: number[]) => ({ latest: { blockNum: HEAD, timestamp: new Date(1_800_000_000_000).toISOString() }, legs: blocks.map((blockNum) => ({ blockNum })) }) as Parameters<ReturnType<typeof createRates>>[1]
+  const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i)
+
+  it("still answers with a kept rate the same read lets go of", async () => {
+    const rates = createRates(async (_feed, blocks) => new Map(blocks.map((block) => [block, { answer: String(block), updatedAt: block } satisfies RateRound])))
+    await rates("CAD", walletAt(range(1, 100_000)))
+    const read = await rates("CAD", walletAt([1, 100_001]))
+    assert.deepEqual(Object.keys(read?.byBlock ?? {}), ["1", "100001"])
+  })
+
+  it("still answers with a kept rate another read lets go of while it waits", async () => {
+    let release = () => {}
+    const held = new Promise<void>((resolve) => (release = resolve))
+    let holdNext = false
+    let started = () => {}
+    const waiting = new Promise<void>((resolve) => (started = resolve))
+    const rates = createRates(async (_feed, blocks) => {
+      if (holdNext) {
+        holdNext = false
+        started()
+        await held
+      }
+      return new Map(blocks.map((block) => [block, { answer: String(block), updatedAt: block } satisfies RateRound]))
+    })
+    await rates("CAD", walletAt(range(1, 100_000)))
+    holdNext = true
+    const first = rates("CAD", walletAt([1, 100_001]))
+    await waiting
+    await rates("CAD", walletAt([100_002]))
+    release()
+    assert.deepEqual(Object.keys((await first)?.byBlock ?? {}), ["1", "100001"])
+  })
+})

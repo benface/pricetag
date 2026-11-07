@@ -33,10 +33,7 @@ export function walletTurns() {
     turns.set(address, tail)
     return turn
   }
-  return Object.assign(inTurn, {
-    /** How many wallets have a read running or waiting. */
-    get waiting() {
-      return turns.size
-    },
-  })
+  /** How many wallets have a read running or waiting. */
+  const waiting = () => turns.size
+  return Object.assign(inTurn, { waiting })
 }

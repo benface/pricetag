@@ -86,8 +86,8 @@ export function createRates(readRounds: RoundReader): RatesReader {
   const settled = new Map<CurrencyCode, Map<number, RateRound>>()
   /** With the chain's head when it was read. Anything not yet settled could have changed once that moves. */
   const newest = new Map<CurrencyCode, NonNullable<Rates["latest"]> & { readAt: number }>()
-  /** How many reorgs have been told about. A read that crossed one can't say which chain it got, so it isn't kept. */
-  let rewinds = 0
+  /** Reads still running, each with the lowest block a reorg replaced while it ran. A read that crossed one can't say which chain it got, so it isn't kept. */
+  const running = new Set<{ rewoundFrom: number }>()
 
   /** A read that fails throws. A block the feed had no answer for is just left out, and isn't remembered, so it's tried again. */
   const ratesFor: ReadRates = async (currency, wallet, { held = false, chainHead } = {}) => {
@@ -98,11 +98,25 @@ export function createRates(readRounds: RoundReader): RatesReader {
     const chain = chainHead ?? asOf
     const blocks = [...new Set([...wallet.legs.filter((leg) => held || !leg.opening).map((leg) => leg.blockNum), ...(wallet.priceSamples ?? []).map((sample) => sample.blockNum)])]
     const current = newest.get(currency)
-    const wanted = new Set(blocks.filter((block) => !known.has(block)))
-    if (!known.has(asOf) && (current?.blockNum !== asOf || current.readAt !== chain)) wanted.add(asOf)
-    const startedAt = rewinds
-    const read = wanted.size > 0 ? await readRounds(currency, [...wanted]) : new Map<number, RateRound>()
-    const isSameChain = startedAt === rewinds
+    // What's kept is taken now, since this read or another can let go of it while this one waits.
+    const cached = new Map<number, RateRound>()
+    for (const block of [...blocks, asOf]) {
+      const round = known.get(block)
+      if (round) cached.set(block, round)
+    }
+    const wanted = new Set(blocks.filter((block) => !cached.has(block)))
+    if (!cached.has(asOf) && (current?.blockNum !== asOf || current.readAt !== chain)) wanted.add(asOf)
+    const crossed = { rewoundFrom: Infinity }
+    running.add(crossed)
+    let read: Map<number, RateRound>
+    try {
+      read = wanted.size > 0 ? await readRounds(currency, [...wanted]) : new Map<number, RateRound>()
+    } finally {
+      running.delete(crossed)
+    }
+    const isSameChain = crossed.rewoundFrom === Infinity
+    // A kept rate from a block a reorg replaced while this read ran is gone, as it would have been had this read started after.
+    for (const block of cached.keys()) if (block >= crossed.rewoundFrom) cached.delete(block)
     if (isSameChain) for (const [block, round] of read) if (block <= settledThrough(chain)) known.set(block, round)
     for (const at of known.keys()) {
       if (known.size <= MAX_SETTLED_BLOCKS) break
@@ -111,11 +125,12 @@ export function createRates(readRounds: RoundReader): RatesReader {
 
     const byBlock: Rates["byBlock"] = {}
     for (const block of blocks) {
-      const round = read.get(block) ?? known.get(block)
+      const round = read.get(block) ?? cached.get(block)
       if (round) byBlock[block] = round
     }
     // A read that found no answer means there's none now. An older one could be from a block a reorg replaced.
-    const round = wanted.has(asOf) ? read.get(asOf) : (known.get(asOf) ?? current?.round)
+    const kept = isSameChain || current === undefined || current.blockNum < crossed.rewoundFrom ? current : undefined
+    const round = wanted.has(asOf) ? read.get(asOf) : (cached.get(asOf) ?? kept?.round)
     if (isSameChain) {
       if (round) newest.set(currency, { blockNum: asOf, round, readAt: chain })
       else newest.delete(currency)
@@ -125,7 +140,7 @@ export function createRates(readRounds: RoundReader): RatesReader {
 
   return Object.assign(ratesFor, {
     rewind(block: number) {
-      rewinds += 1
+      for (const read of running) read.rewoundFrom = Math.min(read.rewoundFrom, block)
       for (const known of settled.values()) for (const at of known.keys()) if (at >= block) known.delete(at)
       for (const [currency, latest] of newest) if (latest.blockNum >= block) newest.delete(currency)
     },
