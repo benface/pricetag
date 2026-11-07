@@ -66,7 +66,7 @@ Amounts are in a token's smallest unit, and money is in micros (millionths of a 
 | `shortHash` | A transaction hash or address, shortened. |
 | `describeError(error)` | The most useful message in an error from Amp's client. The SDK's own errors already have it as their `message`, with Amp's error as their `cause`. |
 | `WalletTooBigError` | What reads throw for a wallet with more history than fits in memory, about 10 KB a row of heap, or `maxWalletRows` if you set it. You never get part of a history. Read a smaller block range, or give Node a bigger heap. |
-| `OldestFirstTooBigError` | What `getPortfolio` throws with `method: "fifo"` on a history too long for that in this heap, which can be far shorter, because its memory grows with the lots it holds times the steps. `average` still works. |
+| `OldestFirstTooBigError` | What `getPortfolio` throws with `method: "fifo"` on a history too long for that in this heap, which can be shorter, because it holds every lot still open. For now, the check also refuses some histories that would fit. `average` still works. |
 | `TOKENS`, `ASSETS`, `isAddress` | The allowlist, its positions, and whether a string is a Base address. |
 
 Everything callers see is camelCase. The one exception is in `@pricetag/sdk/core`: `LegRow` and `PricedRow` are rows of the dataset's tables, so they keep its column names.
