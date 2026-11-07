@@ -125,27 +125,6 @@ private func readLog(_ points: [PnlPoint], currency: CurrencyCode, signed: [Sent
     }.value
 }
 
-extension SentTransaction {
-    /// Only what's still on its way or failed. One that landed is read with the rest, and one that never did changed nothing.
-    init?(_ record: SignedRecord) {
-        let status: Status
-        switch record.status {
-        case .pending: status = .pending
-        case .failed: status = .failed
-        case .confirmed, .dropped: return nil
-        }
-        let amount = "\(Format.amount(record.amount, decimals: record.decimals)) \(record.symbol)"
-        let summary = switch record.reason {
-        case .sent: "Send \(amount)"
-        case .site: record.amount == "0" ? "Transaction for \(record.site.map(siteName) ?? "a site")" : "Send \(amount) for \(record.site.map(siteName) ?? "a site")"
-        case .note: "Publish what you paid for \(record.symbol)"
-        case .revoke: "Revoke an approval for \(record.symbol)"
-        case .aboveCap, .manual, .rotation: "Move \(amount) to savings"
-        }
-        self.init(txHash: record.hash, date: record.createdAt, summary: summary, to: record.to.lowercased, asset: record.reason == .note || record.reason == .revoke ? nil : record.symbol, status: status)
-    }
-}
-
 /// The rows, under a heading for each day. Up and down move through them and show each one's details.
 private struct TransactionsTable: View {
     let days: [TransactionDay]

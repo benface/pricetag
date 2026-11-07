@@ -31,21 +31,11 @@ struct BuySheet: View {
         self.purchases = purchases
         self.started = started
         self.addSavings = addSavings
-        let suggestion = Self.suggestion(for: wallet)
+        let suggestion = wallet.buySuggestion
         _typed = State(initialValue: typed ?? suggestion)
         _suggested = State(initialValue: typed == nil ? suggestion : nil)
         _asset = State(initialValue: asset)
         _failure = State(initialValue: failure)
-    }
-
-    /// What to start at, once the wallet's been read: the room left is unknown before, and would read as the whole cap. Without
-    /// savings it's all the room, since nothing would move what's above it.
-    private static func suggestion(for wallet: HotWallet) -> Int? {
-        guard wallet.plan != nil else { return nil }
-        let display = wallet.display
-        let room = display.wholeAmount(wallet.topUpRoom, rounding: .down)
-        let start = wallet.settings.sweepDestination == nil ? room : min(room, 20)
-        return max(display.wholeAmount(BuyPlan.minimumUsdMicros, rounding: .up), start)
     }
 
     /// What's typed, which can be nothing, or below zero. Nothing here assumes it's an amount until `BuyPlan` has said so.
@@ -92,7 +82,7 @@ struct BuySheet: View {
         }
         .padding(20)
         .frame(width: 460)
-        .onChange(of: Self.suggestion(for: wallet)) { _, suggestion in
+        .onChange(of: wallet.buySuggestion) { _, suggestion in
             guard typed == suggested else { return }
             typed = suggestion
             suggested = suggestion

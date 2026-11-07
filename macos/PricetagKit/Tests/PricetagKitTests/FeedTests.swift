@@ -1444,3 +1444,15 @@ final class FailingProtocol: URLProtocol, @unchecked Sendable {
         }
     }
 }
+
+@Suite struct WalletBadgeTests {
+    @Test func itsLeftOutWhenTheLineBesideItSaysTheSame() throws {
+        let demo = try demoPortfolio()
+        #expect(!FeedState.noWallet.showsWalletBadge(portfolio: nil))
+        #expect(!FeedState.reading.showsWalletBadge(portfolio: nil))
+        #expect(FeedState.reading.showsWalletBadge(portfolio: demo))
+        #expect(!FeedState.live.showsWalletBadge(portfolio: demo))
+        #expect(FeedState.live.showsWalletBadge(portfolio: nil))
+        #expect(FeedState.serverUnreachable.showsWalletBadge(portfolio: nil))
+    }
+}

@@ -469,7 +469,7 @@ struct HotWalletDetails<Overview: View>: View {
         .confirmationDialog("Delete the old key?", isPresented: $isConfirmingAbandon) {
             Button("Delete and Leave It Behind", role: .destructive) { Task { await wallet.finishRotationLeavingFundsBehind() } }
         } message: {
-            Text(abandonMessage)
+            Text(wallet.leavingOldKeyMessage)
         }
     }
 
@@ -564,9 +564,8 @@ struct HotWalletDetails<Overview: View>: View {
     }
 
     private func applyRPC() {
-        let value = rpc.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: value), url.scheme == "http" || url.scheme == "https", url.host() != nil else {
-            rpcError = "That isn't a web address. It should look like \(Base.publicRPC.absoluteString)."
+        guard let url = WebAddress.read(rpc) else {
+            rpcError = WebAddress.problem(example: Base.publicRPC)
             return
         }
         rpcError = nil
@@ -580,30 +579,19 @@ struct HotWalletDetails<Overview: View>: View {
         }
     }
 
-    private var abandonMessage: String {
-        let lost = "What's still on the old address can never be moved again."
-        if wallet.isKeyMissing { return "This device no longer has it. \(lost)" }
-        return switch wallet.rotationHold {
-        case .otherTokens(let count): "It holds \(count) \(count == 1 ? "token" : "tokens") this app doesn't track. \(lost)"
-        case .cantCheckOtherTokens: "This app can't check right now whether it holds other tokens. \(lost)"
-        case .notWorthTheGas(let symbols): "It holds \(HotWalletWording.tooCostlyToMove(symbols)). \(lost)"
-        case .notEnoughGas, nil: "It holds tokens with no ETH to move them. \(lost)"
-        }
-    }
-
     private var activity: some View {
         DetailsSection("Signed by This Mac") {
             ForEach(wallet.records) { record in
                 HStack {
                     VStack(alignment: .leading) {
-                        Text(recordTitle(record))
+                        Text(record.title)
                             .monospacedDigit()
-                        Text("\(reasonText(record)) · \(Format.time(record.createdAt))")
+                        Text("\(record.reasonText) · \(Format.time(record.createdAt))")
                             .font(.caption)
                             .secondaryText()
                     }
                     Spacer()
-                    RecordStatus(status: record.status, text: statusText(record))
+                    RecordStatus(status: record.status, text: record.statusText(among: wallet.records))
                     if let url = Basescan.transaction(record.hash) {
                         Link(destination: url) { Image(systemName: "arrow.up.right.square") }
                             .foregroundStyle(.secondary)
@@ -635,36 +623,6 @@ struct HotWalletDetails<Overview: View>: View {
             try? await Task.sleep(for: .seconds(3))
             guard litRow == row else { return }
             withAnimation(.easeOut(duration: 0.6)) { litRow = nil }
-        }
-    }
-
-    private func reasonText(_ record: SignedRecord) -> String {
-        switch record.reason {
-        case .aboveCap: record.gainUsdMicros == "0" ? "Above the cap" : "Above the cap or realized gains"
-        case .manual: "Swept by you"
-        case .rotation: "Replacing the key"
-        case .site: record.site.map(siteName) ?? "A site"
-        case .sent: "Sent to \(Format.shortHash(record.to.checksummed))"
-        case .note: "Published for anyone to read"
-        case .revoke: "Revoked, for \(Format.shortHash(record.to.checksummed))"
-        }
-    }
-
-    private func recordTitle(_ record: SignedRecord) -> String {
-        switch record.reason {
-        case .note: "What you paid for \(record.symbol)"
-        case .revoke: "Approval for \(record.symbol)"
-        default: "\(Format.amount(record.amount, decimals: record.decimals)) \(record.symbol)"
-        }
-    }
-
-    private func statusText(_ record: SignedRecord) -> String {
-        switch record.status {
-        case .pending: "On its way"
-        case .confirmed: "Done"
-        case .failed: "Failed"
-        // Given up on, it can still land, unless another transaction took its place.
-        case .dropped: wallet.records.contains { $0.nonce == record.nonce && ($0.status == .confirmed || $0.status == .failed) } ? "Never landed" : "Not confirmed"
         }
     }
 }

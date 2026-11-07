@@ -4,6 +4,18 @@ import PricetagKit
 
 /// The hot wallet's sentences. It's "this device's spending money" and the cold wallet is "your savings", everywhere.
 public enum HotWalletWording {
+    /// For someone about to delete an old key, and what's on it for good.
+    public static func leavingOldKey(isMissing: Bool, hold: HotWallet.RotationHold?) -> String {
+        let lost = "What's still on the old address can never be moved again."
+        if isMissing { return "This device no longer has it. \(lost)" }
+        return switch hold {
+        case .otherTokens(let count): "It holds \(count) \(count == 1 ? "token" : "tokens") this app doesn't track. \(lost)"
+        case .cantCheckOtherTokens: "This app can't check right now whether it holds other tokens. \(lost)"
+        case .notWorthTheGas(let symbols): "It holds \(tooCostlyToMove(symbols)). \(lost)"
+        case .notEnoughGas, nil: "It holds tokens with no ETH to move them. \(lost)"
+        }
+    }
+
     public static let title = "Spending Money"
     public static let summary = "A small balance for everyday use, with no recovery phrase to write down."
     public static let cannotBeRestored = "This money lives only on this device. There's no recovery phrase and no backup: if this device is lost or erased, what's on it is gone."

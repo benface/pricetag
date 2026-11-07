@@ -92,7 +92,7 @@ struct PopoverView: View {
             HStack(alignment: .firstTextBaseline) {
                 walletHeader
                 Spacer(minLength: 8)
-                if showsBadge {
+                if store.feed.showsWalletBadge(portfolio: portfolio) {
                     FeedBadge(feed: store.feed, portfolio: portfolio, readingSince: store.readingSince)
                         .fixedSize()
                 }
@@ -210,16 +210,6 @@ struct PopoverView: View {
         .menuStyle(.button)
         .menuIndicator(.hidden)
         .buttonStyle(.plain)
-    }
-
-    /// Not when the line beside it or under it already says the same: "Demo wallet", "No wallet yet", or "Reading this wallet…".
-    private var showsBadge: Bool {
-        switch store.feed {
-        case .noWallet: false
-        case .reading: portfolio != nil
-        case .live: portfolio?.mode != .demo
-        default: true
-        }
     }
 
     private var isCatchingUp: Bool {

@@ -5,14 +5,6 @@ import LocalAuthenticationEmbeddedUI
 import PricetagKit
 import SwiftUI
 
-struct ConfirmationRow {
-    let label: String
-    let value: String
-    var isAddress = false
-    /// Who an address belongs to, above it, when that's known.
-    var name: String?
-}
-
 extension EnvironmentValues {
     /// The tallest an approval can be. Otherwise the smallest screen's, since this doesn't know which one it'll open on.
     @Entry var confirmationHeightLimit: CGFloat?
@@ -25,11 +17,6 @@ extension EnvironmentValues {
 extension ApprovalPrompt {
     /// Whether an approval waits for the user to say they've heard it before Touch ID can ask, which only matters with VoiceOver on.
     static var needsReview: Bool { NSWorkspace.shared.isVoiceOverEnabled }
-}
-
-enum ConfirmationHero {
-    case amount(String, symbol: String)
-    case words(String)
 }
 
 enum ConfirmationAsker {

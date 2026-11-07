@@ -242,3 +242,16 @@ public enum Format {
         return result
     }
 }
+
+/// A server's address as someone typed it, which has to be one this app can actually reach.
+public enum WebAddress {
+    public static func read(_ text: String) -> URL? {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: value), url.scheme == "http" || url.scheme == "https", url.host() != nil else { return nil }
+        return url
+    }
+
+    public static func problem(example: URL) -> String {
+        "That isn't a web address. It should look like \(example.absoluteString)."
+    }
+}
