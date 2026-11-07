@@ -24,7 +24,7 @@ So no swaps, approvals, permits, messages or typed data, on any route. Swaps hap
 | **Keystone** | QR codes and the webcam, so it's never connected | No: you find it on the device's receive screen | A webcam |
 | **Browser wallet** | Through the wallet, like Rabby | No: you check it on the device | The wallet set up with your device |
 
-The browser wallet is the fallback if a direct route misbehaves on demo day. Our own extension isn't offered there, because it's the hot wallet.
+The browser wallet is the fallback if a direct route misbehaves. Our own extension isn't offered there, because it's the hot wallet.
 
 Either way, the page shows an address as checked only after you say every character matched your device's screen. The accounts you choose between aren't checked yet, and the page says so.
 
@@ -44,14 +44,19 @@ With `pnpm mac`, the page is `/` on the server it runs on this Mac. A hosted ser
 
 ## Where an address shows on each device
 
-The Mac app used to say "its receive screen for Base", and the web page "for Ethereum". Neither device has a receive screen for Base. Base shares Ethereum's address.
+Neither device has a receive screen for Base, which shares Ethereum's address.
 
-| | What it really does | Source |
-| --- | --- | --- |
-| **Ledger Nano X** | It has no receive screen of its own. It shows an address only when software asks. With the Base chain ID, which is what the page sends, the Ethereum app says **Verify Base address**, then the address, then **Confirm** or **Reject**, then "Address verified". An older Ethereum app says less. Base has no app of its own | [`ui_get_public_key.c`](https://github.com/LedgerHQ/app-ethereum/blob/develop/src/nbgl/ui_get_public_key.c), [`network.c`](https://github.com/LedgerHQ/app-ethereum/blob/develop/src/network.c), [the Nano UI](https://github.com/LedgerHQ/ledger-secure-sdk/blob/master/lib_nbgl/src/nbgl_use_case_nanos.c), [Ledger on Base](https://www.ledger.com/blog/base-the-new-l2-incubated-by-coinbase-joins-the-ledger-live-ecosystem) |
-| **Keystone 3 Pro** | Tap **ETH** on the home screen. **Receive ETH** shows a code with just the address in it, and the address itself. It doesn't mention Base. **Switch Account** changes the account, and **⋯ > Change Derivation Path** changes the path, where **BIP 44 Standard** is the one this page's Top Up reaches | [`gui_multi_path_coin_receive_widgets.c`](https://github.com/KeystoneHQ/keystone3-firmware/blob/master/src/ui/gui_widgets/multi/web3/gui_multi_path_coin_receive_widgets.c), [its wording](https://github.com/KeystoneHQ/keystone3-firmware/blob/master/src/ui/lv_i18n/data.csv), [Receiving](https://guide.keyst.one/docs/receiving-cryptocurrency), [Connect Software Wallet](https://guide.keyst.one/docs/connecting-software-wallets-to-keystone) |
+- **Ledger Nano X** has no receive screen of its own: it shows an address only when software asks.
+  With the Base chain ID, which the page sends, the Ethereum app says **Verify Base address**, then the address, then **Confirm** or **Reject**, then "Address verified".
+  An older Ethereum app says less.
+  Sources: [`ui_get_public_key.c`](https://github.com/LedgerHQ/app-ethereum/blob/develop/src/nbgl/ui_get_public_key.c), [`network.c`](https://github.com/LedgerHQ/app-ethereum/blob/develop/src/network.c), [the Nano UI](https://github.com/LedgerHQ/ledger-secure-sdk/blob/master/lib_nbgl/src/nbgl_use_case_nanos.c).
+- **Keystone 3 Pro:** tap **ETH** on the home screen.
+  **Receive ETH** shows a code with just the address in it, and the address itself, without mentioning Base.
+  **Switch Account** changes the account, and **⋯ > Change Derivation Path** the path, where **BIP 44 Standard** is the one Top Up reaches.
+  Sources: [the receive widget](https://github.com/KeystoneHQ/keystone3-firmware/blob/master/src/ui/gui_widgets/multi/web3/gui_multi_path_coin_receive_widgets.c), [its wording](https://github.com/KeystoneHQ/keystone3-firmware/blob/master/src/ui/lv_i18n/data.csv), [Receiving](https://guide.keyst.one/docs/receiving-cryptocurrency).
 
-Installing the Ethereum app is My Ledger in Ledger Wallet, and closing Ledger Wallet first comes from [MetaMask's Ledger guide](https://support.metamask.io/more-web3/even-more/having-issues-with-your-ledger/), since Ledger's own support pages don't say it plainly. All of this is read from source and docs, and not one word has been checked on a device yet. The checklist below does that.
+Closing Ledger Wallet first comes from [MetaMask's Ledger guide](https://support.metamask.io/more-web3/even-more/having-issues-with-your-ledger/).
+All of this is read from source and docs, and the checklist below checks it on a device.
 
 ## What each device shows
 
@@ -112,7 +117,7 @@ Once one's added, send a few dollars to it, and see them arrive. That's the firs
 4. Fund that account with a few dollars of ETH on Base, sent to the address you checked.
 5. Press **Send to another of my wallets**, send a little ETH to another account you've checked, and compare the device's screen with the page. It should show Base.
 6. Send a little USDC the same way, if it holds some. Note whether the device shows the token's name and amount, or asks for blind signing.
-7. With **Blind signing off**, publish a cost from Resolve or the Mac app. The page should say to turn the setting on. Turn it on, try again, note what the device shows, and turn it back off.
+7. With **Blind signing off**, publish a cost from Answer Questions, on the web or in the Mac app. The page should say to turn the setting on. Turn it on, try again, note what the device shows, and turn it back off.
 8. Check that a note you published reads as `self-reported` once Amp has it.
 
 **Keystone:** the same steps, with these differences.
@@ -129,5 +134,5 @@ Once one's added, send a few dollars to it, and see them arrive. That's the firs
 1. **Top Up from Savings**. With Chrome as your default, it should say **Continue in Google Chrome**. With Safari as your default, it should say the same, say Safari can't reach a Ledger, and offer **Use Safari Instead, for a Keystone**. Each should open that browser. The page should open with the amount and hot wallet filled in, and ask you to say the address is yours. Compare it with the Mac app first. In Safari, Ledger should be disabled and Keystone should work.
 2. The extension's **Top Up…** button should get to the same sheet.
 3. On the web page, press **Add to the Mac app as savings**. The Mac app should show its check step, filled in, and shouldn't add anything until you tick the box. Any other accounts should be listed with their own boxes, unticked.
-4. In Resolve, on a savings wallet's cost, **Publish from Your Device…** should say which browser it opens, with the same choices, then open the page with the cost filled in. Connect a device or account that doesn't hold that wallet: **Continue** should stay off, and it should offer **Show more** and **Use another device**.
-5. In the web app, with CAD as your main currency, type a cost in Resolve and press **Publish from your device…**. The form should ask for USD, not carry over what you typed.
+4. In Answer Questions, on a savings wallet's cost, **Publish from Your Device…** should say which browser it opens, with the same choices, then open the page with the cost filled in. Connect a device or account that doesn't hold that wallet: **Continue** should stay off, and it should offer **Show more** and **Use another device**.
+5. In the web app, with CAD as your main currency, type a cost in Answer Questions and press **Publish from your device…**. The form should ask for USD, not carry over what you typed.

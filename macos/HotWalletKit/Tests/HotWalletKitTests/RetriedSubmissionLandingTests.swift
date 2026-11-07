@@ -5,7 +5,7 @@ import Testing
 @testable import HotWalletKit
 
 @MainActor
-/// From the review of WORK-489: a retried send or sweep follows the receipts of what it put on its way, and nothing else.
+/// A retried send or sweep follows the receipts of what it put on its way, and nothing else.
 @Suite struct RetriedSubmissionLandingTests {
     @Test func sweepRetryWithNewHashOnlyTracksTheSuccessfulAttempt() async throws {
         let rig = await Rig(snapshot())

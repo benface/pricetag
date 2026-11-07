@@ -18,6 +18,28 @@
 # SWIFT_QUEUE_ON_PASS is a command to run once a run really has passed, cleanup included. Nothing the command does in its turn can know that.
 # SWIFT_QUEUE_ON_STOP is a command to run if a run's reported as stopped, which has to take back anything SWIFT_QUEUE_ON_PASS did, even if
 # that's still running. Once the first has returned and this script stops listening for signals, the run has passed.
+#
+# What a run says, and how it cleans up. TESTING.md says how to run it.
+#
+# What you'll see, on lines starting with `[swift-queue]`:
+#
+# - **`Waiting … not hung: pnpm check:mac from <worktree> has been running for 2m3s`**, every 30 seconds. It's in the queue, behind that.
+# - **`… passed in 3m12s`** or **`… failed with exit 1 in 3m12s`**: the result. A failing check still fails with its own exit code.
+# - **Exit 75 and `… did not run: it was still waiting`**: the queue was too long, so it gave up after 4 minutes to leave time for the run itself. This isn't a failed check, and nothing's left behind. Run it again. At a terminal it waits as long as it takes, and `SWIFT_QUEUE_WAIT=<seconds>` sets another limit (empty for none).
+# - **Exit 69 and `… isn't a pass` or `… did not run: an earlier run's processes can't be verified gone`**: see below. Don't report either as a pass or a failed check.
+# - **`… was stopped while waiting`** or **`… was stopped partway`**: there's no result. It didn't pass or fail, so don't report it as either. Run it again. Whatever it had compiled is kept, so the next run goes faster.
+#
+# When a run ends or is killed, even with `kill -9` on its whole process group, it stops everything it started, and the next run doesn't start until that's done. That usually takes under a second, and about 5 for something that ignores SIGTERM. Nothing else is touched, including other worktrees' runs.
+#
+# A process that starts its own session and whose parent exits within a second, before the run lists it, isn't found, and none of the Swift tools do that. And a run's cleanup comes from a watcher outside its process group, so if that's killed along with the run, what's left keeps running until the next run stops it.
+#
+# If what a run started can't be verified gone after about 7 seconds, because something can't be killed or `ps` keeps failing, the run says `Couldn't stop …` and `… isn't a pass`, and exits with 69 unless the command had already failed with its own code. It keeps its job folder in the queue folder, with the list of what's left in `pids`. Each later run tries again for about 7 seconds, and starts once they're gone. Until then it exits with 69 and `… did not run`, without running anything, so waiting runs don't hang and nothing overlaps. Run it again once `ps` works. If a process really can't be killed, restart the Mac, which clears it. Only delete that job folder once you've checked its processes are gone, because the queue forgets them when you do.
+#
+# The lock is at `~/Library/Caches/patina-swift-queue/`, outside the repo so that every worktree shares it. Don't delete it: a run waiting on the old file wouldn't see the new one.
+#
+# The queue has its own tests, in `macos/swift-queue.test.ts`, because they take about a minute and only protect the Mac's builds, so they're not in `pnpm test`. `pnpm check:swift-queue` runs them, and a full `pnpm check:mac` runs them first, before its turn, because they use their own queue and compile nothing. `--quick` and a run that finds its code already passed skip them. They're in `macos/`, so changing them runs everything again. Run them whenever you change `swift-queue.sh`: this lock protects every run on this Mac. A failure names its test, and so does a signal: `Its tests got SIGTERM during "…"` came from outside them, so it has no result, like `… was stopped partway`.
+#
+# A test that waits for something needs a deadline. If it spins forever and `swift test` is killed outside the queue, its `swiftpm-testing-helper` keeps using a whole core with nobody to stop it.
 set -u
 
 # A check's own builds are already part of its turn.

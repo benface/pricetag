@@ -1,4 +1,4 @@
-# The hosted server: the API only, with invites, limits and redacted logs (PRICETAG_HOSTED=1). See "Hosting" in the README.
+# The hosted server: the API only, with invites, limits and redacted logs (PRICETAG_HOSTED=1). See "Hosting" in docs/OPERATIONS.md.
 # Pinned by digest, like every other dependency here.
 FROM node:26.13.0-bookworm-slim@sha256:add5c17c14752c54d2f3d519ec46a3815684d41c33f198bcb09fb998f7dcbf68
 

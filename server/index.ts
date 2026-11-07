@@ -1,5 +1,5 @@
 // `pnpm start`: serves the built app and the API. It binds to localhost, since locally it's a personal tool with a staging token.
-// With PRICETAG_HOSTED=1 it's the shared server instead: see "Hosting" in the README and `server/hosting.ts`.
+// With PRICETAG_HOSTED=1 it's the shared server instead: see "Hosting" in docs/OPERATIONS.md and `server/hosting.ts`.
 
 import { createServer } from "node:http"
 import { resolve } from "node:path"

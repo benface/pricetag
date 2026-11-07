@@ -55,7 +55,7 @@ export type HoldComparison = {
   ethValueMicros: string | null
   /** Today's ETH price. */
   ethPriceMicros: string | null
-  /** Movements in with no known value, or no ETH price at their moment. Never counted as $0. */
+  /** Movements in with no known value, or no ETH price at their moment, like an opening balance, which has no moment to convert at. Never counted as $0. */
   unknownAmounts: number
   /** More left the wallet than holding would have had left to give. */
   ranOut: boolean

@@ -1,4 +1,4 @@
-# The hosted server on Fly.io, live at patina-server.fly.dev. See "Hosting" in the README.
+# The hosted server on Fly.io, live at patina-server.fly.dev. See "Hosting" in docs/OPERATIONS.md.
 # Secrets never go in this file: `fly secrets set` holds them, and the server reads them from its environment.
 app = "patina-server"
 primary_region = "ord"

@@ -17,7 +17,7 @@ export type Hosting = {
   invites: ReadonlyMap<string, string>
   /** The header the host sets to the client's address, overwriting what the client sent. Null reads the socket's. */
   clientIpHeader: string | null
-  /** Whether it also serves the web app. A hosted one doesn't by default: see "Hosting" in the README. */
+  /** Whether it also serves the web app. A hosted one doesn't by default: see "Hosting" in docs/OPERATIONS.md. */
   servesApp: boolean
   limits: Limits
   /** How many people's Amp queries run at once. Each person's own run one at a time, and the head's don't count. */
