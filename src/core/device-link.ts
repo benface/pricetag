@@ -1,14 +1,14 @@
 // What a link can ask the hardware wallet flow to do. The Mac app has no device code, so its Add, Top Up and Publish buttons open
 // these. Anyone can make a link, so a link only ever fills in a form: nothing here is treated as true until the person says so.
 
-import { isAddress, normalizeAddress, plainAmount, type CurrencyCode } from "@pricetag/sdk/core"
+import { isAddress, isCurrencyCode, normalizeAddress, plainAmount, type CurrencyCode } from "@pricetag/sdk/core"
 import type { UnitChoice } from "./book.ts"
 import { unitsOfDecimal } from "./decimal.ts"
 import { heldFromJson, type Held } from "./held-units.ts"
 
 export type DeviceLink =
   | { kind: "add-savings"; device: "ledger" | null }
-  | { kind: "top-up"; to: string; usdMicros: string | null; held: HeldByWallet | null }
+  | { kind: "top-up"; to: string; usdMicros: string | null; naming: TopUpNaming | null }
   | { kind: "publish"; wallet: string; txHash: string; asset: string; usdMicros: string | null; amount: { units: string; decimals: number } | null }
 
 /**
@@ -17,6 +17,23 @@ export type DeviceLink =
  * what comes back, and its tax report refuses a choice that doesn't fit what was held.
  */
 export type HeldByWallet = ReadonlyMap<string, ReadonlyMap<string, Held>>
+
+/**
+ * What a top-up needs to name its units. It comes after the `#`, so it never reaches a server: a long history would be too much for a
+ * request line. `flow` is the Mac's one-time number for this top-up, which the record has to bring back. `currency` is what the costs
+ * in `held` are in, which can be other than this page's.
+ */
+export type TopUpNaming = { flow: string; currency: CurrencyCode; held: HeldByWallet }
+
+const FLOW = /^[0-9a-f]{32}$/
+
+function namingOf(hash: string): TopUpNaming | null {
+  const params = new URLSearchParams(hash.replace(/^#/, ""))
+  const flow = params.get("flow")
+  const currency = params.get("currency")
+  const held = heldByWalletOf(params.get("held"))
+  return flow !== null && FLOW.test(flow) && isCurrencyCode(currency) && held !== null ? { flow, currency, held } : null
+}
 
 const MOST_HELD_WALLETS = 16
 
@@ -58,12 +75,12 @@ const ASSET = /^[A-Za-z0-9]{1,16}$/
 const UNITS = /^\d{1,78}$/
 const DECIMALS = /^\d{1,2}$/
 
-/** The request in a page's address, or null if there's none or it doesn't make sense. */
-export function parseDeviceLink(search: string): DeviceLink | null {
+/** The request in a page's address, or null if there's none or it doesn't make sense. `hash` is what's after the `#`, if anything. */
+export function parseDeviceLink(search: string, hash = ""): DeviceLink | null {
   const params = new URLSearchParams(search)
   if (params.has("addsavings")) return { kind: "add-savings", device: params.get("addsavings") === "ledger" ? "ledger" : null }
   const to = params.get("topup")
-  if (to !== null) return isAddress(to) ? { kind: "top-up", to: normalizeAddress(to), usdMicros: usdMicrosOf(params.get("usd")), held: heldByWalletOf(params.get("held")) } : null
+  if (to !== null) return isAddress(to) ? { kind: "top-up", to: normalizeAddress(to), usdMicros: usdMicrosOf(params.get("usd")), naming: namingOf(hash) } : null
   const txHash = params.get("publish")?.toLowerCase()
   if (txHash === undefined) return null
   const wallet = params.get("wallet")
@@ -95,10 +112,10 @@ export function addToMacLink(address: string, name: string, others: readonly str
 }
 
 /**
- * How the page hands the Mac app a record of which units a top-up took. The Mac only keeps one while it's waiting on a top-up it opened,
- * from one of its savings wallets, and made since it opened it, because anyone can make this link too.
+ * How the page hands the Mac app a record of which units a top-up took. Anyone can make this link too, so the Mac only keeps one that
+ * brings back the `flow` of a top-up it opened, once, and that fits what it said was held.
  */
-export function unitChoiceLink(choice: UnitChoice): string {
-  const params = new URLSearchParams({ wallet: choice.wallet, tx: choice.txHash, asset: choice.asset, recorded: choice.recordedAt, takes: choice.takes.map((take) => `${take.boughtAt}~${take.units}`).join(",") })
+export function unitChoiceLink(choice: UnitChoice, flow: string): string {
+  const params = new URLSearchParams({ flow, wallet: choice.wallet, tx: choice.txHash, asset: choice.asset, recorded: choice.recordedAt, takes: choice.takes.map((take) => `${take.boughtAt}~${take.units}`).join(",") })
   return `patina://unit-choice?${params}`
 }

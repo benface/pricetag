@@ -68,7 +68,7 @@ export function App() {
   const [buying, setBuying] = useState(false)
   const paidIn = currenciesIn(book).join(",")
   const [device, setDevice] = useState<{ link: DeviceLink | null } | null>(() => {
-    const link = parseDeviceLink(window.location.search)
+    const link = parseDeviceLink(window.location.search, window.location.hash)
     return link ? { link } : null
   })
   // Read again whenever the device panel closes, since that's where accounts get checked.
@@ -232,7 +232,7 @@ export function App() {
   const openTotal = (metric: TotalMetric) => setTarget({ kind: "total", metric })
   const closeDevice = () => {
     // A link has done its job, and reloading shouldn't start it over.
-    if (parseDeviceLink(window.location.search)) window.history.replaceState(null, "", window.location.pathname)
+    if (parseDeviceLink(window.location.search, window.location.hash)) window.history.replaceState(null, "", window.location.pathname)
     setDevice(null)
   }
   const showingTitle = !showing ? null : isAll ? ALL_YOURS_TITLE : showing.mode === "demo" ? "Demo wallet" : `Wallet ${shortHash(showing.address)}`

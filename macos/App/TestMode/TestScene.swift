@@ -43,7 +43,7 @@ struct SceneSpec {
 
     enum ChartPlay { case scrubbed(Int), scrubbedToAGap, drawing, changingRange, changingMetric, scrubbing }
     enum ResolveSkip { case toKnownExchange, everything }
-    enum TopUpRead { case readsFirst, readsAfterItOpens, neverReads }
+    enum TopUpRead { case readsFirst, readsAfterItOpens, neverReads, holdingsFail }
     /// What the menu bar's buttons do. Each fails unless it gets where it promises.
     enum Route { case send, topUp, buy, receive, addSavings, export, find, topUpCancelled, holdings, addWallet, details, answer, removeFromSavings }
     enum Browsers { case chromeOnly, safariAndChrome, safariOnly }
@@ -450,6 +450,7 @@ enum TestScene: String, CaseIterable {
     case hotWalletTopUpCAD = "hot-wallet-top-up-cad"
     case hotWalletTopUpSafari = "hot-wallet-top-up-safari"
     case hotWalletTopUpNoChromium = "hot-wallet-top-up-no-chromium"
+    case hotWalletTopUpHoldingsFailed = "hot-wallet-top-up-holdings-failed"
     case send
     case sendCAD = "send-cad"
     case sendKnown = "send-known"
@@ -851,6 +852,7 @@ enum TestScene: String, CaseIterable {
         case .hotWalletTopUpCAD: SceneSpec(screen: .topUp(), chrome: .none, currency: .CAD, hotWallet: .funded)
         case .hotWalletTopUpSafari: SceneSpec(screen: .topUp(), chrome: .none, hotWallet: .funded, browsers: .safariAndChrome)
         case .hotWalletTopUpNoChromium: SceneSpec(screen: .topUp(), chrome: .none, hotWallet: .funded, browsers: .safariOnly)
+        case .hotWalletTopUpHoldingsFailed: SceneSpec(screen: .topUp(.holdingsFail), chrome: .none, hotWallet: .funded)
         case .send: SceneSpec(screen: .send, chrome: .none, hotWallet: .funded)
         case .sendCAD: SceneSpec(screen: .send, chrome: .none, currency: .CAD, hotWallet: .funded)
         case .sendKnown: SceneSpec(screen: .send, chrome: .none, hotWallet: .funded, answers: .recipientIsSomeoneElse)
@@ -1200,8 +1202,11 @@ enum TestScene: String, CaseIterable {
         case .buy:
             return buyScreen(parts)
         case .topUp(let read):
-            let sheet = TopUpSheet(wallet: hotWallet, server: URL(string: "http://127.0.0.1:8787")!, browsers: deviceBrowsers)
+            // Under US rules, with what the savings hold failing to read.
+            let failing = read == .holdingsFail ? TopUpHoldings(needed: true, wallets: hotWallet.settings.coldWallets.map(\.address.lowercased), currency: .USD) { _ in throw URLError(.notConnectedToInternet) } : nil
+            let sheet = TopUpSheet(wallet: hotWallet, server: URL(string: "http://127.0.0.1:8787")!, browsers: deviceBrowsers, holdings: failing)
             switch read {
+            case .holdingsFail: return TestScreen(view: AnyView(sheet), isReady: { [failing] in isReady() && failing?.state != .reading })
             case .readsFirst: return TestScreen(view: AnyView(sheet), isReady: isReady)
             // The sheet opens first here, so the read has to change what it worked out.
             case .readsAfterItOpens: return TestScreen(view: AnyView(sheet.task { await parts.readHotWallet() }), isReady: { parts.hotWalletHasRead.isDone })

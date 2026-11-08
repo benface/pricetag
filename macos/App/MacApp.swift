@@ -45,7 +45,7 @@ struct MacApp: App {
             AppLinks.onOpen = { url in
                 if let link = AddSavingsLink(url: url) { navigation.pending = .addSavingsFromDevice(link) }
                 // Which units a top-up took, from the page this app opened for it. Anything else is ignored.
-                if let link = UnitChoiceLink(url: url), let choice = UnitChoiceHandoff.shared.accept(link) { store.keepUnitChoices([choice]) }
+                if let link = UnitChoiceLink(url: url), let choice = UnitChoiceHandoff.shared.accept(link, existing: store.book.unitChoices) { store.keepUnitChoices([choice]) }
             }
         }
         hotWallet.onLinkedWalletsChange = {

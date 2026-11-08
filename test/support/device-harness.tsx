@@ -54,7 +54,7 @@ if (scene === "code") {
   root.render(<CodeToSign code={{ type: request.type, cbor: request.cbor.toString("hex") }} />)
 } else root.render(
   <DevicePanel
-    link={parseDeviceLink(window.location.search)}
+    link={parseDeviceLink(window.location.search, window.location.hash)}
     book={emptyBook()}
     onLink={() => {}}
     onView={() => {}}

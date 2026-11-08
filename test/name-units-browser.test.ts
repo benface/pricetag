@@ -35,12 +35,15 @@ window.sent = 0
 window.nextRead = "ok"
 let releases = []
 window.release = () => (releases.splice(0).forEach((go) => go()), true)
+// After "sold the first", the first purchase is gone from what's read.
+window.soldFirst = false
+const current = () => (window.soldFirst ? { ...held, purchases: held.purchases.slice(1) } : held)
 const read = () => {
   window.reads++
   const how = window.nextRead
   if (how === "fail") return Promise.reject(new Error("offline"))
-  if (how === "hold") return new Promise((resolve) => releases.push(() => resolve(held)))
-  return Promise.resolve(held)
+  if (how === "hold") return new Promise((resolve) => releases.push(() => resolve(current())))
+  return Promise.resolve(current())
 }
 const signer = { kind: "browser", name: "Test", provider: {}, listAccounts: async () => [], showAddress: async () => ({ ok: true }), close: async () => {} }
 const connectors = {
@@ -64,8 +67,10 @@ function Harness() {
   window.freshReads = () => flushSync(() => setFresh(true))
   const heldOf = fresh ? (from, asset) => read() : stable
   // A top-up the Mac app opened carries what its savings hold, and gets the choice back by a link of its own.
-  const link = location.search.startsWith("?topup") ? parseDeviceLink(location.search) : null
-  return createElement(DevicePanel, { link, book, currency: "USD", onLink: () => {}, onClose: () => {}, connectors, start, heldOf, onNamed: (choice) => window.named.push(choice), renders })
+  const link = location.search.startsWith("?topup") ? parseDeviceLink(location.search, location.hash) : null
+  // The page's own currency: the Mac's page has none, so it's USD, and pnpm mac serves the web app in whatever the browser chose.
+  const currency = new URLSearchParams(location.search).get("pagecurrency") ?? "USD"
+  return createElement(DevicePanel, { link, book, currency, onLink: () => {}, onClose: () => {}, connectors, start, heldOf, onNamed: (choice) => window.named.push(choice), renders })
 }
 const input = (element, value) => {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set
@@ -257,21 +262,76 @@ describe("naming a send's units in the hardware-wallet panel", { skip: existsSyn
     assert.equal(await evaluate(session, "canSend()"), true)
   })
 
-  it("offers what the Mac app says its savings hold, and hands the choice back to it", async () => {
-    const held = { [FROM]: { ETH: { purchases: [{ boughtAt: FIRST, units: "1000000000000000000", costMicros: "2000000000", allOnly: false }], unnamed: "0" } } }
-    const session = await page(`?topup=${TO}&usd=20&held=${encodeURIComponent(JSON.stringify(held))}`)
+  it("clears a chosen purchase that a new read no longer has, and says so", async () => {
+    const session = await page()
+    await openNaming(session)
+    await evaluate(session, `pickFrom(0, "0.2")`)
+    await evaluate(session, `pickFrom(1, "0.3")`)
+    assert.equal(await evaluate(session, "canSend()"), true)
+    await evaluate(session, "soldFirst = true")
+    await evaluate(session, "freshReads()")
+    await until(() => evaluate(session, "picked().length === 1"), "the first purchase to go")
+    assert.deepEqual(await evaluate(session, "picked()"), ["0.3"], "what's left keeps its amount")
+    assert.equal(await evaluate(session, `text().includes("One purchase you chose from isn't held anymore, so it was cleared.")`), true)
+    assert.equal(await evaluate(session, "canSend()"), false, "0.3 isn't what's sent")
+    await evaluate(session, `pickFrom(0, "0.5")`)
+    assert.equal(await evaluate(session, "canSend()"), true, "nothing hidden holds it back")
+    await evaluate(session, `click("Send from your device")`)
+    const named = await until(() => evaluate<any[]>(session, "named.length ? named : null"), "the choice to be kept")
+    assert.deepEqual(named[0].takes, [{ boughtAt: SECOND, units: "500000000000000000" }])
+  })
+
+  it("says nothing about a purchase that goes away with nothing chosen from it, and counts zero as nothing", async () => {
+    const session = await page()
+    await openNaming(session)
+    await evaluate(session, `pickFrom(0, "0")`)
+    await evaluate(session, `pickFrom(1, "0.5")`)
+    assert.equal(await evaluate(session, "canSend()"), true, "zero from one purchase is none of it")
+    await evaluate(session, "soldFirst = true")
+    await evaluate(session, "freshReads()")
+    await until(() => evaluate(session, "picked().length === 1"), "the first purchase to go")
+    assert.equal(await evaluate(session, `text().includes("isn't held anymore")`), false)
+    assert.equal(await evaluate(session, "canSend()"), true)
+  })
+
+  it("starts over after \"Don't choose\"", async () => {
+    const session = await page()
+    await openNaming(session)
+    await evaluate(session, `pickFrom(0, "0.2")`)
+    await evaluate(session, `click("Don't choose")`)
+    await openNaming(session)
+    assert.deepEqual(await evaluate(session, "picked()"), ["", ""])
+  })
+
+  it("offers what the Mac app says its savings hold, in its currency, and hands the choice back with its flow", async () => {
+    const held = { [FROM]: { ETH: { purchases: [{ boughtAt: FIRST, units: "1000000000000000000", costMicros: "2700000000", allOnly: false }], unnamed: "0" } } }
+    const flow = "0123456789abcdef0123456789abcdef"
+    // After the #, as the Mac writes it, so it never reaches the server.
+    const session = await page(`?topup=${TO}&usd=20#${new URLSearchParams({ flow, currency: "CAD", held: JSON.stringify(held) })}`)
     await evaluate(session, `click("Which units?")`)
     await until(() => evaluate(session, "picked().length === 1"), "the Mac's purchase to show")
     assert.equal(await evaluate(session, "reads"), 0, "this page reads nothing of its own")
+    const cost = await evaluate<string>(session, `document.querySelector("label.name-unit").textContent`)
+    assert.match(cost, /cost CA\$2,700\.00/, "the Mac's CAD costs aren't shown as dollars of this page's")
     await evaluate(session, `pickFrom(0, "0.5")`)
     await until(() => evaluate(session, "canSend()"), "the send to be ready")
     await evaluate(session, `click("Send from your device")`)
     const link = new URL((await until(() => evaluate<string | null>(session, "handBack()"), "the link back to the Mac")) as string)
     assert.equal(link.host, "unit-choice")
+    assert.equal(link.searchParams.get("flow"), flow)
     assert.equal(link.searchParams.get("wallet"), FROM)
     assert.equal(link.searchParams.get("tx"), `0x${"ab".repeat(32)}`)
     assert.equal(link.searchParams.get("asset"), "ETH")
     assert.equal(link.searchParams.get("takes"), `${FIRST}~500000000000000000`)
     assert.deepEqual(await evaluate(session, "named"), [], "this page's own book doesn't keep it")
+  })
+
+  it("labels the Mac's costs when they're in another kind of dollar than the page's", async () => {
+    const held = { [FROM]: { ETH: { purchases: [{ boughtAt: FIRST, units: "1000000000000000000", costMicros: "2700000000", allOnly: false }], unnamed: "0" } } }
+    const fragment = new URLSearchParams({ flow: "0123456789abcdef0123456789abcdef", currency: "USD", held: JSON.stringify(held) })
+    const session = await page(`?topup=${TO}&usd=20&pagecurrency=CAD#${fragment}`)
+    await evaluate(session, `click("Which units?")`)
+    await until(() => evaluate(session, "picked().length === 1"), "the Mac's purchase to show")
+    assert.match(await evaluate<string>(session, `document.querySelector("label.name-unit").textContent`), /cost US\$2,700\.00/)
   })
 })

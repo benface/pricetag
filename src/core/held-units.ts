@@ -91,6 +91,8 @@ export function picksProblem(held: Held, picks: Picks, units: bigint, format: (u
   if (named === 0n) return null
   if ([...picks.values()].filter((n) => n > 0n).length > MAX_CHOICE_TAKES) return `A send can name up to ${MAX_CHOICE_TAKES} purchases.`
   for (const [at, n] of picks) {
+    // Nothing from a purchase isn't a choice of it, whether it's still held or not.
+    if (n === 0n) continue
     const purchase = held.purchases.find((one) => one.boughtAt === at)
     if (!purchase) return "One of those purchases isn't held anymore."
     if (n > purchase.units) return `That's more than is left of one purchase, which has ${format(purchase.units)}.`

@@ -739,27 +739,38 @@ struct TopUpSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var dollars = 0.0
     @State private var found = LedgerBrowserChoice.unknown
-    /// What each savings wallet holds, by token, once it's read. One that couldn't be read is left out, and the page says so.
-    @State private var held: [String: [String: HeldUnits]] = [:]
+    /// What each savings wallet holds, by token. The page only opens once it's all read, or what couldn't be is let go on purpose.
+    @State private var holdings: TopUpHoldings
 
-    init(wallet: HotWallet, server: URL, browsers: DeviceBrowsers = .real, store: PortfolioStore? = nil, handoff: UnitChoiceHandoff = .shared) {
+    init(wallet: HotWallet, server: URL, browsers: DeviceBrowsers = .real, store: PortfolioStore? = nil, handoff: UnitChoiceHandoff = .shared, holdings: TopUpHoldings? = nil) {
         self.wallet = wallet
         self.server = server
         self.browsers = browsers
         self.store = store
         self.handoff = handoff
+        let savings = wallet.settings.coldWallets.map(\.address.lowercased)
+        _holdings = State(initialValue: holdings ?? TopUpHoldings(
+            needed: store.map { TaxReportModel.country(currency: $0.currency) == .US } ?? false,
+            wallets: savings,
+            currency: store?.currency ?? .USD,
+            read: { [store] address in
+                guard let store else { throw CancellationError() }
+                return try await store.held(in: address)
+            }
+        ))
     }
-
-    private var savings: [String] { wallet.settings.coldWallets.map(\.address.lowercased) }
 
     private var room: Int { Int(wallet.topUpRoom / Money.dollar) }
     /// Until then the room left is unknown, and would read as the whole cap.
     private var hasRead: Bool { wallet.plan != nil }
     private var hasDestination: Bool { wallet.settings.sweepDestination != nil }
 
+    /// Without what's held, so it can say which browser opens it before that's read. What's held goes in when it opens.
     private var deviceLink: URL? {
-        wallet.address.flatMap { DeviceFlow.topUp(server: server, to: $0.checksummed, dollars: Int(dollars), held: held) }
+        wallet.address.flatMap { DeviceFlow.topUp(server: server, to: $0.checksummed, dollars: Int(dollars)) }
     }
+
+    private var canOpen: Bool { hasRead && holdings.isSettled }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -782,8 +793,9 @@ struct TopUpSheet: View {
                     .font(.caption)
                     .secondaryText()
                     .fixedSize(horizontal: false, vertical: true)
-                if let deviceLink {
-                    DeviceBrowserNote(choice: found, outcome: "your hardware wallet signs the transfer.", canUseDefault: hasRead) { open(deviceLink, in: nil) }
+                HoldingsNote(holdings: holdings)
+                if deviceLink != nil {
+                    DeviceBrowserNote(choice: found, outcome: "your hardware wallet signs the transfer.", canUseDefault: canOpen) { open(in: nil) }
                 }
                 DisclosureGroup("Or do it by hand on the device") {
                     VStack(alignment: .leading, spacing: 8) {
@@ -815,10 +827,10 @@ struct TopUpSheet: View {
                 }
                 Button(room >= 1 ? "Cancel" : "Done") { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                if room >= 1, let deviceLink {
-                    Button(found.continueTitle) { open(deviceLink, in: found.browser) }
+                if room >= 1, deviceLink != nil {
+                    Button(found.continueTitle) { open(in: found.browser) }
                         .keyboardShortcut(.defaultAction)
-                        .disabled(!hasRead)
+                        .disabled(!canOpen)
                 }
             }
         }
@@ -828,23 +840,16 @@ struct TopUpSheet: View {
         // A read can leave less room than there was when this opened. What's chosen stays if it still fits.
         .onChange(of: room) { dollars = min(dollars, Double(max(room, 1))) }
         .findingBrowsers(browsers, $found)
-        .task { await readHeld() }
+        .task { await holdings.load() }
     }
 
-    /// What the savings hold, read while the amount's chosen, so opening the page doesn't wait on it.
-    private func readHeld() async {
-        guard let store, TaxReportModel.country(currency: store.currency) == .US else { return }
-        for address in savings {
-            guard let assets = try? await store.held(in: address), !Task.isCancelled else { continue }
-            held[address] = assets
-        }
-    }
-
-    private func open(_ link: URL, in browser: InstalledBrowser?) {
-        // The amount in the link is only worth sending once the room's known.
-        guard hasRead else { return }
-        // A record that comes back is only kept for a top-up this opened, from a wallet it said what was held in.
-        if !held.isEmpty { handoff.opened(wallets: Array(held.keys)) }
+    private func open(in browser: InstalledBrowser?) {
+        // The amount in the link is only worth sending once the room's known, and what's held once it's all read.
+        guard canOpen, let address = wallet.address else { return }
+        let naming = holdings.naming()
+        guard let link = DeviceFlow.topUp(server: server, to: address.checksummed, dollars: Int(dollars), naming: naming) else { return }
+        // A record that comes back is only kept if it brings this top-up's flow back, and fits what this said was held.
+        if let naming { handoff.opened(naming) }
         browsers.open(link, browser)
         dismiss()
     }
@@ -863,6 +868,36 @@ struct TopUpSheet: View {
         }
         if wallet.display.isConverted { tokens.append("\(Int(dollars)) USDC") }
         return tokens.isEmpty ? "" : " (about \(tokens.joined(separator: " or ")))"
+    }
+}
+
+/// Says what's happening with what the savings hold, so the top-up's page can offer a choice of units. Only under US rules.
+private struct HoldingsNote: View {
+    let holdings: TopUpHoldings
+
+    var body: some View {
+        switch holdings.state {
+        case .notNeeded, .ready:
+            EmptyView()
+        case .reading:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Reading what your savings hold, so the send can choose which units it takes…")
+                    .font(.caption)
+                    .secondaryText()
+            }
+        case let .failed(wallets):
+            VStack(alignment: .leading, spacing: 8) {
+                Notice(.warning, wallets.count == 1
+                    ? "Couldn't read what \(Format.shortHash(wallets[0])) holds, so a send from it can't choose which units it takes."
+                    : "Couldn't read what \(wallets.count) of your savings wallets hold, so a send from them can't choose which units it takes.")
+                HStack {
+                    Button("Try Again") { Task { await holdings.load() } }
+                    Button("Continue Without Choosing") { holdings.goWithout() }
+                }
+                .controlSize(.small)
+            }
+        }
     }
 }
 
