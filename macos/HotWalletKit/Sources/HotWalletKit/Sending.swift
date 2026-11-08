@@ -113,14 +113,114 @@ public final class SendModel {
     public private(set) var failure: String?
     public private(set) var isSending = false
 
+    /// What a wallet holds, by purchase, while a send is naming its units.
+    public enum Held: Equatable, Sendable {
+        case reading, failed
+        case read(HeldUnits)
+    }
+
+    /// Only US rules let a send name which units it takes, and only before it happens.
+    public let canName: Bool
+    /// Whether the "Which units?" step is open. Once it is, nothing's sent until the amounts add up or it's closed.
+    public private(set) var naming = false
+    /// What's typed for each purchase, by when it was bought.
+    public var picked: [String: String] = [:]
+    /// Every token's, from one read, so changing the token doesn't read again.
+    private var heldAssets: [String: HeldUnits]?
+    private var heldFailed = false
+    private var readingHeld: Task<Void, Never>?
+
     private let wallet: HotWallet
     private let store: PortfolioStore
     private var askingPrompt: PresencePrompt?
 
-    public init(wallet: HotWallet, store: PortfolioStore) {
+    /// `canName` follows the country the tax report was last made for, unless a test says otherwise.
+    public init(wallet: HotWallet, store: PortfolioStore, canName: Bool? = nil) {
         self.wallet = wallet
         self.store = store
+        self.canName = canName ?? (TaxReportModel.country(currency: store.currency) == .US)
         token = wallet.holdings.first { !$0.token.isNative }?.token ?? Base.eth
+    }
+
+    /// Opens the step, and reads what this wallet holds with this Mac's answers.
+    public func startNaming() {
+        guard canName, !naming, let address = wallet.address else { return }
+        naming = true
+        guard heldAssets == nil else { return }
+        heldFailed = false
+        readingHeld?.cancel()
+        readingHeld = Task { [store] in
+            do {
+                let all = try await store.held(in: address.lowercased)
+                guard !Task.isCancelled else { return }
+                heldAssets = all
+            } catch {
+                guard !Task.isCancelled else { return }
+                heldFailed = true
+            }
+        }
+    }
+
+    /// Closes the step. The send then goes the usual way, oldest first, with no record.
+    public func stopNaming() {
+        naming = false
+        picked = [:]
+        if heldAssets == nil {
+            readingHeld?.cancel()
+            readingHeld = nil
+        }
+    }
+
+    public var held: Held {
+        if let heldAssets { return .read(heldAssets[token.asset] ?? HeldUnits(purchases: [], unnamed: "0")) }
+        return heldFailed ? .failed : .reading
+    }
+
+    /// What's typed, in the token's smallest units. A purchase with nothing typed gives nothing, and one that isn't an amount is nil.
+    private var picks: UnitPicks? {
+        var picks: UnitPicks = [:]
+        for (at, text) in picked {
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { continue }
+            guard let units = Money.units(fromText: trimmed, decimals: token.decimals) else { return nil }
+            picks[at] = units
+        }
+        return picks
+    }
+
+    public func amountText(_ units: UInt128) -> String {
+        "\(Money.text(ofUnits: units, decimals: token.decimals)) \(token.symbol)"
+    }
+
+    /// What's wrong with what's picked, to show as a warning. Nil while there's nothing to say yet.
+    public var namingProblem: String? {
+        guard naming, case .read(let held) = held else { return nil }
+        guard let picks else { return "One of those isn't an amount of \(token.symbol)." }
+        guard let amount, picks.values.contains(where: { $0 > 0 }) else { return nil }
+        return NamedUnits.problem(held: held, picks: picks, units: amount, format: amountText)
+    }
+
+    /// Nothing goes while the step is open without a choice that fits: not while it's reading, not when it couldn't, and not with nothing picked.
+    public var namingBlocks: Bool {
+        guard naming else { return false }
+        guard case .read = held, let picks, picks.values.contains(where: { $0 > 0 }) else { return true }
+        return namingProblem != nil
+    }
+
+    /// The currency costs come back in.
+    public var costCurrency: CurrencyCode { store.currency }
+
+    /// What the send takes, as the confirmation shows it. Nil when it isn't naming any.
+    public var namedSummary: String? {
+        guard naming, let picks else { return nil }
+        let taken = picks.filter { $0.value > 0 }.sorted { $0.key < $1.key }
+        guard !taken.isEmpty else { return nil }
+        return taken.map { "\(amountText($0.value)) bought \(NamedUnits.shown($0.key))" }.joined(separator: "\n")
+    }
+
+    /// Nothing's picked yet, from a list there is.
+    public var nothingPicked: Bool {
+        naming && (picks.map { !$0.values.contains { $0 > 0 } } ?? false)
     }
 
     public var tokens: [Token] { wallet.holdings.map(\.token) }
@@ -179,6 +279,8 @@ public final class SendModel {
 
     private func tokenChanged() {
         pinnedMaximum = nil
+        // Other purchases, so what was typed for these doesn't carry over.
+        picked = [:]
         if unit == .money, !canTypeMoney {
             unit = .token
             amountText = ""
@@ -301,7 +403,7 @@ public final class SendModel {
 
     public var canSend: Bool {
         guard wallet.canSend, !isSending, let amount, amount > 0, recipient != nil else { return false }
-        return recipientProblem == nil && amountProblem == nil && (lookalike == nil || acceptsLookalike)
+        return recipientProblem == nil && amountProblem == nil && (lookalike == nil || acceptsLookalike) && !namingBlocks
     }
 
     /// On to what Touch ID will be asked about, with the amount as it is now.
@@ -332,6 +434,10 @@ public final class SendModel {
         guard canSend, let recipient, let amount else { return false }
         // Together, because the answer is about this address, whatever's on screen by the time this lands.
         let answer = asksIfItsYours ? ownership?.answer : nil
+        // Made now, before it's signed, so the record was there before the transaction was.
+        let named = naming ? picks : nil
+        let recordedAt = NamedUnits.moment(.now)
+        let asset = token.asset
         isSending = true
         askingPrompt = prompt
         defer {
@@ -345,6 +451,9 @@ public final class SendModel {
         }
         sentHashes = wallet.lastSubmitted
         stage = .sent
+        if let named, let from = wallet.address, let hash = sentHashes.last, let choice = UnitChoice(wallet: from.lowercased, txHash: hash, asset: asset, recordedAt: recordedAt, picks: named) {
+            store.keepUnitChoices([choice])
+        }
         if let answer, store.book.senders[recipient.lowercased] == nil {
             store.setBook(store.book.answering(recipient.lowercased, answer, focus: wallet.address?.lowercased))
         }

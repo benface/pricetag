@@ -65,6 +65,8 @@ public protocol PortfolioSource: Sendable {
     func exportCSV(_ read: ReadContext, shown: [String]?) async throws -> String
     func importCoinbase(csv: String) async throws -> ExchangeImport
     func importUnitChoices(csv: String) async throws -> UnitChoiceImport
+    /// What a wallet still holds of each token, by purchase, folded the way a US report does, so a send can name the units it takes.
+    func held(_ read: ReadContext) async throws -> HeldByAsset
     /// Empty when the server has only one, so there's nothing to choose.
     func rules() async throws -> [PricingRule]
     /// How far a wallet's first read has got. Nil when this source can't tell, like a server from before it could.
@@ -94,6 +96,7 @@ extension PortfolioSource {
     public func exportCSV(_ read: ReadContext, shown: [String]?) async throws -> String { throw FetchError.unreachable }
     public func importCoinbase(csv: String) async throws -> ExchangeImport { throw FetchError.unreachable }
     public func importUnitChoices(csv: String) async throws -> UnitChoiceImport { throw FetchError.unreachable }
+    public func held(_ read: ReadContext) async throws -> HeldByAsset { throw FetchError.unreachable }
     /// Reads every wallet in it, so it gets as long as a first read.
     public func taxReport(_ request: TaxReportRequest) async throws -> TaxReport { throw FetchError.unreachable }
     public func proof(leg: String, address: String, currency: CurrencyCode, rule: String?) async throws -> Proof { throw FetchError.unreachable }
@@ -269,6 +272,10 @@ public struct PricetagClient: PortfolioSource {
     /// The server reads the file the same way the web app does, so both apps keep the same records from it.
     public func importUnitChoices(csv: String) async throws -> UnitChoiceImport {
         try await decoded(post("/api/import/unit-choices", body: ["csv": csv], timeout: .seconds(30)))
+    }
+
+    public func held(_ read: ReadContext) async throws -> HeldByAsset {
+        try await decoded(post("/api/portfolio/\(read.address)/held", body: FoldBody(read), timeout: .seconds(60)))
     }
 
     public func rules() async throws -> [PricingRule] {

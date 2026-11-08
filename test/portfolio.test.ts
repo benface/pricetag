@@ -577,6 +577,20 @@ describe("the portfolio API", () => {
     assert.equal((await post("/api/import/unit-choices", { csv: "nope" })).status, 400)
   })
 
+  it("says what a wallet still holds, by purchase, for a send that names its units", async () => {
+    const { status, body } = await post("/api/portfolio/demo/held", { method: "fifo" })
+    assert.equal(status, 200)
+    const eth = (body.assets as Record<string, { purchases: { boughtAt: string; units: string }[]; unnamed: string }>).ETH
+    assert.ok(eth)
+    const purchases = eth.purchases
+    assert.ok(Array.isArray(purchases) && purchases.length > 0)
+    for (const purchase of purchases) {
+      assert.match(purchase.boughtAt, /^\d{4}-\d{2}-\d{2}T/)
+      assert.match(purchase.units, /^\d+$/)
+    }
+    assert.match(eth.unnamed, /^\d+$/)
+  })
+
   it("refuses a post that isn't JSON, so a page can't send one without asking", async () => {
     assert.equal((await post("/api/portfolio/demo", { method: "average" }, "text/plain")).status, 400)
   })

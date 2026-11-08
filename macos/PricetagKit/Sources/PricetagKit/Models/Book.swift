@@ -227,6 +227,11 @@ public struct UnitChoice: Codable, Sendable, Equatable, Hashable {
         public let boughtAt: String
         /// In the token's smallest units.
         public let units: String
+
+        public init(boughtAt: String, units: String) {
+            self.boughtAt = boughtAt
+            self.units = units
+        }
     }
 
     public let wallet: String
@@ -236,6 +241,14 @@ public struct UnitChoice: Codable, Sendable, Equatable, Hashable {
     /// When the records named them, as `toISOString` writes it.
     public let recordedAt: String
     public let takes: [Take]
+
+    public init(wallet: String, txHash: String, asset: String, recordedAt: String, takes: [Take]) {
+        self.wallet = wallet
+        self.txHash = txHash
+        self.asset = asset
+        self.recordedAt = recordedAt
+        self.takes = takes
+    }
 
     /// One choice per sale, whatever case its addresses are in.
     var key: String { "\(wallet.lowercased()):\(txHash.lowercased()):\(asset)" }

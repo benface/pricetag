@@ -231,10 +231,15 @@ public final class TaxReportModel {
     public init(defaults: UserDefaults = .standard, currency: CurrencyCode, fetch: @escaping @MainActor (TaxReportRequest) async throws -> TaxReport) {
         self.defaults = defaults
         self.fetch = fetch
-        country = defaults.string(forKey: Keys.country).flatMap(TaxCountry.init(rawValue:)) ?? .guess(from: currency)
+        country = Self.country(defaults: defaults, currency: currency)
         // An override only makes sense for the country it was made on, and that's the one remembered.
         chosenMethod = defaults.string(forKey: Keys.method).flatMap(CostMethod.init(rawValue:))
         chosenScope = defaults.string(forKey: Keys.scope).flatMap(TaxScope.init(rawValue:))
+    }
+
+    /// The country the report was last made for, or the best guess from the main currency. A send only offers to name its units under US rules.
+    public static func country(defaults: UserDefaults = .standard, currency: CurrencyCode) -> TaxCountry {
+        defaults.string(forKey: Keys.country).flatMap(TaxCountry.init(rawValue:)) ?? .guess(from: currency)
     }
 
     /// One the country doesn't allow goes back to what it calls for.

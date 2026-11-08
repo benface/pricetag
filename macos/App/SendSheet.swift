@@ -70,6 +70,9 @@ private struct SendForm: View {
                 }
                 recipient
             }
+            if model.canName {
+                NameUnits(model: model)
+            }
             if let failure = model.failure {
                 WarningText(failure).font(.callout).fixedSize(horizontal: false, vertical: true)
             }
@@ -292,8 +295,105 @@ struct SendConfirmation: View {
         if let address = model.recipient {
             rows.append(ConfirmationRow(label: "To", value: address.checksummed, isAddress: true, name: model.recipientName))
         }
+        if let named = model.namedSummary { rows.append(ConfirmationRow(label: "Takes", value: named)) }
         if let fee = model.feeText { rows.append(.networkFee(fee)) }
         return rows
+    }
+}
+
+/// An optional step: which purchases this send takes from. Left closed, the oldest go first. Once it's open, the send waits for a
+/// choice that fits, or for Don't Choose.
+private struct NameUnits: View {
+    let model: SendModel
+
+    var body: some View {
+        if model.naming {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Which units does this send take?").fontWeight(.semibold)
+                Text("US tax rules let you choose which purchases a sale or send comes from, if you choose before it happens. This is saved with the send, so your tax report can use it.")
+                    .font(.caption)
+                    .secondaryText()
+                    .fixedSize(horizontal: false, vertical: true)
+                switch model.held {
+                case .reading:
+                    Text("Reading what this wallet holds…").font(.callout).secondaryText()
+                case .failed:
+                    WarningText("Couldn't read what this wallet holds, so this send can't name its units. To send without choosing, choose Don't Choose.")
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                case .read(let held):
+                    purchases(held)
+                }
+                Button("Don't Choose") { model.stopNaming() }
+                    .buttonStyle(.link)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .softBox()
+        } else {
+            HStack(spacing: 6) {
+                Button("Which Units?") { model.startNaming() }
+                    .buttonStyle(.link)
+                Text("Optional. Otherwise, the ones you've held longest go first.")
+                    .secondaryText()
+            }
+            .font(.callout)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private func purchases(_ held: HeldUnits) -> some View {
+        if held.purchases.isEmpty {
+            Text("Nothing this wallet holds says when it was bought, so there's nothing to choose from. Choose Don't Choose to send.")
+                .font(.callout)
+                .secondaryText()
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            ScrollView {
+                VStack(spacing: 6) {
+                    ForEach(held.purchases) { row($0) }
+                }
+            }
+            .frame(maxHeight: 200)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        if let unnamed = UInt128(held.unnamed), unnamed > 0 {
+            Text("\(model.amountText(unnamed)) more can't be chosen, because nothing says exactly when it was bought.")
+                .font(.caption)
+                .secondaryText()
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        if model.nothingPicked, !held.purchases.isEmpty {
+            Text("Type how much comes from each purchase, or choose Don't Choose.")
+                .font(.caption)
+                .secondaryText()
+        }
+        if let problem = model.namingProblem {
+            WarningText(problem).font(.callout).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func row(_ purchase: HeldUnits.Purchase) -> some View {
+        let bought = NamedUnits.shown(purchase.boughtAt)
+        let cost = purchase.costMicros.map { "cost \(Format.money($0, model.costCurrency))" } ?? "⚠ cost unknown"
+        return HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Bought \(bought)")
+                Text("\(model.amountText(purchase.amount)) left · \(cost)\(purchase.allOnly ? " · all or none" : "")")
+                    .font(.caption)
+                    .secondaryText()
+                    .monospacedDigit()
+            }
+            Spacer(minLength: 0)
+            TextField("0", text: Binding(get: { model.picked[purchase.boughtAt] ?? "" }, set: { model.picked[purchase.boughtAt] = $0 }))
+                .textFieldStyle(.roundedBorder)
+                .multilineTextAlignment(.trailing)
+                .monospacedDigit()
+                .frame(width: 110)
+                .accessibilityLabel("Amount from the purchase made \(bought)")
+        }
+        .font(.callout)
     }
 }
 

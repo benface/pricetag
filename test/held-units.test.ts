@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { formatAmount, type Lot, type PricedLeg } from "@pricetag/sdk/core"
+import { applyLegTaking, emptyPosition, formatAmount, type FoldLeg, type Lot, type PricedLeg } from "@pricetag/sdk/core"
 import type { WalletResponse } from "../src/core/api.ts"
 import { emptyBook, parseUnitChoice, recordUnitChoices } from "../src/core/book.ts"
 import { DEMO_WALLET } from "../src/core/fixtures.ts"
@@ -83,6 +83,31 @@ describe("what a send can name", () => {
     assert.equal(held.unnamed, 2n * ETH)
     assert.match(picksProblem(held, new Map([[at(10), ETH]]), ETH, format) ?? "", /all 2 ETH or none/)
     assert.equal(picksProblem(held, new Map([[at(10), 2n * ETH]]), 2n * ETH, format), null)
+  })
+
+  it("only offers what the fold takes when it's named", () => {
+    const lot = (qty: bigint, cost: bigint | null, fields: Partial<Lot> = {}): Lot => ({ qty: qty.toString(), costMicros: cost === null ? null : cost.toString(), label: "paid", legId: "x", acquiredAt: at(10), acquiredBlock: 10, ...fields })
+    const debit = (takes: { at: string; qty: bigint }[]): FoldLeg => ({ id: "out", delta: (-takes.reduce((sum, take) => sum + take.qty, 0n)).toString(), decimals: 18, kind: "transfer", priceMicros: null, costMicros: null, proceedsMicros: null, costLabel: "unknown", blockNum: 50, timestamp: at(50), takes: takes.map((take) => ({ at: take.at, qty: take.qty.toString() })) }) as FoldLeg
+    const cases: [string, Lot[]][] = [
+      // An ordinary lot and one known only as a whole, with nothing but its arrival to date it, at the same moment.
+      ["whole cost only", [lot(ETH, 1000n * USD), lot(ETH, 2000n * USD, { wholeCostOnly: true }), lot(ETH, 3000n * USD, { acquiredAt: at(20), acquiredBlock: 20 })]],
+      // The same, with one that could have come any time before where it is.
+      ["unplaced", [lot(ETH, 1000n * USD), lot(ETH, null, { unplaced: true }), lot(ETH, 3000n * USD, { acquiredAt: at(20), acquiredBlock: 20 })]],
+    ]
+    for (const [name, lots] of cases) {
+      const held = heldOf(lots)
+      assert.deepEqual(held.purchases.map(({ boughtAt }) => boughtAt), [at(20)], `${name}: the moment that shares a lot nothing can name isn't offered`)
+      assert.equal(held.unnamed, 2n * ETH, name)
+      const state = { ...emptyPosition("fifo", 18), lots }
+      for (const purchase of held.purchases) {
+        for (const units of purchase.allOnly ? [purchase.units] : [purchase.units, purchase.units / 2n]) {
+          assert.equal(picksProblem(held, new Map([[purchase.boughtAt, units]]), units, format), null)
+          assert.equal(applyLegTaking(state, debit([{ at: purchase.boughtAt, qty: units }])).chosen, "used", `${name}: the fold takes what was offered`)
+        }
+      }
+      // What the picker leaves out is what the fold refuses.
+      assert.equal(applyLegTaking(state, debit([{ at: at(10), qty: ETH }])).chosen, "refused", name)
+    }
   })
 
   it("says when the picks don't add up to what's sent, or ask for more than is left", () => {

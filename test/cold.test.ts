@@ -9,7 +9,7 @@ import { encodeFunctionData, erc20Abi, parseTransaction, serializeTransaction, t
 import { linkDeviceAccounts, emptyBook, isOwnWallet, linkedWallets } from "../src/core/book.ts"
 import { NOT_ALLOWED, NOT_LISTED, NOT_YOURS, readColdRequest, sendFromCold, signatureFromHex, toColdAccount, transferRequest, yParityOf, type ColdRequest, type WalletSigner } from "../src/core/cold.ts"
 import { accountsToLink, defaultAccount, isFresh, readCheckedAccounts, rememberCheckedAccount, selectedAccount, type SeenAccount } from "../src/core/device-accounts.ts"
-import { addToMacLink, noteLinkFor, parseDeviceLink, usdMicrosOf } from "../src/core/device-link.ts"
+import { addToMacLink, noteLinkFor, parseDeviceLink, unitChoiceLink, usdMicrosOf } from "../src/core/device-link.ts"
 import { FAKE_SIGNATURE, accountSigningWithFake, mockSigner } from "./support/mock-signer.ts"
 import { assertMatchesFixture } from "./support/fixtures.ts"
 
@@ -294,13 +294,13 @@ describe("links into the flow", () => {
   test("a top-up", () => {
     assert.deepEqual(parseDeviceLink("?addsavings=ledger"), { kind: "add-savings", device: "ledger" })
     assert.deepEqual(parseDeviceLink("?addsavings=anything"), { kind: "add-savings", device: null })
-    assert.deepEqual(parseDeviceLink(`?topup=${HOT}&usd=20`), { kind: "top-up", to: HOT, usdMicros: "20000000" })
-    assert.deepEqual(parseDeviceLink(`?topup=${HOT}`), { kind: "top-up", to: HOT, usdMicros: null })
+    assert.deepEqual(parseDeviceLink(`?topup=${HOT}&usd=20`), { kind: "top-up", to: HOT, usdMicros: "20000000", held: null })
+    assert.deepEqual(parseDeviceLink(`?topup=${HOT}`), { kind: "top-up", to: HOT, usdMicros: null, held: null })
   })
 
   test("a bad amount is left for the person to fill in, and a bad address isn't a link", () => {
-    assert.deepEqual(parseDeviceLink(`?topup=${HOT}&usd=lots`), { kind: "top-up", to: HOT, usdMicros: null })
-    assert.deepEqual(parseDeviceLink(`?topup=${HOT}&usd=-5`), { kind: "top-up", to: HOT, usdMicros: null })
+    assert.deepEqual(parseDeviceLink(`?topup=${HOT}&usd=lots`), { kind: "top-up", to: HOT, usdMicros: null, held: null })
+    assert.deepEqual(parseDeviceLink(`?topup=${HOT}&usd=-5`), { kind: "top-up", to: HOT, usdMicros: null, held: null })
     assert.equal(parseDeviceLink("?topup=0x1234&usd=20"), null)
   })
 
@@ -334,11 +334,39 @@ describe("links into the flow", () => {
     for (const bad of ["1.234,50", "12,3456", "1,23,456", "0,125", ",5"]) assert.equal(usdMicrosOf(bad), null, bad)
     assert.equal(noteLinkFor({ wallet: COLD, noteAbout: TX, arrivals: [{ asset: "USDC", units: "1500000", decimals: 6 }], receipts: [{}] }, "46,20", "USD")?.usdMicros, "46200000")
     const link = parseDeviceLink(new URL(`http://127.0.0.1:8787?topup=${HOT}&usd=46,20`).search)
-    assert.deepEqual(link, { kind: "top-up", to: HOT, usdMicros: "46200000" })
+    assert.deepEqual(link, { kind: "top-up", to: HOT, usdMicros: "46200000", held: null })
+  })
+
+  test("reads what the Mac app says its savings hold, as `NamedUnitsTests.swift` writes it", () => {
+    const wallet = "0x00000000000000000000000000000000000000c1"
+    const held = `{"${wallet}":{"ETH":{"purchases":[{"allOnly":false,"boughtAt":"2026-01-02T00:00:00.000Z","costMicros":"2000000000","units":"1000000000000000000"},{"allOnly":true,"boughtAt":"2026-03-04T05:06:07.890Z","units":"2000000000000000000"}],"unnamed":"0"}}}`
+    const url = new URL(`http://127.0.0.1:8787?topup=${HOT}&usd=20`)
+    url.searchParams.set("held", held)
+    const link = parseDeviceLink(url.search)
+    assert.equal(link?.kind, "top-up")
+    const eth = link?.kind === "top-up" ? link.held?.get(wallet)?.get("ETH") : undefined
+    assert.deepEqual(eth, {
+      purchases: [
+        { boughtAt: "2026-01-02T00:00:00.000Z", units: 10n ** 18n, costMicros: 2_000_000_000n, allOnly: false },
+        { boughtAt: "2026-03-04T05:06:07.890Z", units: 2n * 10n ** 18n, costMicros: null, allOnly: true },
+      ],
+      unnamed: 0n,
+    })
+    // Anyone can make a link: what doesn't fit is left out whole, and the send just can't name its units.
+    for (const bad of [held.replace('"units":"1000000000000000000"', '"units":"-1"'), held.replace(wallet, "0xnope"), "{", "[]"]) {
+      url.searchParams.set("held", bad)
+      const read = parseDeviceLink(url.search)
+      assert.equal(read?.kind === "top-up" ? read.held : "not a top-up", null, bad)
+    }
+  })
+
+  test("hands the Mac app a choice, as `NamedUnitsTests.swift` reads it", () => {
+    const choice = { wallet: "0x00000000000000000000000000000000000000c1", txHash: `0x${"ab".repeat(32)}`, asset: "ETH", recordedAt: "2026-11-07T12:00:00.000Z", takes: [{ boughtAt: "2026-01-02T00:00:00.000Z", units: "500000000000000000" }, { boughtAt: "2026-03-04T05:06:07.890Z", units: "1" }] }
+    assert.equal(unitChoiceLink(choice), "patina://unit-choice?wallet=0x00000000000000000000000000000000000000c1&tx=0xabababababababababababababababababababababababababababababababab&asset=ETH&recorded=2026-11-07T12%3A00%3A00.000Z&takes=2026-01-02T00%3A00%3A00.000Z%7E500000000000000000%2C2026-03-04T05%3A06%3A07.890Z%7E1")
   })
 
   test("reads what the Mac app writes, as `DeviceFlowTests.swift` pins it", () => {
-    assert.deepEqual(parseDeviceLink(new URL(`http://127.0.0.1:8787?topup=${HOT}&usd=20`).search), { kind: "top-up", to: HOT, usdMicros: "20000000" })
+    assert.deepEqual(parseDeviceLink(new URL(`http://127.0.0.1:8787?topup=${HOT}&usd=20`).search), { kind: "top-up", to: HOT, usdMicros: "20000000", held: null })
     assert.deepEqual(parseDeviceLink(new URL(`http://127.0.0.1:8787?publish=${TX}&wallet=${COLD}&asset=USDC&units=1500000&decimals=6&usd=250`).search), { kind: "publish", wallet: COLD, txHash: TX, asset: "USDC", usdMicros: "250000000", amount: { units: "1500000", decimals: 6 } })
   })
 

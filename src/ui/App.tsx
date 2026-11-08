@@ -17,7 +17,7 @@ import { readHeld } from "./held.ts"
 import { useAllYours, useWallet } from "./useWallet.ts"
 import { LazyPanel } from "./LoadBoundary.tsx"
 import { ProblemNotice } from "./ProblemNotice.tsx"
-import { answerSender, currenciesIn, recordUnitChoices, unlinkWallet, walletsBehind, walletsToRead, yourWallets } from "../core/book.ts"
+import { answerSender, currenciesIn, recordUnitChoices, unlinkWallet, walletsBehind, walletsToRead, yourWallets, type UnitChoice } from "../core/book.ts"
 import { readCheckedAccounts } from "../core/device-accounts.ts"
 import { parseDeviceLink, type DeviceLink } from "../core/device-link.ts"
 import { exportCsv } from "../core/export.ts"
@@ -208,6 +208,9 @@ export function App() {
     return explainTarget(target, fold, bookContext(wallet, others, method, book, fold.view))
   }, [target, together, fold, wallet, others, method, book])
   const close = useCallback(() => setTarget(null), [])
+  // Stable across the renders each new block brings, so a send that's naming its units doesn't read them again for nothing.
+  const heldOf = useCallback((from: string, asset: string) => readHeld(from, asset, book, chosenCurrency, chosenRule, paidIn), [book, chosenCurrency, chosenRule, paidIn])
+  const keepNamed = useCallback((choice: UnitChoice) => changeRecords((latest) => recordUnitChoices(latest, [choice])), [changeRecords])
   const statusLines = showing ? [
     ...(combined && combined.linkedReading.length > 0 ? [allYoursReadingSentence(combined.linkedReading)] : []),
     ...(combined && combined.linkedUpdating.length > 0 ? [allYoursUpdatingSentence(combined.linkedUpdating)] : []),
@@ -413,8 +416,8 @@ export function App() {
             currency={chosenCurrency}
             allYours={isAll}
             onLink={linkAccounts}
-            heldOf={(from, asset) => readHeld(from, asset, book, chosenCurrency, chosenRule, paidIn)}
-            onNamed={(choice) => changeRecords((latest) => recordUnitChoices(latest, [choice]))}
+            heldOf={heldOf}
+            onNamed={keepNamed}
             notSaved={notSaved}
             onView={(next) => {
               setDevice(null)

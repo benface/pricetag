@@ -11,6 +11,7 @@ import { exportCsv } from "../src/core/export.ts"
 import { UNIT_CHOICE_COLUMNS, parseUnitChoicesCsv } from "../src/core/unit-choices.ts"
 import { DEMO_ADDRESS, DEMO_WALLET, demoRates, demoWallet } from "../src/core/fixtures.ts"
 import { foldBook, previewBook } from "../src/core/resolve.ts"
+import { heldByAsset } from "../src/core/held-units.ts"
 import { withoutWhatItHas } from "./long-lists.ts"
 import { CAUTIOUS_RULE_ID, MARKET_RULE_ID, RULE_TEXT, ruleNote, type PricingRule } from "../src/core/rules.ts"
 import { refuse, type CheckoutRefusal } from "./hosting.ts"
@@ -669,7 +670,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       return taxReport(taxMatch[1] as string, { country: body.country, method: body.method, scope: body.scope, year: body.year }, also as string[], currency, book, res)
     }
 
-    const match = /^\/api\/portfolio\/([^/]+)(?:\/(explain|preview|export|compare|last|wallets))?$/.exec(path)
+    const match = /^\/api\/portfolio\/([^/]+)(?:\/(explain|preview|export|compare|last|wallets|held))?$/.exec(path)
     if (!match) return sendJson(res, 404, { error: "Not found" })
     const method = parseMethod(typeof body.method === "string" ? body.method : null)
     if (!method) return sendJson(res, 400, { error: "The method is either average or fifo." })
@@ -706,7 +707,7 @@ export function createApi(env: Env, created: Created | null = createSource(env),
       res.end()
       return
     }
-    const read = await readWallet(match[1] as string, res, { fresh: action === undefined, rule })
+    const read = await readWallet(match[1] as string, res, { fresh: action === undefined || action === "held", rule })
     const wallet = read && (await inCurrency(read, currency, res, books))
     if (!wallet) return
     // The client's own wallets, which only count on a wallet that's real.
@@ -715,6 +716,8 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     if (!others) return
 
     if (action === "preview") return sendJson(res, 200, { previews: linkedBooks.map((candidate) => previewBook(wallet, others, method, candidate, [...linkedFailures])) })
+    // What's still held of each token, by purchase, folded the way a US report does, for a send that names its units as it's signed.
+    if (action === "held") return sendJson(res, 200, { assets: heldByAsset(wallet, others, linkedBooks[0] as Book) })
     if (action === "export") {
       const { positions, view } = foldBook(wallet, others, method, linkedBooks[0] as Book)
       res.writeHead(200, { "content-type": "text/csv; charset=utf-8", "cache-control": "no-store" })

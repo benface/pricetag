@@ -31,6 +31,15 @@ final class FixtureSource: PortfolioSource {
         }
     }
 
+    /// Three USDC purchases, one with no cost anyone knows, and some nothing can name.
+    func held(_ read: ReadContext) async throws -> HeldByAsset {
+        HeldByAsset(assets: ["USDC": HeldUnits(purchases: [
+            .init(boughtAt: "2026-02-14T15:20:00.000Z", units: "10000000", costMicros: "10010000", allOnly: false),
+            .init(boughtAt: "2026-06-03T09:45:00.000Z", units: "8000000", costMicros: nil, allOnly: false),
+            .init(boughtAt: "2026-10-28T18:05:00.000Z", units: "6000000", costMicros: "6000000", allOnly: true),
+        ], unnamed: "1500000")])
+    }
+
     func readProgress(address: String) async throws -> FirstReadProgress? {
         try await Task.sleep(for: progressDelay)
         return progress

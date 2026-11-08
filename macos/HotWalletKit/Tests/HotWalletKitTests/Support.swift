@@ -267,6 +267,11 @@ actor ScriptedPortfolios: PortfolioSource {
 
     func set(_ next: Result<Portfolio, FetchError>) { self.next = next }
 
+    /// What a send that names its units reads.
+    private var heldNext: Result<HeldByAsset, FetchError> = .failure(.unreachable)
+    func setHeld(_ next: Result<HeldByAsset, FetchError>) { heldNext = next }
+    func held(_ read: ReadContext) throws -> HeldByAsset { try heldNext.get() }
+
     /// Each read's pricing rule. Money only ever moves by the default.
     private(set) var rules: [String?] = []
 

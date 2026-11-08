@@ -612,6 +612,11 @@ public final class PortfolioStore {
         try await source.importUnitChoices(csv: csv)
     }
 
+    /// What a wallet still holds of each token, by purchase, with this Mac's answers, so a send can name the units it takes.
+    public func held(in address: String) async throws -> [String: HeldUnits] {
+        try await source.held(readContext(for: address.lowercased())).assets
+    }
+
     /// Records of named units go in the book, outside Undo, since they aren't answers.
     public func keepUnitChoices(_ found: [UnitChoice]) {
         answerHistory.changeUnitChoices { $0.recordingUnitChoices(found) }

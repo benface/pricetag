@@ -4,7 +4,7 @@ import type { Hex, PublicClient } from "viem"
 import { linkedWallets, type Book, type UnitChoice } from "../core/book.ts"
 import { readColdRequest, transferRequest, type ColdAccount, type ColdRequest, type ColdSigner, type DevicePrompt } from "../core/cold.ts"
 import { accountsToLink, isFresh, readCheckedAccounts, rememberCheckedAccount, selectedAccount, type AccountActivity, type CheckedAccount, type SeenAccount } from "../core/device-accounts.ts"
-import { addToMacLink, usdMicrosOf, type DeviceLink } from "../core/device-link.ts"
+import { addToMacLink, unitChoiceLink, usdMicrosOf, type DeviceLink } from "../core/device-link.ts"
 import { amountForUsd, checkSend, parseAmount, readActivity, readEthPriceMicros, type SendCheck } from "../core/device-read.ts"
 import { choiceOf, picksProblem, type Held } from "../core/held-units.ts"
 import { NOT_SAVED } from "../core/wording.ts"
@@ -192,6 +192,22 @@ export function DevicePanel({ link, book, currency = "USD", allYours = false, on
     setStep("route")
   }
 
+  // A top-up the Mac app opened says what its savings hold, folded with its answers, and only under US rules. What's chosen goes back
+  // to it, since its book is the one that counts. Anywhere else, it's this app's own reading and book, and only under US rules here.
+  const fromMac = link?.kind === "top-up" ? link.held : null
+  const heldFor = useMemo(
+    () =>
+      fromMac
+        ? (address: string, asset: string) => {
+            const held = fromMac.get(normalizeAddress(address))?.get(asset)
+            return held ? Promise.resolve(held) : Promise.reject(new Error("The Mac app didn't say what this one holds."))
+          }
+        : heldOf,
+    [fromMac, heldOf],
+  )
+  const canName = fromMac !== null || (heldOf !== undefined && onNamed !== undefined && readCountry(currency) === "US")
+  const [handBack, setHandBack] = useState<UnitChoice | null>(null)
+
   const send = (request: ColdRequest, what: string, own: ReadonlySet<string>, named?: Named) => {
     if (!signer || !account) return
     if (required !== null && account.address !== required) return setProblem(WRONG_PUBLISHER)
@@ -200,7 +216,8 @@ export function DevicePanel({ link, book, currency = "USD", allYours = false, on
     void attempt(async () => {
       const hash = await connectors.send({ signer, account, request, own, onPrompt: setPrompt })
       const choice = named ? choiceOf(account.address, hash, named.asset, recordedAt, named.picks) : null
-      if (choice) onNamed?.(choice)
+      if (choice && fromMac) setHandBack(choice)
+      else if (choice) onNamed?.(choice)
       setExchange(null)
       setSent({ hash, status: "pending", what })
       setStep("sent")
@@ -383,7 +400,7 @@ export function DevicePanel({ link, book, currency = "USD", allYours = false, on
           </>
         ) : null}
 
-        {step === "send" && account && signer ? <SendForm link={link?.kind === "top-up" ? link : null} currency={currency} from={account} book={book} heldOf={onNamed ? heldOf : undefined} checked={checked} accounts={accounts} clientOf={clientOf} busy={busy} onBack={() => setStep(link?.kind === "top-up" ? "accounts" : "ready")} onLink={onLink} onSend={send} /> : null}
+        {step === "send" && account && signer ? <SendForm link={link?.kind === "top-up" ? link : null} currency={currency} from={account} book={book} heldOf={canName ? heldFor : undefined} checked={checked} accounts={accounts} clientOf={clientOf} busy={busy} onBack={() => setStep(link?.kind === "top-up" ? "accounts" : "ready")} onLink={onLink} onSend={send} /> : null}
 
         {step === "publish" && account && signer && link?.kind === "publish" ? <PublishForm link={link} currency={currency} busy={busy} onBack={() => setStep("accounts")} onSend={send} /> : null}
 
@@ -396,7 +413,17 @@ export function DevicePanel({ link, book, currency = "USD", allYours = false, on
                 See it on Basescan
               </a>
             </p>
-            {link ? <p className="muted small">The Mac app picks this up on its own.</p> : null}
+            {handBack ? (
+              <>
+                <p className="small">The Mac app sees the send on its own, but not which units it took. Until you save your choice there, it goes by the ones you've held longest.</p>
+                <p className="device-actions">
+                  <a className="button-link primary" href={unitChoiceLink(handBack)}>
+                    Save your choice in the Mac app
+                  </a>
+                </p>
+              </>
+            ) : null}
+            {link && !handBack ? <p className="muted small">The Mac app picks this up on its own.</p> : null}
           </>
         ) : null}
 
@@ -507,29 +534,42 @@ function SendForm({ link, currency, from, book, heldOf, checked, accounts, clien
     }
   }, [key, refused])
 
-  // Only US rules let a send name its units, and only before it happens.
-  const canName = heldOf !== undefined && readCountry(currency) === "US"
+  // Only US rules let a send name its units, and only before it happens. The panel says when that applies.
+  const canName = heldOf !== undefined
   const [naming, setNaming] = useState(false)
-  const [held, setHeld] = useState<Held | "reading" | "failed">("reading")
+  // What was last read, for which wallet and asset. A new read, after a new block or a change to the book, keeps the last one on
+  // screen with what's typed into it, and the send waits until it's back.
+  const holding = `${from.address}:${token.asset}`
+  const [lastRead, setLastRead] = useState<{ holding: string; held: Held | "failed" } | null>(null)
+  const [reading, setReading] = useState(false)
   const [picked, setPicked] = useState<Record<string, string>>({})
+  // Other purchases, so what was typed for these doesn't carry over.
+  useEffect(() => setPicked({}), [holding])
   useEffect(() => {
-    setPicked({})
     if (!naming || !heldOf) return
     let current = true
-    setHeld("reading")
-    heldOf(from.address, token.asset).then((next) => current && setHeld(next), () => current && setHeld("failed"))
+    setReading(true)
+    heldOf(from.address, token.asset).then(
+      (next) => current && (setLastRead({ holding, held: next }), setReading(false)),
+      () => current && (setLastRead({ holding, held: "failed" }), setReading(false)),
+    )
     return () => {
       current = false
     }
-  }, [naming, heldOf, from.address, token.asset])
+  }, [naming, heldOf, holding])
+  const held: Held | "reading" | "failed" = lastRead?.holding === holding ? lastRead.held : "reading"
   const picks = useMemo(() => new Map(Object.entries(picked).flatMap(([at, text]) => {
     const n = text.trim() === "" ? 0n : parseAmount(text, token.decimals)
     return n === null ? [[at, -1n] as const] : [[at, n] as const]
   })), [picked, token.decimals])
   const format = (n: bigint) => `${formatAmount(n, token.decimals)} ${token.symbol}`
   const badPick = [...picks.values()].some((n) => n < 0n)
-  const pickProblem = !naming || typeof held !== "object" ? null : badPick ? `One of those isn't an amount of ${token.symbol}.` : units ? picksProblem(held, picks, units, format) : null
-  const named: Named | undefined = naming && typeof held === "object" && !pickProblem && !badPick ? { asset: token.asset, picks } : undefined
+  const nothingPicked = [...picks.values()].every((n) => n === 0n)
+  const pickProblem = !naming || typeof held !== "object" ? null : badPick ? `One of those isn't an amount of ${token.symbol}.` : units && !nothingPicked ? picksProblem(held, picks, units, format) : null
+  // Once this is open, the send goes with what's chosen here, or nothing goes until "Don't choose" closes it. It never goes
+  // without a choice someone thinks it has.
+  const namingBlocks = naming && (typeof held !== "object" || reading || nothingPicked || pickProblem !== null)
+  const named: Named | undefined = naming && !namingBlocks ? { asset: token.asset, picks } : undefined
 
   const what = units && to ? `${amount.trim()} ${token.symbol} from ${shortHash(from.address)} to ${shortHash(to)}` : ""
   const go = () => {
@@ -577,13 +617,13 @@ function SendForm({ link, currency, from, book, heldOf, checked, accounts, clien
       {refused && !needsAnswer ? <p className="small warn-text" role="alert">⚠ {refused}</p> : null}
       {check?.feeUnits ? <p className="muted small">Network fee: about {formatAmount(check.feeUnits, 18)} ETH</p> : null}
       {check?.problem ? <p className="small warn-text" role="alert">⚠ {check.problem}</p> : null}
-      {canName ? <NameUnits naming={naming} onNaming={setNaming} held={held} picked={picked} onPick={(at, text) => setPicked((latest) => ({ ...latest, [at]: text }))} format={format} currency={currency} problem={units ? pickProblem : null} /> : null}
+      {canName ? <NameUnits naming={naming} onNaming={setNaming} held={held} checking={reading && typeof held === "object"} nothingPicked={nothingPicked} picked={picked} onPick={(at, text) => setPicked((latest) => ({ ...latest, [at]: text }))} format={format} currency={currency} problem={units ? pickProblem : null} /> : null}
       <p className="muted small">Your device shows the same address and amount. Trust what it shows.</p>
       <div className="device-actions">
         <button type="button" disabled={busy} onClick={onBack}>
           Back
         </button>
-        <button type="button" className="primary" disabled={busy || !request || refused !== null || (needsAnswer && !isMine) || check?.blocks === true || pickProblem !== null} onClick={go}>
+        <button type="button" className="primary" disabled={busy || !request || refused !== null || (needsAnswer && !isMine) || check?.blocks === true || namingBlocks} onClick={go}>
           Send from your device
         </button>
       </div>
@@ -592,10 +632,13 @@ function SendForm({ link, currency, from, book, heldOf, checked, accounts, clien
 }
 
 /** An optional step: which purchases this send takes from. Left closed, the oldest go first. */
-function NameUnits({ naming, onNaming, held, picked, onPick, format, currency, problem }: {
+function NameUnits({ naming, onNaming, held, checking, nothingPicked, picked, onPick, format, currency, problem }: {
   naming: boolean
   onNaming: (naming: boolean) => void
   held: Held | "reading" | "failed"
+  /** Reading it again, with the last read still shown. */
+  checking: boolean
+  nothingPicked: boolean
   picked: Readonly<Record<string, string>>
   onPick: (at: string, text: string) => void
   format: (units: bigint) => string
@@ -617,8 +660,8 @@ function NameUnits({ naming, onNaming, held, picked, onPick, format, currency, p
       <legend className="small">Which units does this send take?</legend>
       <p className="muted small">US tax rules let you choose which purchases a sale or send comes from, if you choose before it happens. This is saved with the send, so your tax report can use it.</p>
       {held === "reading" ? <p className="muted small" role="status">Reading what this wallet holds…</p> : null}
-      {held === "failed" ? <p className="small warn-text" role="alert">⚠ Couldn't read what this wallet holds, so this send can't name its units. Close this to send anyway.</p> : null}
-      {typeof held === "object" && held.purchases.length === 0 ? <p className="muted small">Nothing this wallet holds says when it was bought, so there's nothing to choose from.</p> : null}
+      {held === "failed" ? <p className="small warn-text" role="alert">⚠ Couldn't read what this wallet holds, so this send can't name its units. To send without choosing, pick "Don't choose".</p> : null}
+      {typeof held === "object" && held.purchases.length === 0 ? <p className="muted small">Nothing this wallet holds says when it was bought, so there's nothing to choose from. Pick "Don't choose" to send.</p> : null}
       {typeof held === "object"
         ? held.purchases.map((purchase) => (
             <label key={purchase.boughtAt} className="name-unit">
@@ -633,7 +676,9 @@ function NameUnits({ naming, onNaming, held, picked, onPick, format, currency, p
             </label>
           ))
         : null}
-      {typeof held === "object" && held.unnamed > 0n ? <p className="muted small">{format(held.unnamed)} more can't be chosen, because nothing says when it was bought.</p> : null}
+      {typeof held === "object" && held.unnamed > 0n ? <p className="muted small">{format(held.unnamed)} more can't be chosen, because nothing says exactly when it was bought.</p> : null}
+      {checking ? <p className="muted small" role="status">Checking what this wallet holds…</p> : null}
+      {typeof held === "object" && nothingPicked && held.purchases.length > 0 ? <p className="muted small">Type how much comes from each purchase, or pick "Don't choose".</p> : null}
       {problem ? <p className="small warn-text" role="alert">⚠ {problem}</p> : null}
       <button type="button" className="link" onClick={() => onNaming(false)}>
         Don't choose

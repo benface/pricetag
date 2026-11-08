@@ -5,8 +5,16 @@ import Foundation
 
 public enum DeviceFlow {
     /// The page that moves money from a device to `address`. It only fills in a form, and the device still shows what it's signing.
-    public static func topUp(server: URL, to address: String, dollars: Int) -> URL? {
-        link(server, [URLQueryItem(name: "topup", value: address), URLQueryItem(name: "usd", value: String(dollars))])
+    /// `held` is what each savings wallet holds, by token and purchase, so the send can name the units it takes. It's only there under
+    /// US rules, and the page hands the choice back in a `UnitChoiceLink`.
+    public static func topUp(server: URL, to address: String, dollars: Int, held: [String: [String: HeldUnits]] = [:]) -> URL? {
+        var items = [URLQueryItem(name: "topup", value: address), URLQueryItem(name: "usd", value: String(dollars))]
+        if !held.isEmpty {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+            if let data = try? encoder.encode(held), let text = String(data: data, encoding: .utf8) { items.append(URLQueryItem(name: "held", value: text)) }
+        }
+        return link(server, items)
     }
 
     /// The page that publishes a cost from the wallet it arrived in. `usd` is as typed, if anything was, and goes in plain digits,

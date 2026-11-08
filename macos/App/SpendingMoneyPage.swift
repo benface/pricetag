@@ -195,7 +195,7 @@ struct SpendingMoneyPage<Overview: View>: View {
         .sheet(isPresented: $isAddingCold, onDismiss: { if testingSavings != nil { isSending = true } }) {
             AddColdWalletSheet(wallet: wallet, wallets: store.walletList(hotWallet: wallet).pickable, navigation: navigation, server: store.serverURL) { testingSavings = $0 }
         }
-        .sheet(isPresented: $isToppingUp) { TopUpSheet(wallet: wallet, server: store.serverURL) }
+        .sheet(isPresented: $isToppingUp) { TopUpSheet(wallet: wallet, server: store.serverURL, store: store) }
         .sheet(isPresented: $isSending, onDismiss: { testingSavings = nil }) {
             SendSheet(model: {
                 let model = SendModel(wallet: wallet, store: store)
@@ -733,15 +733,24 @@ struct TopUpSheet: View {
     let wallet: HotWallet
     let server: URL
     let browsers: DeviceBrowsers
+    /// Where what the savings hold is read from, so the page can name the units the send takes. Only under US rules.
+    let store: PortfolioStore?
+    let handoff: UnitChoiceHandoff
     @Environment(\.dismiss) private var dismiss
     @State private var dollars = 0.0
     @State private var found = LedgerBrowserChoice.unknown
+    /// What each savings wallet holds, by token, once it's read. One that couldn't be read is left out, and the page says so.
+    @State private var held: [String: [String: HeldUnits]] = [:]
 
-    init(wallet: HotWallet, server: URL, browsers: DeviceBrowsers = .real) {
+    init(wallet: HotWallet, server: URL, browsers: DeviceBrowsers = .real, store: PortfolioStore? = nil, handoff: UnitChoiceHandoff = .shared) {
         self.wallet = wallet
         self.server = server
         self.browsers = browsers
+        self.store = store
+        self.handoff = handoff
     }
+
+    private var savings: [String] { wallet.settings.coldWallets.map(\.address.lowercased) }
 
     private var room: Int { Int(wallet.topUpRoom / Money.dollar) }
     /// Until then the room left is unknown, and would read as the whole cap.
@@ -749,7 +758,7 @@ struct TopUpSheet: View {
     private var hasDestination: Bool { wallet.settings.sweepDestination != nil }
 
     private var deviceLink: URL? {
-        wallet.address.flatMap { DeviceFlow.topUp(server: server, to: $0.checksummed, dollars: Int(dollars)) }
+        wallet.address.flatMap { DeviceFlow.topUp(server: server, to: $0.checksummed, dollars: Int(dollars), held: held) }
     }
 
     var body: some View {
@@ -819,11 +828,23 @@ struct TopUpSheet: View {
         // A read can leave less room than there was when this opened. What's chosen stays if it still fits.
         .onChange(of: room) { dollars = min(dollars, Double(max(room, 1))) }
         .findingBrowsers(browsers, $found)
+        .task { await readHeld() }
+    }
+
+    /// What the savings hold, read while the amount's chosen, so opening the page doesn't wait on it.
+    private func readHeld() async {
+        guard let store, TaxReportModel.country(currency: store.currency) == .US else { return }
+        for address in savings {
+            guard let assets = try? await store.held(in: address), !Task.isCancelled else { continue }
+            held[address] = assets
+        }
     }
 
     private func open(_ link: URL, in browser: InstalledBrowser?) {
         // The amount in the link is only worth sending once the room's known.
         guard hasRead else { return }
+        // A record that comes back is only kept for a top-up this opened, from a wallet it said what was held in.
+        if !held.isEmpty { handoff.opened(wallets: Array(held.keys)) }
         browsers.open(link, browser)
         dismiss()
     }

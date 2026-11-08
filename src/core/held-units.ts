@@ -36,8 +36,8 @@ function sameCost(a: Lot, b: Lot): boolean {
   return (gap < 0n ? -gap : gap) <= aQty + bQty
 }
 
-/** A lot nothing can name: no date, or one that could have been bought any time before where it is. The fold refuses those. */
-const unnameable = (lot: Lot) => (lot.boughtAt ?? lot.acquiredAt) === undefined || (lot.wholeCostOnly === true && !lot.boughtAt) || lot.unplaced === true
+/** A lot that could have been bought any time before where it is. The fold refuses any name that covers one, whatever else it covers. */
+const anyTimeBefore = (lot: Lot) => (lot.wholeCostOnly === true && !lot.boughtAt) || lot.unplaced === true
 
 /** The lots a fold left open, as purchases someone could name. */
 export function heldOf(lots: readonly Lot[]): Held {
@@ -46,16 +46,16 @@ export function heldOf(lots: readonly Lot[]): Held {
   for (const lot of lots) {
     if (BigInt(lot.qty) <= 0n) continue
     const at = lot.boughtAt ?? lot.acquiredAt
-    // A moment with a lot nothing can name can't be named at all, since the fold refuses any name that covers one.
-    if (at === undefined || unnameable(lot)) {
+    if (at === undefined) {
       unnamed += BigInt(lot.qty)
       continue
     }
+    // Grouped first, with the lots nothing can name, since a name covers every lot of its moment, and then the whole moment can't be.
     byMoment.set(at, [...(byMoment.get(at) ?? []), lot])
   }
   const purchases: HeldPurchase[] = []
   for (const [boughtAt, group] of byMoment) {
-    if (group.some(unnameable)) {
+    if (group.some(anyTimeBefore)) {
       unnamed += group.reduce((sum, lot) => sum + BigInt(lot.qty), 0n)
       continue
     }
@@ -71,6 +71,16 @@ export function heldOf(lots: readonly Lot[]): Held {
 export function heldIn(wallet: WalletResponse, others: readonly WalletResponse[], book: Book, asset: string): Held {
   const position = foldBook(wallet, others, HELD_METHOD, book).positions.find((one) => one.asset === asset)
   return heldOf(position?.state.lots ?? [])
+}
+
+/** What `wallet` holds of each token, the same way, as JSON. A token nothing's held of is left out. */
+export function heldByAsset(wallet: WalletResponse, others: readonly WalletResponse[], book: Book): Record<string, HeldJson> {
+  const held: Record<string, HeldJson> = {}
+  for (const position of foldBook(wallet, others, HELD_METHOD, book).positions) {
+    const one = heldOf(position.state.lots)
+    if (one.purchases.length > 0 || one.unnamed > 0n) held[position.asset] = heldToJson(one)
+  }
+  return held
 }
 
 export type Picks = ReadonlyMap<string, bigint>
@@ -94,4 +104,34 @@ export function picksProblem(held: Held, picks: Picks, units: bigint, format: (u
 export function choiceOf(wallet: string, txHash: string, asset: string, recordedAt: string, picks: Picks): UnitChoice | null {
   const takes = [...picks].filter(([, n]) => n > 0n).sort(([a], [b]) => Date.parse(a) - Date.parse(b)).map(([boughtAt, n]) => ({ boughtAt, units: n.toString() }))
   return takes.length === 0 ? null : { wallet: normalizeAddress(wallet), txHash: txHash.toLowerCase(), asset, recordedAt, takes }
+}
+
+/** `Held` as JSON, which has no bigints, for a client that doesn't fold its own, like the Mac app. */
+export type HeldJson = { purchases: { boughtAt: string; units: string; costMicros: string | null; allOnly: boolean }[]; unnamed: string }
+
+export const heldToJson = (held: Held): HeldJson => ({
+  purchases: held.purchases.map((p) => ({ boughtAt: p.boughtAt, units: p.units.toString(), costMicros: p.costMicros === null ? null : p.costMicros.toString(), allOnly: p.allOnly })),
+  unnamed: held.unnamed.toString(),
+})
+
+const DIGITS = /^\d{1,78}$/
+const MOMENT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
+
+/** What someone else said is held, or null when it isn't that. Anyone can make a link, so this only reads what fits. */
+export function heldFromJson(value: unknown): Held | null {
+  if (typeof value !== "object" || value === null) return null
+  const { purchases, unnamed } = value as Record<string, unknown>
+  if (!Array.isArray(purchases) || typeof unnamed !== "string" || !DIGITS.test(unnamed) || purchases.length > 500) return null
+  const read: HeldPurchase[] = []
+  for (const one of purchases as unknown[]) {
+    if (typeof one !== "object" || one === null) return null
+    // The Mac app leaves out a cost nobody knows.
+    const { boughtAt, units, costMicros = null, allOnly } = one as Record<string, unknown>
+    if (typeof boughtAt !== "string" || !MOMENT.test(boughtAt) || typeof units !== "string" || !DIGITS.test(units) || BigInt(units) === 0n) return null
+    if (costMicros !== null && (typeof costMicros !== "string" || !DIGITS.test(costMicros))) return null
+    if (typeof allOnly !== "boolean" || read.some((p) => p.boughtAt === boughtAt)) return null
+    read.push({ boughtAt, units: BigInt(units), costMicros: costMicros === null ? null : BigInt(costMicros), allOnly })
+  }
+  read.sort((a, b) => Date.parse(a.boughtAt) - Date.parse(b.boughtAt))
+  return { purchases: read, unnamed: BigInt(unnamed) }
 }

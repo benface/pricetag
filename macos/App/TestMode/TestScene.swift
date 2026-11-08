@@ -462,6 +462,8 @@ enum TestScene: String, CaseIterable {
     case sendWaiting = "send-waiting"
     /// With VoiceOver on, Touch ID waits for the user to say they've heard it.
     case sendReviewing = "send-reviewing"
+    case sendWhichUnits = "send-which-units"
+    case sendWhichUnitsReviewing = "send-which-units-reviewing"
     case sendGoing = "send-going"
     case sendSent = "send-sent"
     case sendStopped = "send-stopped"
@@ -860,6 +862,7 @@ enum TestScene: String, CaseIterable {
         case .sendTyping: SceneSpec(screen: .send, chrome: .none, listsWallets: true, hotWallet: .funded)
         case .sendWaiting: SceneSpec(screen: .send, chrome: .none, hotWallet: .funded)
         case .sendReviewing: SceneSpec(screen: .send, chrome: .none, hotWallet: .funded)
+        case .sendWhichUnits, .sendWhichUnitsReviewing: SceneSpec(screen: .send, chrome: .none, hotWallet: .funded)
         case .sendGoing: SceneSpec(screen: .send, chrome: .none, hotWallet: .funded)
         case .sendSent: SceneSpec(screen: .send, chrome: .none, hotWallet: .funded)
         case .sendStopped: SceneSpec(screen: .send, chrome: .none, hotWallet: .funded)
@@ -1388,7 +1391,8 @@ enum TestScene: String, CaseIterable {
     }
 
     private func sendScreen(_ parts: SceneParts) -> TestScreen {
-        let model = SendModel(wallet: parts.hotWallet, store: parts.store)
+        let naming = self == .sendWhichUnits || self == .sendWhichUnitsReviewing
+        let model = SendModel(wallet: parts.hotWallet, store: parts.store, canName: naming ? true : nil)
         model.token = Base.tokens.first { $0.symbol == "USDC" }!
         model.amountText = "12.50"
         model.addressText = switch self {
@@ -1404,6 +1408,16 @@ enum TestScene: String, CaseIterable {
         default: Self.recipient
         }
         if self == .sendLookalikeChecked { model.acceptsLookalike = true }
+        if naming {
+            model.startNaming()
+            model.picked = ["2026-02-14T15:20:00.000Z": "10", "2026-06-03T09:45:00.000Z": "2.5"]
+        }
+        if self == .sendWhichUnitsReviewing {
+            return TestScreen(view: AnyView(SendConfirmation(model: model, gate: .scene(.needsReview), done: {}).frame(width: 460).task {
+                while model.held == .reading { try? await Task.sleep(for: .milliseconds(20)) }
+                model.confirm()
+            }), isReady: { parts.isReady() && model.stage == .confirming })
+        }
         if self == .sendMoney || self == .sendMoneyCAD {
             model.switchUnit()
             model.amountText = "25"
@@ -1419,7 +1433,7 @@ enum TestScene: String, CaseIterable {
         case .sendSent: confirmation(.done)
         case .sendStopped: confirmation(.stopped(nil))
         case .sendRefused: confirmation(.stopped(HotWalletWording.notSent("insufficient funds for gas * price + value")))
-        default: TestScreen(view: AnyView(SendSheet(model: model, wallets: parts.store.walletList(hotWallet: parts.hotWallet).pickable)), isReady: parts.isReady)
+        default: TestScreen(view: AnyView(SendSheet(model: model, wallets: parts.store.walletList(hotWallet: parts.hotWallet).pickable)), isReady: { parts.isReady() && (!naming || model.held != .reading) })
         }
     }
 
