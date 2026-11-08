@@ -5,7 +5,7 @@
 import { sha256 } from "@noble/hashes/sha2"
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils"
 import { ASSETS, decimalsOf, isAddress, normalizeAddress, type CurrencyCode } from "@pricetag/sdk/core"
-import { MAX_EXCHANGE_LOTS, type Book, type ExchangeLot, type ExchangeWithdrawal } from "./book.ts"
+import { MAX_EXCHANGE_LOTS, onCalendar, type Book, type ExchangeLot, type ExchangeWithdrawal } from "./book.ts"
 import { unitsOfDecimal } from "./decimal.ts"
 
 export type ExchangeImport = {
@@ -216,7 +216,11 @@ export function parseCoinbaseCsv(text: string): ExchangeImport | null {
     .slice(headerAt + 1)
     .filter((line) => line.trim() !== "")
     .map(parseCsvLine)
-    .map((cells) => ({ cells, time: Date.parse((cells[at.time] ?? "").replace(" UTC", "Z").replace(" ", "T")) }))
+    .map((cells) => {
+      const time = (cells[at.time] ?? "").trim().replace(" UTC", "Z").replace(/\s+(?=[+-]\d{2}:?\d{2}$)/, "").replace(" ", "T")
+      // `Date.parse` would roll a day the calendar doesn't have into the next month, so that's no readable time either.
+      return { cells, time: onCalendar(time) ? Date.parse(time) : Number.NaN }
+    })
 
   const pools = new Map<string, Pool>()
   const firstSeen: Record<string, string> = {}

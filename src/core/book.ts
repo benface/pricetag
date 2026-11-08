@@ -310,7 +310,7 @@ function parseExchangeLots(value: unknown[], units: string, fifoCostMicros: stri
     const lot = recordOf(item)
     if (!lot || !isMicros(lot.units) || BigInt(lot.units) === 0n || !isMicros(lot.micros)) return null
     if (lot.wholeCostOnly !== undefined && lot.wholeCostOnly !== true) return null
-    if (lot.at === undefined ? !lot.wholeCostOnly : typeof lot.at !== "string" || Number.isNaN(Date.parse(lot.at))) return null
+    if (lot.at === undefined ? !lot.wholeCostOnly : !isInstant(lot.at)) return null
     lots.push({ units: lot.units, micros: lot.micros, ...(lot.wholeCostOnly ? { wholeCostOnly: true as const } : {}), ...(typeof lot.at === "string" ? { at: new Date(lot.at).toISOString() } : {}) })
   }
   const adds = (pick: (lot: ExchangeLot) => string, total: string) => lots.reduce((sum, lot) => sum + BigInt(pick(lot)), 0n) === BigInt(total)
@@ -322,7 +322,7 @@ function parseWithdrawal(value: unknown): ExchangeWithdrawal | null {
   if (!row || typeof row.exchange !== "string" || typeof row.asset !== "string" || !isMicros(row.units)) return null
   const cost = parseMoney(row.cost)
   if (!cost) return null
-  if (typeof row.at !== "string" || Number.isNaN(Date.parse(row.at))) return null
+  if (!isInstant(row.at)) return null
   // The Mac app's encoder leaves out what it doesn't have.
   const toAddress = row.toAddress ?? null
   const fifoCostMicros = row.fifoCostMicros ?? null
@@ -361,6 +361,8 @@ export function onCalendar(text: string): boolean {
   return isDate && hour <= 23 && minute <= 59 && second <= 59 && offsetHour <= 23 && offsetMinute <= 59
 }
 
+/** A saved time `Date.parse` can read, on a day the calendar has. Some, like a date with only an offset, pass one check and not the other. */
+const isInstant = (value: unknown): value is string => typeof value === "string" && onCalendar(value) && Number.isFinite(Date.parse(value))
 const isMoment = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) && onCalendar(value)
 const isDay = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && onCalendar(value)
 const isTxHash = (value: unknown): value is string => typeof value === "string" && /^0x[0-9a-fA-F]{64}$/.test(value)
