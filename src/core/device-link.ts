@@ -21,9 +21,10 @@ export type HeldByWallet = ReadonlyMap<string, ReadonlyMap<string, Held>>
 /**
  * What a top-up needs to name its units. It comes after the `#`, so it never reaches a server: a long history would be too much for a
  * request line. `flow` is the Mac's one-time number for this top-up, which the record has to bring back. `currency` is what the costs
- * in `held` are in, which can be other than this page's.
+ * in `held` are in, which can be other than this page's. `held` is null when the Mac sent a list this page can't read, like one
+ * longer than it takes: the top-up is still the Mac's, so the page says it can't choose rather than choosing from its own book.
  */
-export type TopUpNaming = { flow: string; currency: CurrencyCode; held: HeldByWallet }
+export type TopUpNaming = { flow: string; currency: CurrencyCode; held: HeldByWallet | null }
 
 const FLOW = /^[0-9a-f]{32}$/
 
@@ -31,14 +32,15 @@ function namingOf(hash: string): TopUpNaming | null {
   const params = new URLSearchParams(hash.replace(/^#/, ""))
   const flow = params.get("flow")
   const currency = params.get("currency")
-  const held = heldByWalletOf(params.get("held"))
-  return flow !== null && FLOW.test(flow) && isCurrencyCode(currency) && held !== null ? { flow, currency, held } : null
+  return flow !== null && FLOW.test(flow) && isCurrencyCode(currency) ? { flow, currency, held: heldByWalletOf(params.get("held")) } : null
 }
 
-const MOST_HELD_WALLETS = 16
+/** The most savings wallets a top-up lists, and how long that list can be, as JSON. `NamedUnits` in the Mac app keeps to the same. */
+export const MOST_HELD_WALLETS = 16
+export const MOST_HELD_CHARACTERS = 200_000
 
 function heldByWalletOf(text: string | null): HeldByWallet | null {
-  if (text === null || text.length > 200_000) return null
+  if (text === null || text.length > MOST_HELD_CHARACTERS) return null
   let value: unknown
   try {
     value = JSON.parse(text)

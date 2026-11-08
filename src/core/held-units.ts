@@ -116,6 +116,9 @@ export const heldToJson = (held: Held): HeldJson => ({
   unnamed: held.unnamed.toString(),
 })
 
+/** The most purchases of one token a link can list for one wallet. `NamedUnits` in the Mac app keeps to the same. */
+export const MOST_LISTED_PURCHASES = 500
+
 const DIGITS = /^\d{1,78}$/
 const MOMENT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
 
@@ -123,7 +126,7 @@ const MOMENT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
 export function heldFromJson(value: unknown): Held | null {
   if (typeof value !== "object" || value === null) return null
   const { purchases, unnamed } = value as Record<string, unknown>
-  if (!Array.isArray(purchases) || typeof unnamed !== "string" || !DIGITS.test(unnamed) || purchases.length > 500) return null
+  if (!Array.isArray(purchases) || typeof unnamed !== "string" || !DIGITS.test(unnamed) || purchases.length > MOST_LISTED_PURCHASES) return null
   const read: HeldPurchase[] = []
   for (const one of purchases as unknown[]) {
     if (typeof one !== "object" || one === null) return null

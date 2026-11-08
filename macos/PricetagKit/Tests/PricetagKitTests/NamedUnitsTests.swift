@@ -22,6 +22,18 @@ private let written = "patina://unit-choice?flow=0123456789abcdef0123456789abcde
 /// `test/cold.test.ts` reads this.
 private let macTopUp = "http://127.0.0.1:8787?topup=0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&usd=20#flow=0123456789abcdef0123456789abcdef&currency=CAD&held=%7B%220x00000000000000000000000000000000000000c1%22:%7B%22ETH%22:%7B%22purchases%22:%5B%7B%22allOnly%22:false,%22boughtAt%22:%222026-01-02T00:00:00.000Z%22,%22costMicros%22:%222000000000%22,%22units%22:%221000000000000000000%22%7D,%7B%22allOnly%22:true,%22boughtAt%22:%222026-03-04T05:06:07.890Z%22,%22units%22:%222000000000000000000%22%7D%5D,%22unnamed%22:%220%22%7D%7D%7D"
 
+/// `count` purchases of 1 ETH, an hour apart.
+private func purchases(_ count: Int) -> HeldUnits {
+    HeldUnits(purchases: (0..<count).map { i in
+        .init(boughtAt: NamedUnits.moment(Date(timeIntervalSince1970: 1_735_689_600 + Double(i) * 3600)), units: String(eth), costMicros: "2000000000", allOnly: false)
+    }, unnamed: "0")
+}
+
+private func wallet(_ i: Int) -> String {
+    let hex = String(i + 1, radix: 16)
+    return "0x" + String(repeating: "0", count: 40 - hex.count) + hex
+}
+
 @MainActor private final class Failing {
     var wallets: Set<String>
     var reads: [String] = []
@@ -197,6 +209,53 @@ private let macTopUp = "http://127.0.0.1:8787?topup=0xbbbbbbbbbbbbbbbbbbbbbbbbbb
         holdings.goWithout()
         #expect(holdings.isSettled)
         #expect(holdings.naming() == nil, "with nothing read, there's nothing to choose from")
+    }
+
+    /// The page reads no more than this, as `test/cold.test.ts` pins on the web, so this app checks before it opens it.
+    @Test func whatThePageCanListIsTheSameAsTheWebs() {
+        #expect(NamedUnits.mostListedPurchases == 500)
+        #expect(NamedUnits.mostHeldWallets == 16)
+        #expect(NamedUnits.mostHeldCharacters == 200_000)
+        #expect(TopUpNaming.fits([cold: ["ETH": purchases(500)]]))
+        #expect(!TopUpNaming.fits([cold: ["ETH": purchases(501)]]))
+        #expect(TopUpNaming.fits(Dictionary(uniqueKeysWithValues: (0..<16).map { (wallet($0), ["ETH": purchases(1)]) })))
+        #expect(!TopUpNaming.fits(Dictionary(uniqueKeysWithValues: (0..<17).map { (wallet($0), ["ETH": purchases(1)]) })))
+        // Four wallets of 500 each is too long altogether, though each fits.
+        let four = Dictionary(uniqueKeysWithValues: (0..<4).map { (wallet($0), ["ETH": purchases(500)]) })
+        #expect((TopUpNaming.text(four)?.utf16.count ?? 0) > NamedUnits.mostHeldCharacters)
+        #expect(!TopUpNaming.fits(four))
+        let three = Dictionary(uniqueKeysWithValues: (0..<3).map { (wallet($0), ["ETH": purchases(500)]) })
+        #expect(TopUpNaming.fits(three))
+    }
+
+    @MainActor @Test func aTopUpSaysWhenItsSavingsHoldMoreThanThePageCanList() async {
+        let holdings = TopUpHoldings(needed: true, wallets: [cold], currency: .USD) { _ in ["ETH": purchases(501)] }
+        await holdings.load()
+        #expect(holdings.state == .tooMuch)
+        #expect(!holdings.isSettled, "it doesn't just open with nothing to choose from")
+        #expect(holdings.naming() == nil)
+        holdings.goWithout()
+        #expect(holdings.isSettled)
+        #expect(holdings.naming() == nil, "gone without on purpose, so the page doesn't choose")
+        let fine = TopUpHoldings(needed: true, wallets: [cold], currency: .USD) { _ in ["ETH": purchases(500)] }
+        await fine.load()
+        #expect(fine.state == .ready)
+        #expect(fine.naming()?.held[cold]?["ETH"]?.purchases.count == 500)
+    }
+
+    @MainActor @Test func goingWithoutAFailedReadStillChecksWhatsLeftFits() async {
+        let other = "0x00000000000000000000000000000000000000d1"
+        let failing = Failing(wallets: [other])
+        let holdings = TopUpHoldings(needed: true, wallets: [cold, other], currency: .USD) { wallet in
+            _ = try await failing.read(wallet)
+            return ["ETH": purchases(501)]
+        }
+        await holdings.load()
+        #expect(holdings.state == .failed([other]))
+        holdings.goWithout()
+        #expect(holdings.state == .tooMuch)
+        holdings.goWithout()
+        #expect(holdings.naming() == nil)
     }
 
     @MainActor @Test func aTopUpOutsideTheUSDoesntWait() async {

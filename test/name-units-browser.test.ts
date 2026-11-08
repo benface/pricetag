@@ -16,6 +16,7 @@ const FROM = "0x3762620fbcb400b0f98365da4aad7d2a250e5d89"
 const TO = "0x1111111111111111111111111111111111111111"
 const FIRST = "2026-01-02T00:00:00.000Z"
 const SECOND = "2026-03-04T00:00:00.000Z"
+const MAC_FLOW = "0123456789abcdef0123456789abcdef"
 
 const HARNESS = `
 import { createElement, useState } from "react"
@@ -70,7 +71,9 @@ function Harness() {
   const link = location.search.startsWith("?topup") ? parseDeviceLink(location.search, location.hash) : null
   // The page's own currency: the Mac's page has none, so it's USD, and pnpm mac serves the web app in whatever the browser chose.
   const currency = new URLSearchParams(location.search).get("pagecurrency") ?? "USD"
-  return createElement(DevicePanel, { link, book, currency, onLink: () => {}, onClose: () => {}, connectors, start, heldOf, onNamed: (choice) => window.named.push(choice), renders })
+  // "bundled" is the Mac's own page, which has no book and reads nothing. Otherwise it's pnpm mac's, the web app with its own.
+  const own = new URLSearchParams(location.search).has("bundled") ? {} : { heldOf, onNamed: (choice) => window.named.push(choice) }
+  return createElement(DevicePanel, { link, book, currency, onLink: () => {}, onClose: () => {}, connectors, start, ...own, renders })
 }
 const input = (element, value) => {
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set
@@ -131,14 +134,21 @@ describe("naming a send's units in the hardware-wallet panel", { skip: existsSyn
   }
 
   /** A page of its own, at the send step with an address and amount filled in. */
-  async function page(search = ""): Promise<string> {
+  async function page(search = "", { ready = true } = {}): Promise<string> {
     const { browserContextId } = await send("Target.createBrowserContext")
     const { targetId } = await send("Target.createTarget", { url: url + search, browserContextId })
     const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true })
     await until(() => evaluate(sessionId, "Boolean(window.ready && document.querySelector(\"input[placeholder='0.00']\"))"), "the send form")
     await evaluate(sessionId, `fill(${JSON.stringify(TO)}, "0.5")`)
-    await until(() => evaluate(sessionId, "canSend()"), "the send to be ready")
+    if (ready) await until(() => evaluate(sessionId, "canSend()"), "the send to be ready")
     return sessionId
+  }
+
+  /** A top-up the Mac app opened, listing `count` purchases of ETH in the sending wallet, after the `#` as it writes them. */
+  const macTopUp = (count: number, bundled: boolean) => {
+    const purchases = Array.from({ length: count }, (_, i) => ({ allOnly: false, boughtAt: new Date(Date.UTC(2025, 0, 1) + i * 3_600_000).toISOString(), costMicros: "2000000000", units: "1000000000000000000" }))
+    const fragment = new URLSearchParams({ flow: MAC_FLOW, currency: "USD", held: JSON.stringify({ [FROM]: { ETH: { purchases, unnamed: "0" } } }) })
+    return `?topup=${TO}&usd=20${bundled ? "&bundled" : ""}#${fragment}`
   }
 
   const openNaming = async (session: string) => {
@@ -333,5 +343,40 @@ describe("naming a send's units in the hardware-wallet panel", { skip: existsSyn
     await evaluate(session, `click("Which units?")`)
     await until(() => evaluate(session, "picked().length === 1"), "the Mac's purchase to show")
     assert.match(await evaluate<string>(session, `document.querySelector("label.name-unit").textContent`), /cost US\$2,700\.00/)
+  })
+  for (const bundled of [true, false]) {
+    const where = bundled ? "on the Mac's own page" : "on pnpm mac's page"
+
+    it(`lists all of the Mac's 500 purchases and hands the choice back, ${where}`, async () => {
+      const session = await page(macTopUp(500, bundled))
+      await evaluate(session, `click("Which units?")`)
+      await until(() => evaluate(session, "picked().length === 500"), "the Mac's 500 purchases to show")
+      await evaluate(session, `pickFrom(499, "0.5")`)
+      await until(() => evaluate(session, "canSend()"), "the send to be ready")
+      await evaluate(session, `click("Send from your device")`)
+      const link = new URL((await until(() => evaluate<string | null>(session, "handBack()"), "the link back to the Mac")) as string)
+      assert.equal(link.searchParams.get("flow"), MAC_FLOW)
+      assert.deepEqual([await evaluate(session, "reads"), await evaluate(session, "named")], [0, []], "nothing from this page's own book")
+    })
+
+    it(`says so when the Mac's list is longer than the page takes, and only sends without a choice once told to, ${where}`, async () => {
+      const session = await page(macTopUp(501, bundled), { ready: false })
+      await until(() => evaluate(session, `text().includes("The Mac app's list of what your savings hold is longer than this page can read")`), "the reason it can't choose")
+      assert.equal(await evaluate(session, "canSend()"), false, "it doesn't just go without a choice")
+      assert.equal(await evaluate(session, "reads"), 0, "this page doesn't choose from its own book instead")
+      await evaluate(session, `click("Don't choose")`)
+      assert.equal(await evaluate(session, "canSend()"), true)
+      await evaluate(session, `click("Send from your device")`)
+      await until(() => evaluate(session, "sent === 1"), "the send")
+      assert.deepEqual([await evaluate(session, "reads"), await evaluate(session, "named"), await evaluate(session, "handBack()")], [0, [], null])
+      assert.equal(await evaluate(session, `text().includes("The Mac app picks this up on its own.")`), true)
+    })
+  }
+
+  it("never chooses from pnpm mac's own book for a top-up the Mac sent nothing to choose from", async () => {
+    // Outside US rules, or when someone chose to go without on the Mac.
+    const session = await page(`?topup=${TO}&usd=20`)
+    assert.equal(await evaluate(session, `text().includes("Which units?")`), false)
+    assert.equal(await evaluate(session, "reads"), 0)
   })
 })

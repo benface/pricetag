@@ -52,6 +52,13 @@ public enum NamedUnits {
     /// `UnitChoice` holds at most this many, the same as the web's `MAX_CHOICE_TAKES`.
     public static let mostTakes = 64
 
+    /// The most a top-up's page reads of what the savings hold: purchases of one token in one wallet, wallets, and characters of the
+    /// list as JSON. The same as `MOST_LISTED_PURCHASES`, `MOST_HELD_WALLETS` and `MOST_HELD_CHARACTERS` on the web. A longer list
+    /// can't be chosen from there, so this app says so before it opens the page.
+    public static let mostListedPurchases = 500
+    public static let mostHeldWallets = 16
+    public static let mostHeldCharacters = 200_000
+
     /// Why these picks can't go with a send of `units`, or nil when they can. Nothing picked at all isn't a choice, so it's for the caller
     /// to say whether that's fine.
     public static func problem(held: HeldUnits, picks: UnitPicks, units: UInt128, format: (UInt128) -> String) -> String? {
@@ -112,6 +119,20 @@ public struct TopUpNaming: Sendable, Equatable {
 
     public static func isFlow(_ text: String) -> Bool {
         text.wholeMatch(of: /[0-9a-f]{32}/) != nil
+    }
+
+    /// What the page reads, as JSON. Nil if it can't be written.
+    public static func text(_ held: [String: [String: HeldUnits]]) -> String? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return (try? encoder.encode(held)).flatMap { String(data: $0, encoding: .utf8) }
+    }
+
+    /// Whether the page can read all of this. One it can't would leave nothing to choose from there.
+    public static func fits(_ held: [String: [String: HeldUnits]]) -> Bool {
+        guard held.count <= NamedUnits.mostHeldWallets, held.values.allSatisfy({ $0.values.allSatisfy { $0.purchases.count <= NamedUnits.mostListedPurchases } }), let text = text(held) else { return false }
+        // The page counts UTF-16, and it's all ASCII anyway.
+        return text.utf16.count <= NamedUnits.mostHeldCharacters
     }
 }
 
@@ -209,6 +230,8 @@ public final class TopUpHoldings {
         case ready
         /// These couldn't be read.
         case failed([String])
+        /// All of it read, but it's more than the page can list, so a send there can't choose.
+        case tooMuch
     }
 
     public private(set) var state: State
@@ -217,6 +240,8 @@ public final class TopUpHoldings {
     public let currency: CurrencyCode
     private let wallets: [String]
     private let read: @MainActor (String) async throws -> [String: HeldUnits]
+    /// Gone without on purpose, since it's more than the page can list.
+    private var letGo = false
 
     public init(needed: Bool, wallets: [String], currency: CurrencyCode, read: @escaping @MainActor (String) async throws -> [String: HeldUnits]) {
         state = needed && !wallets.isEmpty ? .reading : .notNeeded
@@ -229,7 +254,7 @@ public final class TopUpHoldings {
     public var isSettled: Bool {
         switch state {
         case .notNeeded, .ready: true
-        case .reading, .failed: false
+        case .reading, .failed, .tooMuch: false
         }
     }
 
@@ -238,7 +263,7 @@ public final class TopUpHoldings {
         guard state != .notNeeded else { return }
         let missing = wallets.filter { held[$0] == nil }
         guard !missing.isEmpty else {
-            state = .ready
+            state = settled
             return
         }
         state = .reading
@@ -248,16 +273,25 @@ public final class TopUpHoldings {
             guard !Task.isCancelled else { return }
         }
         guard !Task.isCancelled else { return }
-        state = failed.isEmpty ? .ready : .failed(wallets.filter(failed.contains))
+        state = failed.isEmpty ? settled : .failed(wallets.filter(failed.contains))
     }
 
-    /// Opens the page without the ones that couldn't be read. A send from one of them just can't name its units.
+    private var settled: State { TopUpNaming.fits(held) ? .ready : .tooMuch }
+
+    /// Opens the page without the ones that couldn't be read, which a send can't name its units from. If what's left is still more
+    /// than the page can list, that's said next. Gone without from there, the page doesn't choose at all.
     public func goWithout() {
-        if case .failed = state { state = .ready }
+        switch state {
+        case .failed: state = settled
+        case .tooMuch:
+            letGo = true
+            state = .ready
+        case .notNeeded, .reading, .ready: break
+        }
     }
 
     /// What to put in the link, with a new flow each time. Nil when there's nothing to name from.
     public func naming() -> TopUpNaming? {
-        state == .ready && !held.isEmpty ? TopUpNaming(currency: currency, held: held) : nil
+        state == .ready && !letGo && !held.isEmpty && TopUpNaming.fits(held) ? TopUpNaming(currency: currency, held: held) : nil
     }
 }

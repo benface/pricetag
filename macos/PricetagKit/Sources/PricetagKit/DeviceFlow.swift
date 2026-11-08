@@ -12,9 +12,7 @@ public enum DeviceFlow {
         guard var parts = URLComponents(url: server, resolvingAgainstBaseURL: false) else { return nil }
         parts.queryItems = [URLQueryItem(name: "topup", value: address), URLQueryItem(name: "usd", value: String(dollars))]
         if let naming {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-            guard let data = try? encoder.encode(naming.held), let text = String(data: data, encoding: .utf8) else { return nil }
+            guard let text = TopUpNaming.text(naming.held) else { return nil }
             var fragment = URLComponents()
             fragment.queryItems = [URLQueryItem(name: "flow", value: naming.flow), URLQueryItem(name: "currency", value: naming.currency.rawValue), URLQueryItem(name: "held", value: text)]
             parts.percentEncodedFragment = fragment.percentEncodedQuery

@@ -43,7 +43,7 @@ struct SceneSpec {
 
     enum ChartPlay { case scrubbed(Int), scrubbedToAGap, drawing, changingRange, changingMetric, scrubbing }
     enum ResolveSkip { case toKnownExchange, everything }
-    enum TopUpRead { case readsFirst, readsAfterItOpens, neverReads, holdingsFail }
+    enum TopUpRead { case readsFirst, readsAfterItOpens, neverReads, holdingsFail, holdingsTooMuch }
     /// What the menu bar's buttons do. Each fails unless it gets where it promises.
     enum Route { case send, topUp, buy, receive, addSavings, export, find, topUpCancelled, holdings, addWallet, details, answer, removeFromSavings }
     enum Browsers { case chromeOnly, safariAndChrome, safariOnly }
@@ -451,6 +451,7 @@ enum TestScene: String, CaseIterable {
     case hotWalletTopUpSafari = "hot-wallet-top-up-safari"
     case hotWalletTopUpNoChromium = "hot-wallet-top-up-no-chromium"
     case hotWalletTopUpHoldingsFailed = "hot-wallet-top-up-holdings-failed"
+    case hotWalletTopUpHoldingsTooMuch = "hot-wallet-top-up-holdings-too-much"
     case send
     case sendCAD = "send-cad"
     case sendKnown = "send-known"
@@ -853,6 +854,7 @@ enum TestScene: String, CaseIterable {
         case .hotWalletTopUpSafari: SceneSpec(screen: .topUp(), chrome: .none, hotWallet: .funded, browsers: .safariAndChrome)
         case .hotWalletTopUpNoChromium: SceneSpec(screen: .topUp(), chrome: .none, hotWallet: .funded, browsers: .safariOnly)
         case .hotWalletTopUpHoldingsFailed: SceneSpec(screen: .topUp(.holdingsFail), chrome: .none, hotWallet: .funded)
+        case .hotWalletTopUpHoldingsTooMuch: SceneSpec(screen: .topUp(.holdingsTooMuch), chrome: .none, hotWallet: .funded)
         case .send: SceneSpec(screen: .send, chrome: .none, hotWallet: .funded)
         case .sendCAD: SceneSpec(screen: .send, chrome: .none, currency: .CAD, hotWallet: .funded)
         case .sendKnown: SceneSpec(screen: .send, chrome: .none, hotWallet: .funded, answers: .recipientIsSomeoneElse)
@@ -1202,11 +1204,16 @@ enum TestScene: String, CaseIterable {
         case .buy:
             return buyScreen(parts)
         case .topUp(let read):
-            // Under US rules, with what the savings hold failing to read.
-            let failing = read == .holdingsFail ? TopUpHoldings(needed: true, wallets: hotWallet.settings.coldWallets.map(\.address.lowercased), currency: .USD) { _ in throw URLError(.notConnectedToInternet) } : nil
+            // Under US rules, with what the savings hold failing to read, or more than the page can list.
+            let savings = hotWallet.settings.coldWallets.map(\.address.lowercased)
+            let failing: TopUpHoldings? = switch read {
+            case .holdingsFail: TopUpHoldings(needed: true, wallets: savings, currency: .USD) { _ in throw URLError(.notConnectedToInternet) }
+            case .holdingsTooMuch: TopUpHoldings(needed: true, wallets: savings, currency: .USD) { _ in ["ETH": Self.manyPurchases(NamedUnits.mostListedPurchases + 1)] }
+            case .readsFirst, .readsAfterItOpens, .neverReads: nil
+            }
             let sheet = TopUpSheet(wallet: hotWallet, server: URL(string: "http://127.0.0.1:8787")!, browsers: deviceBrowsers, holdings: failing)
             switch read {
-            case .holdingsFail: return TestScreen(view: AnyView(sheet), isReady: { [failing] in isReady() && failing?.state != .reading })
+            case .holdingsFail, .holdingsTooMuch: return TestScreen(view: AnyView(sheet), isReady: { [failing] in isReady() && failing?.state != .reading })
             case .readsFirst: return TestScreen(view: AnyView(sheet), isReady: isReady)
             // The sheet opens first here, so the read has to change what it worked out.
             case .readsAfterItOpens: return TestScreen(view: AnyView(sheet.task { await parts.readHotWallet() }), isReady: { parts.hotWalletHasRead.isDone })
@@ -1553,6 +1560,13 @@ enum TestScene: String, CaseIterable {
         PricingRule(id: "standard", name: "Standard", summary: "Chainlink prices, and swaps where there's no price.", dataset: "benface/pricetag@0.0.8", hash: "0x8f3a11c27d4e9b05"),
         PricingRule(id: "cautious-eth", name: "Cautious ETH", summary: "The same, with ETH counted 1% lower.", dataset: "benface/pricetag_cautious@0.0.3", hash: "0x2b71c9e04fa6d813"),
     ]
+
+    /// `count` purchases of 0.01 ETH, an hour apart.
+    private static func manyPurchases(_ count: Int) -> HeldUnits {
+        HeldUnits(purchases: (0..<count).map { i in
+            .init(boughtAt: NamedUnits.moment(Date(timeIntervalSince1970: 1_735_689_600 + Double(i) * 3600)), units: "10000000000000000", costMicros: "35000000", allOnly: false)
+        }, unnamed: "0")
+    }
 
     /// One purchase in each state it can be in.
     private static func purchases(inCAD: Bool = false) -> [TrackedPurchase] {

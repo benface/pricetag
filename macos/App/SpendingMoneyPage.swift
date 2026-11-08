@@ -896,6 +896,11 @@ private struct HoldingsNote: View {
                     Button("Continue Without Choosing") { holdings.goWithout() }
                 }
                 .controlSize(.small)
+            }        case .tooMuch:
+            VStack(alignment: .leading, spacing: 8) {
+                Notice(.warning, "Your savings have more purchases than the hardware wallet page can list, so this send can't choose which units it takes. The ones you've held longest go first.")
+                Button("Continue Without Choosing") { holdings.goWithout() }
+                    .controlSize(.small)
             }
         }
     }
