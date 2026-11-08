@@ -1397,6 +1397,15 @@ Timestamp,Transaction Type,Asset,Quantity Transacted,Spot Price Currency,Spot Pr
       }
     })
 
+    it("won't put a row on a day the calendar doesn't have", () => {
+      // February 30 would otherwise land on March 2, and 2027 has no February 29.
+      for (const when of ["2026-02-30T10:00:00Z", "2027-02-29 10:00:00 UTC", "2026-10-02T24:00:00Z"]) {
+        const parsed = parse(row(day(1), "Buy", "1", "$1000"), row(when, "Send", "1"), row(day(3), "Send", "1"))
+        assert.deepEqual([parsed.withdrawals, parsed.skipped], [[], 2], when)
+      }
+      assert.equal(parse(row("2028-02-29 10:00:00 UTC", "Buy", "1", "$1000"), row("2028-03-01 10:00:00 +00:00", "Send", "1")).withdrawals.length, 1)
+    })
+
     it("ignores a row that isn't about anything it tracks", () => {
       assert.equal(parse(row(day(1), "Buy", "1", "$1000"), "Total,,,,,,,,,", "Something at the end of the file", row(day(3), "Send", "1")).withdrawals.length, 1)
     })
@@ -1745,6 +1754,10 @@ Timestamp,Transaction Type,Asset,Quantity Transacted,Spot Price Currency,Spot Pr
         const lots = withdrawal?.fifoLots as ExchangeLot[]
         for (const fifoLots of ["nope", [], [{}], lots.slice(1), [{ ...lots[0], micros: "1" }, lots[1]], [{ ...lots[0], units: "0" }, lots[1]], [{ ...lots[0], wholeCostOnly: false }, lots[1]], Array.from({ length: MAX_EXCHANGE_LOTS + 1 }, () => lots[0])]) {
           assert.equal(parseBook({ withdrawals: [{ ...withdrawal, fifoLots }] }), null, JSON.stringify(fifoLots).slice(0, 80))
+        }
+        for (const at of ["2026-02-30T10:00:00.000Z", "2027-02-29T10:00:00.000Z"]) {
+          assert.equal(parseBook({ withdrawals: [{ ...withdrawal, fifoLots: [{ ...lots[0], at }, lots[1]] }] }), null, `a purchase on ${at}`)
+          assert.equal(parseBook({ withdrawals: [{ ...withdrawal, at }] }), null, `a withdrawal on ${at}`)
         }
         assert.equal(parseBook({ withdrawals: [{ ...withdrawal, fifoCostMicros: null }] }), null, "lots with no cost")
         for (const fileId of [1, ""]) assert.equal(parseBook({ withdrawals: [{ ...withdrawal, fileId }] }), null, `a file id of ${JSON.stringify(fileId)}`)

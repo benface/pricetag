@@ -310,7 +310,7 @@ function parseExchangeLots(value: unknown[], units: string, fifoCostMicros: stri
     const lot = recordOf(item)
     if (!lot || !isMicros(lot.units) || BigInt(lot.units) === 0n || !isMicros(lot.micros)) return null
     if (lot.wholeCostOnly !== undefined && lot.wholeCostOnly !== true) return null
-    if (lot.at === undefined ? !lot.wholeCostOnly : typeof lot.at !== "string" || Number.isNaN(Date.parse(lot.at))) return null
+    if (lot.at === undefined ? !lot.wholeCostOnly : typeof lot.at !== "string" || !onCalendar(lot.at)) return null
     lots.push({ units: lot.units, micros: lot.micros, ...(lot.wholeCostOnly ? { wholeCostOnly: true as const } : {}), ...(typeof lot.at === "string" ? { at: new Date(lot.at).toISOString() } : {}) })
   }
   const adds = (pick: (lot: ExchangeLot) => string, total: string) => lots.reduce((sum, lot) => sum + BigInt(pick(lot)), 0n) === BigInt(total)
@@ -322,7 +322,7 @@ function parseWithdrawal(value: unknown): ExchangeWithdrawal | null {
   if (!row || typeof row.exchange !== "string" || typeof row.asset !== "string" || !isMicros(row.units)) return null
   const cost = parseMoney(row.cost)
   if (!cost) return null
-  if (typeof row.at !== "string" || Number.isNaN(Date.parse(row.at))) return null
+  if (typeof row.at !== "string" || !onCalendar(row.at)) return null
   // The Mac app's encoder leaves out what it doesn't have.
   const toAddress = row.toAddress ?? null
   const fifoCostMicros = row.fifoCostMicros ?? null
