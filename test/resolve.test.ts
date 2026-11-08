@@ -1755,7 +1755,8 @@ Timestamp,Transaction Type,Asset,Quantity Transacted,Spot Price Currency,Spot Pr
         for (const fifoLots of ["nope", [], [{}], lots.slice(1), [{ ...lots[0], micros: "1" }, lots[1]], [{ ...lots[0], units: "0" }, lots[1]], [{ ...lots[0], wholeCostOnly: false }, lots[1]], Array.from({ length: MAX_EXCHANGE_LOTS + 1 }, () => lots[0])]) {
           assert.equal(parseBook({ withdrawals: [{ ...withdrawal, fifoLots }] }), null, JSON.stringify(fifoLots).slice(0, 80))
         }
-        for (const at of ["2026-02-30T10:00:00.000Z", "2027-02-29T10:00:00.000Z"]) {
+        // The last one is on the calendar, but `Date.parse` can't read it.
+        for (const at of ["2026-02-30T10:00:00.000Z", "2027-02-29T10:00:00.000Z", "2026-10-01+00:00"]) {
           assert.equal(parseBook({ withdrawals: [{ ...withdrawal, fifoLots: [{ ...lots[0], at }, lots[1]] }] }), null, `a purchase on ${at}`)
           assert.equal(parseBook({ withdrawals: [{ ...withdrawal, at }] }), null, `a withdrawal on ${at}`)
         }
