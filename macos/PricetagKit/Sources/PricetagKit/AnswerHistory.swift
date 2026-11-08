@@ -93,6 +93,15 @@ final class AnswerHistory {
         store(next)
     }
 
+    /// Records of named units aren't answers either, so this changes them everywhere in the history, and undoing an answer keeps them.
+    func changeUnitChoices(_ change: (Book) -> Book) {
+        let next = change(answers)
+        guard next.unitChoices != answers.unitChoices else { return }
+        for index in history.indices { history[index].book.unitChoices = next.unitChoices }
+        for index in future.indices { future[index].book.unitChoices = next.unitChoices }
+        store(next)
+    }
+
     /// Makes a change to one wallet as one step in the history, called `name`, and returns `snapshot` with what the change did.
     func recording(_ snapshot: WalletListSnapshot, name: String, alsoUndo: (() -> Void)?, change: @escaping () -> Void) -> WalletListSnapshot {
         var snapshot = snapshot
@@ -215,6 +224,7 @@ final class AnswerHistory {
     private func answers(in next: Book, linked: [String]) -> Book {
         var kept = next.unlinking(linked)
         kept.purchases = answers.purchases
+        kept.unitChoices = answers.unitChoices
         for account in linked where next.senders[account]?.kind == .mine { kept.senders[account] = answers.senders[account] }
         return kept
     }

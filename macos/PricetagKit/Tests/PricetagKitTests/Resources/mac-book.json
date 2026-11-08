@@ -24,6 +24,9 @@
       "kind" : "my-exchange"
     }
   },
+  "unitChoices" : [
+
+  ],
   "withdrawals" : [
     {
       "asset" : "ETH",

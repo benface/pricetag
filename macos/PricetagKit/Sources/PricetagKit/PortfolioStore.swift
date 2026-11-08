@@ -607,6 +607,20 @@ public final class PortfolioStore {
         try await source.importCoinbase(csv: csv)
     }
 
+    /// Reads a file of records saying which units each sale or send took. Nothing's kept until `keepUnitChoices`.
+    public func readUnitChoices(csv: String) async throws -> UnitChoiceImport {
+        try await source.importUnitChoices(csv: csv)
+    }
+
+    /// Records of named units go in the book, outside Undo, since they aren't answers.
+    public func keepUnitChoices(_ found: [UnitChoice]) {
+        answerHistory.changeUnitChoices { $0.recordingUnitChoices(found) }
+    }
+
+    public func forgetUnitChoices(for wallets: [String]) {
+        answerHistory.changeUnitChoices { $0.forgettingUnitChoices(for: wallets) }
+    }
+
     /// Adds what a file found to what's on this device.
     public func keepImport(_ imported: ExchangeImport) {
         setBook(book.importing(imported.withdrawals), action: "Import")

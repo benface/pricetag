@@ -8,6 +8,7 @@ import type { Head, WalletResponse } from "../src/core/api.ts"
 import { emptyBook, linkedWallets, parseBook, walletsBehind, type Book } from "../src/core/book.ts"
 import { parseCoinbaseCsv } from "../src/core/exchange-import.ts"
 import { exportCsv } from "../src/core/export.ts"
+import { UNIT_CHOICE_COLUMNS, parseUnitChoicesCsv } from "../src/core/unit-choices.ts"
 import { DEMO_ADDRESS, DEMO_WALLET, demoRates, demoWallet } from "../src/core/fixtures.ts"
 import { foldBook, previewBook } from "../src/core/resolve.ts"
 import { withoutWhatItHas } from "./long-lists.ts"
@@ -630,6 +631,12 @@ export function createApi(env: Env, created: Created | null = createSource(env),
     if (path === "/api/import/coinbase") {
       const imported = typeof body.csv === "string" ? parseCoinbaseCsv(body.csv) : null
       if (!imported) return sendJson(res, 400, { error: "That doesn't look like a Coinbase transaction history." })
+      return sendJson(res, 200, imported)
+    }
+    // The same reading the web app does in the browser, for a client that doesn't run this code, like the Mac app.
+    if (path === "/api/import/unit-choices") {
+      const imported = typeof body.csv === "string" ? parseUnitChoicesCsv(body.csv) : null
+      if (!imported) return sendJson(res, 400, { error: `That file needs these columns: ${UNIT_CHOICE_COLUMNS.join(", ")}.` })
       return sendJson(res, 200, imported)
     }
     if (path === "/api/links/verify") {

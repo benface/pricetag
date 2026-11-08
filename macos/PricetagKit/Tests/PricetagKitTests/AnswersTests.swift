@@ -168,6 +168,47 @@ private final class AnswerClock: @unchecked Sendable {
         #expect(store.book == Book(purchases: [purchase("1"), purchase("2")]))
     }
 
+    private func choice(_ tx: String, recordedAt: String = "2026-10-02T10:00:00.000Z") -> UnitChoice {
+        UnitChoice(wallet: wallet, txHash: "0x" + String(repeating: tx, count: 64), asset: "ETH", recordedAt: recordedAt, takes: [.init(boughtAt: "2026-10-01", units: "500000000000000000")])
+    }
+
+    @Test func namedUnitsGoWithEachReadAndStayThroughUndoAndRelaunch() async throws {
+        let (store, defaults) = try makeStore()
+        store.keepUnitChoices([choice("a")])
+        #expect(store.answerEntries.isEmpty, "a record isn't an answer")
+        store.setBook(store.book.answering(sender, .someoneElse, focus: nil))
+        // A newer record for the same sale takes over, whatever case it's in.
+        let newer = UnitChoice(wallet: wallet.uppercased().replacingOccurrences(of: "0X", with: "0x"), txHash: choice("a").txHash, asset: "ETH", recordedAt: "2026-10-03T10:00:00.000Z", takes: choice("a").takes)
+        store.keepUnitChoices([newer, choice("b")])
+        #expect(store.book.unitChoices == [newer, choice("b")])
+        store.undo()
+        #expect(store.book.senders[sender] == nil)
+        #expect(store.book.unitChoices == [newer, choice("b")])
+        store.redo()
+        let source = BookSource([try demoPortfolio()])
+        let reopened = PortfolioStore(defaults: defaults, makeSource: { _ in source })
+        #expect(reopened.book.unitChoices == [newer, choice("b")])
+        await _ = reopened.poll()
+        #expect(await source.books.last?.unitChoices == [newer, choice("b")])
+        store.forgetUnitChoices(for: [wallet])
+        #expect(store.book.unitChoices.isEmpty)
+        #expect(store.book.senders[sender] == .someoneElse)
+    }
+
+    @Test func aBookSavedBeforeNamedUnitsReadsAndSendsThemTheWayTheServerReadsThem() throws {
+        let earlier = try JSONDecoder().decode(Book.self, from: Data(#"{"senders":{},"costs":{},"withdrawals":[],"purchases":[]}"#.utf8))
+        #expect(earlier.unitChoices.isEmpty)
+        let sent = try JSONSerialization.jsonObject(with: JSONEncoder().encode(Book(unitChoices: [choice("a")]))) as? [String: Any]
+        let named = try #require((sent?["unitChoices"] as? [[String: Any]])?.first)
+        #expect(named["txHash"] as? String == choice("a").txHash)
+        #expect((named["takes"] as? [[String: String]])?.first == ["boughtAt": "2026-10-01", "units": "500000000000000000"])
+    }
+
+    @Test func aFileOfRecordsSaysWhatItAddedAndWhatItLeftOut() {
+        #expect(UnitChoiceImport(choices: [], skipped: []).sentence == "Nothing in that file could be used.")
+        #expect(UnitChoiceImport(choices: [choice("a")], skipped: [3]).sentence == "Added 1 sale or send. Line 3 couldn't be read, so its sale or send was left out whole.")
+    }
+
     @Test func aBookFromBeforeAPurchaseDoesntLoseIt() throws {
         let (store, _) = try makeStore()
         let earlier = store.book.answering(sender, .someoneElse, focus: nil)

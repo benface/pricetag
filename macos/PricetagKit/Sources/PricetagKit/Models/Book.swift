@@ -219,27 +219,91 @@ public struct PurchaseMatch: Codable, Sendable, Equatable {
     public let state: State
 }
 
+/// Which units one sale or send took, as the user's own records named them. US rules only count that if the records named them no
+/// later than the date and time of the sale, so it's kept with when they did. Only the server reads what's in it.
+public struct UnitChoice: Codable, Sendable, Equatable, Hashable {
+    public struct Take: Codable, Sendable, Equatable, Hashable {
+        /// A UTC day as `YYYY-MM-DD`, or a moment as `toISOString` writes it.
+        public let boughtAt: String
+        /// In the token's smallest units.
+        public let units: String
+    }
+
+    public let wallet: String
+    /// The transaction that sold or sent them.
+    public let txHash: String
+    public let asset: String
+    /// When the records named them, as `toISOString` writes it.
+    public let recordedAt: String
+    public let takes: [Take]
+
+    /// One choice per sale, whatever case its addresses are in.
+    var key: String { "\(wallet.lowercased()):\(txHash.lowercased()):\(asset)" }
+}
+
+/// What a file of records said, as the server read it.
+public struct UnitChoiceImport: Codable, Sendable, Equatable {
+    public let choices: [UnitChoice]
+    /// Lines that couldn't be read. A record with one of them is left out whole.
+    public let skipped: [Int]
+
+    public init(choices: [UnitChoice], skipped: [Int]) {
+        self.choices = choices
+        self.skipped = skipped
+    }
+
+    /// What to tell someone once it's added.
+    public var sentence: String {
+        let count = choices.count
+        let read = count == 0 ? "Nothing in that file could be used." : "Added \(count.formatted()) \(count == 1 ? "sale or send" : "sales and sends")."
+        guard !skipped.isEmpty else { return read }
+        let shown = skipped.prefix(5).map(String.init).joined(separator: ", ")
+        let lines = skipped.count > 5 ? "\(shown) and \((skipped.count - 5).formatted()) more" : shown
+        return "\(read) \(skipped.count == 1 ? "Line" : "Lines") \(lines) couldn't be read, so \(skipped.count == 1 ? "its sale or send was" : "their sales and sends were") left out whole."
+    }
+}
+
 /// The user's answers. They stay on this device, and go along with each request. The server doesn't keep them.
 public struct Book: Codable, Sendable, Equatable, Hashable {
     public var senders: [String: SenderAnswer]
     public var costs: [String: Money]
     public var withdrawals: [ExchangeWithdrawal]
     public var purchases: [Purchase]
+    /// Units the user's records named for a sale or send. They aren't answers, so undoing an answer never touches them.
+    public var unitChoices: [UnitChoice]
 
-    public init(senders: [String: SenderAnswer] = [:], costs: [String: Money] = [:], withdrawals: [ExchangeWithdrawal] = [], purchases: [Purchase] = []) {
+    public init(senders: [String: SenderAnswer] = [:], costs: [String: Money] = [:], withdrawals: [ExchangeWithdrawal] = [], purchases: [Purchase] = [], unitChoices: [UnitChoice] = []) {
         self.senders = senders
         self.costs = costs
         self.withdrawals = withdrawals
         self.purchases = purchases
+        self.unitChoices = unitChoices
     }
 
-    /// A book saved before there were purchases has none.
+    /// A book saved before there were purchases, or named units, has none.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         senders = try container.decode([String: SenderAnswer].self, forKey: .senders)
         costs = try container.decode([String: Money].self, forKey: .costs)
         withdrawals = try container.decode([ExchangeWithdrawal].self, forKey: .withdrawals)
         purchases = try container.decodeIfPresent([Purchase].self, forKey: .purchases) ?? []
+        unitChoices = try container.decodeIfPresent([UnitChoice].self, forKey: .unitChoices) ?? []
+    }
+
+    /// Records added to the book. A newer one for the same sale takes over, since that's the latest word on it.
+    public func recordingUnitChoices(_ found: [UnitChoice]) -> Book {
+        let again = Set(found.map(\.key))
+        var next = self
+        next.unitChoices = unitChoices.filter { !again.contains($0.key) } + found
+        return next
+    }
+
+    /// The book without any records for these wallets.
+    public func forgettingUnitChoices(for wallets: [String]) -> Book {
+        let mine = Set(wallets.map { $0.lowercased() })
+        var next = self
+        next.unitChoices = unitChoices.filter { !mine.contains($0.wallet.lowercased()) }
+        return next
     }
 
     /// What an import adds to what earlier ones found. A file that has the same withdrawal again takes over for it, since it's the
@@ -318,7 +382,7 @@ public struct Book: Codable, Sendable, Equatable, Hashable {
         senders.filter { $0.value.kind == .mine }.keys.sorted()
     }
 
-    public var isEmpty: Bool { senders.isEmpty && costs.isEmpty && withdrawals.isEmpty && purchases.isEmpty }
+    public var isEmpty: Bool { senders.isEmpty && costs.isEmpty && withdrawals.isEmpty && purchases.isEmpty && unitChoices.isEmpty }
 }
 
 extension SenderAnswer: Hashable {}

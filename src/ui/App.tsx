@@ -13,10 +13,11 @@ import { RulesPanel } from "./RulesPanel.tsx"
 import { useRules } from "./useRules.ts"
 import type { TaxYear } from "../core/tax.ts"
 import { TaxPanel } from "./TaxPanel.tsx"
+import { readHeld } from "./held.ts"
 import { useAllYours, useWallet } from "./useWallet.ts"
 import { LazyPanel } from "./LoadBoundary.tsx"
 import { ProblemNotice } from "./ProblemNotice.tsx"
-import { answerSender, currenciesIn, unlinkWallet, walletsBehind, walletsToRead, yourWallets } from "../core/book.ts"
+import { answerSender, currenciesIn, recordUnitChoices, unlinkWallet, walletsBehind, walletsToRead, yourWallets } from "../core/book.ts"
 import { readCheckedAccounts } from "../core/device-accounts.ts"
 import { parseDeviceLink, type DeviceLink } from "../core/device-link.ts"
 import { exportCsv } from "../core/export.ts"
@@ -412,6 +413,8 @@ export function App() {
             currency={chosenCurrency}
             allYours={isAll}
             onLink={linkAccounts}
+            heldOf={(from, asset) => readHeld(from, asset, book, chosenCurrency, chosenRule, paidIn)}
+            onNamed={(choice) => changeRecords((latest) => recordUnitChoices(latest, [choice]))}
             notSaved={notSaved}
             onView={(next) => {
               setDevice(null)
