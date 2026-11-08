@@ -43,7 +43,7 @@ struct SceneSpec {
 
     enum ChartPlay { case scrubbed(Int), scrubbedToAGap, drawing, changingRange, changingMetric, scrubbing }
     enum ResolveSkip { case toKnownExchange, everything }
-    enum TopUpRead { case readsFirst, readsAfterItOpens, neverReads }
+    enum TopUpRead { case readsFirst, readsAfterItOpens, neverReads, holdingsFail, holdingsTooMuch }
     /// What the menu bar's buttons do. Each fails unless it gets where it promises.
     enum Route { case send, topUp, buy, receive, addSavings, export, find, topUpCancelled, holdings, addWallet, details, answer, removeFromSavings }
     enum Browsers { case chromeOnly, safariAndChrome, safariOnly }
@@ -450,6 +450,8 @@ enum TestScene: String, CaseIterable {
     case hotWalletTopUpCAD = "hot-wallet-top-up-cad"
     case hotWalletTopUpSafari = "hot-wallet-top-up-safari"
     case hotWalletTopUpNoChromium = "hot-wallet-top-up-no-chromium"
+    case hotWalletTopUpHoldingsFailed = "hot-wallet-top-up-holdings-failed"
+    case hotWalletTopUpHoldingsTooMuch = "hot-wallet-top-up-holdings-too-much"
     case send
     case sendCAD = "send-cad"
     case sendKnown = "send-known"
@@ -462,6 +464,8 @@ enum TestScene: String, CaseIterable {
     case sendWaiting = "send-waiting"
     /// With VoiceOver on, Touch ID waits for the user to say they've heard it.
     case sendReviewing = "send-reviewing"
+    case sendWhichUnits = "send-which-units"
+    case sendWhichUnitsReviewing = "send-which-units-reviewing"
     case sendGoing = "send-going"
     case sendSent = "send-sent"
     case sendStopped = "send-stopped"
@@ -849,6 +853,8 @@ enum TestScene: String, CaseIterable {
         case .hotWalletTopUpCAD: SceneSpec(screen: .topUp(), chrome: .none, currency: .CAD, hotWallet: .funded)
         case .hotWalletTopUpSafari: SceneSpec(screen: .topUp(), chrome: .none, hotWallet: .funded, browsers: .safariAndChrome)
         case .hotWalletTopUpNoChromium: SceneSpec(screen: .topUp(), chrome: .none, hotWallet: .funded, browsers: .safariOnly)
+        case .hotWalletTopUpHoldingsFailed: SceneSpec(screen: .topUp(.holdingsFail), chrome: .none, hotWallet: .funded)
+        case .hotWalletTopUpHoldingsTooMuch: SceneSpec(screen: .topUp(.holdingsTooMuch), chrome: .none, hotWallet: .funded)
         case .send: SceneSpec(screen: .send, chrome: .none, hotWallet: .funded)
         case .sendCAD: SceneSpec(screen: .send, chrome: .none, currency: .CAD, hotWallet: .funded)
         case .sendKnown: SceneSpec(screen: .send, chrome: .none, hotWallet: .funded, answers: .recipientIsSomeoneElse)
@@ -860,6 +866,7 @@ enum TestScene: String, CaseIterable {
         case .sendTyping: SceneSpec(screen: .send, chrome: .none, listsWallets: true, hotWallet: .funded)
         case .sendWaiting: SceneSpec(screen: .send, chrome: .none, hotWallet: .funded)
         case .sendReviewing: SceneSpec(screen: .send, chrome: .none, hotWallet: .funded)
+        case .sendWhichUnits, .sendWhichUnitsReviewing: SceneSpec(screen: .send, chrome: .none, hotWallet: .funded)
         case .sendGoing: SceneSpec(screen: .send, chrome: .none, hotWallet: .funded)
         case .sendSent: SceneSpec(screen: .send, chrome: .none, hotWallet: .funded)
         case .sendStopped: SceneSpec(screen: .send, chrome: .none, hotWallet: .funded)
@@ -1197,8 +1204,16 @@ enum TestScene: String, CaseIterable {
         case .buy:
             return buyScreen(parts)
         case .topUp(let read):
-            let sheet = TopUpSheet(wallet: hotWallet, server: URL(string: "http://127.0.0.1:8787")!, browsers: deviceBrowsers)
+            // Under US rules, with what the savings hold failing to read, or more than the page can list.
+            let savings = hotWallet.settings.coldWallets.map(\.address.lowercased)
+            let failing: TopUpHoldings? = switch read {
+            case .holdingsFail: TopUpHoldings(needed: true, wallets: savings, currency: .USD) { _ in throw URLError(.notConnectedToInternet) }
+            case .holdingsTooMuch: TopUpHoldings(needed: true, wallets: savings, currency: .USD) { _ in ["ETH": Self.manyPurchases(NamedUnits.mostListedPurchases + 1)] }
+            case .readsFirst, .readsAfterItOpens, .neverReads: nil
+            }
+            let sheet = TopUpSheet(wallet: hotWallet, server: URL(string: "http://127.0.0.1:8787")!, browsers: deviceBrowsers, holdings: failing)
             switch read {
+            case .holdingsFail, .holdingsTooMuch: return TestScreen(view: AnyView(sheet), isReady: { [failing] in isReady() && failing?.state != .reading })
             case .readsFirst: return TestScreen(view: AnyView(sheet), isReady: isReady)
             // The sheet opens first here, so the read has to change what it worked out.
             case .readsAfterItOpens: return TestScreen(view: AnyView(sheet.task { await parts.readHotWallet() }), isReady: { parts.hotWalletHasRead.isDone })
@@ -1388,7 +1403,8 @@ enum TestScene: String, CaseIterable {
     }
 
     private func sendScreen(_ parts: SceneParts) -> TestScreen {
-        let model = SendModel(wallet: parts.hotWallet, store: parts.store)
+        let naming = self == .sendWhichUnits || self == .sendWhichUnitsReviewing
+        let model = SendModel(wallet: parts.hotWallet, store: parts.store, canName: naming ? true : nil)
         model.token = Base.tokens.first { $0.symbol == "USDC" }!
         model.amountText = "12.50"
         model.addressText = switch self {
@@ -1404,6 +1420,16 @@ enum TestScene: String, CaseIterable {
         default: Self.recipient
         }
         if self == .sendLookalikeChecked { model.acceptsLookalike = true }
+        if naming {
+            model.startNaming()
+            model.picked = ["2026-02-14T15:20:00.000Z": "10", "2026-06-03T09:45:00.000Z": "2.5"]
+        }
+        if self == .sendWhichUnitsReviewing {
+            return TestScreen(view: AnyView(SendConfirmation(model: model, gate: .scene(.needsReview), done: {}).frame(width: 460).task {
+                while model.held == .reading { try? await Task.sleep(for: .milliseconds(20)) }
+                model.confirm()
+            }), isReady: { parts.isReady() && model.stage == .confirming })
+        }
         if self == .sendMoney || self == .sendMoneyCAD {
             model.switchUnit()
             model.amountText = "25"
@@ -1419,7 +1445,7 @@ enum TestScene: String, CaseIterable {
         case .sendSent: confirmation(.done)
         case .sendStopped: confirmation(.stopped(nil))
         case .sendRefused: confirmation(.stopped(HotWalletWording.notSent("insufficient funds for gas * price + value")))
-        default: TestScreen(view: AnyView(SendSheet(model: model, wallets: parts.store.walletList(hotWallet: parts.hotWallet).pickable)), isReady: parts.isReady)
+        default: TestScreen(view: AnyView(SendSheet(model: model, wallets: parts.store.walletList(hotWallet: parts.hotWallet).pickable)), isReady: { parts.isReady() && (!naming || model.held != .reading) })
         }
     }
 
@@ -1534,6 +1560,13 @@ enum TestScene: String, CaseIterable {
         PricingRule(id: "standard", name: "Standard", summary: "Chainlink prices, and swaps where there's no price.", dataset: "benface/pricetag@0.0.8", hash: "0x8f3a11c27d4e9b05"),
         PricingRule(id: "cautious-eth", name: "Cautious ETH", summary: "The same, with ETH counted 1% lower.", dataset: "benface/pricetag_cautious@0.0.3", hash: "0x2b71c9e04fa6d813"),
     ]
+
+    /// `count` purchases of 0.01 ETH, an hour apart.
+    private static func manyPurchases(_ count: Int) -> HeldUnits {
+        HeldUnits(purchases: (0..<count).map { i in
+            .init(boughtAt: NamedUnits.moment(Date(timeIntervalSince1970: 1_735_689_600 + Double(i) * 3600)), units: "10000000000000000", costMicros: "35000000", allOnly: false)
+        }, unnamed: "0")
+    }
 
     /// One purchase in each state it can be in.
     private static func purchases(inCAD: Bool = false) -> [TrackedPurchase] {

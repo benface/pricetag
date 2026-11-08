@@ -218,6 +218,31 @@ check("Top Up sends from the device's account to the hot wallet", topUp?.from ==
 const moved = BigInt(await anvil("eth_getBalance", [hot, "latest"])) - before
 check("and the money moved, on the fork", moved > 0n && moved === BigInt(topUp.value), moved.toString())
 
+// Top Up, naming its units, with a long history after the #, the way the Mac app writes it. In the request line, it was too long for this server.
+const many = Array.from({ length: 500 }, (_, i) => ({ allOnly: false, boughtAt: new Date(Date.UTC(2025, 0, 1) + i * 3_600_000).toISOString(), costMicros: "2700000000", units: "1000000000000" }))
+const flow = "0123456789abcdef0123456789abcdef"
+const naming = new URLSearchParams({ flow, currency: "CAD", held: JSON.stringify({ [device.toLowerCase()]: { ETH: { purchases: many, unnamed: "0" } } }) })
+check("the history is longer than a request line can be", naming.toString().length > 16 * 1024, naming.toString().length)
+await page.open(`?topup=${hot}&usd=4#${naming}`)
+await page.seeing("Top up from savings")
+await page.press("Stand-in")
+await page.press("Continue")
+await page.press("This is my wallet")
+const type = (selector: string, value: string) =>
+  page.evaluate(`(() => { const input = ${selector}; Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, ${JSON.stringify(value)}); input.dispatchEvent(new Event("input", { bubbles: true })); return true })()`)
+await type(`[...document.querySelectorAll("input")].find((input) => input.placeholder === "0.00")`, "0.000001")
+await page.press("Which units?")
+await page.until(`document.querySelectorAll("label.name-unit").length === 500`, "every purchase the Mac app listed")
+check("with its costs in the Mac app's currency", (await page.evaluate(`document.querySelector("label.name-unit").innerText`)).includes("CA$2,700.00"))
+await type(`document.querySelectorAll("label.name-unit input")[499]`, "0.000001")
+await page.press("Send from your device")
+const named = await page.sentTransaction()
+check("Top Up naming its units sends what was typed", named?.from === device && BigInt(named?.value ?? 0) === 1_000_000_000_000n, named)
+const back = `[...document.querySelectorAll("a")].find((a) => a.href.startsWith("patina://unit-choice"))`
+await page.until(`${back} !== undefined`, "the link back to the Mac app")
+const handBack = new URL(await page.evaluate(`${back}.href`))
+check("and hands the choice back with the top-up's flow", handBack.searchParams.get("flow") === flow && handBack.searchParams.get("takes") === `${many[499]!.boughtAt}~1000000000000`, handBack.href)
+
 // Publish a cost.
 const about = `0x${"ab".repeat(32)}`
 await page.open(`?publish=${about}&wallet=${device}&asset=USDC&units=1500000&decimals=6&usd=250`)

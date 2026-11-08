@@ -14,6 +14,8 @@ public struct TaxReportView: View {
     @State private var addingWallet: String
     @State private var document: TaxReportDocument?
     @State private var saveError: String?
+    @State private var isImportingNamed = false
+    @State private var namedMessage: String?
 
     public init(store: PortfolioStore, wallets: [WalletEntry] = [], readAddress: @escaping (String) -> String? = WalletAddress.pasted(in:), addingWallet: String = "", model: TaxReportModel? = nil, onResolve: ((String) -> Void)? = nil, onOpen: ((ExplainTarget) -> Void)? = nil) {
         self.store = store
@@ -82,6 +84,16 @@ public struct TaxReportView: View {
         .onChange(of: reportAddress, initial: true) {
             model.carryOverTypedWallets(to: reportAddress, store: store)
         }
+        .fileImporter(isPresented: $isImportingNamed, allowedContentTypes: [.commaSeparatedText, .plainText]) { result in
+            guard case .success(let url) = result else { return }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            guard let csv = try? String(contentsOf: url, encoding: .utf8) else {
+                namedMessage = "Couldn't read that file."
+                return
+            }
+            Task { await importNamed(csv) }
+        }
         .fileExporter(
             isPresented: Binding(get: { document != nil }, set: { if !$0 { document = nil } }),
             document: document,
@@ -141,6 +153,54 @@ public struct TaxReportView: View {
                     .secondaryText()
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+        namedUnits
+    }
+
+    /// Records the user kept of which units each sale or send took. Only US rules count them.
+    @ViewBuilder
+    private var namedUnits: some View {
+        if model.country == .US, store.address != WalletAddress.demo {
+            let count = store.book.unitChoices.filter { covered.contains($0.wallet.lowercased()) }.count
+            Section {
+                HStack {
+                    Button("Import Records…") { isImportingNamed = true }
+                    Spacer()
+                    if count > 0 {
+                        Text("Named for \(count.formatted()) \(count == 1 ? "sale or send" : "sales or sends")")
+                            .secondaryText()
+                        Button("Remove") {
+                            store.forgetUnitChoices(for: covered)
+                            namedMessage = nil
+                        }
+                    }
+                }
+                if let namedMessage {
+                    Text(namedMessage)
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } header: {
+                Text("Units your records named")
+            } footer: {
+                Text("If your own records said which units a sale or send took, no later than when it happened, import them and this report uses those units for it. One row per purchase it took from, with these columns: \(Self.namedColumns). Bought on is a day or a moment in UTC, and Amount is in whole tokens.")
+                    .font(.callout)
+                    .secondaryText()
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// The same columns the web app reads, since the server reads the file for both.
+    static let namedColumns = "Recorded at, Wallet, Transaction, Asset, Bought on, Amount"
+
+    private func importNamed(_ csv: String) async {
+        do {
+            let imported = try await store.readUnitChoices(csv: csv)
+            if !imported.choices.isEmpty { store.keepUnitChoices(imported.choices) }
+            namedMessage = imported.sentence
+        } catch {
+            namedMessage = failureMessage(for: error)
         }
     }
 

@@ -569,6 +569,28 @@ describe("the portfolio API", () => {
     assert.equal((await post("/api/import/coinbase", { csv: "nope" })).status, 400)
   })
 
+  it("reads records of named units for a client that doesn't run the parser", async () => {
+    const csv = `Recorded at,Wallet,Transaction,Asset,Bought on,Amount\n2026-10-02T10:00:00Z,0x${"a".repeat(40)},0x${"b".repeat(64)},ETH,2026-10-01,0.5\n`
+    const { status, body } = await post("/api/import/unit-choices", { csv })
+    assert.equal(status, 200)
+    assert.deepEqual(body, { choices: [{ wallet: `0x${"a".repeat(40)}`, txHash: `0x${"b".repeat(64)}`, asset: "ETH", recordedAt: "2026-10-02T10:00:00.000Z", takes: [{ boughtAt: "2026-10-01", units: (10n ** 17n * 5n).toString() }] }], skipped: [] })
+    assert.equal((await post("/api/import/unit-choices", { csv: "nope" })).status, 400)
+  })
+
+  it("says what a wallet still holds, by purchase, for a send that names its units", async () => {
+    const { status, body } = await post("/api/portfolio/demo/held", { method: "fifo" })
+    assert.equal(status, 200)
+    const eth = (body.assets as Record<string, { purchases: { boughtAt: string; units: string }[]; unnamed: string }>).ETH
+    assert.ok(eth)
+    const purchases = eth.purchases
+    assert.ok(Array.isArray(purchases) && purchases.length > 0)
+    for (const purchase of purchases) {
+      assert.match(purchase.boughtAt, /^\d{4}-\d{2}-\d{2}T/)
+      assert.match(purchase.units, /^\d+$/)
+    }
+    assert.match(eth.unnamed, /^\d+$/)
+  })
+
   it("refuses a post that isn't JSON, so a page can't send one without asking", async () => {
     assert.equal((await post("/api/portfolio/demo", { method: "average" }, "text/plain")).status, 400)
   })

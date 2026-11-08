@@ -4,24 +4,17 @@ import type { TaxReportResponse } from "../core/api.ts"
 import { failureOf, jsonPost, readResponse, type ReadFailure } from "../core/read-failure.ts"
 import { forgetUnitChoices, isDemoWallet, recordUnitChoices, type Book } from "../core/book.ts"
 import { UNIT_CHOICE_COLUMNS, parseUnitChoicesCsv } from "../core/unit-choices.ts"
-import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxCountryCode, isTaxMethod, typedOtherWallets, walletsInReport, type TaxCountryCode, type TaxScope, type TaxYear } from "../core/tax.ts"
+import { SCOPE_LABELS, TAX_COUNTRIES, TAX_COUNTRY_CODES, isTaxMethod, typedOtherWallets, walletsInReport, type TaxCountryCode, type TaxScope, type TaxYear } from "../core/tax.ts"
 import { METHOD_LABELS, METHOD_NAME, answerQuestionsLabel, est, panelProblem } from "../core/wording.ts"
 import { ProblemNotice } from "./ProblemNotice.tsx"
 import { downloadCsv } from "./download.ts"
+import { COUNTRY_KEY, readCountry } from "./taxCountry.ts"
 import { useModal } from "./useModal.ts"
 
-const COUNTRY_KEY = "pricetag.taxCountry"
 const METHOD_KEY = "pricetag.taxMethod"
 const SCOPE_KEY = "pricetag.taxScope"
 /** Where the report kept wallets typed into it, before it used the linked ones. What's still there is linked once, then removed. */
 const OTHERS_KEY = "pricetag.taxOtherWallets"
-
-/** Remembered in this browser. Until it's chosen, the main currency is the best guess. */
-function readCountry(currency: CurrencyCode): TaxCountryCode {
-  const value = localStorage.getItem(COUNTRY_KEY)
-  if (isTaxCountryCode(value)) return value
-  return TAX_COUNTRY_CODES.find((code) => TAX_COUNTRIES[code].currency === currency) ?? "US"
-}
 
 const readMethod = (): string | null => localStorage.getItem(METHOD_KEY)
 

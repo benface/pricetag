@@ -8,7 +8,7 @@ import { parseDeviceLink } from "./core/device-link.ts"
 import { DevicePanel } from "./ui/DevicePanel.tsx"
 import "./ui/styles.css"
 
-const link = parseDeviceLink(window.location.search)
+const link = parseDeviceLink(window.location.search, window.location.hash)
 
 function DevicePage() {
   const [book, setBook] = useState(emptyBook)

@@ -9,7 +9,8 @@ import { encodeFunctionData, erc20Abi, parseTransaction, serializeTransaction, t
 import { linkDeviceAccounts, emptyBook, isOwnWallet, linkedWallets } from "../src/core/book.ts"
 import { NOT_ALLOWED, NOT_LISTED, NOT_YOURS, readColdRequest, sendFromCold, signatureFromHex, toColdAccount, transferRequest, yParityOf, type ColdRequest, type WalletSigner } from "../src/core/cold.ts"
 import { accountsToLink, defaultAccount, isFresh, readCheckedAccounts, rememberCheckedAccount, selectedAccount, type SeenAccount } from "../src/core/device-accounts.ts"
-import { addToMacLink, noteLinkFor, parseDeviceLink, usdMicrosOf } from "../src/core/device-link.ts"
+import { MOST_HELD_CHARACTERS, MOST_HELD_WALLETS, addToMacLink, noteLinkFor, parseDeviceLink, unitChoiceLink, usdMicrosOf, type TopUpNaming } from "../src/core/device-link.ts"
+import { MOST_LISTED_PURCHASES } from "../src/core/held-units.ts"
 import { FAKE_SIGNATURE, accountSigningWithFake, mockSigner } from "./support/mock-signer.ts"
 import { assertMatchesFixture } from "./support/fixtures.ts"
 
@@ -290,17 +291,21 @@ describe("linking a device's accounts", () => {
   })
 })
 
+/** `NamedUnitsTests.swift` checks that `DeviceFlow.topUp` writes exactly this. */
+const FLOW = "0123456789abcdef0123456789abcdef"
+const MAC_TOP_UP = "http://127.0.0.1:8787?topup=0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&usd=20#flow=0123456789abcdef0123456789abcdef&currency=CAD&held=%7B%220x00000000000000000000000000000000000000c1%22:%7B%22ETH%22:%7B%22purchases%22:%5B%7B%22allOnly%22:false,%22boughtAt%22:%222026-01-02T00:00:00.000Z%22,%22costMicros%22:%222000000000%22,%22units%22:%221000000000000000000%22%7D,%7B%22allOnly%22:true,%22boughtAt%22:%222026-03-04T05:06:07.890Z%22,%22units%22:%222000000000000000000%22%7D%5D,%22unnamed%22:%220%22%7D%7D%7D"
+
 describe("links into the flow", () => {
   test("a top-up", () => {
     assert.deepEqual(parseDeviceLink("?addsavings=ledger"), { kind: "add-savings", device: "ledger" })
     assert.deepEqual(parseDeviceLink("?addsavings=anything"), { kind: "add-savings", device: null })
-    assert.deepEqual(parseDeviceLink(`?topup=${HOT}&usd=20`), { kind: "top-up", to: HOT, usdMicros: "20000000" })
-    assert.deepEqual(parseDeviceLink(`?topup=${HOT}`), { kind: "top-up", to: HOT, usdMicros: null })
+    assert.deepEqual(parseDeviceLink(`?topup=${HOT}&usd=20`), { kind: "top-up", to: HOT, usdMicros: "20000000", naming: null })
+    assert.deepEqual(parseDeviceLink(`?topup=${HOT}`), { kind: "top-up", to: HOT, usdMicros: null, naming: null })
   })
 
   test("a bad amount is left for the person to fill in, and a bad address isn't a link", () => {
-    assert.deepEqual(parseDeviceLink(`?topup=${HOT}&usd=lots`), { kind: "top-up", to: HOT, usdMicros: null })
-    assert.deepEqual(parseDeviceLink(`?topup=${HOT}&usd=-5`), { kind: "top-up", to: HOT, usdMicros: null })
+    assert.deepEqual(parseDeviceLink(`?topup=${HOT}&usd=lots`), { kind: "top-up", to: HOT, usdMicros: null, naming: null })
+    assert.deepEqual(parseDeviceLink(`?topup=${HOT}&usd=-5`), { kind: "top-up", to: HOT, usdMicros: null, naming: null })
     assert.equal(parseDeviceLink("?topup=0x1234&usd=20"), null)
   })
 
@@ -334,11 +339,79 @@ describe("links into the flow", () => {
     for (const bad of ["1.234,50", "12,3456", "1,23,456", "0,125", ",5"]) assert.equal(usdMicrosOf(bad), null, bad)
     assert.equal(noteLinkFor({ wallet: COLD, noteAbout: TX, arrivals: [{ asset: "USDC", units: "1500000", decimals: 6 }], receipts: [{}] }, "46,20", "USD")?.usdMicros, "46200000")
     const link = parseDeviceLink(new URL(`http://127.0.0.1:8787?topup=${HOT}&usd=46,20`).search)
-    assert.deepEqual(link, { kind: "top-up", to: HOT, usdMicros: "46200000" })
+    assert.deepEqual(link, { kind: "top-up", to: HOT, usdMicros: "46200000", naming: null })
+  })
+
+  test("reads what the Mac app says its savings hold after the #, as `NamedUnitsTests.swift` writes it", () => {
+    const wallet = "0x00000000000000000000000000000000000000c1"
+    const url = new URL(MAC_TOP_UP)
+    // Never in the request line: a long history would be too much for a server to take.
+    assert.equal(url.search, `?topup=${HOT}&usd=20`)
+    const link = parseDeviceLink(url.search, url.hash)
+    assert.equal(link?.kind, "top-up")
+    const naming = link?.kind === "top-up" ? link.naming : null
+    assert.equal(naming?.flow, FLOW)
+    assert.equal(naming?.currency, "CAD")
+    assert.deepEqual(naming?.held?.get(wallet)?.get("ETH"), {
+      purchases: [
+        { boughtAt: "2026-01-02T00:00:00.000Z", units: 10n ** 18n, costMicros: 2_000_000_000n, allOnly: false },
+        { boughtAt: "2026-03-04T05:06:07.890Z", units: 2n * 10n ** 18n, costMicros: null, allOnly: true },
+      ],
+      unnamed: 0n,
+    })
+    // Anyone can make a link: a list that doesn't fit is left out whole, and the send just can't name its units. The top-up is still
+    // the Mac's, with its flow, so the page says so instead of choosing from its own book.
+    const params = new URLSearchParams(url.hash.slice(1))
+    const held = params.get("held") ?? ""
+    const namingWith = (change: (params: URLSearchParams) => void) => {
+      const changed = new URLSearchParams(params)
+      change(changed)
+      const read = parseDeviceLink(url.search, `#${changed}`)
+      return read?.kind === "top-up" ? read.naming : "not a top-up"
+    }
+    for (const bad of [held.replace('"units":"1000000000000000000"', '"units":"-1"'), held.replace(wallet, "0xnope"), "{", "[]"]) {
+      assert.deepEqual(namingWith((p) => p.set("held", bad)), { flow: FLOW, currency: "CAD", held: null }, bad)
+    }
+    assert.deepEqual(namingWith((p) => p.delete("held")), { flow: FLOW, currency: "CAD", held: null })
+    // Without a flow nothing could come back to the Mac, and without a currency its costs can't be shown, so it isn't one at all.
+    for (const [name, bad] of [["flow", "abc"], ["flow", FLOW.toUpperCase()], ["currency", "XYZ"]] as const) assert.equal(namingWith((p) => p.set(name, bad)), null, `${name}=${bad}`)
+    for (const missing of ["flow", "currency"]) assert.equal(namingWith((p) => p.delete(missing)), null, missing)
+  })
+
+  test("keeps a top-up the Mac's when its list is longer than the page takes, at the limits `NamedUnitsTests.swift` pins", () => {
+    // The Mac app checks the same numbers before it opens the page.
+    assert.equal(MOST_LISTED_PURCHASES, 500)
+    assert.equal(MOST_HELD_CHARACTERS, 200_000)
+    assert.equal(MOST_HELD_WALLETS, 16)
+    const purchases = (count: number) => Array.from({ length: count }, (_, i) => ({ allOnly: false, boughtAt: new Date(Date.UTC(2025, 0, 1) + i * 3_600_000).toISOString(), costMicros: "2000000000", units: "1000000000000000000" }))
+    const walletAt = (i: number) => `0x${(i + 1).toString(16).padStart(40, "0")}`
+    const read = (held: object, pad = 0): TopUpNaming | null => {
+      const text = JSON.stringify(held)
+      // Spaces are still JSON, so this reaches an exact length without changing what's listed.
+      const fragment = new URLSearchParams({ flow: FLOW, currency: "USD", held: text.slice(0, -1) + " ".repeat(pad) + "}" })
+      const link = parseDeviceLink(`?topup=${HOT}`, `#${fragment}`)
+      return link?.kind === "top-up" ? link.naming : null
+    }
+    const one = (count: number) => ({ [walletAt(0)]: { ETH: { purchases: purchases(count), unnamed: "0" } } })
+    assert.equal(read(one(500))?.held?.get(walletAt(0))?.get("ETH")?.purchases.length, 500)
+    assert.deepEqual(read(one(501)), { flow: FLOW, currency: "USD", held: null }, "501 purchases: the flow stays, with nothing to choose from")
+    const many = Object.fromEntries(Array.from({ length: 4 }, (_, i) => [walletAt(i), { ETH: { purchases: purchases(400), unnamed: "0" } }]))
+    const length = JSON.stringify(many).length
+    assert.ok(length < MOST_HELD_CHARACTERS)
+    assert.equal(read(many, MOST_HELD_CHARACTERS - length)?.held?.size, 4, "exactly at the limit")
+    assert.deepEqual(read(many, MOST_HELD_CHARACTERS - length + 1), { flow: FLOW, currency: "USD", held: null }, "one character over")
+    const wallets = (count: number) => Object.fromEntries(Array.from({ length: count }, (_, i) => [walletAt(i), { ETH: { purchases: purchases(1), unnamed: "0" } }]))
+    assert.equal(read(wallets(16))?.held?.size, 16)
+    assert.deepEqual(read(wallets(17)), { flow: FLOW, currency: "USD", held: null })
+  })
+
+  test("hands the Mac app a choice with its top-up's flow, as `NamedUnitsTests.swift` reads it", () => {
+    const choice = { wallet: "0x00000000000000000000000000000000000000c1", txHash: `0x${"ab".repeat(32)}`, asset: "ETH", recordedAt: "2026-11-07T12:00:00.000Z", takes: [{ boughtAt: "2026-01-02T00:00:00.000Z", units: "500000000000000000" }, { boughtAt: "2026-03-04T05:06:07.890Z", units: "1" }] }
+    assert.equal(unitChoiceLink(choice, FLOW), `patina://unit-choice?flow=${FLOW}&wallet=0x00000000000000000000000000000000000000c1&tx=0xabababababababababababababababababababababababababababababababab&asset=ETH&recorded=2026-11-07T12%3A00%3A00.000Z&takes=2026-01-02T00%3A00%3A00.000Z%7E500000000000000000%2C2026-03-04T05%3A06%3A07.890Z%7E1`)
   })
 
   test("reads what the Mac app writes, as `DeviceFlowTests.swift` pins it", () => {
-    assert.deepEqual(parseDeviceLink(new URL(`http://127.0.0.1:8787?topup=${HOT}&usd=20`).search), { kind: "top-up", to: HOT, usdMicros: "20000000" })
+    assert.deepEqual(parseDeviceLink(new URL(`http://127.0.0.1:8787?topup=${HOT}&usd=20`).search), { kind: "top-up", to: HOT, usdMicros: "20000000", naming: null })
     assert.deepEqual(parseDeviceLink(new URL(`http://127.0.0.1:8787?publish=${TX}&wallet=${COLD}&asset=USDC&units=1500000&decimals=6&usd=250`).search), { kind: "publish", wallet: COLD, txHash: TX, asset: "USDC", usdMicros: "250000000", amount: { units: "1500000", decimals: 6 } })
   })
 

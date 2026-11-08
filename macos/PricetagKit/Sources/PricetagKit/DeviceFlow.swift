@@ -5,8 +5,19 @@ import Foundation
 
 public enum DeviceFlow {
     /// The page that moves money from a device to `address`. It only fills in a form, and the device still shows what it's signing.
-    public static func topUp(server: URL, to address: String, dollars: Int) -> URL? {
-        link(server, [URLQueryItem(name: "topup", value: address), URLQueryItem(name: "usd", value: String(dollars))])
+    /// `naming` is what each savings wallet holds, so the send can name the units it takes. It's only there under US rules, and goes
+    /// after the `#`, which never reaches a server, so a long history can't make the request line too long for one. The page hands the
+    /// choice back in a `UnitChoiceLink` that brings its `flow` back.
+    public static func topUp(server: URL, to address: String, dollars: Int, naming: TopUpNaming? = nil) -> URL? {
+        guard var parts = URLComponents(url: server, resolvingAgainstBaseURL: false) else { return nil }
+        parts.queryItems = [URLQueryItem(name: "topup", value: address), URLQueryItem(name: "usd", value: String(dollars))]
+        if let naming {
+            guard let text = TopUpNaming.text(naming.held) else { return nil }
+            var fragment = URLComponents()
+            fragment.queryItems = [URLQueryItem(name: "flow", value: naming.flow), URLQueryItem(name: "currency", value: naming.currency.rawValue), URLQueryItem(name: "held", value: text)]
+            parts.percentEncodedFragment = fragment.percentEncodedQuery
+        }
+        return parts.url
     }
 
     /// The page that publishes a cost from the wallet it arrived in. `usd` is as typed, if anything was, and goes in plain digits,
@@ -39,10 +50,11 @@ public enum DeviceFlow {
         !link.isOnThisMac
     }
 
-    /// The same request, on the page at `page`.
+    /// The same request, on the page at `page`, with what's after its `#`.
     public static func link(_ link: URL, on page: URL) -> URL? {
-        guard let query = URLComponents(url: link, resolvingAgainstBaseURL: false)?.queryItems, var parts = URLComponents(url: page, resolvingAgainstBaseURL: false) else { return nil }
+        guard let original = URLComponents(url: link, resolvingAgainstBaseURL: false), let query = original.queryItems, var parts = URLComponents(url: page, resolvingAgainstBaseURL: false) else { return nil }
         parts.queryItems = query
+        parts.percentEncodedFragment = original.percentEncodedFragment
         return parts.url
     }
 
